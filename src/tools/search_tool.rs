@@ -1,12 +1,17 @@
 use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, schemars, tool};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{STORED, Schema, TextFieldIndexing, TextOptions, Value};
+use tantivy::schema::Value;
 use tantivy::{Index, TantivyDocument, doc};
 use tracing;
+
+// Phase 1: Import our new modules
+use file_search_mcp::metadata_cache::{FileMetadata, MetadataCache};
+use file_search_mcp::schema::FileSchema;
+use directories::ProjectDirs;
 
 // Search parameters: directory path and search keyword
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -32,6 +37,45 @@ pub struct SearchTool;
 impl SearchTool {
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Get the path for storing persistent index and cache
+    fn data_dir() -> PathBuf {
+        // Use XDG-compliant data directory, or fallback to current directory
+        ProjectDirs::from("dev", "rust-code-mcp", "search")
+            .map(|dirs| dirs.data_dir().to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
+    }
+
+    /// Open or create a persistent Tantivy index
+    fn open_or_create_index() -> Result<(Index, FileSchema), String> {
+        let schema = FileSchema::new();
+        let index_path = Self::data_dir().join("index");
+
+        // Ensure directory exists
+        std::fs::create_dir_all(&index_path)
+            .map_err(|e| format!("Failed to create index directory: {}", e))?;
+
+        let index = if index_path.join("meta.json").exists() {
+            // Open existing index
+            tracing::debug!("Opening existing index at: {}", index_path.display());
+            Index::open_in_dir(&index_path)
+                .map_err(|e| format!("Failed to open index: {}", e))?
+        } else {
+            // Create new index
+            tracing::info!("Creating new index at: {}", index_path.display());
+            Index::create_in_dir(&index_path, schema.schema())
+                .map_err(|e| format!("Failed to create index: {}", e))?
+        };
+
+        Ok((index, schema))
+    }
+
+    /// Open or create metadata cache
+    fn open_cache() -> Result<MetadataCache, String> {
+        let cache_path = Self::data_dir().join("cache");
+        MetadataCache::new(&cache_path)
+            .map_err(|e| format!("Failed to open metadata cache: {}", e))
     }
 
     /// Read and return the content of a specified file
@@ -106,29 +150,21 @@ impl SearchTool {
     /// Perform full-text search for keywords on text files (such as .txt, .md, etc.) in the specified directory
     #[tool(description = "Search for keywords in text files within the specified directory")]
     async fn search(&self, #[tool(aggr)] params: SearchParams) -> Result<String, String> {
-        // 1. Define schema for Tantivy (file paths and content)
-        let mut schema_builder = Schema::builder();
-        let path_field = schema_builder.add_text_field("path", STORED);
+        // 1. Open or create persistent index with FileSchema
+        let (index, file_schema) = Self::open_or_create_index()?;
 
-        // Improve content field settings: explicitly set indexing options
-        let text_indexing = TextFieldIndexing::default().set_tokenizer("default");
-        let text_options = TextOptions::default()
-            .set_indexing_options(text_indexing)
-            .set_stored();
-        let content_field = schema_builder.add_text_field("content", text_options);
-
-        let schema = schema_builder.build();
-
-        // 2. Create in-memory index
-        let index = Index::create_in_ram(schema.clone());
+        // 2. Open metadata cache for incremental indexing
+        let cache = Self::open_cache()?;
 
         // 3. Create index writer (adjust buffer size as needed)
         let mut index_writer = index
             .writer(50_000_000)
             .map_err(|e| format!("Index writer error: {}", e))?;
 
-        // Count the number of files added to the index
+        // 4. Count the number of files added to the index
         let mut indexed_files_count = 0;
+        let mut reindexed_files_count = 0;  // Track how many were reindexed (changed)
+        let mut unchanged_files_count = 0;  // Track how many were skipped (unchanged)
         // Track directory processing status (for debugging)
         let mut found_files_count = 0;
         let mut skipped_files_count = 0;
@@ -205,10 +241,12 @@ impl SearchTool {
         fn process_directory(
             dir_path: &Path,
             index_writer: &mut tantivy::IndexWriter,
-            path_field: tantivy::schema::Field,
-            content_field: tantivy::schema::Field,
+            file_schema: &FileSchema,
+            cache: &MetadataCache,
             binary_extensions: &[&str],
             indexed_files_count: &mut usize,
+            reindexed_files_count: &mut usize,
+            unchanged_files_count: &mut usize,
             found_files_count: &mut usize,
             skipped_files_count: &mut usize,
         ) -> Result<(), String> {
@@ -223,10 +261,12 @@ impl SearchTool {
                     process_directory(
                         &path,
                         index_writer,
-                        path_field,
-                        content_field,
+                        file_schema,
+                        cache,
                         binary_extensions,
                         indexed_files_count,
+                        reindexed_files_count,
+                        unchanged_files_count,
                         found_files_count,
                         skipped_files_count,
                     )?;
@@ -238,14 +278,64 @@ impl SearchTool {
                         match fs::read_to_string(&path) {
                             Ok(content) => {
                                 if !content.trim().is_empty() {
-                                    index_writer
-                                        .add_document(doc!(
-                                            path_field => path.to_string_lossy().to_string(),
-                                            content_field => content,
-                                        ))
-                                        .map_err(|e| format!("Document addition error: {}", e))?;
-                                    *indexed_files_count += 1;
-                                    tracing::debug!("Indexed: {}", path.display());
+                                    let file_path_str = path.to_string_lossy().to_string();
+
+                                    // Check if file has changed using metadata cache
+                                    let has_changed = cache.has_changed(&file_path_str, &content)
+                                        .map_err(|e| format!("Cache check error: {}", e))?;
+
+                                    if !has_changed {
+                                        // File unchanged, skip indexing
+                                        *unchanged_files_count += 1;
+                                        tracing::debug!("Skipped (unchanged): {}", path.display());
+                                    } else {
+                                        // File is new or changed, index it
+                                        // Check if file was in cache (for reindex tracking)
+                                        let was_cached = cache.get(&file_path_str)
+                                            .map_err(|e| format!("Cache get error: {}", e))?
+                                            .is_some();
+
+                                        // Get file metadata
+                                        let metadata = fs::metadata(&path)
+                                            .map_err(|e| format!("Metadata error: {}", e))?;
+                                        let last_modified = metadata.modified()
+                                            .map_err(|e| format!("Modified time error: {}", e))?
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map_err(|e| format!("Time conversion error: {}", e))?
+                                            .as_secs();
+
+                                        // Create FileMetadata for cache
+                                        let file_meta = FileMetadata::from_content(
+                                            &content,
+                                            last_modified,
+                                            metadata.len()
+                                        );
+
+                                        // Add document to index
+                                        index_writer
+                                            .add_document(doc!(
+                                                file_schema.relative_path => file_path_str.clone(),
+                                                file_schema.content => content,
+                                                file_schema.unique_hash => file_meta.hash.clone(),
+                                                file_schema.last_modified => file_meta.last_modified,
+                                                file_schema.file_size => file_meta.size,
+                                            ))
+                                            .map_err(|e| format!("Document addition error: {}", e))?;
+
+                                        // Update cache
+                                        cache.set(&file_path_str, &file_meta)
+                                            .map_err(|e| format!("Cache update error: {}", e))?;
+
+                                        *indexed_files_count += 1;
+
+                                        // Track if this was a reindex or new file
+                                        if was_cached {
+                                            *reindexed_files_count += 1;
+                                            tracing::debug!("Reindexed (changed): {}", path.display());
+                                        } else {
+                                            tracing::debug!("Indexed (new): {}", path.display());
+                                        }
+                                    }
                                 } else {
                                     *skipped_files_count += 1;
                                     tracing::debug!("Skipped (empty file): {}", path.display());
@@ -271,18 +361,22 @@ impl SearchTool {
         process_directory(
             dir_path,
             &mut index_writer,
-            path_field,
-            content_field,
+            &file_schema,
+            &cache,
             &binary_extensions,
             &mut indexed_files_count,
+            &mut reindexed_files_count,
+            &mut unchanged_files_count,
             &mut found_files_count,
             &mut skipped_files_count,
         )?;
 
         tracing::info!(
-            "Processing complete: Found files={}, Indexed={}, Skipped={}",
+            "Processing complete: Found={}, New/Changed={}, Reindexed={}, Unchanged={}, Skipped={}",
             found_files_count,
             indexed_files_count,
+            reindexed_files_count,
+            unchanged_files_count,
             skipped_files_count
         );
 
@@ -304,7 +398,7 @@ impl SearchTool {
         let searcher = reader.searcher();
 
         // 7. Parse query containing the keyword
-        let query_parser = QueryParser::for_index(&index, vec![content_field]);
+        let query_parser = QueryParser::for_index(&index, vec![file_schema.content]);
 
         // Ensure the keyword is not empty
         if params.keyword.trim().is_empty() {
@@ -326,7 +420,7 @@ impl SearchTool {
             let retrieved_doc: TantivyDocument =
                 searcher.doc(*doc_address).map_err(|e| e.to_string())?;
             let path_value = retrieved_doc
-                .get_first(path_field)
+                .get_first(file_schema.relative_path)
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown path");
             result_str.push_str(&format!("Hit: {} (Score: {:.2})\n", path_value, score));
