@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# MCP and async runtime
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = [
   "server",
   "transport-io",
 ] }
-tantivy = "0.22.0"
 tokio = { version = "1", features = [
   "macros",
   "rt",
@@ -16,10 +16,38 @@ tokio = { version = "1", features = [
   "io-std",
   "signal",
 ] }
+
+# Search and indexing
+tantivy = "0.22.0"
+
+# Serialization
+serde = { version = "1.0.219", features = ["derive"] }
+bincode = "1.3"
+uuid = { version = "1.10", features = ["v4"] }  # Unique IDs for chunks
+
+# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "std",
   "fmt",
 ] }
-serde = "1.0.219"
+
+# Phase 1: Persistent Index + Incremental Updates
+notify = "6"           # File watching
+sled = "0.34"          # Embedded key-value store for metadata cache
+sha2 = "0.10"          # SHA-256 file hashing
+directories = "5"      # Cross-platform config/data directories
+
+# Phase 2: Tree-sitter Integration + Symbol Extraction
+tree-sitter = "0.20"   # AST parsing
+tree-sitter-rust = "0.20"  # Rust grammar
+
+# Phase 3: Semantic Code Chunking
+text-splitter = "0.13"  # Semantic text chunking
+
+# Phase 4: Embedding Generation
+fastembed = "4"        # Local embeddings (ONNX-based)
+
+[dev-dependencies]
+tempfile = "3"         # Temporary directories for tests
