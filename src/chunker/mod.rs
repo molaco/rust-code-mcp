@@ -4,11 +4,12 @@
 //! for better embedding and retrieval quality.
 
 use crate::parser::{CallGraph, Import, ParseResult, Symbol, SymbolKind};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// A unique identifier for a code chunk
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ChunkId(Uuid);
 
 impl ChunkId {
@@ -21,6 +22,11 @@ impl ChunkId {
     pub fn to_string(&self) -> String {
         self.0.to_string()
     }
+
+    /// Parse from string representation
+    pub fn from_string(s: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
 }
 
 impl Default for ChunkId {
@@ -30,7 +36,7 @@ impl Default for ChunkId {
 }
 
 /// Context information for a code chunk
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkContext {
     /// File path
     pub file_path: PathBuf,
@@ -52,7 +58,7 @@ pub struct ChunkContext {
 }
 
 /// A code chunk with content and context
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeChunk {
     /// Unique identifier
     pub id: ChunkId,

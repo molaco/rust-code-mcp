@@ -7,6 +7,7 @@ pub mod embeddings;
 pub mod metadata_cache;
 pub mod parser;
 pub mod schema;
+pub mod vector_store;
 
 // Will be added in later steps:
 // pub mod watcher;
