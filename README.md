@@ -2,7 +2,7 @@
 
 A Model Context Protocol (MCP) server for hybrid semantic + lexical code search, optimized for large Rust codebases (1M+ LOC).
 
-**Status:** ⚙️ Phase 6 (Partial) - Hybrid Search Infrastructure Complete
+**Status:** ⚙️ Phase 7 (Week 12 Complete) - Enhanced MCP Tools
 
 ## 🎯 Project Goals
 
@@ -39,7 +39,8 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 - **[PHASE3_COMPLETE.md](docs/PHASE3_COMPLETE.md)** - Phase 3: Semantic code chunking
 - **[PHASE4_COMPLETE.md](docs/PHASE4_COMPLETE.md)** - Phase 4: Local embedding generation
 - **[PHASE5_COMPLETE.md](docs/PHASE5_COMPLETE.md)** - Phase 5: Qdrant vector search
-- **[PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md)** - Phase 6: Hybrid search with BM25 + Vector RRF ⭐ NEW
+- **[PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md)** - Phase 6: Hybrid search with BM25 + Vector RRF
+- **[PHASE7_WEEK12_COMPLETE.md](docs/PHASE7_WEEK12_COMPLETE.md)** - Phase 7 Week 12: Enhanced MCP Tools ⭐ NEW
 
 ### Research & Analysis
 - **[RUST_MCP_CODE_SEARCH_RESEARCH.md](docs/RUST_MCP_CODE_SEARCH_RESEARCH.md)** - Research on reusable components
@@ -118,6 +119,16 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 
 **See [PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md) for full details.**
 
+**Phase 7: Enhanced MCP Tools (Week 12)** ✅ **COMPLETE**
+- [x] find_definition - Locate symbol definitions
+- [x] find_references - Find all symbol references
+- [x] get_dependencies - Analyze file imports
+- [x] get_call_graph - Show function call relationships
+- [x] analyze_complexity - Calculate code metrics
+- [x] get_similar_code - Semantic similarity search
+
+**See [PHASE7_WEEK12_COMPLETE.md](docs/PHASE7_WEEK12_COMPLETE.md) for full details.**
+
 ## ✨ Planned Features
 
 ### Current Features
@@ -142,7 +153,8 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 - [x] **Phase 4 (Week 8)**: Local embedding generation ✅
 - [x] **Phase 5 (Week 9)**: Qdrant vector search ✅
 - [x] **Phase 6 (Week 10-11)**: Hybrid search with RRF ✅
-- [ ] **Phase 7 (Week 12-13)**: Enhanced MCP tools
+- [x] **Phase 7 Week 12**: Enhanced MCP tools ✅
+- [ ] **Phase 7 Week 13**: MCP resources
 - [ ] **Phase 8 (Week 14-16)**: Optimization & release
 
 ## 🛠️ Technology Stack
@@ -379,7 +391,7 @@ export QDRANT_URL=http://localhost:6333
 ## 🔄 Current Architecture
 
 ```
-rust-code-mcp (Phase 6 Partial)
+rust-code-mcp (Phase 7 Week 12)
 ├── MCP Server ✅
 │   └── stdio transport
 ├── Parsing & Chunking ✅
@@ -402,7 +414,13 @@ rust-code-mcp (Phase 6 Partial)
 │   └── Metadata Cache
 └── Tools ✅
     ├── search (keyword with persistent index)
-    └── read_file
+    ├── read_file_content (read file contents)
+    ├── find_definition (locate symbols)
+    ├── find_references (find symbol usage)
+    ├── get_dependencies (analyze imports)
+    ├── get_call_graph (call relationships)
+    ├── analyze_complexity (code metrics)
+    └── get_similar_code (semantic search)
 ```
 
 ## 🎯 Target Architecture (Week 16)
@@ -474,8 +492,9 @@ MIT License (same as original file-search-mcp)
 **Phase 4 (Week 8):** ✅ Complete - Local Embeddings
 **Phase 5 (Week 9):** ✅ Complete - Vector Search
 **Phase 6 (Week 10-11):** ✅ Complete - Hybrid Search with BM25 + Vector
-**Current Phase:** Phase 7 - Enhanced MCP Tools
-**Next Milestone:** Phase 7 - Enhanced MCP Tools
+**Phase 7 Week 12:** ✅ Complete - Enhanced MCP Tools (6 new tools)
+**Current Phase:** Phase 7 Week 13 - MCP Resources
+**Next Milestone:** Phase 8 - Optimization & Release
 **Target MVP:** Week 16 - Full hybrid search operational
 
 **Key Documents:**
@@ -485,5 +504,6 @@ MIT License (same as original file-search-mcp)
 - [PHASE3_COMPLETE.md](docs/PHASE3_COMPLETE.md) - Semantic chunking
 - [PHASE4_COMPLETE.md](docs/PHASE4_COMPLETE.md) - Local embeddings
 - [PHASE5_COMPLETE.md](docs/PHASE5_COMPLETE.md) - Qdrant vector search
-- [PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md) - Hybrid search (BM25 + Vector) ⭐ NEW
+- [PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md) - Hybrid search (BM25 + Vector)
+- [PHASE7_WEEK12_COMPLETE.md](docs/PHASE7_WEEK12_COMPLETE.md) - Enhanced MCP tools (6 new tools) ⭐ NEW
 - [EXTRACTION_PLAN.md](docs/EXTRACTION_PLAN.md) - Bloop patterns to extract

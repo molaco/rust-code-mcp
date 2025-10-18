@@ -11,6 +11,10 @@ use tracing;
 // Phase 1: Import our new modules
 use file_search_mcp::metadata_cache::{FileMetadata, MetadataCache};
 use file_search_mcp::schema::FileSchema;
+use file_search_mcp::parser::RustParser;
+use file_search_mcp::embeddings::EmbeddingGenerator;
+use file_search_mcp::vector_store::{VectorStore, VectorStoreConfig};
+use file_search_mcp::search::HybridSearch;
 use directories::ProjectDirs;
 
 // Search parameters: directory path and search keyword
@@ -27,6 +31,58 @@ pub struct SearchParams {
 pub struct FileContentParams {
     #[schemars(description = "Path to the file to read")]
     pub file_path: String,
+}
+
+// Find definition parameters: symbol name and directory
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FindDefinitionParams {
+    #[schemars(description = "Symbol name to find the definition for")]
+    pub symbol_name: String,
+    #[schemars(description = "Directory to search in")]
+    pub directory: String,
+}
+
+// Find references parameters: symbol name and directory
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FindReferencesParams {
+    #[schemars(description = "Symbol name to find references to")]
+    pub symbol_name: String,
+    #[schemars(description = "Directory to search in")]
+    pub directory: String,
+}
+
+// Get dependencies parameters: file path
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetDependenciesParams {
+    #[schemars(description = "Path to the file to analyze")]
+    pub file_path: String,
+}
+
+// Get call graph parameters: file path
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetCallGraphParams {
+    #[schemars(description = "Path to the file to analyze")]
+    pub file_path: String,
+    #[schemars(description = "Optional: specific symbol to get call graph for")]
+    pub symbol_name: Option<String>,
+}
+
+// Analyze complexity parameters: file path
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AnalyzeComplexityParams {
+    #[schemars(description = "Path to the file to analyze")]
+    pub file_path: String,
+}
+
+// Get similar code parameters: code snippet and directory
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetSimilarCodeParams {
+    #[schemars(description = "Code snippet or query to find similar code")]
+    pub query: String,
+    #[schemars(description = "Directory containing the codebase")]
+    pub directory: String,
+    #[schemars(description = "Number of similar results to return (default 5)")]
+    pub limit: Option<usize>,
 }
 
 // Main tool struct
@@ -439,6 +495,424 @@ impl SearchTool {
             ))
         }
     }
+
+    /// Find the definition of a symbol in Rust code
+    #[tool(description = "Find where a Rust symbol (function, struct, trait, etc.) is defined")]
+    async fn find_definition(
+        &self,
+        #[tool(aggr)] params: FindDefinitionParams,
+    ) -> Result<String, String> {
+        let dir_path = Path::new(&params.directory);
+        if !dir_path.is_dir() {
+            return Err(format!(
+                "The specified path '{}' is not a directory",
+                params.directory
+            ));
+        }
+
+        tracing::debug!("Searching for definition of '{}'", params.symbol_name);
+
+        let mut found_definitions = Vec::new();
+        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+
+        // Recursively search .rs files
+        fn visit_rust_files(
+            dir: &Path,
+            symbol_name: &str,
+            parser: &mut RustParser,
+            found: &mut Vec<(PathBuf, usize, String)>,
+        ) -> Result<(), String> {
+            for entry in fs::read_dir(dir).map_err(|e| format!("Directory read error: {}", e))? {
+                let entry = entry.map_err(|e| format!("Entry read error: {}", e))?;
+                let path = entry.path();
+
+                if path.is_dir() {
+                    visit_rust_files(&path, symbol_name, parser, found)?;
+                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    if let Ok(symbols) = parser.parse_file(&path) {
+                        for symbol in symbols {
+                            if symbol.name == symbol_name {
+                                found.push((
+                                    path.clone(),
+                                    symbol.range.start_line,
+                                    symbol.kind.as_str().to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        visit_rust_files(dir_path, &params.symbol_name, &mut parser, &mut found_definitions)?;
+
+        if found_definitions.is_empty() {
+            Ok(format!(
+                "No definition found for symbol '{}'",
+                params.symbol_name
+            ))
+        } else {
+            let mut result = format!(
+                "Found {} definition(s) for '{}':\n",
+                found_definitions.len(),
+                params.symbol_name
+            );
+            for (path, line, kind) in found_definitions {
+                result.push_str(&format!(
+                    "- {}:{} ({})\n",
+                    path.display(),
+                    line,
+                    kind
+                ));
+            }
+            Ok(result)
+        }
+    }
+
+    /// Find all references to a symbol in the codebase
+    #[tool(description = "Find all places where a symbol is referenced or called")]
+    async fn find_references(
+        &self,
+        #[tool(aggr)] params: FindReferencesParams,
+    ) -> Result<String, String> {
+        let dir_path = Path::new(&params.directory);
+        if !dir_path.is_dir() {
+            return Err(format!(
+                "The specified path '{}' is not a directory",
+                params.directory
+            ));
+        }
+
+        tracing::debug!("Searching for references to '{}'", params.symbol_name);
+
+        let mut found_references = Vec::new();
+        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+
+        // Recursively search .rs files for references in call graphs
+        fn visit_rust_files(
+            dir: &Path,
+            symbol_name: &str,
+            parser: &mut RustParser,
+            found: &mut Vec<(PathBuf, Vec<String>)>,
+        ) -> Result<(), String> {
+            for entry in fs::read_dir(dir).map_err(|e| format!("Directory read error: {}", e))? {
+                let entry = entry.map_err(|e| format!("Entry read error: {}", e))?;
+                let path = entry.path();
+
+                if path.is_dir() {
+                    visit_rust_files(&path, symbol_name, parser, found)?;
+                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    if let Ok(parse_result) = parser.parse_file_complete(&path) {
+                        let callers = parse_result.call_graph.get_callers(symbol_name);
+                        if !callers.is_empty() {
+                            found.push((
+                                path.clone(),
+                                callers.into_iter().map(String::from).collect(),
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        visit_rust_files(dir_path, &params.symbol_name, &mut parser, &mut found_references)?;
+
+        if found_references.is_empty() {
+            Ok(format!(
+                "No references found for symbol '{}'",
+                params.symbol_name
+            ))
+        } else {
+            let total_refs: usize = found_references.iter().map(|(_, callers)| callers.len()).sum();
+            let mut result = format!(
+                "Found {} reference(s) to '{}' in {} file(s):\n",
+                total_refs,
+                params.symbol_name,
+                found_references.len()
+            );
+            for (path, callers) in found_references {
+                result.push_str(&format!(
+                    "- {} (called by: {})\n",
+                    path.display(),
+                    callers.join(", ")
+                ));
+            }
+            Ok(result)
+        }
+    }
+
+    /// Get dependencies for a file (imports and files that depend on it)
+    #[tool(description = "Get import dependencies for a Rust source file")]
+    async fn get_dependencies(
+        &self,
+        #[tool(aggr)] params: GetDependenciesParams,
+    ) -> Result<String, String> {
+        let file_path = Path::new(&params.file_path);
+
+        if !file_path.exists() {
+            return Err(format!("File '{}' does not exist", params.file_path));
+        }
+
+        if !file_path.is_file() {
+            return Err(format!("'{}' is not a file", params.file_path));
+        }
+
+        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+        let parse_result = parser
+            .parse_file_complete(file_path)
+            .map_err(|e| format!("Parse error: {}", e))?;
+
+        let mut result = format!("Dependencies for '{}':\n\n", file_path.display());
+
+        // List imports
+        if parse_result.imports.is_empty() {
+            result.push_str("No imports found.\n");
+        } else {
+            result.push_str(&format!("Imports ({}):\n", parse_result.imports.len()));
+            for import in &parse_result.imports {
+                result.push_str(&format!("- {}\n", import.path));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Get call graph for a file or specific symbol
+    #[tool(description = "Get the call graph showing function call relationships")]
+    async fn get_call_graph(
+        &self,
+        #[tool(aggr)] params: GetCallGraphParams,
+    ) -> Result<String, String> {
+        let file_path = Path::new(&params.file_path);
+
+        if !file_path.exists() {
+            return Err(format!("File '{}' does not exist", params.file_path));
+        }
+
+        if !file_path.is_file() {
+            return Err(format!("'{}' is not a file", params.file_path));
+        }
+
+        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+        let parse_result = parser
+            .parse_file_complete(file_path)
+            .map_err(|e| format!("Parse error: {}", e))?;
+
+        let mut result = format!("Call graph for '{}':\n\n", file_path.display());
+
+        if let Some(ref symbol_name) = params.symbol_name {
+            // Show call graph for specific symbol
+            let callees = parse_result.call_graph.get_callees(symbol_name);
+            let callers = parse_result.call_graph.get_callers(symbol_name);
+
+            result.push_str(&format!("Symbol: {}\n\n", symbol_name));
+
+            if callees.is_empty() && callers.is_empty() {
+                result.push_str("No call relationships found.\n");
+            } else {
+                if !callees.is_empty() {
+                    result.push_str(&format!("Calls ({}):\n", callees.len()));
+                    for callee in callees {
+                        result.push_str(&format!("  → {}\n", callee));
+                    }
+                }
+
+                if !callers.is_empty() {
+                    result.push_str(&format!("\nCalled by ({}):\n", callers.len()));
+                    for caller in callers {
+                        result.push_str(&format!("  ← {}\n", caller));
+                    }
+                }
+            }
+        } else {
+            // Show entire call graph for file
+            let all_functions = parse_result.call_graph.all_functions();
+            let edge_count = parse_result.call_graph.edge_count();
+
+            result.push_str(&format!("Functions: {}\n", all_functions.len()));
+            result.push_str(&format!("Call relationships: {}\n\n", edge_count));
+
+            if edge_count == 0 {
+                result.push_str("No function calls found.\n");
+            } else {
+                result.push_str("Call relationships:\n");
+                for function in all_functions {
+                    let callees = parse_result.call_graph.get_callees(function);
+                    if !callees.is_empty() {
+                        result.push_str(&format!("{} → [{}]\n", function, callees.join(", ")));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Analyze code complexity metrics for a file
+    #[tool(description = "Analyze code complexity metrics (LOC, cyclomatic complexity, function count)")]
+    async fn analyze_complexity(
+        &self,
+        #[tool(aggr)] params: AnalyzeComplexityParams,
+    ) -> Result<String, String> {
+        let file_path = Path::new(&params.file_path);
+
+        if !file_path.exists() {
+            return Err(format!("File '{}' does not exist", params.file_path));
+        }
+
+        if !file_path.is_file() {
+            return Err(format!("'{}' is not a file", params.file_path));
+        }
+
+        // Read source file
+        let source = fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        // Parse file to get symbols
+        let mut parser = RustParser::new()
+            .map_err(|e| format!("Parser initialization error: {}", e))?;
+        let parse_result = parser
+            .parse_file_complete(file_path)
+            .map_err(|e| format!("Parse error: {}", e))?;
+
+        // Calculate metrics
+        let lines_of_code = source.lines().count();
+        let non_empty_loc = source.lines().filter(|l| !l.trim().is_empty()).count();
+        let comment_lines = source.lines().filter(|l| l.trim().starts_with("//")).count();
+        let function_count = parse_result
+            .symbols
+            .iter()
+            .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Function { .. }))
+            .count();
+        let struct_count = parse_result
+            .symbols
+            .iter()
+            .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Struct))
+            .count();
+        let trait_count = parse_result
+            .symbols
+            .iter()
+            .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Trait))
+            .count();
+
+        // Calculate cyclomatic complexity (simplified - count decision points)
+        let complexity_keywords = ["if", "else if", "while", "for", "match", "&&", "||"];
+        let cyclomatic_complexity: usize = source
+            .lines()
+            .map(|line| {
+                complexity_keywords
+                    .iter()
+                    .map(|kw| line.matches(kw).count())
+                    .sum::<usize>()
+            })
+            .sum();
+
+        // Calculate average function complexity
+        let avg_complexity = if function_count > 0 {
+            cyclomatic_complexity as f64 / function_count as f64
+        } else {
+            0.0
+        };
+
+        let mut result = format!("Complexity analysis for '{}':\n\n", file_path.display());
+        result.push_str("=== Code Metrics ===\n");
+        result.push_str(&format!("Total lines:           {}\n", lines_of_code));
+        result.push_str(&format!("Non-empty lines:       {}\n", non_empty_loc));
+        result.push_str(&format!("Comment lines:         {}\n", comment_lines));
+        result.push_str(&format!("Code lines (approx):   {}\n\n", non_empty_loc - comment_lines));
+
+        result.push_str("=== Symbol Counts ===\n");
+        result.push_str(&format!("Functions:             {}\n", function_count));
+        result.push_str(&format!("Structs:               {}\n", struct_count));
+        result.push_str(&format!("Traits:                {}\n\n", trait_count));
+
+        result.push_str("=== Complexity ===\n");
+        result.push_str(&format!("Total cyclomatic:      {}\n", cyclomatic_complexity));
+        result.push_str(&format!("Avg per function:      {:.2}\n", avg_complexity));
+
+        // Add call graph complexity
+        let edge_count = parse_result.call_graph.edge_count();
+        result.push_str(&format!("Function calls:        {}\n", edge_count));
+
+        Ok(result)
+    }
+
+    /// Find semantically similar code using vector search
+    #[tool(description = "Find code snippets semantically similar to a query using embeddings")]
+    async fn get_similar_code(
+        &self,
+        #[tool(aggr)] params: GetSimilarCodeParams,
+    ) -> Result<String, String> {
+        let dir_path = Path::new(&params.directory);
+        if !dir_path.is_dir() {
+            return Err(format!(
+                "The specified path '{}' is not a directory",
+                params.directory
+            ));
+        }
+
+        let limit = params.limit.unwrap_or(5);
+
+        tracing::debug!("Searching for similar code to: {}", params.query);
+
+        // Initialize components
+        let embedding_generator = EmbeddingGenerator::new()
+            .map_err(|e| format!("Failed to initialize embedding generator: {}", e))?;
+
+        let vector_store_config = VectorStoreConfig::default();
+        let vector_store = VectorStore::new(vector_store_config)
+            .await
+            .map_err(|e| format!("Failed to initialize vector store: {}", e))?;
+
+        // Create hybrid search (vector-only mode)
+        let hybrid_search = HybridSearch::with_defaults(
+            embedding_generator,
+            vector_store,
+            None, // No BM25 for this tool
+        );
+
+        // Perform vector search
+        let results = hybrid_search
+            .vector_only_search(&params.query, limit)
+            .await
+            .map_err(|e| format!("Search error: {}", e))?;
+
+        if results.is_empty() {
+            return Ok(format!(
+                "No similar code found for query: '{}'",
+                params.query
+            ));
+        }
+
+        let mut result = format!(
+            "Found {} similar code snippet(s) for query '{}':\n\n",
+            results.len(),
+            params.query
+        );
+
+        for (idx, search_result) in results.iter().enumerate() {
+            let chunk = &search_result.chunk;
+            result.push_str(&format!("{}. ", idx + 1));
+            result.push_str(&format!(
+                "Score: {:.4} | File: {} | Symbol: {} ({})\n",
+                search_result.score,
+                chunk.context.file_path.display(),
+                chunk.context.symbol_name,
+                chunk.context.symbol_kind
+            ));
+            result.push_str(&format!("   Lines: {}-{}\n", chunk.context.line_start, chunk.context.line_end));
+            if let Some(ref doc) = chunk.context.docstring {
+                result.push_str(&format!("   Doc: {}\n", doc));
+            }
+            result.push_str(&format!("   Code preview:\n   {}\n\n",
+                chunk.content.lines().take(3).collect::<Vec<_>>().join("\n   ")
+            ));
+        }
+
+        Ok(result)
+    }
 }
 
 #[tool(tool_box)]
@@ -453,7 +927,7 @@ impl ServerHandler for SearchTool {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides two tools: 1) Search for keywords in text files within a directory, 2) Read and display the content of a specific file."
+                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) get_similar_code - semantic similarity search"
                     .into(),
             ),
         }
