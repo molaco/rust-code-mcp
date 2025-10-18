@@ -2,6 +2,10 @@
 //!
 //! Implements Reciprocal Rank Fusion (RRF) to merge results from multiple search engines
 
+pub mod bm25;
+
+pub use bm25::Bm25Search;
+
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::EmbeddingGenerator;
 use crate::vector_store::{VectorStore, SearchResult as VectorSearchResult};
@@ -86,6 +90,7 @@ impl VectorSearch {
 /// Hybrid search combining BM25 and vector search with RRF
 pub struct HybridSearch {
     vector_search: VectorSearch,
+    bm25_search: Option<Bm25Search>,
     config: HybridSearchConfig,
 }
 
@@ -94,10 +99,12 @@ impl HybridSearch {
     pub fn new(
         embedding_generator: EmbeddingGenerator,
         vector_store: VectorStore,
+        bm25_search: Option<Bm25Search>,
         config: HybridSearchConfig,
     ) -> Self {
         Self {
             vector_search: VectorSearch::new(embedding_generator, vector_store),
+            bm25_search,
             config,
         }
     }
@@ -106,29 +113,48 @@ impl HybridSearch {
     pub fn with_defaults(
         embedding_generator: EmbeddingGenerator,
         vector_store: VectorStore,
+        bm25_search: Option<Bm25Search>,
     ) -> Self {
-        Self::new(embedding_generator, vector_store, HybridSearchConfig::default())
+        Self::new(embedding_generator, vector_store, bm25_search, HybridSearchConfig::default())
     }
 
     /// Perform hybrid search combining BM25 and vector search
     ///
-    /// Currently only implements vector search. BM25 integration with Tantivy
-    /// will be added when MCP tool integration is complete.
+    /// If BM25 search is available, runs both searches in parallel and merges
+    /// results using Reciprocal Rank Fusion. Otherwise falls back to vector-only search.
     pub async fn search(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        // Get results from vector search
-        let vector_results = self
-            .vector_search
-            .search(query, self.config.candidate_count)
-            .await?;
+        // Run vector search and BM25 search in parallel (if BM25 is available)
+        let (vector_results, bm25_results) = if let Some(bm25) = &self.bm25_search {
+            // BM25 search is sync, run in blocking task
+            let bm25_clone = bm25.clone();
+            let query_clone = query.to_string();
+            let candidate_count = self.config.candidate_count;
 
-        // TODO: Get results from BM25 search (Tantivy)
-        // This requires integration with the existing search tool
-        // For now, we'll just use vector results
-        let bm25_results: Vec<(ChunkId, f32, CodeChunk)> = vec![];
+            let (vector_future, bm25_future) = tokio::join!(
+                self.vector_search.search(query, candidate_count),
+                tokio::task::spawn_blocking(move || {
+                    bm25_clone.search(&query_clone, candidate_count)
+                })
+            );
+
+            let vector_results = vector_future?;
+            let bm25_results = bm25_future.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))) as Box<dyn std::error::Error>)?;
+
+            (vector_results, bm25_results)
+        } else {
+            // No BM25 search available, vector only
+            let vector_results = self
+                .vector_search
+                .search(query, self.config.candidate_count)
+                .await?;
+
+            (vector_results, vec![])
+        };
 
         // Apply Reciprocal Rank Fusion
         let merged = self.reciprocal_rank_fusion(&vector_results, &bm25_results);
@@ -318,7 +344,7 @@ mod tests {
             .await
             .unwrap();
 
-        let hybrid_search = HybridSearch::new(embedding_generator, vector_store, config);
+        let hybrid_search = HybridSearch::new(embedding_generator, vector_store, None, config);
 
         let results = hybrid_search.reciprocal_rank_fusion(&vector_results, &bm25_results);
 
@@ -353,11 +379,52 @@ mod tests {
             .await
             .unwrap();
 
-        let hybrid_search = HybridSearch::with_defaults(embedding_generator, vector_store);
+        let hybrid_search = HybridSearch::with_defaults(embedding_generator, vector_store, None);
 
         // This test would require indexed data
         let results = hybrid_search.vector_only_search("test query", 10).await;
         assert!(results.is_ok());
+    }
+
+    #[test]
+    fn test_hybrid_search_with_bm25() {
+        use tempfile::TempDir;
+        use tantivy::doc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let index_path = temp_dir.path().join("bm25_test");
+
+        // Create BM25 search
+        let bm25_search = Bm25Search::new(&index_path).unwrap();
+
+        // Create test chunks and index them
+        let chunk1_id = ChunkId::new();
+        let chunk1 = create_test_chunk(chunk1_id, "async_function");
+        let chunk1_json = serde_json::to_string(&chunk1).unwrap();
+
+        let mut index_writer = bm25_search.index().writer(50_000_000).unwrap();
+        let schema = bm25_search.schema();
+
+        index_writer.add_document(doc!(
+            schema.chunk_id => chunk1_id.to_string(),
+            schema.content => chunk1.content.clone(),
+            schema.symbol_name => chunk1.context.symbol_name.clone(),
+            schema.symbol_kind => chunk1.context.symbol_kind.clone(),
+            schema.file_path => chunk1.context.file_path.display().to_string(),
+            schema.module_path => chunk1.context.module_path.join("::"),
+            schema.docstring => chunk1.context.docstring.clone().unwrap_or_default(),
+            schema.chunk_json => chunk1_json,
+        )).unwrap();
+
+        index_writer.commit().unwrap();
+
+        // Verify BM25 search works independently
+        let mut bm25_search_mut = bm25_search.clone();
+        bm25_search_mut.reload().unwrap();
+
+        let results = bm25_search_mut.search("async", 10).unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].0, chunk1_id);
     }
 
     #[test]

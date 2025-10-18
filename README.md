@@ -39,7 +39,7 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 - **[PHASE3_COMPLETE.md](docs/PHASE3_COMPLETE.md)** - Phase 3: Semantic code chunking
 - **[PHASE4_COMPLETE.md](docs/PHASE4_COMPLETE.md)** - Phase 4: Local embedding generation
 - **[PHASE5_COMPLETE.md](docs/PHASE5_COMPLETE.md)** - Phase 5: Qdrant vector search
-- **[PHASE6_PARTIAL.md](docs/PHASE6_PARTIAL.md)** - Phase 6: Hybrid search (RRF infrastructure) ⭐ NEW
+- **[PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md)** - Phase 6: Hybrid search with BM25 + Vector RRF ⭐ NEW
 
 ### Research & Analysis
 - **[RUST_MCP_CODE_SEARCH_RESEARCH.md](docs/RUST_MCP_CODE_SEARCH_RESEARCH.md)** - Research on reusable components
@@ -106,16 +106,17 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 
 **See [PHASE5_COMPLETE.md](docs/PHASE5_COMPLETE.md) for full details.**
 
-**Phase 6: Hybrid Search (Week 10-11)** ⚙️ **PARTIAL COMPLETE**
+**Phase 6: Hybrid Search (Week 10-11)** ✅ **COMPLETE**
+- [x] Create ChunkSchema for Tantivy
+- [x] Implement Bm25Search module for chunk-level search
 - [x] Implement Reciprocal Rank Fusion (RRF) algorithm
 - [x] Create VectorSearch wrapper
-- [x] Build HybridSearch infrastructure
+- [x] Build HybridSearch infrastructure with BM25 + Vector
 - [x] Add unified SearchResult type
-- [x] Test RRF with simulated data
-- [ ] Implement chunk-level BM25 indexing (pending)
-- [ ] Full hybrid search integration (pending)
+- [x] Parallel execution (async vector + sync BM25)
+- [x] Comprehensive testing (45 tests passing)
 
-**See [PHASE6_PARTIAL.md](docs/PHASE6_PARTIAL.md) for full details.**
+**See [PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md) for full details.**
 
 ## ✨ Planned Features
 
@@ -132,7 +133,7 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 - ✅ **Semantic chunking** - Symbol-based code chunks
 - ✅ **Local embeddings** - all-MiniLM-L6-v2 (384 dims)
 - ✅ **Vector search** - Qdrant with cosine similarity
-- ⚙️ **Hybrid search** - RRF infrastructure (BM25 integration pending)
+- ✅ **Hybrid search** - BM25 + Vector with RRF fusion
 
 ### Enhancements (Phases 1-8)
 - [x] **Phase 1 (Week 2)**: Persistent index + incremental updates ✅
@@ -140,7 +141,7 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 - [x] **Phase 3 (Week 7)**: Semantic code chunking ✅
 - [x] **Phase 4 (Week 8)**: Local embedding generation ✅
 - [x] **Phase 5 (Week 9)**: Qdrant vector search ✅
-- [x] **Phase 6 (Week 10-11)**: Hybrid search with RRF ⚙️ (infrastructure complete)
+- [x] **Phase 6 (Week 10-11)**: Hybrid search with RRF ✅
 - [ ] **Phase 7 (Week 12-13)**: Enhanced MCP tools
 - [ ] **Phase 8 (Week 14-16)**: Optimization & release
 
@@ -202,7 +203,7 @@ Run all library tests:
 cargo test --lib
 ```
 
-**Expected output:** `test result: ok. 39 passed; 0 failed; 11 ignored`
+**Expected output:** `test result: ok. 45 passed; 0 failed; 11 ignored`
 
 ### Integration Tests
 
@@ -390,11 +391,11 @@ rust-code-mcp (Phase 6 Partial)
 │   ├── Local embeddings (fastembed)
 │   ├── Qdrant vector store
 │   └── Semantic similarity search
-├── Hybrid Search ⚙️
+├── Hybrid Search ✅
 │   ├── RRF algorithm ✅
 │   ├── VectorSearch wrapper ✅
-│   ├── BM25 chunk indexing ⏳ (pending)
-│   └── Full hybrid integration ⏳ (pending)
+│   ├── Bm25Search module ✅
+│   └── Parallel BM25 + Vector fusion ✅
 ├── Persistent Storage ✅
 │   ├── Tantivy Index (file-level)
 │   ├── Qdrant (chunk-level)
@@ -472,8 +473,8 @@ MIT License (same as original file-search-mcp)
 **Phase 3 (Week 7):** ✅ Complete - Semantic Chunking
 **Phase 4 (Week 8):** ✅ Complete - Local Embeddings
 **Phase 5 (Week 9):** ✅ Complete - Vector Search
-**Phase 6 (Week 10-11):** ⚙️ Partial - Hybrid Search Infrastructure
-**Current Phase:** Phase 6.5 - BM25 Chunk Indexing (pending)
+**Phase 6 (Week 10-11):** ✅ Complete - Hybrid Search with BM25 + Vector
+**Current Phase:** Phase 7 - Enhanced MCP Tools
 **Next Milestone:** Phase 7 - Enhanced MCP Tools
 **Target MVP:** Week 16 - Full hybrid search operational
 
@@ -484,5 +485,5 @@ MIT License (same as original file-search-mcp)
 - [PHASE3_COMPLETE.md](docs/PHASE3_COMPLETE.md) - Semantic chunking
 - [PHASE4_COMPLETE.md](docs/PHASE4_COMPLETE.md) - Local embeddings
 - [PHASE5_COMPLETE.md](docs/PHASE5_COMPLETE.md) - Qdrant vector search
-- [PHASE6_PARTIAL.md](docs/PHASE6_PARTIAL.md) - Hybrid search infrastructure ⭐ NEW
+- [PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md) - Hybrid search (BM25 + Vector) ⭐ NEW
 - [EXTRACTION_PLAN.md](docs/EXTRACTION_PLAN.md) - Bloop patterns to extract
