@@ -11,6 +11,7 @@ use qdrant_client::qdrant::{
 use qdrant_client::Qdrant as QdrantClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Configuration for the vector store
 #[derive(Debug, Clone)]
@@ -25,17 +26,32 @@ pub struct VectorStoreConfig {
 
 impl Default for VectorStoreConfig {
     fn default() -> Self {
+        // Generate collection name from project directory to avoid mixing codebases
+        let collection_name = std::env::current_dir()
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| {
+                        // Sanitize name: replace hyphens and invalid chars with underscores
+                        let sanitized = name.replace('-', "_").replace(' ', "_");
+                        format!("code_chunks_{}", sanitized)
+                    })
+            })
+            .unwrap_or_else(|| "code_chunks_default".to_string());
+
         Self {
-            url: "http://localhost:6333".to_string(),
-            collection_name: "code_chunks".to_string(),
+            url: "http://localhost:6334".to_string(),  // gRPC port, not HTTP
+            collection_name,
             vector_size: 384, // all-MiniLM-L6-v2
         }
     }
 }
 
 /// Vector database client for code search
+#[derive(Clone)]
 pub struct VectorStore {
-    client: QdrantClient,
+    client: Arc<QdrantClient>,
     collection_name: String,
     vector_size: usize,
 }
@@ -50,11 +66,12 @@ pub struct SearchResult {
 
 impl VectorStore {
     /// Create a new vector store client
-    pub async fn new(config: VectorStoreConfig) -> Result<Self, Box<dyn std::error::Error>> {
-        let client = QdrantClient::from_url(&config.url).build()?;
+    pub async fn new(config: VectorStoreConfig) -> Result<Self, Box<dyn std::error::Error + Send>> {
+        let client = QdrantClient::from_url(&config.url).build()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
 
         let mut store = Self {
-            client,
+            client: Arc::new(client),
             collection_name: config.collection_name,
             vector_size: config.vector_size,
         };
@@ -68,9 +85,10 @@ impl VectorStore {
     /// Check if collection exists and create it if not
     async fn create_collection_if_not_exists(
         &mut self,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send>> {
         // Check if collection exists
-        let collections = self.client.list_collections().await?;
+        let collections = self.client.list_collections().await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
         let exists = collections
             .collections
             .iter()
@@ -117,7 +135,8 @@ impl VectorStore {
             ..Default::default()
         };
 
-        self.client.create_collection(create_collection).await?;
+        self.client.create_collection(create_collection).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
         Ok(())
     }
 
@@ -125,7 +144,7 @@ impl VectorStore {
     pub async fn upsert_chunks(
         &self,
         chunks_with_embeddings: Vec<(ChunkId, Embedding, CodeChunk)>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send>> {
         if chunks_with_embeddings.is_empty() {
             return Ok(());
         }
@@ -167,7 +186,8 @@ impl VectorStore {
                 points: batch.to_vec(),
                 ..Default::default()
             };
-            self.client.upsert_points(upsert_points).await?;
+            self.client.upsert_points(upsert_points).await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
         }
 
         Ok(())
@@ -178,7 +198,7 @@ impl VectorStore {
         &self,
         query_vector: Embedding,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
         let search_points = SearchPoints {
             collection_name: self.collection_name.clone(),
             vector: query_vector,
@@ -187,10 +207,11 @@ impl VectorStore {
             ..Default::default()
         };
 
-        let response = self.client.search_points(search_points).await?;
+        let response = self.client.search_points(search_points).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
 
         // Convert Qdrant results to SearchResult
-        let results: Result<Vec<SearchResult>, Box<dyn std::error::Error>> = response
+        let results: Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> = response
             .result
             .into_iter()
             .map(|point| {
@@ -199,13 +220,14 @@ impl VectorStore {
                     Some(id) => match id.point_id_options.as_ref().unwrap() {
                         qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid) => uuid.clone(),
                         qdrant_client::qdrant::point_id::PointIdOptions::Num(_) => {
-                            return Err("Expected UUID point ID".into())
+                            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Expected UUID point ID")) as Box<dyn std::error::Error + Send>)
                         }
                     },
-                    None => return Err("Missing point ID".into()),
+                    None => return Err(Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Missing point ID")) as Box<dyn std::error::Error + Send>),
                 };
 
-                let chunk_id = ChunkId::from_string(&chunk_id_str)?;
+                let chunk_id = ChunkId::from_string(&chunk_id_str)
+                    .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{:?}", e))) as Box<dyn std::error::Error + Send>)?;
 
                 // Deserialize chunk from payload
                 // Convert Qdrant values back to serde_json::Value
@@ -219,7 +241,8 @@ impl VectorStore {
                     }
                 }
 
-                let chunk: CodeChunk = serde_json::from_value(serde_json::Value::Object(json_map))?;
+                let chunk: CodeChunk = serde_json::from_value(serde_json::Value::Object(json_map))
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
 
                 Ok(SearchResult {
                     chunk_id,
@@ -236,7 +259,7 @@ impl VectorStore {
     pub async fn delete_chunks(
         &self,
         chunk_ids: Vec<ChunkId>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send>> {
         if chunk_ids.is_empty() {
             return Ok(());
         }
@@ -260,23 +283,26 @@ impl VectorStore {
             ..Default::default()
         };
 
-        self.client.delete_points(delete_points).await?;
+        self.client.delete_points(delete_points).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
 
         Ok(())
     }
 
     /// Get the total number of points in the collection
-    pub async fn count(&self) -> Result<usize, Box<dyn std::error::Error>> {
+    pub async fn count(&self) -> Result<usize, Box<dyn std::error::Error + Send>> {
         let info = self
             .client
             .collection_info(&self.collection_name)
-            .await?;
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
         Ok(info.result.and_then(|r| r.points_count).unwrap_or(0) as usize)
     }
 
     /// Delete the entire collection
-    pub async fn delete_collection(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.client.delete_collection(&self.collection_name).await?;
+    pub async fn delete_collection(&self) -> Result<(), Box<dyn std::error::Error + Send>> {
+        self.client.delete_collection(&self.collection_name).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
         Ok(())
     }
 }

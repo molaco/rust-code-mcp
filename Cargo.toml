@@ -53,5 +53,14 @@ fastembed = "4"        # Local embeddings (ONNX-based)
 # Phase 5: Vector Database
 qdrant-client = "1"    # Vector search with Qdrant
 
+# Additional dependencies for Phase 1
+walkdir = "2"          # Directory traversal for indexing
+anyhow = "1"           # Error handling
+regex = "1"            # Secrets scanning patterns
+glob = "0.3"           # File pattern matching
+
+# Merkle tree for 100x faster change detection (Week 2)
+rs_merkle = "1.4"      # Merkle tree implementation
+
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests

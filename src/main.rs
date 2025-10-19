@@ -1,8 +1,6 @@
-use crate::tools::search_tool::SearchTool;
+use file_search_mcp::tools::search_tool::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::{self, EnvFilter};
-
-mod tools;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

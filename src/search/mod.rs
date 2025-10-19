@@ -78,7 +78,7 @@ impl VectorSearch {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<VectorSearchResult>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<VectorSearchResult>, Box<dyn std::error::Error + Send>> {
         // Generate embedding for the query
         let query_embedding = self.embedding_generator.embed(query)?;
 
@@ -126,7 +126,7 @@ impl HybridSearch {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
         // Run vector search and BM25 search in parallel (if BM25 is available)
         let (vector_results, bm25_results) = if let Some(bm25) = &self.bm25_search {
             // BM25 search is sync, run in blocking task
@@ -142,8 +142,8 @@ impl HybridSearch {
             );
 
             let vector_results = vector_future?;
-            let bm25_results = bm25_future.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))) as Box<dyn std::error::Error>)?;
+            let bm25_results = bm25_future.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))) as Box<dyn std::error::Error + Send>)?;
 
             (vector_results, bm25_results)
         } else {
@@ -242,7 +242,7 @@ impl HybridSearch {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
         let results = self.vector_search.search(query, limit).await?;
 
         Ok(results

@@ -2,7 +2,7 @@
 
 A Model Context Protocol (MCP) server for hybrid semantic + lexical code search, optimized for large Rust codebases (1M+ LOC).
 
-**Status:** ✅ Phase 7 Complete - Enhanced MCP Tools (8 tools)
+**Status:** ✅ Phase 7 Complete - Enhanced MCP Tools (8 tools) | Integration Verified ✔
 
 ## 🎯 Project Goals
 
@@ -41,7 +41,11 @@ This project is a fork of [file-search-mcp](https://github.com/Kurogoma4D/file-s
 - **[PHASE5_COMPLETE.md](docs/PHASE5_COMPLETE.md)** - Phase 5: Qdrant vector search
 - **[PHASE6_COMPLETE.md](docs/PHASE6_COMPLETE.md)** - Phase 6: Hybrid search with BM25 + Vector RRF
 - **[PHASE7_WEEK12_COMPLETE.md](docs/PHASE7_WEEK12_COMPLETE.md)** - Phase 7 Week 12: Enhanced MCP Tools (6 new tools)
-- **[PHASE7_COMPLETE.md](docs/PHASE7_COMPLETE.md)** - Phase 7 Complete: 8 Tools Total (Resources deferred) ⭐ NEW
+- **[PHASE7_COMPLETE.md](docs/PHASE7_COMPLETE.md)** - Phase 7 Complete: 8 Tools Total (Resources deferred)
+- **[INTEGRATION_VERIFIED.md](docs/INTEGRATION_VERIFIED.md)** - Integration verified with Nix + Claude Code ⭐ NEW
+
+### Testing & Usage
+- **[TESTING.md](TESTING.md)** - Comprehensive testing guide for all 8 MCP tools
 
 ### Research & Analysis
 - **[RUST_MCP_CODE_SEARCH_RESEARCH.md](docs/RUST_MCP_CODE_SEARCH_RESEARCH.md)** - Research on reusable components
@@ -301,22 +305,44 @@ This tests:
 - Selective reindexing of modified files
 - Index persistence across restarts
 
-### Testing in Claude Desktop
+### Testing with Claude Code
 
-Add to your Claude Desktop config (`~/.config/Claude/claude_desktop_config.json`):
+**Integration Verified ✔** - See [INTEGRATION_VERIFIED.md](docs/INTEGRATION_VERIFIED.md) for complete setup guide.
+
+**Quick Start:**
+
+1. Enter the Nix development shell:
+```bash
+cd /home/molaco/Documents/nix-code
+nix develop
+```
+
+2. Open Claude Code:
+```bash
+cd /home/molaco/Documents/rust-code-mcp
+claude-code .
+```
+
+3. Test the MCP tools with prompts like:
+```
+Read the file src/lib.rs using rust-code-mcp
+Find where RustParser is defined in src/ using rust-code-mcp
+Analyze the complexity of src/search/mod.rs using rust-code-mcp
+```
+
+See [INTEGRATION_VERIFIED.md](docs/INTEGRATION_VERIFIED.md) for all 8 tools and example prompts.
+
+### Testing in Other MCP Clients
+
+Add to your MCP client config (Claude Desktop, Cursor, etc.):
 ```json
 {
   "mcpServers": {
-    "rust-code": {
+    "rust-code-mcp": {
       "command": "/home/molaco/Documents/rust-code-mcp/target/release/file-search-mcp"
     }
   }
 }
-```
-
-Restart Claude Desktop, then test with:
-```
-Search for "test" in /tmp/test-rust-search
 ```
 
 ### Verifying Index Persistence

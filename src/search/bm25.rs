@@ -46,6 +46,20 @@ impl Bm25Search {
         })
     }
 
+    /// Create a BM25 search instance from an existing Tantivy Index
+    ///
+    /// This is useful when you already have an Index instance (e.g., from UnifiedIndexer)
+    pub fn from_index(index: Index) -> Result<Self, Box<dyn std::error::Error + Send>> {
+        let schema = ChunkSchema::new();
+        let reader = index.reader().map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
+
+        Ok(Self {
+            index,
+            schema,
+            reader,
+        })
+    }
+
     /// Search for chunks matching a query
     ///
     /// Returns chunks with their BM25 scores, sorted by relevance (highest first).

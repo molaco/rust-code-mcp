@@ -1,5 +1,11 @@
-use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
-use rmcp::{ServerHandler, schemars, tool};
+use rmcp::{
+    ErrorData as McpError, ServerHandler,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{
+        CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
+    },
+    schemars, tool, tool_handler, tool_router,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tantivy::collector::TopDocs;
@@ -9,12 +15,12 @@ use tantivy::{Index, TantivyDocument, doc};
 use tracing;
 
 // Phase 1: Import our new modules
-use file_search_mcp::metadata_cache::{FileMetadata, MetadataCache};
-use file_search_mcp::schema::FileSchema;
-use file_search_mcp::parser::RustParser;
-use file_search_mcp::embeddings::EmbeddingGenerator;
-use file_search_mcp::vector_store::{VectorStore, VectorStoreConfig};
-use file_search_mcp::search::HybridSearch;
+use crate::embeddings::EmbeddingGenerator;
+use crate::metadata_cache::{FileMetadata, MetadataCache};
+use crate::parser::RustParser;
+use crate::schema::FileSchema;
+use crate::search::HybridSearch;
+use crate::vector_store::{VectorStore, VectorStoreConfig};
 use directories::ProjectDirs;
 
 // Search parameters: directory path and search keyword
@@ -86,13 +92,16 @@ pub struct GetSimilarCodeParams {
 }
 
 // Main tool struct
-#[derive(Debug, Clone)]
-pub struct SearchTool;
+#[derive(Clone)]
+pub struct SearchTool {
+    tool_router: ToolRouter<Self>,
+}
 
-#[tool(tool_box)]
 impl SearchTool {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            tool_router: Self::tool_router(),
+        }
     }
 
     /// Get the path for storing persistent index and cache
@@ -115,8 +124,7 @@ impl SearchTool {
         let index = if index_path.join("meta.json").exists() {
             // Open existing index
             tracing::debug!("Opening existing index at: {}", index_path.display());
-            Index::open_in_dir(&index_path)
-                .map_err(|e| format!("Failed to open index: {}", e))?
+            Index::open_in_dir(&index_path).map_err(|e| format!("Failed to open index: {}", e))?
         } else {
             // Create new index
             tracing::info!("Creating new index at: {}", index_path.display());
@@ -130,50 +138,54 @@ impl SearchTool {
     /// Open or create metadata cache
     fn open_cache() -> Result<MetadataCache, String> {
         let cache_path = Self::data_dir().join("cache");
-        MetadataCache::new(&cache_path)
-            .map_err(|e| format!("Failed to open metadata cache: {}", e))
+        MetadataCache::new(&cache_path).map_err(|e| format!("Failed to open metadata cache: {}", e))
     }
+}
 
+#[tool_router]
+impl SearchTool {
     /// Read and return the content of a specified file
     #[tool(description = "Read the content of a file from the specified path")]
     async fn read_file_content(
         &self,
-        #[tool(aggr)] params: FileContentParams,
-    ) -> Result<String, String> {
+        Parameters(FileContentParams { file_path }): Parameters<FileContentParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Validate file path
-        let file_path = Path::new(&params.file_path);
+        let file_path_obj = Path::new(&file_path);
 
         // Check if the path exists
-        if !file_path.exists() {
-            return Err(format!(
-                "The specified path '{}' does not exist",
-                params.file_path
+        if !file_path_obj.exists() {
+            return Err(McpError::invalid_params(
+                format!("The specified path '{}' does not exist", file_path),
+                None,
             ));
         }
 
         // Check if the path is a file
-        if !file_path.is_file() {
-            return Err(format!(
-                "The specified path '{}' is not a file",
-                params.file_path
+        if !file_path_obj.is_file() {
+            return Err(McpError::invalid_params(
+                format!("The specified path '{}' is not a file", file_path),
+                None,
             ));
         }
 
         // Try to read the file content
-        match fs::read_to_string(file_path) {
+        match fs::read_to_string(file_path_obj) {
             Ok(content) => {
                 if content.is_empty() {
-                    Ok("File is empty.".to_string())
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "File is empty.",
+                    )]))
                 } else {
-                    Ok(content)
+                    Ok(CallToolResult::success(vec![Content::text(content)]))
                 }
             }
             Err(e) => {
                 // Handle binary files or read errors
-                tracing::error!("Error reading file '{}': {}", file_path.display(), e);
+                tracing::error!("Error reading file '{}': {}", file_path_obj.display(), e);
 
                 // Try to read as binary and check if it's a binary file
-                match fs::read(file_path) {
+                match fs::read(file_path_obj) {
                     Ok(bytes) => {
                         // Check if it seems to be a binary file
                         if bytes.iter().any(|&b| b == 0)
@@ -183,316 +195,157 @@ impl SearchTool {
                                 .count()
                                 > bytes.len() / 10
                         {
-                            Err(format!(
-                                "The file '{}' appears to be a binary file and cannot be displayed as text",
-                                params.file_path
+                            Err(McpError::invalid_params(
+                                format!(
+                                    "The file '{}' appears to be a binary file and cannot be displayed as text",
+                                    file_path
+                                ),
+                                None,
                             ))
                         } else {
-                            Err(format!(
-                                "The file '{}' could not be read as text: {}",
-                                params.file_path, e
+                            Err(McpError::invalid_params(
+                                format!(
+                                    "The file '{}' could not be read as text: {}",
+                                    file_path, e
+                                ),
+                                None,
                             ))
                         }
                     }
-                    Err(read_err) => Err(format!(
-                        "Error reading file '{}': {}",
-                        params.file_path, read_err
+                    Err(read_err) => Err(McpError::invalid_params(
+                        format!("Error reading file '{}': {}", file_path, read_err),
+                        None,
                     )),
                 }
             }
         }
     }
 
-    /// Perform full-text search for keywords on text files (such as .txt, .md, etc.) in the specified directory
-    #[tool(description = "Search for keywords in text files within the specified directory")]
-    async fn search(&self, #[tool(aggr)] params: SearchParams) -> Result<String, String> {
-        // 1. Open or create persistent index with FileSchema
-        let (index, file_schema) = Self::open_or_create_index()?;
+    /// Perform hybrid search (BM25 + Vector) on Rust code in the specified directory
+    #[tool(description = "Search for keywords in Rust code using hybrid search (BM25 + semantic vectors)")]
+    async fn search(
+        &self,
+        Parameters(SearchParams { directory, keyword }): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::indexing::unified::UnifiedIndexer;
 
-        // 2. Open metadata cache for incremental indexing
-        let cache = Self::open_cache()?;
-
-        // 3. Create index writer (adjust buffer size as needed)
-        let mut index_writer = index
-            .writer(50_000_000)
-            .map_err(|e| format!("Index writer error: {}", e))?;
-
-        // 4. Count the number of files added to the index
-        let mut indexed_files_count = 0;
-        let mut reindexed_files_count = 0;  // Track how many were reindexed (changed)
-        let mut unchanged_files_count = 0;  // Track how many were skipped (unchanged)
-        // Track directory processing status (for debugging)
-        let mut found_files_count = 0;
-        let mut skipped_files_count = 0;
-
-        // 4. Read text files in the specified directory and add them to the index
-        let dir_path = Path::new(&params.directory);
+        let dir_path = Path::new(&directory);
         if !dir_path.is_dir() {
-            return Err(format!(
-                "The specified path '{}' is not a directory",
-                params.directory
+            return Err(McpError::invalid_params(
+                format!("The specified path '{}' is not a directory", directory),
+                None,
             ));
         }
-
-        // Blacklist of extensions likely to be binary files
-        // Skip extensions that are clearly binary files
-        let binary_extensions = [
-            "exe", "dll", "so", "dylib", "bin", "obj", "o", "a", "lib", "png", "jpg", "jpeg",
-            "gif", "bmp", "tiff", "webp", "ico", "mp3", "mp4", "wav", "ogg", "flac", "avi", "mov",
-            "mkv", "zip", "gz", "tar", "7z", "rar", "jar", "war", "pdf", "doc", "docx", "xls",
-            "xlsx", "ppt", "pptx", "db", "sqlite", "mdb", "iso", "dmg", "class",
-        ];
-
-        // Function to determine if a file is a text file
-        fn is_text_file(path: &Path, binary_extensions: &[&str]) -> bool {
-            // 1. First check extensions that are clearly binary
-            if let Some(ext) = path.extension() {
-                let ext_str = ext.to_string_lossy().to_lowercase();
-                if binary_extensions.iter().any(|&bin_ext| bin_ext == ext_str) {
-                    return false;
-                }
-            }
-
-            // 2. Read the beginning of the file and determine if it is binary
-            match fs::read(path) {
-                Ok(bytes) if !bytes.is_empty() => {
-                    // Sample size (read up to 8KB)
-                    let sample_size = std::cmp::min(bytes.len(), 8192);
-                    let sample = &bytes[..sample_size];
-
-                    // Detect binary characteristics
-                    // 1. Detect NULL bytes (text files do not have NULL bytes)
-                    if sample.iter().any(|&b| b == 0) {
-                        return false;
-                    }
-
-                    // 2. Check the ratio of control characters
-                    let control_chars_count = sample
-                        .iter()
-                        .filter(|&&b| {
-                            b < 32 && b != 9 && b != 10 && b != 13 // Exclude Tab, LF, CR
-                        })
-                        .count();
-
-                    // If the ratio of control characters is too high, consider it binary
-                    if (control_chars_count as f32 / sample_size as f32) > 0.3 {
-                        return false;
-                    }
-
-                    // 3. Check if it is valid UTF-8
-                    let is_valid_utf8 = std::str::from_utf8(sample).is_ok();
-
-                    // 4. Check the ASCII ratio
-                    let ascii_ratio =
-                        sample.iter().filter(|&&b| b <= 127).count() as f32 / sample_size as f32;
-
-                    // Valid UTF-8 with a high ASCII ratio, or specific non-UTF-8 encoding characteristics
-                    is_valid_utf8 || ascii_ratio > 0.8
-                }
-                _ => false, // Do not consider files with read errors or size 0 as text
-            }
-        }
-
-        // Function to recursively process directory entries
-        fn process_directory(
-            dir_path: &Path,
-            index_writer: &mut tantivy::IndexWriter,
-            file_schema: &FileSchema,
-            cache: &MetadataCache,
-            binary_extensions: &[&str],
-            indexed_files_count: &mut usize,
-            reindexed_files_count: &mut usize,
-            unchanged_files_count: &mut usize,
-            found_files_count: &mut usize,
-            skipped_files_count: &mut usize,
-        ) -> Result<(), String> {
-            for entry in fs::read_dir(dir_path)
-                .map_err(|e| format!("Directory read error '{}': {}", dir_path.display(), e))?
-            {
-                let entry = entry.map_err(|e| format!("Entry read error: {}", e))?;
-                let path = entry.path();
-
-                if path.is_dir() {
-                    // Recursively process subdirectories (add depth limit if needed)
-                    process_directory(
-                        &path,
-                        index_writer,
-                        file_schema,
-                        cache,
-                        binary_extensions,
-                        indexed_files_count,
-                        reindexed_files_count,
-                        unchanged_files_count,
-                        found_files_count,
-                        skipped_files_count,
-                    )?;
-                } else if path.is_file() {
-                    *found_files_count += 1;
-
-                    // More universal text file determination
-                    if is_text_file(&path, binary_extensions) {
-                        match fs::read_to_string(&path) {
-                            Ok(content) => {
-                                if !content.trim().is_empty() {
-                                    let file_path_str = path.to_string_lossy().to_string();
-
-                                    // Check if file has changed using metadata cache
-                                    let has_changed = cache.has_changed(&file_path_str, &content)
-                                        .map_err(|e| format!("Cache check error: {}", e))?;
-
-                                    if !has_changed {
-                                        // File unchanged, skip indexing
-                                        *unchanged_files_count += 1;
-                                        tracing::debug!("Skipped (unchanged): {}", path.display());
-                                    } else {
-                                        // File is new or changed, index it
-                                        // Check if file was in cache (for reindex tracking)
-                                        let was_cached = cache.get(&file_path_str)
-                                            .map_err(|e| format!("Cache get error: {}", e))?
-                                            .is_some();
-
-                                        // Get file metadata
-                                        let metadata = fs::metadata(&path)
-                                            .map_err(|e| format!("Metadata error: {}", e))?;
-                                        let last_modified = metadata.modified()
-                                            .map_err(|e| format!("Modified time error: {}", e))?
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .map_err(|e| format!("Time conversion error: {}", e))?
-                                            .as_secs();
-
-                                        // Create FileMetadata for cache
-                                        let file_meta = FileMetadata::from_content(
-                                            &content,
-                                            last_modified,
-                                            metadata.len()
-                                        );
-
-                                        // Add document to index
-                                        index_writer
-                                            .add_document(doc!(
-                                                file_schema.relative_path => file_path_str.clone(),
-                                                file_schema.content => content,
-                                                file_schema.unique_hash => file_meta.hash.clone(),
-                                                file_schema.last_modified => file_meta.last_modified,
-                                                file_schema.file_size => file_meta.size,
-                                            ))
-                                            .map_err(|e| format!("Document addition error: {}", e))?;
-
-                                        // Update cache
-                                        cache.set(&file_path_str, &file_meta)
-                                            .map_err(|e| format!("Cache update error: {}", e))?;
-
-                                        *indexed_files_count += 1;
-
-                                        // Track if this was a reindex or new file
-                                        if was_cached {
-                                            *reindexed_files_count += 1;
-                                            tracing::debug!("Reindexed (changed): {}", path.display());
-                                        } else {
-                                            tracing::debug!("Indexed (new): {}", path.display());
-                                        }
-                                    }
-                                } else {
-                                    *skipped_files_count += 1;
-                                    tracing::debug!("Skipped (empty file): {}", path.display());
-                                }
-                            }
-                            Err(e) => {
-                                // Skip and continue on read errors
-                                *skipped_files_count += 1;
-                                tracing::debug!("Skipped (read error): {} - {}", path.display(), e);
-                            }
-                        }
-                    } else {
-                        *skipped_files_count += 1;
-                        tracing::debug!("Skipped (non-text): {}", path.display());
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        // Execute directory processing
-        tracing::info!("Target directory for search: {}", dir_path.display());
-        process_directory(
-            dir_path,
-            &mut index_writer,
-            &file_schema,
-            &cache,
-            &binary_extensions,
-            &mut indexed_files_count,
-            &mut reindexed_files_count,
-            &mut unchanged_files_count,
-            &mut found_files_count,
-            &mut skipped_files_count,
-        )?;
-
-        tracing::info!(
-            "Processing complete: Found={}, New/Changed={}, Reindexed={}, Unchanged={}, Skipped={}",
-            found_files_count,
-            indexed_files_count,
-            reindexed_files_count,
-            unchanged_files_count,
-            skipped_files_count
-        );
-
-        // Return an error if no files were indexed
-        if indexed_files_count == 0 {
-            return Ok(format!(
-                "No text files suitable for indexing were found in the specified directory '{}'.\nFound files: {}, Skipped: {}\nSupported extensions: {:?}",
-                params.directory, found_files_count, skipped_files_count, binary_extensions
-            ));
-        }
-
-        // 5. Commit the index
-        index_writer
-            .commit()
-            .map_err(|e| format!("Commit error: {}", e))?;
-
-        // 6. Generate reader and searcher for searching
-        let reader = index.reader().map_err(|e| e.to_string())?;
-        let searcher = reader.searcher();
-
-        // 7. Parse query containing the keyword
-        let query_parser = QueryParser::for_index(&index, vec![file_schema.content]);
 
         // Ensure the keyword is not empty
-        if params.keyword.trim().is_empty() {
-            return Err("Search keyword is empty. Please enter a valid keyword.".into());
+        if keyword.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Search keyword is empty. Please enter a valid keyword.".to_string(),
+                None,
+            ));
         }
 
-        let query = query_parser
-            .parse_query(&params.keyword)
-            .map_err(|e| format!("Query parse error: {}", e))?;
+        // 1. Initialize unified indexer
+        let qdrant_url = std::env::var("QDRANT_URL")
+            .unwrap_or_else(|_| "http://localhost:6334".to_string());
 
-        // 8. Retrieve top 10 search results
-        let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(10))
-            .map_err(|e| format!("Search error: {}", e))?;
+        // Sanitize project name for collection
+        let project_name = dir_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default")
+            .replace(|c: char| !c.is_alphanumeric(), "_");
 
-        // 9. Concatenate file paths from search results into a string
-        let mut result_str = String::new();
-        for (score, doc_address) in &top_docs {
-            let retrieved_doc: TantivyDocument =
-                searcher.doc(*doc_address).map_err(|e| e.to_string())?;
-            let path_value = retrieved_doc
-                .get_first(file_schema.relative_path)
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown path");
-            result_str.push_str(&format!("Hit: {} (Score: {:.2})\n", path_value, score));
+        let collection_name = format!("code_chunks_{}", project_name);
+
+        tracing::info!("Initializing unified indexer for {}", dir_path.display());
+
+        let mut indexer = UnifiedIndexer::new(
+            &Self::data_dir().join("cache"),
+            &Self::data_dir().join("index"),
+            &qdrant_url,
+            &collection_name,
+            384, // all-MiniLM-L6-v2 vector size
+        )
+        .await
+        .map_err(|e| McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None))?;
+
+        // 2. Index directory (incremental - only changed files)
+        tracing::info!("Indexing directory: {}", dir_path.display());
+        let stats = indexer
+            .index_directory(dir_path)
+            .await
+            .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
+
+        tracing::info!(
+            "Indexed {} files ({} chunks), {} unchanged, {} skipped",
+            stats.indexed_files,
+            stats.total_chunks,
+            stats.unchanged_files,
+            stats.skipped_files
+        );
+
+        if stats.total_chunks == 0 && stats.unchanged_files == 0 {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No Rust files suitable for indexing were found in '{}'.\nSkipped files: {}",
+                directory, stats.skipped_files
+            ))]));
         }
 
-        if result_str.is_empty() {
-            Ok(format!(
-                "No search results for keyword '{}'. Number of indexed files: {}",
-                params.keyword, indexed_files_count
-            ))
+        // 3. Perform hybrid search
+        let bm25_search = indexer.create_bm25_search()
+            .map_err(|e| McpError::invalid_params(format!("Failed to create BM25 search: {}", e), None))?;
+
+        let hybrid_search = HybridSearch::with_defaults(
+            indexer.embedding_generator_cloned(),
+            indexer.vector_store_cloned(),
+            Some(bm25_search),
+        );
+
+        tracing::info!("Performing hybrid search for: {}", keyword);
+        let results = hybrid_search
+            .search(&keyword, 10)
+            .await
+            .map_err(|e| McpError::invalid_params(format!("Search failed: {}", e), None))?;
+
+        // 4. Format results
+        if results.is_empty() {
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "No results found for '{}'.\nIndexed {} files ({} chunks), {} unchanged, {} skipped",
+                keyword, stats.indexed_files, stats.total_chunks, stats.unchanged_files, stats.skipped_files
+            ))]))
         } else {
-            Ok(format!(
-                "Search results ({} hits):\n{}",
-                top_docs.len(),
-                result_str
-            ))
+            let mut result_str = format!("Found {} results for '{}':\n\n", results.len(), keyword);
+
+            for (idx, result) in results.iter().enumerate() {
+                result_str.push_str(&format!(
+                    "{}. Score: {:.4} | File: {} | Symbol: {} ({})\n",
+                    idx + 1,
+                    result.score,
+                    result.chunk.context.file_path.display(),
+                    result.chunk.context.symbol_name,
+                    result.chunk.context.symbol_kind,
+                ));
+                result_str.push_str(&format!(
+                    "   Lines: {}-{}\n",
+                    result.chunk.context.line_start,
+                    result.chunk.context.line_end
+                ));
+                if let Some(ref doc) = result.chunk.context.docstring {
+                    result_str.push_str(&format!("   Doc: {}\n", doc));
+                }
+                result_str.push_str(&format!(
+                    "   Preview:\n   {}\n\n",
+                    result.chunk.content.lines().take(3).collect::<Vec<_>>().join("\n   ")
+                ));
+            }
+
+            result_str.push_str(&format!(
+                "\n--- Indexing stats: {} files indexed ({} chunks), {} unchanged, {} skipped ---",
+                stats.indexed_files, stats.total_chunks, stats.unchanged_files, stats.skipped_files
+            ));
+
+            Ok(CallToolResult::success(vec![Content::text(result_str)]))
         }
     }
 
@@ -500,20 +353,25 @@ impl SearchTool {
     #[tool(description = "Find where a Rust symbol (function, struct, trait, etc.) is defined")]
     async fn find_definition(
         &self,
-        #[tool(aggr)] params: FindDefinitionParams,
-    ) -> Result<String, String> {
-        let dir_path = Path::new(&params.directory);
+        Parameters(FindDefinitionParams {
+            symbol_name,
+            directory,
+        }): Parameters<FindDefinitionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dir_path = Path::new(&directory);
         if !dir_path.is_dir() {
-            return Err(format!(
-                "The specified path '{}' is not a directory",
-                params.directory
+            return Err(McpError::invalid_params(
+                format!("The specified path '{}' is not a directory", directory),
+                None,
             ));
         }
 
-        tracing::debug!("Searching for definition of '{}'", params.symbol_name);
+        tracing::debug!("Searching for definition of '{}'", symbol_name);
 
         let mut found_definitions = Vec::new();
-        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+        let mut parser = RustParser::new().map_err(|e| {
+            McpError::invalid_params(format!("Parser initialization error: {}", e), None)
+        })?;
 
         // Recursively search .rs files
         fn visit_rust_files(
@@ -545,71 +403,119 @@ impl SearchTool {
             Ok(())
         }
 
-        visit_rust_files(dir_path, &params.symbol_name, &mut parser, &mut found_definitions)?;
+        visit_rust_files(dir_path, &symbol_name, &mut parser, &mut found_definitions)
+            .map_err(|e| McpError::invalid_params(e, None))?;
 
         if found_definitions.is_empty() {
-            Ok(format!(
+            Ok(CallToolResult::success(vec![Content::text(format!(
                 "No definition found for symbol '{}'",
-                params.symbol_name
-            ))
+                symbol_name
+            ))]))
         } else {
             let mut result = format!(
                 "Found {} definition(s) for '{}':\n",
                 found_definitions.len(),
-                params.symbol_name
+                symbol_name
             );
             for (path, line, kind) in found_definitions {
-                result.push_str(&format!(
-                    "- {}:{} ({})\n",
-                    path.display(),
-                    line,
-                    kind
-                ));
+                result.push_str(&format!("- {}:{} ({})\n", path.display(), line, kind));
             }
-            Ok(result)
+            Ok(CallToolResult::success(vec![Content::text(result)]))
         }
     }
 
     /// Find all references to a symbol in the codebase
-    #[tool(description = "Find all places where a symbol is referenced or called")]
+    #[tool(
+        description = "Find all places where a symbol is referenced or called (includes function calls and type usage)"
+    )]
     async fn find_references(
         &self,
-        #[tool(aggr)] params: FindReferencesParams,
-    ) -> Result<String, String> {
-        let dir_path = Path::new(&params.directory);
+        Parameters(FindReferencesParams {
+            symbol_name,
+            directory,
+        }): Parameters<FindReferencesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dir_path = Path::new(&directory);
         if !dir_path.is_dir() {
-            return Err(format!(
-                "The specified path '{}' is not a directory",
-                params.directory
+            return Err(McpError::invalid_params(
+                format!("The specified path '{}' is not a directory", directory),
+                None,
             ));
         }
 
-        tracing::debug!("Searching for references to '{}'", params.symbol_name);
+        tracing::debug!("Searching for references to '{}'", symbol_name);
 
-        let mut found_references = Vec::new();
-        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+        let mut found_call_refs = Vec::new();
+        let mut found_type_refs = Vec::new();
+        let mut parser = RustParser::new().map_err(|e| {
+            McpError::invalid_params(format!("Parser initialization error: {}", e), None)
+        })?;
 
-        // Recursively search .rs files for references in call graphs
+        // Recursively search .rs files for references (both function calls and type usage)
         fn visit_rust_files(
             dir: &Path,
             symbol_name: &str,
             parser: &mut RustParser,
-            found: &mut Vec<(PathBuf, Vec<String>)>,
+            call_refs: &mut Vec<(PathBuf, Vec<String>)>,
+            type_refs: &mut Vec<(PathBuf, Vec<String>)>,
         ) -> Result<(), String> {
             for entry in fs::read_dir(dir).map_err(|e| format!("Directory read error: {}", e))? {
                 let entry = entry.map_err(|e| format!("Entry read error: {}", e))?;
                 let path = entry.path();
 
                 if path.is_dir() {
-                    visit_rust_files(&path, symbol_name, parser, found)?;
+                    visit_rust_files(&path, symbol_name, parser, call_refs, type_refs)?;
                 } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
                     if let Ok(parse_result) = parser.parse_file_complete(&path) {
+                        // Check function call references
                         let callers = parse_result.call_graph.get_callers(symbol_name);
                         if !callers.is_empty() {
-                            found.push((
+                            call_refs.push((
                                 path.clone(),
                                 callers.into_iter().map(String::from).collect(),
                             ));
+                        }
+
+                        // Check type references
+                        let type_usages: Vec<String> = parse_result
+                            .type_references
+                            .iter()
+                            .filter(|r| r.type_name == symbol_name)
+                            .map(|r| match &r.usage_context {
+                                crate::parser::TypeUsageContext::FunctionParameter {
+                                    function_name,
+                                } => {
+                                    format!("parameter in {}", function_name)
+                                }
+                                crate::parser::TypeUsageContext::FunctionReturn {
+                                    function_name,
+                                } => {
+                                    format!("return type of {}", function_name)
+                                }
+                                crate::parser::TypeUsageContext::StructField {
+                                    struct_name,
+                                    field_name,
+                                } => {
+                                    format!("field '{}' in struct {}", field_name, struct_name)
+                                }
+                                crate::parser::TypeUsageContext::ImplBlock { trait_name } => {
+                                    if let Some(trait_name) = trait_name {
+                                        format!("impl {} for type", trait_name)
+                                    } else {
+                                        "impl block".to_string()
+                                    }
+                                }
+                                crate::parser::TypeUsageContext::LetBinding => {
+                                    "let binding".to_string()
+                                }
+                                crate::parser::TypeUsageContext::GenericArgument => {
+                                    "generic type argument".to_string()
+                                }
+                            })
+                            .collect();
+
+                        if !type_usages.is_empty() {
+                            type_refs.push((path.clone(), type_usages));
                         }
                     }
                 }
@@ -617,29 +523,65 @@ impl SearchTool {
             Ok(())
         }
 
-        visit_rust_files(dir_path, &params.symbol_name, &mut parser, &mut found_references)?;
+        visit_rust_files(
+            dir_path,
+            &symbol_name,
+            &mut parser,
+            &mut found_call_refs,
+            &mut found_type_refs,
+        )
+        .map_err(|e| McpError::invalid_params(e, None))?;
 
-        if found_references.is_empty() {
-            Ok(format!(
+        if found_call_refs.is_empty() && found_type_refs.is_empty() {
+            Ok(CallToolResult::success(vec![Content::text(format!(
                 "No references found for symbol '{}'",
-                params.symbol_name
-            ))
+                symbol_name
+            ))]))
         } else {
-            let total_refs: usize = found_references.iter().map(|(_, callers)| callers.len()).sum();
+            let total_call_refs: usize = found_call_refs
+                .iter()
+                .map(|(_, callers)| callers.len())
+                .sum();
+            let total_type_refs: usize =
+                found_type_refs.iter().map(|(_, usages)| usages.len()).sum();
+            let total_refs = total_call_refs + total_type_refs;
+            let total_files = found_call_refs
+                .iter()
+                .map(|(p, _)| p)
+                .chain(found_type_refs.iter().map(|(p, _)| p))
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+
             let mut result = format!(
-                "Found {} reference(s) to '{}' in {} file(s):\n",
-                total_refs,
-                params.symbol_name,
-                found_references.len()
+                "Found {} reference(s) to '{}' in {} file(s):\n\n",
+                total_refs, symbol_name, total_files
             );
-            for (path, callers) in found_references {
+
+            // Show function call references
+            if !found_call_refs.is_empty() {
                 result.push_str(&format!(
-                    "- {} (called by: {})\n",
-                    path.display(),
-                    callers.join(", ")
+                    "Function Calls ({} references):\n",
+                    total_call_refs
                 ));
+                for (path, callers) in found_call_refs {
+                    result.push_str(&format!(
+                        "- {} (called by: {})\n",
+                        path.display(),
+                        callers.join(", ")
+                    ));
+                }
+                result.push('\n');
             }
-            Ok(result)
+
+            // Show type usage references
+            if !found_type_refs.is_empty() {
+                result.push_str(&format!("Type Usage ({} references):\n", total_type_refs));
+                for (path, usages) in found_type_refs {
+                    result.push_str(&format!("- {} ({})\n", path.display(), usages.join(", ")));
+                }
+            }
+
+            Ok(CallToolResult::success(vec![Content::text(result)]))
         }
     }
 
@@ -647,24 +589,32 @@ impl SearchTool {
     #[tool(description = "Get import dependencies for a Rust source file")]
     async fn get_dependencies(
         &self,
-        #[tool(aggr)] params: GetDependenciesParams,
-    ) -> Result<String, String> {
-        let file_path = Path::new(&params.file_path);
+        Parameters(GetDependenciesParams { file_path }): Parameters<GetDependenciesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let file_path_obj = Path::new(&file_path);
 
-        if !file_path.exists() {
-            return Err(format!("File '{}' does not exist", params.file_path));
+        if !file_path_obj.exists() {
+            return Err(McpError::invalid_params(
+                format!("File '{}' does not exist", file_path),
+                None,
+            ));
         }
 
-        if !file_path.is_file() {
-            return Err(format!("'{}' is not a file", params.file_path));
+        if !file_path_obj.is_file() {
+            return Err(McpError::invalid_params(
+                format!("'{}' is not a file", file_path),
+                None,
+            ));
         }
 
-        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+        let mut parser = RustParser::new().map_err(|e| {
+            McpError::invalid_params(format!("Parser initialization error: {}", e), None)
+        })?;
         let parse_result = parser
-            .parse_file_complete(file_path)
-            .map_err(|e| format!("Parse error: {}", e))?;
+            .parse_file_complete(file_path_obj)
+            .map_err(|e| McpError::invalid_params(format!("Parse error: {}", e), None))?;
 
-        let mut result = format!("Dependencies for '{}':\n\n", file_path.display());
+        let mut result = format!("Dependencies for '{}':\n\n", file_path_obj.display());
 
         // List imports
         if parse_result.imports.is_empty() {
@@ -676,33 +626,44 @@ impl SearchTool {
             }
         }
 
-        Ok(result)
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     /// Get call graph for a file or specific symbol
     #[tool(description = "Get the call graph showing function call relationships")]
     async fn get_call_graph(
         &self,
-        #[tool(aggr)] params: GetCallGraphParams,
-    ) -> Result<String, String> {
-        let file_path = Path::new(&params.file_path);
+        Parameters(GetCallGraphParams {
+            file_path,
+            symbol_name,
+        }): Parameters<GetCallGraphParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let file_path_obj = Path::new(&file_path);
 
-        if !file_path.exists() {
-            return Err(format!("File '{}' does not exist", params.file_path));
+        if !file_path_obj.exists() {
+            return Err(McpError::invalid_params(
+                format!("File '{}' does not exist", file_path),
+                None,
+            ));
         }
 
-        if !file_path.is_file() {
-            return Err(format!("'{}' is not a file", params.file_path));
+        if !file_path_obj.is_file() {
+            return Err(McpError::invalid_params(
+                format!("'{}' is not a file", file_path),
+                None,
+            ));
         }
 
-        let mut parser = RustParser::new().map_err(|e| format!("Parser initialization error: {}", e))?;
+        let mut parser = RustParser::new().map_err(|e| {
+            McpError::invalid_params(format!("Parser initialization error: {}", e), None)
+        })?;
         let parse_result = parser
-            .parse_file_complete(file_path)
-            .map_err(|e| format!("Parse error: {}", e))?;
+            .parse_file_complete(file_path_obj)
+            .map_err(|e| McpError::invalid_params(format!("Parse error: {}", e), None))?;
 
-        let mut result = format!("Call graph for '{}':\n\n", file_path.display());
+        let mut result = format!("Call graph for '{}':\n\n", file_path_obj.display());
 
-        if let Some(ref symbol_name) = params.symbol_name {
+        if let Some(ref symbol_name) = symbol_name {
             // Show call graph for specific symbol
             let callees = parse_result.call_graph.get_callees(symbol_name);
             let callers = parse_result.call_graph.get_callers(symbol_name);
@@ -747,54 +708,66 @@ impl SearchTool {
             }
         }
 
-        Ok(result)
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     /// Analyze code complexity metrics for a file
-    #[tool(description = "Analyze code complexity metrics (LOC, cyclomatic complexity, function count)")]
+    #[tool(
+        description = "Analyze code complexity metrics (LOC, cyclomatic complexity, function count)"
+    )]
     async fn analyze_complexity(
         &self,
-        #[tool(aggr)] params: AnalyzeComplexityParams,
-    ) -> Result<String, String> {
-        let file_path = Path::new(&params.file_path);
+        Parameters(AnalyzeComplexityParams { file_path }): Parameters<AnalyzeComplexityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let file_path_obj = Path::new(&file_path);
 
-        if !file_path.exists() {
-            return Err(format!("File '{}' does not exist", params.file_path));
+        if !file_path_obj.exists() {
+            return Err(McpError::invalid_params(
+                format!("File '{}' does not exist", file_path),
+                None,
+            ));
         }
 
-        if !file_path.is_file() {
-            return Err(format!("'{}' is not a file", params.file_path));
+        if !file_path_obj.is_file() {
+            return Err(McpError::invalid_params(
+                format!("'{}' is not a file", file_path),
+                None,
+            ));
         }
 
         // Read source file
-        let source = fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
+        let source = fs::read_to_string(file_path_obj)
+            .map_err(|e| McpError::invalid_params(format!("Failed to read file: {}", e), None))?;
 
         // Parse file to get symbols
-        let mut parser = RustParser::new()
-            .map_err(|e| format!("Parser initialization error: {}", e))?;
+        let mut parser = RustParser::new().map_err(|e| {
+            McpError::invalid_params(format!("Parser initialization error: {}", e), None)
+        })?;
         let parse_result = parser
-            .parse_file_complete(file_path)
-            .map_err(|e| format!("Parse error: {}", e))?;
+            .parse_file_complete(file_path_obj)
+            .map_err(|e| McpError::invalid_params(format!("Parse error: {}", e), None))?;
 
         // Calculate metrics
         let lines_of_code = source.lines().count();
         let non_empty_loc = source.lines().filter(|l| !l.trim().is_empty()).count();
-        let comment_lines = source.lines().filter(|l| l.trim().starts_with("//")).count();
+        let comment_lines = source
+            .lines()
+            .filter(|l| l.trim().starts_with("//"))
+            .count();
         let function_count = parse_result
             .symbols
             .iter()
-            .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Function { .. }))
+            .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Function { .. }))
             .count();
         let struct_count = parse_result
             .symbols
             .iter()
-            .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Struct))
+            .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Struct))
             .count();
         let trait_count = parse_result
             .symbols
             .iter()
-            .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Trait))
+            .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Trait))
             .count();
 
         // Calculate cyclomatic complexity (simplified - count decision points)
@@ -816,12 +789,15 @@ impl SearchTool {
             0.0
         };
 
-        let mut result = format!("Complexity analysis for '{}':\n\n", file_path.display());
+        let mut result = format!("Complexity analysis for '{}':\n\n", file_path_obj.display());
         result.push_str("=== Code Metrics ===\n");
         result.push_str(&format!("Total lines:           {}\n", lines_of_code));
         result.push_str(&format!("Non-empty lines:       {}\n", non_empty_loc));
         result.push_str(&format!("Comment lines:         {}\n", comment_lines));
-        result.push_str(&format!("Code lines (approx):   {}\n\n", non_empty_loc - comment_lines));
+        result.push_str(&format!(
+            "Code lines (approx):   {}\n\n",
+            non_empty_loc - comment_lines
+        ));
 
         result.push_str("=== Symbol Counts ===\n");
         result.push_str(&format!("Functions:             {}\n", function_count));
@@ -829,42 +805,53 @@ impl SearchTool {
         result.push_str(&format!("Traits:                {}\n\n", trait_count));
 
         result.push_str("=== Complexity ===\n");
-        result.push_str(&format!("Total cyclomatic:      {}\n", cyclomatic_complexity));
+        result.push_str(&format!(
+            "Total cyclomatic:      {}\n",
+            cyclomatic_complexity
+        ));
         result.push_str(&format!("Avg per function:      {:.2}\n", avg_complexity));
 
         // Add call graph complexity
         let edge_count = parse_result.call_graph.edge_count();
         result.push_str(&format!("Function calls:        {}\n", edge_count));
 
-        Ok(result)
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     /// Find semantically similar code using vector search
     #[tool(description = "Find code snippets semantically similar to a query using embeddings")]
     async fn get_similar_code(
         &self,
-        #[tool(aggr)] params: GetSimilarCodeParams,
-    ) -> Result<String, String> {
-        let dir_path = Path::new(&params.directory);
+        Parameters(GetSimilarCodeParams {
+            query,
+            directory,
+            limit,
+        }): Parameters<GetSimilarCodeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let dir_path = Path::new(&directory);
         if !dir_path.is_dir() {
-            return Err(format!(
-                "The specified path '{}' is not a directory",
-                params.directory
+            return Err(McpError::invalid_params(
+                format!("The specified path '{}' is not a directory", directory),
+                None,
             ));
         }
 
-        let limit = params.limit.unwrap_or(5);
+        let limit = limit.unwrap_or(5);
 
-        tracing::debug!("Searching for similar code to: {}", params.query);
+        tracing::debug!("Searching for similar code to: {}", query);
 
         // Initialize components
-        let embedding_generator = EmbeddingGenerator::new()
-            .map_err(|e| format!("Failed to initialize embedding generator: {}", e))?;
+        let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
+            McpError::invalid_params(
+                format!("Failed to initialize embedding generator: {}", e),
+                None,
+            )
+        })?;
 
         let vector_store_config = VectorStoreConfig::default();
-        let vector_store = VectorStore::new(vector_store_config)
-            .await
-            .map_err(|e| format!("Failed to initialize vector store: {}", e))?;
+        let vector_store = VectorStore::new(vector_store_config).await.map_err(|e| {
+            McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
+        })?;
 
         // Create hybrid search (vector-only mode)
         let hybrid_search = HybridSearch::with_defaults(
@@ -875,21 +862,21 @@ impl SearchTool {
 
         // Perform vector search
         let results = hybrid_search
-            .vector_only_search(&params.query, limit)
+            .vector_only_search(&query, limit)
             .await
-            .map_err(|e| format!("Search error: {}", e))?;
+            .map_err(|e| McpError::invalid_params(format!("Search error: {}", e), None))?;
 
         if results.is_empty() {
-            return Ok(format!(
+            return Ok(CallToolResult::success(vec![Content::text(format!(
                 "No similar code found for query: '{}'",
-                params.query
-            ));
+                query
+            ))]));
         }
 
         let mut result = format!(
             "Found {} similar code snippet(s) for query '{}':\n\n",
             results.len(),
-            params.query
+            query
         );
 
         for (idx, search_result) in results.iter().enumerate() {
@@ -902,20 +889,29 @@ impl SearchTool {
                 chunk.context.symbol_name,
                 chunk.context.symbol_kind
             ));
-            result.push_str(&format!("   Lines: {}-{}\n", chunk.context.line_start, chunk.context.line_end));
+            result.push_str(&format!(
+                "   Lines: {}-{}\n",
+                chunk.context.line_start, chunk.context.line_end
+            ));
             if let Some(ref doc) = chunk.context.docstring {
                 result.push_str(&format!("   Doc: {}\n", doc));
             }
-            result.push_str(&format!("   Code preview:\n   {}\n\n",
-                chunk.content.lines().take(3).collect::<Vec<_>>().join("\n   ")
+            result.push_str(&format!(
+                "   Code preview:\n   {}\n\n",
+                chunk
+                    .content
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join("\n   ")
             ));
         }
 
-        Ok(result)
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 }
 
-#[tool(tool_box)]
+#[tool_handler]
 impl ServerHandler for SearchTool {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -927,7 +923,7 @@ impl ServerHandler for SearchTool {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) get_similar_code - semantic similarity search"
+                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 9) get_similar_code - semantic similarity search"
                     .into(),
             ),
         }

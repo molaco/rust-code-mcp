@@ -5,6 +5,7 @@
 
 pub mod call_graph;
 pub mod imports;
+pub mod type_references;
 
 use std::fs;
 use std::path::Path;
@@ -12,6 +13,7 @@ use tree_sitter::{Node, Parser, Tree};
 
 pub use call_graph::CallGraph;
 pub use imports::{extract_imports, get_external_dependencies, Import};
+pub use type_references::{TypeReference, TypeReferenceTracker, TypeUsageContext};
 
 /// A symbol extracted from Rust code
 #[derive(Debug, Clone, PartialEq)]
@@ -98,7 +100,7 @@ pub struct Range {
     pub end_byte: usize,
 }
 
-/// Complete parse result including symbols, call graph, and imports
+/// Complete parse result including symbols, call graph, imports, and type references
 #[derive(Debug, Clone)]
 pub struct ParseResult {
     /// Extracted symbols
@@ -107,6 +109,8 @@ pub struct ParseResult {
     pub call_graph: CallGraph,
     /// Import statements
     pub imports: Vec<Import>,
+    /// Type references
+    pub type_references: Vec<TypeReference>,
 }
 
 /// Rust source code parser
@@ -149,7 +153,7 @@ impl RustParser {
         self.parse_source_complete(&source)
     }
 
-    /// Parse source code and extract everything: symbols, call graph, and imports
+    /// Parse source code and extract everything: symbols, call graph, imports, and type references
     pub fn parse_source_complete(
         &mut self,
         source: &str,
@@ -164,11 +168,13 @@ impl RustParser {
 
         let call_graph = CallGraph::build(&tree, source);
         let imports = extract_imports(&tree, source);
+        let type_references = TypeReferenceTracker::build(&tree, source);
 
         Ok(ParseResult {
             symbols,
             call_graph,
             imports,
+            type_references,
         })
     }
 

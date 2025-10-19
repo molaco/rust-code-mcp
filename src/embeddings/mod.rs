@@ -4,6 +4,7 @@
 
 use crate::chunker::{ChunkId, CodeChunk};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use std::sync::Arc;
 
 /// An embedding vector (384 dimensions for all-MiniLM-L6-v2)
 pub type Embedding = Vec<f32>;
@@ -16,8 +17,9 @@ pub struct ChunkWithEmbedding {
 }
 
 /// Embedding generator using fastembed
+#[derive(Clone)]
 pub struct EmbeddingGenerator {
-    model: TextEmbedding,
+    model: Arc<TextEmbedding>,
     dimensions: usize,
 }
 
@@ -35,7 +37,7 @@ impl EmbeddingGenerator {
         )?;
 
         Ok(Self {
-            model,
+            model: Arc::new(model),
             dimensions: 384,
         })
     }
@@ -46,28 +48,30 @@ impl EmbeddingGenerator {
     }
 
     /// Generate embedding for a single text
-    pub fn embed(&self, text: &str) -> Result<Embedding, Box<dyn std::error::Error>> {
-        let embeddings = self.model.embed(vec![text], None)?;
+    pub fn embed(&self, text: &str) -> Result<Embedding, Box<dyn std::error::Error + Send>> {
+        let embeddings = self.model.embed(vec![text], None)
+            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?;
         embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| "No embedding generated".into())
+            .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No embedding generated")) as Box<dyn std::error::Error + Send>)
     }
 
     /// Generate embeddings for multiple texts (batch processing)
     pub fn embed_batch(
         &self,
         texts: Vec<String>,
-    ) -> Result<Vec<Embedding>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Embedding>, Box<dyn std::error::Error + Send>> {
         let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        Ok(self.model.embed(text_refs, None)?)
+        Ok(self.model.embed(text_refs, None)
+            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?)
     }
 
     /// Generate embeddings for code chunks
     pub fn embed_chunks(
         &self,
         chunks: &[CodeChunk],
-    ) -> Result<Vec<ChunkWithEmbedding>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<ChunkWithEmbedding>, Box<dyn std::error::Error + Send>> {
         // Format chunks for embedding
         let formatted: Vec<String> = chunks
             .iter()
@@ -121,7 +125,7 @@ impl EmbeddingPipeline {
         &self,
         chunks: Vec<CodeChunk>,
         mut progress: F,
-    ) -> Result<Vec<ChunkWithEmbedding>, Box<dyn std::error::Error>>
+    ) -> Result<Vec<ChunkWithEmbedding>, Box<dyn std::error::Error + Send>>
     where
         F: FnMut(usize, usize),
     {
