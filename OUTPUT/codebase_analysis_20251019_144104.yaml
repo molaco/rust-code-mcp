@@ -1,0 +1,631 @@
+project_metadata:
+  name: file-search-mcp (rust-code-mcp)
+  version: 0.1.0
+  language: Rust
+  edition: '2024'
+  type: MCP Server Application
+  status: Phase 7 Complete - 8 MCP Tools Operational
+  description: |
+    Hybrid semantic + lexical code search MCP server optimized for large Rust codebases (1M+ LOC). Forked from file-search-mcp, extended with vector search, semantic chunking, and tree-sitter parsing.
+file_statistics:
+  total_tracked_files: 91
+  total_lines_of_code: 28267
+  by_extension:
+    rust:
+      total_files: 25
+      total_lines: 69402
+      source_files: 16
+      source_lines: 5622
+      test_files: 1
+      test_lines: 0
+      binary_files: 1
+      binary_lines: 653
+      breakdown:
+      - category: Core Runtime
+        files:
+        - src/main.rs
+        - src/lib.rs
+        lines: 36
+      - category: Schema & Metadata
+        files:
+        - src/schema.rs
+        - src/metadata_cache.rs
+        lines: 490
+      - category: Parsing (tree-sitter)
+        files:
+        - src/parser/mod.rs
+        - src/parser/call_graph.rs
+        - src/parser/imports.rs
+        - src/parser/type_references.rs
+        lines: 1915
+      - category: Search Infrastructure
+        files:
+        - src/search/mod.rs
+        - src/search/bm25.rs
+        lines: 746
+      - category: Embeddings & Vectors
+        files:
+        - src/embeddings/mod.rs
+        - src/vector_store/mod.rs
+        lines: 707
+      - category: Code Chunking
+        files:
+        - src/chunker/mod.rs
+        lines: 485
+      - category: MCP Tools
+        files:
+        - src/tools/mod.rs
+        - src/tools/search_tool.rs
+        lines: 1116
+      - category: Test Binary
+        files:
+        - src/bin/test_tools_direct.rs
+        lines: 653
+    toml:
+      total_files: 1
+      total_lines: 57
+      files:
+      - path: Cargo.toml
+        lines: 57
+        purpose: Build configuration and dependencies
+    markdown:
+      total_files: 26
+      total_lines: 15452
+      documentation_files: 23
+      documentation_lines: 16209
+      main_readme: README.md (549 lines)
+      phase_reports:
+      - PHASE0_NOTES.md
+      - PHASE1_COMPLETE.md
+      - PHASE2_COMPLETE.md
+      - PHASE3_COMPLETE.md
+      - PHASE4_COMPLETE.md
+      - PHASE5_COMPLETE.md
+      - PHASE6_COMPLETE.md
+      - PHASE7_COMPLETE.md
+      - PHASE7_WEEK12_COMPLETE.md
+      planning:
+      - NEW_PLAN.md
+      - EXTRACTION_PLAN.md
+      - SEARCH.md
+      - NIX_INTEGRATION.md
+      research:
+      - RUST_MCP_CODE_SEARCH_RESEARCH.md
+      - STATE_OF_THE_ART_CODEBASE_ANALYSIS.md
+      - ADVANCED_RESEARCH.md
+      - DEEP_RESEARCH_FINDINGS.md
+      - INDEXING_STRATEGIES.md
+      - COMPARISON_CLAUDE_CONTEXT.md
+      testing: TESTING.md
+      other:
+      - convert_api.md
+    json:
+      total_files: 1604
+      total_lines: 29
+      note: Most JSON files are in .fastembed_cache and storage (excluded from analysis)
+    shell:
+      total_files: 9
+      total_lines: 493
+      scripts:
+      - test-capabilities.sh
+      - test-incremental.sh
+      - test-indexing.sh
+      - test-mcp-integration.sh
+      - test-simple.sh
+      - test-tools-list.sh
+      - test_type_refs.sh
+      - convert_tools.sh
+      - fix_return_types.sh
+    lock_files:
+      cargo_lock:
+        lines: 4905
+        purpose: Dependency lock file
+directory_structure:
+  root_level:
+  - name: src/
+    purpose: Main source code
+    subdirectories:
+    - name: bin/
+      purpose: Binary executables
+      files: 1
+    - name: search/
+      purpose: Hybrid search (BM25 + Vector + RRF)
+      files: 2
+    - name: embeddings/
+      purpose: Local embedding generation (fastembed)
+      files: 1
+    - name: tools/
+      purpose: MCP tool implementations
+      files: 2
+    - name: vector_store/
+      purpose: Qdrant vector database integration
+      files: 1
+    - name: chunker/
+      purpose: Semantic code chunking
+      files: 1
+    - name: parser/
+      purpose: Tree-sitter AST parsing
+      files: 4
+  - name: docs/
+    purpose: Comprehensive documentation
+    files: 23
+    size: ~500KB of planning and phase reports
+  - name: tests/
+    purpose: Integration tests
+    subdirectories:
+    - fixtures/
+    - integration/
+    note: Empty - tests in src/ modules
+  - name: examples/
+    purpose: Usage examples
+    status: Empty (planned for future)
+  - name: benches/
+    purpose: Performance benchmarks
+    status: Empty (planned for Phase 8)
+  - name: storage/
+    purpose: Qdrant vector database storage
+    note: Runtime data - excluded from analysis
+  - name: snapshots/
+    purpose: Test snapshots
+    note: Runtime data - excluded from analysis
+  - name: .github/
+    purpose: GitHub CI/CD
+    files:
+    - copilot-instructions.md
+  - name: .claude/
+    purpose: Claude Code configuration
+    status: Present
+entry_points_and_configuration:
+  main_executable:
+  - path: src/main.rs
+    lines: 21
+    purpose: MCP server entry point using stdio transport
+    binary_name: file-search-mcp
+  library_root:
+  - path: src/lib.rs
+    lines: 15
+    purpose: Public module exports
+    modules:
+    - chunker
+    - embeddings
+    - metadata_cache
+    - parser
+    - schema
+    - search
+    - tools
+    - vector_store
+  build_configuration:
+    cargo_toml:
+      path: Cargo.toml
+      edition: '2024'
+      dependencies_count: 19
+      dev_dependencies_count: 1
+  ci_cd:
+    github_workflows: Not configured
+    testing_scripts: 9
+  documentation_roots:
+  - README.md
+  - docs/NEW_PLAN.md
+  - docs/SEARCH.md
+  - TESTING.md
+dependencies_and_frameworks:
+  core_frameworks:
+    mcp:
+      name: rmcp
+      source: git (rust-sdk main branch)
+      features:
+      - server
+      - transport-io
+      purpose: Model Context Protocol implementation
+    async_runtime:
+      name: tokio
+      version: 1.x
+      features:
+      - macros
+      - rt
+      - rt-multi-thread
+      - io-std
+      - signal
+      purpose: Async runtime
+    search_engine:
+      name: tantivy
+      version: 0.22.0
+      purpose: Full-text search with BM25
+    vector_database:
+      name: qdrant-client
+      version: 1.x
+      purpose: Vector similarity search
+    embeddings:
+      name: fastembed
+      version: 4.x
+      purpose: Local embedding generation (all-MiniLM-L6-v2)
+    parser:
+    - name: tree-sitter
+      version: '0.20'
+      purpose: AST parsing
+    - name: tree-sitter-rust
+      version: '0.20'
+      purpose: Rust grammar
+    chunking:
+      name: text-splitter
+      version: '0.13'
+      purpose: Semantic text chunking
+  storage_and_persistence:
+  - name: sled
+    version: '0.34'
+    purpose: Embedded KV store for metadata cache
+  - name: directories
+    version: 5.x
+    purpose: XDG-compliant data directories
+  serialization:
+  - name: serde
+    version: 1.0.219
+    features:
+    - derive
+  - name: serde_json
+    version: '1.0'
+  - name: bincode
+    version: '1.3'
+  - name: uuid
+    version: '1.10'
+    features:
+    - v4
+    - serde
+    purpose: Unique chunk IDs
+  utilities:
+  - name: sha2
+    version: '0.10'
+    purpose: SHA-256 file hashing for change detection
+  - name: notify
+    version: 6.x
+    purpose: File watching (planned for Phase 1.5)
+  - name: tracing
+    version: '0.1'
+    purpose: Structured logging
+  - name: tracing-subscriber
+    version: '0.3'
+    features:
+    - env-filter
+    - std
+    - fmt
+  dev_dependencies:
+  - name: tempfile
+    version: 3.x
+    purpose: Temporary directories for testing
+architecture_patterns:
+  project_type: Library + Binary Application
+  organization: Modular layered architecture
+  layers:
+  - name: Transport Layer
+    components:
+    - src/main.rs
+    - rmcp stdio transport
+    responsibility: MCP protocol communication
+  - name: MCP Tools Layer
+    components:
+    - src/tools/
+    responsibility: 8 MCP tool implementations
+    tools:
+    - search (keyword search)
+    - read_file_content
+    - find_definition
+    - find_references
+    - get_dependencies
+    - get_call_graph
+    - analyze_complexity
+    - get_similar_code
+  - name: Search Coordination Layer
+    components:
+    - src/search/mod.rs
+    responsibility: Hybrid search with RRF fusion
+    patterns:
+    - Strategy pattern
+    - Async coordination
+  - name: Search Engines Layer
+    components:
+    - src/search/bm25.rs
+    - src/vector_store/
+    responsibility: BM25 lexical + Vector semantic search
+  - name: Parsing & Analysis Layer
+    components:
+    - src/parser/
+    responsibility: Tree-sitter AST parsing, symbol extraction, call graphs
+  - name: Chunking Layer
+    components:
+    - src/chunker/
+    responsibility: Symbol-based semantic code chunking
+  - name: Embedding Layer
+    components:
+    - src/embeddings/
+    responsibility: Local embedding generation
+  - name: Persistence Layer
+    components:
+    - src/metadata_cache.rs
+    - src/schema.rs
+    responsibility: Incremental indexing, change detection
+  key_patterns:
+  - Reciprocal Rank Fusion (RRF) for result merging
+  - Incremental indexing with SHA-256 change detection
+  - Symbol-based code chunking with context enrichment
+  - Async/sync hybrid execution (tokio::spawn_blocking)
+  - Embedded vector database (Qdrant)
+  - Local-first (no API calls)
+key_components:
+  core_modules:
+    search_infrastructure:
+    - path: src/search/mod.rs
+      lines: 457
+      responsibility: HybridSearch, VectorSearch, RRF algorithm
+      key_types:
+      - HybridSearch
+      - VectorSearch
+      - SearchResult
+      - HybridSearchConfig
+    - path: src/search/bm25.rs
+      lines: 289
+      responsibility: BM25 lexical search wrapper
+      key_types:
+      - Bm25Search
+      - ChunkSchema
+    parsing_and_analysis:
+    - path: src/parser/mod.rs
+      lines: 807
+      responsibility: Tree-sitter parsing, symbol extraction
+      key_types:
+      - RustParser
+      - ParsedFile
+      - SymbolInfo
+    - path: src/parser/call_graph.rs
+      lines: 305
+      responsibility: Function call relationship tracking
+    - path: src/parser/imports.rs
+      lines: 269
+      responsibility: Import statement extraction
+    - path: src/parser/type_references.rs
+      lines: 534
+      responsibility: Type reference analysis
+    chunking:
+    - path: src/chunker/mod.rs
+      lines: 485
+      responsibility: Semantic code chunking with context
+      key_types:
+      - CodeChunker
+      - CodeChunk
+      - ChunkContext
+      - ChunkId
+    embeddings_and_vectors:
+    - path: src/embeddings/mod.rs
+      lines: 284
+      responsibility: Local embedding generation
+      key_types:
+      - EmbeddingGenerator
+    - path: src/vector_store/mod.rs
+      lines: 423
+      responsibility: Qdrant vector database integration
+      key_types:
+      - VectorStore
+      - VectorStoreConfig
+      - SearchResult
+    mcp_tools:
+    - path: src/tools/search_tool.rs
+      lines: 1115
+      responsibility: All 8 MCP tool implementations
+      implements: rmcp::ToolProvider trait
+    persistence:
+    - path: src/metadata_cache.rs
+      lines: 250
+      responsibility: SHA-256 file tracking, incremental indexing
+      key_types:
+      - MetadataCache
+      - FileMetadata
+    - path: src/schema.rs
+      lines: 240
+      responsibility: Tantivy schemas (file-level and chunk-level)
+      key_types:
+      - FileSchema
+      - ChunkSchema
+  public_apis:
+    mcp_protocol:
+      transport: stdio
+      tools: 8
+      resources: Deferred (rmcp SDK limitation)
+    library_exports:
+      modules: 8
+      visibility: Public crate modules
+test_coverage:
+  unit_tests:
+    location: Inline in src/ modules (#[cfg(test)])
+    total_passing: 45
+    ignored_tests: 11
+    reason_for_ignored: Require Qdrant server and embedding models
+  integration_tests:
+    location: tests/ (empty), scripts in root
+    test_scripts: 9
+    coverage:
+    - Incremental indexing verification
+    - MCP tool integration
+    - Hybrid search validation
+    - Type reference analysis
+  testing_strategy:
+  - Unit tests for algorithms (RRF, chunking, parsing)
+  - Integration tests via shell scripts
+  - Manual testing via MCP Inspector
+  - Real-world validation with Claude Code
+performance_characteristics:
+  current_metrics:
+    indexing:
+    - 'First index (2 files): ~50-100ms'
+    - 'Unchanged files: <10ms (10x speedup)'
+    - '1 file change: ~15-20ms (selective reindex)'
+    search:
+    - 'Query latency: Not yet benchmarked'
+    - 'Target p95: <200ms'
+    memory:
+    - Not yet benchmarked
+    - 'Target: <4GB for 1M LOC'
+  optimizations:
+    implemented:
+    - Incremental indexing with SHA-256
+    - Persistent Tantivy index
+    - Embedded Qdrant (no network overhead)
+    - Parallel BM25 + Vector search
+    planned:
+    - Rayon parallel processing (Phase 8)
+    - Index compression
+    - Query result caching
+development_status:
+  completed_phases:
+  - phase: 0
+    name: Setup & Planning
+    status: Complete
+  - phase: 1
+    name: Persistent Index + Incremental Updates
+    status: Complete
+    deliverables:
+    - SHA-256 change detection
+    - Sled metadata cache
+    - XDG-compliant storage
+  - phase: 2
+    name: Tree-sitter Integration
+    status: Complete
+    deliverables:
+    - AST parsing
+    - Symbol extraction
+    - Call graph building
+  - phase: 3
+    name: Semantic Code Chunking
+    status: Complete
+    deliverables:
+    - Symbol-based chunking
+    - Context enrichment
+    - Chunk overlap
+  - phase: 4
+    name: Local Embedding Generation
+    status: Complete
+    deliverables:
+    - Fastembed integration
+    - all-MiniLM-L6-v2 model
+    - Batch embedding
+  - phase: 5
+    name: Qdrant Vector Search
+    status: Complete
+    deliverables:
+    - Embedded Qdrant
+    - Vector indexing
+    - Semantic search
+  - phase: 6
+    name: Hybrid Search
+    status: Complete
+    deliverables:
+    - RRF algorithm
+    - BM25 + Vector fusion
+    - Parallel execution
+  - phase: 7
+    name: Enhanced MCP Tools
+    status: Complete
+    deliverables:
+    - 8 total tools
+    - Symbol analysis tools
+    - Semantic similarity
+    - Code metrics
+  current_phase:
+    phase: Testing & Validation
+    focus: Real-world integration with MCP clients
+  next_milestone:
+    phase: 8
+    name: Optimization & Release
+    timeline: Week 14-16
+    goals:
+    - Performance benchmarking
+    - Memory optimization
+    - Multi-language support
+    - v0.1.0 release
+integration_and_deployment:
+  supported_clients:
+  - Claude Code (verified)
+  - Claude Desktop
+  - Cursor
+  - Any MCP-compatible client
+  deployment_method:
+    current: Manual cargo build + absolute path in config
+    planned: cargo install rust-code-mcp
+  configuration:
+    storage_location: ~/.local/share/rust-code-mcp/ (XDG)
+    environment_variables:
+    - QDRANT_MODE (embedded|remote)
+    - QDRANT_URL (for remote mode)
+    - RUST_LOG (for logging)
+  nix_integration:
+    status: Documented in NIX_INTEGRATION.md
+    flake_available: false
+    note: Can be integrated into existing Nix environments
+documentation_quality:
+  completeness: Excellent
+  types:
+    user_documentation:
+    - README.md (549 lines)
+    - TESTING.md
+    - INTEGRATION_VERIFIED.md
+    developer_documentation:
+    - Planning docs (NEW_PLAN.md, EXTRACTION_PLAN.md)
+    - Architecture (SEARCH.md)
+    - Phase reports (9 complete reports)
+    - Research (6 research documents)
+    inline_documentation:
+    - Module-level doc comments
+    - Function signatures documented
+    - Test cases as examples
+  total_documentation_lines: 16209
+  documentation_to_code_ratio: 2.89:1 (exceptional)
+unique_features:
+  hybrid_search: BM25 + Vector with RRF fusion
+  incremental_indexing: SHA-256 change detection, 10x+ speedup
+  symbol_aware: Tree-sitter AST parsing for accurate chunking
+  local_first: No API calls, all processing local
+  context_enriched: Chunks include imports, calls, docstrings
+  scalable: Designed for 1M+ LOC codebases
+  mcp_native: 8 specialized tools for code analysis
+technical_debt_and_risks:
+  deferred_features:
+  - File watching (notify crate) - deferred to Phase 1.5
+  - MCP resources - deferred due to rmcp SDK limitations
+  - Multi-language support - planned for future
+  empty_directories:
+  - examples/ (planned for future)
+  - benches/ (planned for Phase 8)
+  - tests/integration/ (using scripts instead)
+  potential_improvements:
+  - Benchmark suite for performance regression testing
+  - CI/CD pipeline (GitHub Actions)
+  - Published crate on crates.io
+  - Public API stability guarantees
+code_quality_indicators:
+  test_count: 45
+  test_pass_rate: 100% (45/45 passing, 11 ignored)
+  modules: 8
+  clear_separation_of_concerns: true
+  consistent_error_handling: Result<T, Box<dyn Error>>
+  logging: Structured logging with tracing
+  type_safety: Strong Rust type system
+summary:
+  strengths:
+  - Excellent documentation (2.89:1 ratio)
+  - Clean modular architecture
+  - Production-ready hybrid search
+  - Comprehensive phase planning
+  - Real-world integration verified
+  - Strong test coverage (45 unit tests)
+  - Incremental indexing working
+  readiness:
+    current_state: Phase 7 Complete - Feature Complete MVP
+    production_ready: false
+    reason: Needs optimization, benchmarking, and broader testing
+    estimated_completion: Week 16 (Phase 8)
+  notable_achievements:
+  - Successfully forked and extended file-search-mcp
+  - Implemented RRF hybrid search
+  - 8 MCP tools operational
+  - Integrated with Claude Code
+  - Incremental indexing with SHA-256
+  - Local embeddings working
+  - Qdrant vector search functional
