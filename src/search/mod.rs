@@ -3,9 +3,11 @@
 //! Implements Reciprocal Rank Fusion (RRF) to merge results from multiple search engines
 
 pub mod bm25;
+pub mod resilient;
 pub mod rrf_tuner;
 
 pub use bm25::Bm25Search;
+pub use resilient::ResilientHybridSearch;
 pub use rrf_tuner::{evaluate_hybrid_search, EvaluationMetrics, RRFTuner, TestQuery, TuningResult};
 
 use crate::chunker::{ChunkId, CodeChunk};
@@ -281,6 +283,73 @@ impl HybridSearch {
                 chunk: result.chunk,
             })
             .collect())
+    }
+
+    /// Static version of reciprocal rank fusion (for use by ResilientHybridSearch)
+    pub fn reciprocal_rank_fusion_static(
+        bm25_results: Vec<SearchResult>,
+        vector_results: Vec<SearchResult>,
+        k: f32,
+    ) -> Vec<SearchResult> {
+        let mut scores: HashMap<ChunkId, RrfScore> = HashMap::new();
+
+        // Process BM25 results
+        for (rank, result) in bm25_results.iter().enumerate() {
+            let rrf_score = 1.0 / (k + (rank + 1) as f32);
+            let entry = scores.entry(result.chunk_id).or_insert_with(|| RrfScore {
+                chunk_id: result.chunk_id,
+                rrf_score: 0.0,
+                vector_score: None,
+                vector_rank: None,
+                bm25_score: None,
+                bm25_rank: None,
+                chunk: result.chunk.clone(),
+            });
+
+            entry.rrf_score += rrf_score * 0.5; // Default weight
+            entry.bm25_score = result.bm25_score.or(Some(result.score));
+            entry.bm25_rank = Some(rank + 1);
+        }
+
+        // Process vector results
+        for (rank, result) in vector_results.iter().enumerate() {
+            let rrf_score = 1.0 / (k + (rank + 1) as f32);
+            let entry = scores.entry(result.chunk_id).or_insert_with(|| RrfScore {
+                chunk_id: result.chunk_id,
+                rrf_score: 0.0,
+                vector_score: None,
+                vector_rank: None,
+                bm25_score: None,
+                bm25_rank: None,
+                chunk: result.chunk.clone(),
+            });
+
+            entry.rrf_score += rrf_score * 0.5; // Default weight
+            entry.vector_score = result.vector_score.or(Some(result.score));
+            entry.vector_rank = Some(rank + 1);
+        }
+
+        // Convert to SearchResult and sort
+        let mut results: Vec<SearchResult> = scores
+            .into_values()
+            .map(|rrf_score| SearchResult {
+                chunk_id: rrf_score.chunk_id,
+                score: rrf_score.rrf_score,
+                bm25_score: rrf_score.bm25_score,
+                vector_score: rrf_score.vector_score,
+                bm25_rank: rrf_score.bm25_rank,
+                vector_rank: rrf_score.vector_rank,
+                chunk: rrf_score.chunk,
+            })
+            .collect();
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        results
     }
 }
 

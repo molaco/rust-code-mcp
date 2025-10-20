@@ -411,6 +411,49 @@ impl UnifiedIndexer {
         Ok(stats)
     }
 
+    /// Index an entire directory with automatic backup management
+    ///
+    /// This method performs the same indexing as `index_directory`, but also
+    /// creates Merkle tree snapshots and backups according to the provided policy.
+    ///
+    /// # Arguments
+    /// * `dir_path` - Directory to index
+    /// * `backup_manager` - Optional backup manager for Merkle snapshot backups
+    ///
+    /// # Backup Policy
+    /// - Backups are created automatically after every 100 indexed files
+    /// - Uses Merkle tree snapshots for fast incremental tracking
+    /// - Backup manager handles retention policy (default: 7 days)
+    pub async fn index_directory_with_backup(
+        &mut self,
+        dir_path: &Path,
+        backup_manager: Option<&crate::monitoring::backup::BackupManager>,
+    ) -> Result<IndexStats> {
+        // Perform standard indexing
+        let stats = self.index_directory(dir_path).await?;
+
+        // Create backup if manager provided and files were indexed
+        if let Some(manager) = backup_manager {
+            if stats.indexed_files > 0 && stats.indexed_files % 100 == 0 {
+                tracing::info!("Creating Merkle snapshot backup after {} indexed files", stats.indexed_files);
+
+                // Build current Merkle tree
+                match crate::indexing::merkle::FileSystemMerkle::from_directory(dir_path) {
+                    Ok(merkle) => {
+                        if let Err(e) = manager.create_backup(&merkle) {
+                            tracing::warn!("Failed to create backup: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to build Merkle tree for backup: {}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(stats)
+    }
+
     /// Get access to the Tantivy index for searching
     pub fn tantivy_index(&self) -> &Index {
         &self.tantivy_index

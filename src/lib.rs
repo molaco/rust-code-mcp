@@ -6,6 +6,7 @@ pub mod chunker;
 pub mod embeddings;
 pub mod indexing;
 pub mod metadata_cache;
+pub mod monitoring;
 pub mod parser;
 pub mod schema;
 pub mod search;

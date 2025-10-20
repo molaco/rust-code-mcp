@@ -818,6 +818,15 @@ impl SearchTool {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
+    /// Check system health status
+    #[tool(description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)")]
+    async fn health_check(
+        &self,
+        Parameters(params): Parameters<crate::tools::health_tool::HealthCheckParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::health_tool::health_check(Parameters(params)).await
+    }
+
     /// Find semantically similar code using vector search
     #[tool(description = "Find code snippets semantically similar to a query using embeddings")]
     async fn get_similar_code(
@@ -923,7 +932,7 @@ impl ServerHandler for SearchTool {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 9) get_similar_code - semantic similarity search"
+                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search"
                     .into(),
             ),
         }
