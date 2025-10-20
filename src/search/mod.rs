@@ -3,8 +3,10 @@
 //! Implements Reciprocal Rank Fusion (RRF) to merge results from multiple search engines
 
 pub mod bm25;
+pub mod rrf_tuner;
 
 pub use bm25::Bm25Search;
+pub use rrf_tuner::{evaluate_hybrid_search, EvaluationMetrics, RRFTuner, TestQuery, TuningResult};
 
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::EmbeddingGenerator;
@@ -127,6 +129,18 @@ impl HybridSearch {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
+        self.search_with_k(query, limit, self.config.rrf_k).await
+    }
+
+    /// Perform hybrid search with a custom RRF k parameter
+    ///
+    /// This is useful for tuning the RRF k parameter to optimize search quality.
+    pub async fn search_with_k(
+        &self,
+        query: &str,
+        limit: usize,
+        rrf_k: f32,
+    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
         // Run vector search and BM25 search in parallel (if BM25 is available)
         let (vector_results, bm25_results) = if let Some(bm25) = &self.bm25_search {
             // BM25 search is sync, run in blocking task
@@ -157,7 +171,7 @@ impl HybridSearch {
         };
 
         // Apply Reciprocal Rank Fusion
-        let merged = self.reciprocal_rank_fusion(&vector_results, &bm25_results);
+        let merged = self.reciprocal_rank_fusion_with_k(&vector_results, &bm25_results, rrf_k);
 
         // Return top N results
         Ok(merged.into_iter().take(limit).collect())
@@ -174,7 +188,16 @@ impl HybridSearch {
         vector_results: &[VectorSearchResult],
         bm25_results: &[(ChunkId, f32, CodeChunk)],
     ) -> Vec<SearchResult> {
-        let k = self.config.rrf_k;
+        self.reciprocal_rank_fusion_with_k(vector_results, bm25_results, self.config.rrf_k)
+    }
+
+    /// Reciprocal Rank Fusion with custom k parameter
+    fn reciprocal_rank_fusion_with_k(
+        &self,
+        vector_results: &[VectorSearchResult],
+        bm25_results: &[(ChunkId, f32, CodeChunk)],
+        k: f32,
+    ) -> Vec<SearchResult> {
         let mut scores: HashMap<ChunkId, RrfScore> = HashMap::new();
 
         // Process vector search results

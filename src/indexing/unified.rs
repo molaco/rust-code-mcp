@@ -100,6 +100,26 @@ impl UnifiedIndexer {
         collection_name: &str,
         vector_size: usize,
     ) -> Result<Self> {
+        Self::new_with_optimization(cache_path, tantivy_path, qdrant_url, collection_name, vector_size, None).await
+    }
+
+    /// Create a new unified indexer with optimized configuration
+    ///
+    /// # Arguments
+    /// * `cache_path` - Path to metadata cache directory
+    /// * `tantivy_path` - Path to Tantivy index directory
+    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6334")
+    /// * `collection_name` - Qdrant collection name
+    /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
+    /// * `codebase_loc` - Estimated lines of code (for optimization)
+    pub async fn new_with_optimization(
+        cache_path: &Path,
+        tantivy_path: &Path,
+        qdrant_url: &str,
+        collection_name: &str,
+        vector_size: usize,
+        codebase_loc: Option<usize>,
+    ) -> Result<Self> {
         tracing::info!("Initializing UnifiedIndexer...");
 
         // Initialize parser
@@ -113,7 +133,7 @@ impl UnifiedIndexer {
         let embedding_generator = EmbeddingGenerator::new()
             .map_err(|e| anyhow::anyhow!("Failed to create EmbeddingGenerator: {}", e))?;
 
-        // Initialize Tantivy
+        // Initialize Tantivy with optimized memory budget if LOC provided
         let tantivy_schema = ChunkSchema::new();
         let tantivy_index = if tantivy_path.join("meta.json").exists() {
             Index::open_in_dir(tantivy_path).context("Failed to open Tantivy index")?
@@ -124,18 +144,48 @@ impl UnifiedIndexer {
                 .context("Failed to create Tantivy index")?
         };
 
+        // Optimize Tantivy memory budget based on codebase size
+        let (memory_budget_mb, num_threads) = if let Some(loc) = codebase_loc {
+            if loc < 100_000 {
+                (50, 2)
+            } else if loc < 1_000_000 {
+                (100, 4)
+            } else {
+                (200, 8)
+            }
+        } else {
+            (50, 2) // Default for unknown size
+        };
+
+        let total_memory_budget = (memory_budget_mb * num_threads * 1024 * 1024) as usize;
+
         let tantivy_writer = tantivy_index
-            .writer(50_000_000) // 50MB buffer
+            .writer_with_num_threads(num_threads, total_memory_budget)
             .context("Failed to create Tantivy writer")?;
 
-        // Initialize Qdrant
-        let vector_store = VectorStore::new(crate::vector_store::VectorStoreConfig {
+        tracing::info!(
+            "Tantivy configured: {}MB total budget, {} threads",
+            memory_budget_mb * num_threads,
+            num_threads
+        );
+
+        // Initialize Qdrant with optimized configuration if LOC provided
+        let base_config = crate::vector_store::VectorStoreConfig {
             url: qdrant_url.to_string(),
             collection_name: collection_name.to_string(),
             vector_size,
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?;
+        };
+
+        let vector_store = if let Some(loc) = codebase_loc {
+            let optimized_config = crate::vector_store::QdrantOptimizedConfig::for_codebase_size(loc, base_config.clone());
+            VectorStore::new_with_optimization(base_config, Some(optimized_config))
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?
+        } else {
+            VectorStore::new(base_config)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?
+        };
 
         // Initialize metadata cache
         let metadata_cache =
@@ -455,7 +505,8 @@ pub fn test_function() {
 
         // Verify Tantivy has data
         // Verify Qdrant has data
-        let count = indexer.vector_store().count().await.unwrap();
+        let vector_store = indexer.vector_store_cloned();
+        let count = vector_store.count().await.unwrap();
         assert!(count > 0, "Qdrant should have at least one vector");
     }
 }

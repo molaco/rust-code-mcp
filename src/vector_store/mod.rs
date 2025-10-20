@@ -2,8 +2,11 @@
 //!
 //! Provides vector search capabilities for code chunks using embeddings
 
+pub mod config;
+
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::Embedding;
+pub use config::{estimate_codebase_size, QdrantOptimizedConfig};
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
     CreateCollection, Distance, PointStruct, SearchPoints, VectorParams, VectorsConfig,
@@ -67,6 +70,14 @@ pub struct SearchResult {
 impl VectorStore {
     /// Create a new vector store client
     pub async fn new(config: VectorStoreConfig) -> Result<Self, Box<dyn std::error::Error + Send>> {
+        Self::new_with_optimization(config, None).await
+    }
+
+    /// Create a new vector store client with optimized HNSW configuration
+    pub async fn new_with_optimization(
+        config: VectorStoreConfig,
+        optimized_config: Option<QdrantOptimizedConfig>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send>> {
         let client = QdrantClient::from_url(&config.url).build()
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
 
@@ -77,7 +88,7 @@ impl VectorStore {
         };
 
         // Ensure collection exists
-        store.create_collection_if_not_exists().await?;
+        store.create_collection_if_not_exists(optimized_config).await?;
 
         Ok(store)
     }
@@ -85,6 +96,7 @@ impl VectorStore {
     /// Check if collection exists and create it if not
     async fn create_collection_if_not_exists(
         &mut self,
+        optimized_config: Option<QdrantOptimizedConfig>,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         // Check if collection exists
         let collections = self.client.list_collections().await
@@ -97,6 +109,47 @@ impl VectorStore {
         if exists {
             return Ok(());
         }
+
+        // Use optimized config if provided, otherwise use defaults
+        let (hnsw_config, optimizers_config) = if let Some(opt_config) = optimized_config {
+            tracing::info!(
+                "Creating collection '{}' with optimized HNSW config: m={}, ef_construct={}",
+                self.collection_name,
+                opt_config.hnsw_m,
+                opt_config.hnsw_ef_construct
+            );
+            (
+                Some(opt_config.hnsw_config()),
+                Some(opt_config.optimizer_config()),
+            )
+        } else {
+            // Default configuration (small codebase)
+            tracing::info!(
+                "Creating collection '{}' with default configuration",
+                self.collection_name
+            );
+            (
+                Some(qdrant_client::qdrant::HnswConfigDiff {
+                    m: Some(16),
+                    ef_construct: Some(100),
+                    full_scan_threshold: Some(10000),
+                    max_indexing_threads: Some(0),
+                    on_disk: None,
+                    payload_m: None,
+                }),
+                Some(qdrant_client::qdrant::OptimizersConfigDiff {
+                    deleted_threshold: Some(0.2),
+                    vacuum_min_vector_number: Some(1000),
+                    default_segment_number: Some(0),
+                    max_segment_size: None,
+                    memmap_threshold: Some(50000),
+                    indexing_threshold: Some(10000),
+                    flush_interval_sec: Some(5),
+                    max_optimization_threads: None,
+                    deprecated_max_optimization_threads: None,
+                }),
+            )
+        };
 
         // Create collection with optimal configuration for code search
         let create_collection = CreateCollection {
@@ -112,26 +165,8 @@ impl VectorStore {
                     multivector_config: None,
                 })),
             }),
-            // Optimizations for scale
-            hnsw_config: Some(qdrant_client::qdrant::HnswConfigDiff {
-                m: Some(16),           // Connections per node
-                ef_construct: Some(100), // Search depth during construction
-                full_scan_threshold: Some(10000),
-                max_indexing_threads: Some(0),
-                on_disk: None,
-                payload_m: None,
-            }),
-            optimizers_config: Some(qdrant_client::qdrant::OptimizersConfigDiff {
-                deleted_threshold: Some(0.2),
-                vacuum_min_vector_number: Some(1000),
-                default_segment_number: Some(0),
-                max_segment_size: None,
-                memmap_threshold: Some(50000), // Memory-map after 50k vectors
-                indexing_threshold: Some(10000),
-                flush_interval_sec: Some(5),
-                max_optimization_threads: None,
-                deprecated_max_optimization_threads: None,
-            }),
+            hnsw_config,
+            optimizers_config,
             ..Default::default()
         };
 
