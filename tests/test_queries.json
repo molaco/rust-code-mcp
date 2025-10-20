@@ -1,0 +1,184 @@
+{
+  "test_queries": [
+    {
+      "query": "create unified indexer for code search",
+      "relevant_chunks": ["UnifiedIndexer", "new", "new_with_optimization"],
+      "language": "Rust",
+      "category": "initialization"
+    },
+    {
+      "query": "index rust files to search engines",
+      "relevant_chunks": ["index_file", "index_directory", "IndexFileResult"],
+      "language": "Rust",
+      "category": "indexing"
+    },
+    {
+      "query": "parse rust source code with tree-sitter",
+      "relevant_chunks": ["RustParser", "parse_source_complete", "parse_file_complete"],
+      "language": "Rust",
+      "category": "parsing"
+    },
+    {
+      "query": "chunk code into semantic pieces",
+      "relevant_chunks": ["Chunker", "chunk_file", "CodeChunk"],
+      "language": "Rust",
+      "category": "chunking"
+    },
+    {
+      "query": "generate embeddings for code chunks",
+      "relevant_chunks": ["EmbeddingGenerator", "embed", "embed_batch"],
+      "language": "Rust",
+      "category": "embeddings"
+    },
+    {
+      "query": "vector search with Qdrant",
+      "relevant_chunks": ["VectorStore", "search", "upsert_chunks"],
+      "language": "Rust",
+      "category": "vector search"
+    },
+    {
+      "query": "BM25 keyword search",
+      "relevant_chunks": ["Bm25Search", "search", "index_chunks"],
+      "language": "Rust",
+      "category": "keyword search"
+    },
+    {
+      "query": "hybrid search combining BM25 and vector",
+      "relevant_chunks": ["HybridSearch", "search", "reciprocal_rank_fusion"],
+      "language": "Rust",
+      "category": "hybrid search"
+    },
+    {
+      "query": "reciprocal rank fusion merge results",
+      "relevant_chunks": ["reciprocal_rank_fusion", "RrfScore", "HybridSearch"],
+      "language": "Rust",
+      "category": "ranking"
+    },
+    {
+      "query": "optimize HNSW parameters for Qdrant",
+      "relevant_chunks": ["QdrantOptimizedConfig", "for_codebase_size", "apply_to_collection"],
+      "language": "Rust",
+      "category": "optimization"
+    },
+    {
+      "query": "tune RRF k parameter for search quality",
+      "relevant_chunks": ["RRFTuner", "tune_k", "calculate_ndcg"],
+      "language": "Rust",
+      "category": "tuning"
+    },
+    {
+      "query": "bulk indexing mode for faster processing",
+      "relevant_chunks": ["BulkIndexer", "start_bulk_mode", "end_bulk_mode"],
+      "language": "Rust",
+      "category": "performance"
+    },
+    {
+      "query": "detect secrets in code files",
+      "relevant_chunks": ["SecretsScanner", "scan", "should_exclude"],
+      "language": "Rust",
+      "category": "security"
+    },
+    {
+      "query": "filter sensitive files from indexing",
+      "relevant_chunks": ["SensitiveFileFilter", "should_index", "excluded_patterns"],
+      "language": "Rust",
+      "category": "security"
+    },
+    {
+      "query": "check if file content has changed",
+      "relevant_chunks": ["MetadataCache", "has_changed", "FileMetadata"],
+      "language": "Rust",
+      "category": "caching"
+    },
+    {
+      "query": "extract symbols from rust code",
+      "relevant_chunks": ["Symbol", "parse_source_complete", "symbols"],
+      "language": "Rust",
+      "category": "parsing"
+    },
+    {
+      "query": "build call graph for functions",
+      "relevant_chunks": ["CallGraph", "get_callees", "outgoing_calls"],
+      "language": "Rust",
+      "category": "analysis"
+    },
+    {
+      "query": "enrich code chunks with context",
+      "relevant_chunks": ["format_for_embedding", "ChunkContext", "CodeChunk"],
+      "language": "Rust",
+      "category": "context enrichment"
+    },
+    {
+      "query": "create MCP server for code search",
+      "relevant_chunks": ["FileSearchServer", "SearchTool", "search"],
+      "language": "Rust",
+      "category": "mcp"
+    },
+    {
+      "query": "handle MCP tool requests",
+      "relevant_chunks": ["call_tool", "SearchTool", "CallToolResult"],
+      "language": "Rust",
+      "category": "mcp"
+    },
+    {
+      "query": "estimate lines of code in codebase",
+      "relevant_chunks": ["estimate_codebase_size", "QdrantOptimizedConfig"],
+      "language": "Rust",
+      "category": "metrics"
+    },
+    {
+      "query": "extract module path from file path",
+      "relevant_chunks": ["extract_module_path", "module_path", "ChunkContext"],
+      "language": "Rust",
+      "category": "utilities"
+    },
+    {
+      "query": "calculate NDCG evaluation metric",
+      "relevant_chunks": ["calculate_ndcg", "RRFTuner", "EvaluationMetrics"],
+      "language": "Rust",
+      "category": "evaluation"
+    },
+    {
+      "query": "calculate mean reciprocal rank",
+      "relevant_chunks": ["calculate_mrr", "RRFTuner"],
+      "language": "Rust",
+      "category": "evaluation"
+    },
+    {
+      "query": "connect to Qdrant vector database",
+      "relevant_chunks": ["VectorStore", "new", "create_collection_if_not_exists"],
+      "language": "Rust",
+      "category": "database"
+    },
+    {
+      "query": "create Tantivy index for keyword search",
+      "relevant_chunks": ["Bm25Search", "open_or_create", "Index"],
+      "language": "Rust",
+      "category": "indexing"
+    },
+    {
+      "query": "add document to Tantivy index",
+      "relevant_chunks": ["index_to_tantivy", "add_document", "ChunkSchema"],
+      "language": "Rust",
+      "category": "indexing"
+    },
+    {
+      "query": "upsert vectors to Qdrant collection",
+      "relevant_chunks": ["upsert_chunks", "index_to_qdrant", "VectorStore"],
+      "language": "Rust",
+      "category": "indexing"
+    },
+    {
+      "query": "configure memory budget for indexing",
+      "relevant_chunks": ["new_with_optimization", "memory_budget_mb", "num_threads"],
+      "language": "Rust",
+      "category": "configuration"
+    },
+    {
+      "query": "walk directory tree to find rust files",
+      "relevant_chunks": ["index_directory", "WalkDir", "rust_files"],
+      "language": "Rust",
+      "category": "file system"
+    }
+  ]
+}
