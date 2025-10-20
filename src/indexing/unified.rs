@@ -400,6 +400,9 @@ impl UnifiedIndexer {
         // Commit Tantivy changes
         self.tantivy_writer.commit().context("Failed to commit Tantivy index")?;
 
+        // Wait briefly to ensure index is fully committed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
         tracing::info!(
             "✓ Indexing complete: {} files indexed, {} chunks, {} unchanged, {} skipped",
             stats.indexed_files,
@@ -478,6 +481,18 @@ impl UnifiedIndexer {
     pub fn create_bm25_search(&self) -> Result<crate::search::bm25::Bm25Search> {
         crate::search::bm25::Bm25Search::from_index(self.tantivy_index.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create Bm25Search: {}", e))
+    }
+}
+
+impl Drop for UnifiedIndexer {
+    fn drop(&mut self) {
+        // Attempt to rollback any uncommitted changes to release the lock
+        // This prevents "Failed to commit Tantivy index" errors when multiple
+        // indexers are created in quick succession
+        if let Err(e) = self.tantivy_writer.rollback() {
+            tracing::warn!("Failed to rollback Tantivy writer during drop: {}", e);
+        }
+        tracing::debug!("UnifiedIndexer dropped, writer lock released");
     }
 }
 
