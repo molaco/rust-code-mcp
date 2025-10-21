@@ -6,5 +6,5 @@ pub mod merkle;
 pub mod unified;
 
 pub use bulk::{bulk_index_with_auto_mode, BulkIndexer, HnswConfig};
-pub use incremental::IncrementalIndexer;
+pub use incremental::{get_snapshot_path, IncrementalIndexer};
 pub use unified::{IndexFileResult, IndexStats, UnifiedIndexer};
