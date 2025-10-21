@@ -95,12 +95,23 @@ pub struct GetSimilarCodeParams {
 #[derive(Clone)]
 pub struct SearchTool {
     tool_router: ToolRouter<Self>,
+    /// Optional sync manager for automatic directory tracking
+    sync_manager: Option<std::sync::Arc<crate::mcp::SyncManager>>,
 }
 
 impl SearchTool {
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
+            sync_manager: None,
+        }
+    }
+
+    /// Create a new SearchTool with background sync manager
+    pub fn with_sync_manager(sync_manager: std::sync::Arc<crate::mcp::SyncManager>) -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+            sync_manager: Some(sync_manager),
         }
     }
 
@@ -284,6 +295,14 @@ impl SearchTool {
             stats.unchanged_files,
             stats.skipped_files
         );
+
+        // Track directory for background sync if indexing was successful
+        if let Some(ref sync_mgr) = self.sync_manager {
+            if stats.indexed_files > 0 || stats.unchanged_files > 0 {
+                sync_mgr.track_directory(dir_path.to_path_buf()).await;
+                tracing::info!("Directory tracked for background sync: {}", dir_path.display());
+            }
+        }
 
         if stats.total_chunks == 0 && stats.unchanged_files == 0 {
             return Ok(CallToolResult::success(vec![Content::text(format!(
