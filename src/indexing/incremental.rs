@@ -18,7 +18,7 @@ use tracing;
 /// Get snapshot storage path for a codebase
 ///
 /// Uses same pattern as claude-context: ~/.local/share/rust-code-mcp/merkle/{hash}.snapshot
-fn get_snapshot_path(codebase_path: &Path) -> PathBuf {
+pub fn get_snapshot_path(codebase_path: &Path) -> PathBuf {
     use directories::ProjectDirs;
 
     let merkle_dir = if let Some(proj_dirs) = ProjectDirs::from("", "", "rust-code-mcp") {
