@@ -482,6 +482,45 @@ impl UnifiedIndexer {
         crate::search::bm25::Bm25Search::from_index(self.tantivy_index.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create Bm25Search: {}", e))
     }
+
+    /// Delete all chunks for a specific file from both Tantivy and Qdrant
+    ///
+    /// This is needed for incremental indexing when files are modified or deleted
+    pub async fn delete_file_chunks(&mut self, file_path: &Path) -> Result<()> {
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        // Delete from Tantivy
+        let term = tantivy::Term::from_field_text(
+            self.tantivy_schema.file_path,
+            &file_path_str,
+        );
+        let query = tantivy::query::TermQuery::new(
+            term,
+            tantivy::schema::IndexRecordOption::Basic,
+        );
+
+        self.tantivy_writer.delete_query(Box::new(query))?;
+
+        // Delete from Qdrant
+        self.vector_store
+            .delete_by_file_path(&file_path_str)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to delete from Qdrant: {}", e))?;
+
+        tracing::debug!("Deleted chunks for file: {}", file_path_str);
+
+        Ok(())
+    }
+
+    /// Commit Tantivy changes
+    ///
+    /// Useful for forcing a commit after incremental updates
+    pub fn commit(&mut self) -> Result<()> {
+        self.tantivy_writer
+            .commit()
+            .context("Failed to commit Tantivy index")?;
+        Ok(())
+    }
 }
 
 impl Drop for UnifiedIndexer {

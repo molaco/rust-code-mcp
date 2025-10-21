@@ -324,6 +324,55 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Delete all chunks from a specific file
+    ///
+    /// This is needed for incremental indexing when files are modified or deleted
+    pub async fn delete_by_file_path(
+        &self,
+        file_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send>> {
+        use qdrant_client::qdrant::{Condition, Filter};
+
+        // Create a filter for the file_path field in payload
+        let filter = Filter {
+            must: vec![Condition {
+                condition_one_of: Some(
+                    qdrant_client::qdrant::condition::ConditionOneOf::Field(
+                        qdrant_client::qdrant::FieldCondition {
+                            key: "context.file_path".to_string(), // JSON path to file_path
+                            r#match: Some(qdrant_client::qdrant::Match {
+                                match_value: Some(
+                                    qdrant_client::qdrant::r#match::MatchValue::Text(
+                                        file_path.to_string(),
+                                    ),
+                                ),
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                ),
+            }],
+            ..Default::default()
+        };
+
+        let delete_points = qdrant_client::qdrant::DeletePoints {
+            collection_name: self.collection_name.clone(),
+            points: Some(qdrant_client::qdrant::PointsSelector {
+                points_selector_one_of: Some(
+                    qdrant_client::qdrant::points_selector::PointsSelectorOneOf::Filter(filter),
+                ),
+            }),
+            ..Default::default()
+        };
+
+        self.client
+            .delete_points(delete_points)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
+
+        Ok(())
+    }
+
     /// Get the total number of points in the collection
     pub async fn count(&self) -> Result<usize, Box<dyn std::error::Error + Send>> {
         let info = self
