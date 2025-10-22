@@ -68,21 +68,25 @@ The health check likely uses a different path calculation or doesn't check the c
 
 ---
 
-## 3. Semantic Search Returns Wrong Collection
+## 3. Semantic Search Returns Wrong Collection ✅ FIXED
 
 **Severity:** Medium
-**Component:** `src/tools/similar_code_tool.rs` or vector store routing
+**Component:** `src/tools/search_tool.rs`
+**Status:** ✅ **RESOLVED** (2025-10-22)
 
 ### Description
-The `get_similar_code` tool doesn't respect the directory parameter for collection selection. When querying the Burn codebase, it returns results from the rust-code-mcp codebase instead.
+The `get_similar_code` tool didn't respect the directory parameter for collection selection. When querying the Burn codebase, it returned results from the rust-code-mcp codebase instead.
+
+### Root Cause
+The tool used `VectorStoreConfig::default()` which determined the collection name from `std::env::current_dir()` (the MCP server's working directory), not from the `directory` parameter passed by the user.
 
 ### Expected Behavior
 Query for Burn codebase should return results from collection `code_chunks_eb5e3f03` (19,126 points)
 
-### Actual Behavior
-Returns results from `code_chunks_rust_code_mcp` collection or another incorrect collection
+### Actual Behavior (Before Fix)
+Returned results from `code_chunks_rust_code_mcp` collection or another incorrect collection
 
-### Reproduction
+### Reproduction (Before Fix)
 ```rust
 mcp__rust-code-mcp__get_similar_code(
     directory: "/home/molaco/Documents/burn",
@@ -91,10 +95,19 @@ mcp__rust-code-mcp__get_similar_code(
 )
 ```
 
-Returns files from `/home/molaco/Documents/rust-code-mcp/src/search/resilient.rs` instead of Burn codebase.
+Returned files from `/home/molaco/Documents/rust-code-mcp/src/search/resilient.rs` instead of Burn codebase.
 
-### Impact
-Semantic code similarity search is unusable for multi-codebase setups.
+### Solution Implemented
+Updated `get_similar_code` to use the same hash-based collection selection as `index_tool`:
+1. Calculate SHA-256 hash of directory path
+2. Create collection name from first 8 characters of hash
+3. Pass explicit `VectorStoreConfig` instead of using default
+
+### Files Modified
+- `src/tools/search_tool.rs` (lines 877-914) - Fixed collection selection logic
+
+### Impact (After Fix)
+Semantic code similarity search now works correctly for multi-codebase setups, returning results from the correct directory-specific collection.
 
 ---
 

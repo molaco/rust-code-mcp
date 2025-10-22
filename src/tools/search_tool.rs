@@ -874,7 +874,25 @@ impl SearchTool {
 
         let limit = limit.unwrap_or(5);
 
-        tracing::debug!("Searching for similar code to: {}", query);
+        tracing::debug!("Searching for similar code in '{}' to: {}", directory, query);
+
+        // Calculate directory hash (same as index_tool) to determine collection name
+        let dir_hash = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(dir_path.to_string_lossy().as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+
+        let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
+        let qdrant_url = std::env::var("QDRANT_URL")
+            .unwrap_or_else(|_| "http://localhost:6333".to_string());
+
+        tracing::debug!(
+            "Using collection '{}' for directory '{}'",
+            collection_name,
+            dir_path.display()
+        );
 
         // Initialize components
         let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
@@ -884,7 +902,13 @@ impl SearchTool {
             )
         })?;
 
-        let vector_store_config = VectorStoreConfig::default();
+        // Create vector store config with CORRECT collection name based on directory
+        let vector_store_config = VectorStoreConfig {
+            url: qdrant_url,
+            collection_name: collection_name.clone(),
+            vector_size: 384, // all-MiniLM-L6-v2
+        };
+
         let vector_store = VectorStore::new(vector_store_config).await.map_err(|e| {
             McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
         })?;
