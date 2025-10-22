@@ -29,7 +29,7 @@ async fn test_qdrant_hnsw_optimization() {
 
     // 2. Create optimized config
     let base_config = VectorStoreConfig {
-        url: "http://localhost:6334".to_string(),
+        url: "http://localhost:6333".to_string(),
         collection_name: "test_phase2_hnsw_opt".to_string(),
         vector_size: 384,
     };
@@ -92,7 +92,7 @@ async fn test_tantivy_memory_optimization() {
     let indexer = UnifiedIndexer::new_with_optimization(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "test_phase2_tantivy_opt",
         384,
         Some(estimated_loc),  // Enable optimization
@@ -120,7 +120,7 @@ async fn test_bulk_indexing_mode() {
     println!("\n=== Test 3: Bulk Indexing Mode ===\n");
 
     // 1. Create Qdrant client
-    let client = qdrant_client::Qdrant::from_url("http://localhost:6334")
+    let client = qdrant_client::Qdrant::from_url("http://localhost:6333")
         .build()
         .expect("Failed to create Qdrant client");
 
@@ -128,7 +128,7 @@ async fn test_bulk_indexing_mode() {
 
     // 2. Create collection first
     let vector_store = VectorStore::new(VectorStoreConfig {
-        url: "http://localhost:6334".to_string(),
+        url: "http://localhost:6333".to_string(),
         collection_name: collection_name.clone(),
         vector_size: 384,
     })
@@ -226,7 +226,7 @@ async fn test_rrf_parameter_tuning() {
     let mut indexer = UnifiedIndexer::new(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "test_phase2_rrf_tuning",
         384,
     )
@@ -333,7 +333,7 @@ async fn test_phase2_end_to_end() {
     let mut indexer = UnifiedIndexer::new_with_optimization(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "test_phase2_e2e",
         384,
         Some(estimated_loc),  // Enables ALL optimizations

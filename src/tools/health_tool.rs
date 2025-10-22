@@ -59,7 +59,7 @@ pub async fn health_check(
     let bm25 = Bm25Search::new(&bm25_path).ok().map(std::sync::Arc::new);
 
     let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "http://localhost:6334".to_string());
+        .unwrap_or_else(|_| "http://localhost:6333".to_string());
 
     let vector_store = VectorStore::new(VectorStoreConfig {
         url: qdrant_url,

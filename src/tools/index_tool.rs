@@ -55,7 +55,7 @@ pub async fn index_codebase(
 
     // Get configuration
     let qdrant_url =
-        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
 
     // Create collection name from directory hash (same strategy as search tool)
     let dir_hash = {
@@ -100,6 +100,14 @@ pub async fn index_codebase(
     .map_err(|e| {
         McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None)
     })?;
+
+    // Clear all indexed data if force reindex
+    if force {
+        tracing::info!("Force reindex: clearing all indexed data (metadata cache, Tantivy, Qdrant)");
+        indexer.clear_all_data().await.map_err(|e| {
+            McpError::invalid_params(format!("Failed to clear indexed data: {}", e), None)
+        })?;
+    }
 
     // Run incremental indexing
     let start = std::time::Instant::now();

@@ -41,7 +41,7 @@ impl BenchEnvironment {
         IncrementalIndexer::new(
             &self.cache_path,
             &self.tantivy_path,
-            "http://localhost:6334",
+            "http://localhost:6333",
             &self.collection_name,
             384,
             None,

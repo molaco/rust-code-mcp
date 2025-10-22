@@ -18,7 +18,7 @@ async fn test_manual_hybrid_search() {
     let mut indexer = UnifiedIndexer::new(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "test_manual_search",
         384,
     )
@@ -141,7 +141,7 @@ async fn test_incremental_indexing() {
     let mut indexer = UnifiedIndexer::new(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "test_incremental",
         384,
     )
@@ -172,12 +172,12 @@ async fn test_qdrant_connection() {
     let cache_dir = TempDir::new().unwrap();
     let tantivy_dir = TempDir::new().unwrap();
 
-    println!("Connecting to Qdrant at http://localhost:6334...");
+    println!("Connecting to Qdrant at http://localhost:6333...");
 
     let result = UnifiedIndexer::new(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "test_connection",
         384,
     )
@@ -188,7 +188,7 @@ async fn test_qdrant_connection() {
         Err(e) => {
             println!("✗ Qdrant connection failed: {}", e);
             println!("\nMake sure Qdrant is running:");
-            println!("  docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant");
+            println!("  docker run -p 6333:6333 -p 6333:6333 qdrant/qdrant");
             panic!("Qdrant not available");
         }
     }

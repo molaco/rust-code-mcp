@@ -44,7 +44,7 @@ impl Default for VectorStoreConfig {
             .unwrap_or_else(|| "code_chunks_default".to_string());
 
         Self {
-            url: "http://localhost:6334".to_string(),  // gRPC port, not HTTP
+            url: "http://localhost:6333".to_string(),  // gRPC port
             collection_name,
             vector_size: 384, // all-MiniLM-L6-v2
         }
@@ -387,6 +387,34 @@ impl VectorStore {
     pub async fn delete_collection(&self) -> Result<(), Box<dyn std::error::Error + Send>> {
         self.client.delete_collection(&self.collection_name).await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
+        Ok(())
+    }
+
+    /// Clear all points from the collection (without deleting the collection itself)
+    ///
+    /// This is useful for force reindexing while preserving collection configuration
+    pub async fn clear_collection(&self) -> Result<(), Box<dyn std::error::Error + Send>> {
+        use qdrant_client::qdrant::Filter;
+
+        // Create a filter that matches all points (using a filter that always evaluates to true)
+        // We delete all points by not specifying any filter conditions, which matches everything
+        let delete_points = qdrant_client::qdrant::DeletePoints {
+            collection_name: self.collection_name.clone(),
+            points: Some(qdrant_client::qdrant::PointsSelector {
+                points_selector_one_of: Some(
+                    qdrant_client::qdrant::points_selector::PointsSelectorOneOf::Filter(
+                        Filter::default() // Empty filter matches all points
+                    ),
+                ),
+            }),
+            ..Default::default()
+        };
+
+        self.client
+            .delete_points(delete_points)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
+
         Ok(())
     }
 }

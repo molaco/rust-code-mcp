@@ -141,7 +141,10 @@ impl IncrementalIndexer {
         // Fast path: if trees identical, no work needed!
         if !new_merkle.has_changes(old_merkle) {
             tracing::info!("✓ Merkle roots match - no changes detected (< 10ms check)");
-            return Ok(IndexStats::unchanged());
+            let mut stats = IndexStats::unchanged();
+            stats.unchanged_files = new_merkle.file_count();
+            stats.total_files = new_merkle.file_count();
+            return Ok(stats);
         }
 
         tracing::info!("Merkle roots differ - detecting specific changes...");
@@ -151,7 +154,10 @@ impl IncrementalIndexer {
 
         if changes.is_empty() {
             tracing::info!("No file-level changes detected");
-            return Ok(IndexStats::unchanged());
+            let mut stats = IndexStats::unchanged();
+            stats.unchanged_files = new_merkle.file_count();
+            stats.total_files = new_merkle.file_count();
+            return Ok(stats);
         }
 
         tracing::info!(
@@ -237,6 +243,15 @@ impl IncrementalIndexer {
     pub fn indexer_mut(&mut self) -> &mut UnifiedIndexer {
         &mut self.indexer
     }
+
+    /// Clear all indexed data (metadata cache, Tantivy, and Qdrant)
+    ///
+    /// This is used for force reindexing to ensure a completely clean slate.
+    /// Note: This does NOT delete the Merkle snapshot - that should be handled separately
+    /// by the caller (e.g., in index_tool.rs) before calling index_with_change_detection.
+    pub async fn clear_all_data(&mut self) -> Result<()> {
+        self.indexer.clear_all_data().await
+    }
 }
 
 #[cfg(test)]
@@ -262,7 +277,7 @@ mod tests {
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6334",
+            "http://localhost:6333",
             "test_incremental",
             384,
             None,
@@ -296,7 +311,7 @@ mod tests {
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6334",
+            "http://localhost:6333",
             "test_no_changes",
             384,
             None,
@@ -337,7 +352,7 @@ mod tests {
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6334",
+            "http://localhost:6333",
             "test_incremental_update",
             384,
             None,

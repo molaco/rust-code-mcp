@@ -149,7 +149,7 @@ impl HnswConfig {
 /// use qdrant_client::Qdrant as QdrantClient;
 ///
 /// async fn index_large_batch() -> anyhow::Result<()> {
-///     let client = QdrantClient::from_url("http://localhost:6334").build()?;
+///     let client = QdrantClient::from_url("http://localhost:6333").build()?;
 ///     let collection = "my_collection".to_string();
 ///     let hnsw_config = HnswConfig::new(16, 100);
 ///
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_bulk_indexer_state() {
-        let client = QdrantClient::from_url("http://localhost:6334")
+        let client = QdrantClient::from_url("http://localhost:6333")
             .build()
             .unwrap();
         let bulk_indexer = BulkIndexer::new(client, "test".to_string());
@@ -218,7 +218,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires running Qdrant server
     async fn test_bulk_mode_lifecycle() {
-        let client = QdrantClient::from_url("http://localhost:6334")
+        let client = QdrantClient::from_url("http://localhost:6333")
             .build()
             .unwrap();
 

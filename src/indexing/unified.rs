@@ -90,7 +90,7 @@ impl UnifiedIndexer {
     /// # Arguments
     /// * `cache_path` - Path to metadata cache directory
     /// * `tantivy_path` - Path to Tantivy index directory
-    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6334")
+    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6333")
     /// * `collection_name` - Qdrant collection name
     /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
     pub async fn new(
@@ -108,7 +108,7 @@ impl UnifiedIndexer {
     /// # Arguments
     /// * `cache_path` - Path to metadata cache directory
     /// * `tantivy_path` - Path to Tantivy index directory
-    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6334")
+    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6333")
     /// * `collection_name` - Qdrant collection name
     /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
     /// * `codebase_loc` - Estimated lines of code (for optimization)
@@ -521,6 +521,39 @@ impl UnifiedIndexer {
             .context("Failed to commit Tantivy index")?;
         Ok(())
     }
+
+    /// Clear all indexed data (metadata cache, Tantivy, and Qdrant)
+    ///
+    /// This is used for force reindexing to ensure a completely clean slate.
+    /// After calling this, all files will be treated as new during indexing.
+    pub async fn clear_all_data(&mut self) -> Result<()> {
+        tracing::info!("Clearing all indexed data (metadata cache, Tantivy, Qdrant)...");
+
+        // 1. Clear metadata cache
+        self.metadata_cache
+            .clear()
+            .map_err(|e| anyhow::anyhow!("Failed to clear metadata cache: {}", e))?;
+        tracing::info!("✓ Cleared metadata cache");
+
+        // 2. Delete and recreate Tantivy index
+        // We need to delete all documents from the index
+        self.tantivy_writer.delete_all_documents()
+            .context("Failed to delete all Tantivy documents")?;
+        self.tantivy_writer.commit()
+            .context("Failed to commit Tantivy deletion")?;
+        tracing::info!("✓ Cleared Tantivy index");
+
+        // 3. Clear Qdrant collection
+        self.vector_store
+            .clear_collection()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to clear Qdrant collection: {}", e))?;
+        tracing::info!("✓ Cleared Qdrant collection");
+
+        tracing::info!("✓ All indexed data cleared successfully");
+
+        Ok(())
+    }
 }
 
 impl Drop for UnifiedIndexer {
@@ -550,7 +583,7 @@ mod tests {
         let indexer = UnifiedIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6334",
+            "http://localhost:6333",
             "test_collection",
             384,
         )
@@ -569,7 +602,7 @@ mod tests {
         let mut indexer = UnifiedIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6334",
+            "http://localhost:6333",
             "test_index_file",
             384,
         )

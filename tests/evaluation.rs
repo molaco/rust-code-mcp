@@ -267,7 +267,7 @@ async fn setup_hybrid_search() -> Result<HybridSearch, Box<dyn std::error::Error
     let mut indexer = UnifiedIndexer::new_with_optimization(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6334",
+        "http://localhost:6333",
         "evaluation_test",
         384,
         Some(estimated_loc),

@@ -258,7 +258,7 @@ impl SearchTool {
 
         // 1. Initialize unified indexer
         let qdrant_url = std::env::var("QDRANT_URL")
-            .unwrap_or_else(|_| "http://localhost:6334".to_string());
+            .unwrap_or_else(|_| "http://localhost:6333".to_string());
 
         // Sanitize project name for collection
         let project_name = dir_path
@@ -583,9 +583,13 @@ impl SearchTool {
                     total_call_refs
                 ));
                 for (path, callers) in found_call_refs {
+                    // Use relative path if possible
+                    let display_path = path.strip_prefix(dir_path)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| path.to_string_lossy().into_owned());
                     result.push_str(&format!(
                         "- {} (called by: {})\n",
-                        path.display(),
+                        display_path,
                         callers.join(", ")
                     ));
                 }
@@ -596,7 +600,11 @@ impl SearchTool {
             if !found_type_refs.is_empty() {
                 result.push_str(&format!("Type Usage ({} references):\n", total_type_refs));
                 for (path, usages) in found_type_refs {
-                    result.push_str(&format!("- {} ({})\n", path.display(), usages.join(", ")));
+                    // Use relative path if possible
+                    let display_path = path.strip_prefix(dir_path)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+                    result.push_str(&format!("- {} ({})\n", display_path, usages.join(", ")));
                 }
             }
 

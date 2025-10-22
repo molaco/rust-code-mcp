@@ -42,7 +42,7 @@ impl SyncTestEnv {
 
     fn create_sync_manager(&self, interval_secs: u64) -> SyncManager {
         SyncManager::new(
-            "http://localhost:6334".to_string(),
+            "http://localhost:6333".to_string(),
             self.data_dir.join("cache"),
             self.data_dir.join("index"),
             interval_secs,
