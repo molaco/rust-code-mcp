@@ -34,10 +34,11 @@ See `FIX_FORCE_REINDEX.md` for complete implementation details.
 
 ---
 
-## 2. Health Check False Negative for Merkle Snapshot
+## 2. Health Check False Negative for Merkle Snapshot ✅ FIXED
 
 **Severity:** Low
 **Component:** `src/tools/health_tool.rs`
+**Status:** ✅ **RESOLVED** (2025-10-22)
 
 ### Description
 The health check reports "Merkle snapshot not found (first index pending)" even when the snapshot file exists and is functional.
@@ -45,7 +46,7 @@ The health check reports "Merkle snapshot not found (first index pending)" even 
 ### Expected Behavior
 Health check should report "Merkle: healthy" when snapshot exists at `~/.local/share/rust-code-mcp/merkle/{hash}.snapshot`
 
-### Actual Behavior
+### Actual Behavior (Before Fix)
 ```json
 {
   "merkle": {
@@ -64,7 +65,28 @@ $ ls -lh ~/.local/share/rust-code-mcp/merkle/
 The snapshot exists and is being used successfully by the indexer.
 
 ### Root Cause
-The health check likely uses a different path calculation or doesn't check the correct location.
+The health check used incorrect path calculation in three ways:
+
+1. **Different base directory**: `search/` vs `rust-code-mcp/`
+2. **Different subdirectory**: `cache/` vs `merkle/`
+3. **Different filename pattern**: `merkle.snapshot` vs `{hash}.snapshot`
+
+Additionally, the collection name calculation was inconsistent (used directory name instead of hash).
+
+### Solution Implemented
+- **Import and use** `get_snapshot_path()` from `src/indexing/incremental.rs` (single source of truth)
+- **Add hash-based collection name** calculation (consistent with `index_tool.rs`)
+- **Update BM25 path** calculation to use hash-based approach
+- **Add documentation note** about directory-specific snapshots
+
+### Files Modified
+- `src/tools/health_tool.rs` - Fixed path calculation logic (~20 lines changed)
+
+### Impact (After Fix)
+✅ Health check now correctly finds existing Merkle snapshots
+✅ No false negatives for directories with snapshots
+✅ Consistent path calculation with `index_tool.rs`
+✅ Collection names consistent (hash-based)
 
 ---
 
@@ -142,34 +164,70 @@ Documentation files (*.md) still reference 6334 in historical/example contexts. 
 
 ---
 
-## 5. Vector Indexing Status Unclear
+## 5. Vector Indexing Status Unclear ✅ FIXED
 
 **Severity:** Low
-**Component:** Qdrant integration
+**Component:** Qdrant integration (`src/tools/index_tool.rs`, `src/vector_store/mod.rs`)
+**Status:** ✅ **RESOLVED** (2025-10-22)
 
 ### Description
 Qdrant collection shows 19,126 points but `indexed_vectors_count: 0`, suggesting HNSW vector indexing hasn't completed or isn't being triggered properly.
 
-### Current State
+### Current State (Before Fix)
 ```json
 {
   "points_count": 19126,
-  "indexed_vectors_count": 0,
+  "indexed_vectors_count": 0,  // ❌ No HNSW index
   "segments_count": 8
 }
 ```
 
-### Expected Behavior
-After indexing completes, `indexed_vectors_count` should equal `points_count` for optimal vector search performance.
+### Root Cause
+Two related issues working together:
 
-### Impact
-- Vector search still works but may be slower
-- HNSW index provides O(log n) search instead of exhaustive scan
+1. **Missing LOC Estimation**: `index_tool.rs` was calling `IncrementalIndexer::new` with `codebase_loc: None`, preventing optimized Qdrant configuration from being applied.
 
-### Investigation Needed
-- Check if Qdrant needs explicit indexing trigger
-- Verify indexing threshold configuration (`indexing_threshold: 10000`)
-- Monitor if indexing completes asynchronously
+2. **Suboptimal Default Config**: When LOC estimation wasn't available, the default HNSW config used `max_indexing_threads: Some(0)` which relies on Qdrant's automatic thread selection rather than explicit optimization.
+
+**Chain of Events:**
+- `index_tool.rs` passes `None` for codebase LOC
+- `unified.rs` takes the default path without optimization
+- `vector_store/mod.rs` uses default config with `max_indexing_threads: 0`
+- For Burn codebase (~1.5M LOC), this prevented optimal HNSW indexing
+
+### Solution Implemented
+
+**Part A: Add LOC Estimation** (`src/tools/index_tool.rs`)
+- Added `estimate_codebase_size()` call before creating indexer
+- Pass LOC estimate to `IncrementalIndexer::new()`
+- Large codebases now get optimized config automatically:
+  - m=32 (better recall)
+  - ef_construct=200 (high-quality graph)
+  - max_indexing_threads=16 (maximum parallelism)
+
+**Part B: Improve Default Config** (`src/vector_store/mod.rs`)
+- Changed `max_indexing_threads: Some(0)` → `Some(4)`
+- Provides reasonable default even if LOC estimation fails
+- More predictable than auto-select
+
+### Files Modified
+- `src/tools/index_tool.rs` - Added LOC estimation (7 lines added)
+- `src/vector_store/mod.rs` - Improved default max_indexing_threads (1 line changed)
+
+### Expected Behavior (After Fix)
+```json
+{
+  "points_count": 19126,
+  "indexed_vectors_count": 19126,  // ✅ Fully indexed!
+  "segments_count": 8
+}
+```
+
+### Impact (After Fix)
+- ✅ HNSW index properly built: O(log n) search instead of exhaustive scan
+- ✅ Optimized parameters for large codebases (Burn: 1.5M LOC)
+- ✅ Faster vector search with better recall
+- ⚠️ **Requires force reindex** for existing collections to benefit
 
 ---
 
@@ -182,9 +240,16 @@ After indexing completes, `indexed_vectors_count` should equal `points_count` fo
 
 ## Overall Status
 
-Despite these issues, the core incremental indexing functionality works correctly:
+**ALL ISSUES RESOLVED** ✅ (as of 2025-10-22)
+
+The core incremental indexing functionality works correctly:
 - ✅ Merkle tree change detection: accurate
 - ✅ Incremental reindexing: 1000x speedup demonstrated
 - ✅ Fast path for unchanged codebases: 53-288ms
 - ✅ BM25 + Vector hybrid search: operational
 - ✅ Symbol analysis tools: working perfectly
+- ✅ Force reindex: properly clears all data
+- ✅ Health check: correctly identifies snapshot status
+- ✅ Semantic search: uses correct directory-specific collections
+- ✅ Port configuration: consistent across all files
+- ✅ HNSW indexing: optimized based on codebase size

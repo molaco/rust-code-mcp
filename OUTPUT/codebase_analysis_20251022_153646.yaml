@@ -1,0 +1,628 @@
+project_metadata:
+  name: file-search-mcp
+  version: 0.1.0
+  edition: '2024'
+  type: Rust MCP Server Application
+  description: Scalable code search for large Rust codebases using hybrid search (vector + BM25), tree-sitter parsing, and MCP protocol
+file_statistics:
+  rust_files:
+    total_count: 51
+    total_lines: 76783
+    breakdown:
+      source_files: 33
+      test_files: 9
+      benchmark_files: 0
+      example_files: 0
+      binary_files: 1
+  markdown_files:
+    total_count: 76
+    total_lines: 64844
+    breakdown:
+    - root_documentation: 5
+    - docs_directory: 3
+    - DOCS_directory: 26
+    - other: 42
+  toml_files:
+    total_count: 1
+    total_lines: 66
+    files:
+    - Cargo.toml
+  json_files:
+    total_count: 2231
+    total_lines: 0
+    note: Mostly in storage/collections (Qdrant vector database files)
+  yaml_files:
+    total_count: 11
+    total_lines: 7297
+  other_files:
+    misc_count: 72
+    types:
+    - .lock
+    - .txt
+    - .sh
+  total_project_files: 428
+  note: Excluding target/ and .git/ directories
+lines_of_code_by_module:
+  core_library_files:
+    main_rs: 39
+    lib_rs: 19
+    schema_rs: 240
+    metadata_cache_rs: 250
+    total: 548
+  modules:
+    bin: 127
+    chunker: 485
+    embeddings: 288
+    indexing: 1713
+    mcp: 306
+    monitoring: 472
+    parser: 1915
+    search: 1542
+    security: 470
+    tools: 1408
+    vector_store: 756
+  total_module_lines: 9482
+  total_test_lines: 2973
+  total_source_lines: 76783
+directory_structure:
+  root_level:
+  - name: src
+    purpose: Main source code with modular architecture
+  - name: tests
+    purpose: Integration and unit tests
+  - name: docs
+    purpose: Private documentation
+  - name: DOCS
+    purpose: Public documentation and phase completion notes
+  - name: benches
+    purpose: Performance benchmarks (currently empty)
+  - name: examples
+    purpose: Example code (currently empty)
+  - name: storage
+    purpose: Runtime data storage for Qdrant collections and aliases
+  - name: snapshots
+    purpose: Merkle tree snapshots for incremental indexing
+  - name: target
+    purpose: Build artifacts
+  - name: .github
+    purpose: GitHub configuration (no CI/CD workflows present)
+  - name: .claude
+    purpose: Claude AI assistant configuration
+  - name: OUTPUT
+    purpose: Output files
+  - name: RESULTS
+    purpose: Test results
+  source_modules:
+  - name: bin
+    files: 1
+    purpose: Binary executables and test utilities
+  - name: chunker
+    files: 1
+    purpose: Semantic code chunking for embedding generation
+  - name: embeddings
+    files: 1
+    purpose: Local embedding generation using fastembed
+  - name: indexing
+    files: 5
+    purpose: Full-text and incremental indexing with Merkle trees
+    submodules:
+    - bulk.rs
+    - incremental.rs
+    - merkle.rs
+    - unified.rs
+    - mod.rs
+  - name: mcp
+    files: 2
+    purpose: MCP protocol implementation and sync management
+  - name: monitoring
+    files: 3
+    purpose: Health checks and backup utilities
+  - name: parser
+    files: 4
+    purpose: Tree-sitter based Rust code parsing and symbol extraction
+    capabilities:
+    - AST parsing
+    - call graph generation
+    - import tracking
+    - type reference extraction
+  - name: search
+    files: 4
+    purpose: Hybrid search with BM25 and vector similarity
+    submodules:
+    - bm25.rs
+    - resilient.rs
+    - rrf_tuner.rs
+    - mod.rs
+  - name: security
+    files: 2
+    purpose: Secrets scanning and security checks
+  - name: tools
+    files: 4
+    purpose: MCP tool implementations
+    tools:
+    - search_tool.rs
+    - index_tool.rs
+    - health_tool.rs
+    - mod.rs
+  - name: vector_store
+    files: 2
+    purpose: Qdrant vector database client and configuration
+  test_structure:
+    integration_tests:
+    - test_incremental_indexing.rs
+    - test_phase2_integration.rs
+    - test_full_incremental_flow.rs
+    - test_sync_manager_integration.rs
+    - test_index_tool_integration.rs
+    - test_merkle_standalone.rs
+    - test_hybrid_search.rs
+    benchmarks:
+    - bench_incremental_performance.rs
+    evaluation:
+    - evaluation.rs
+    fixtures:
+    - fixtures/ (directory)
+    test_data:
+    - test_queries.json
+entry_points_and_configuration:
+  main_entry_point: src/main.rs
+  library_entry_point: src/lib.rs
+  build_configuration:
+  - file: Cargo.toml
+    type: Rust package manifest
+    dependencies_count: 18
+  runtime_configuration:
+    mcp_config: .mcp.json (symlink)
+    git_ignore: .gitignore
+    claude_ignore: .claudeignore
+  no_ci_cd: true
+  note: No GitHub Actions workflows found in .github/workflows/
+dependencies_and_frameworks:
+  core_frameworks:
+  - name: rmcp
+    purpose: MCP (Model Context Protocol) Rust SDK
+    source: https://github.com/modelcontextprotocol/rust-sdk
+    features:
+    - server
+    - transport-io
+  - name: tokio
+    version: '1'
+    purpose: Async runtime
+    features:
+    - macros
+    - rt
+    - rt-multi-thread
+    - io-std
+    - signal
+  search_and_indexing:
+  - name: tantivy
+    version: 0.22.0
+    purpose: Full-text search engine (BM25)
+  - name: qdrant-client
+    version: '1'
+    purpose: Vector database client
+  - name: fastembed
+    version: '4'
+    purpose: Local ONNX-based embeddings
+  parsing_and_analysis:
+  - name: tree-sitter
+    version: 0.2
+    purpose: AST parsing
+  - name: tree-sitter-rust
+    version: 0.2
+    purpose: Rust language grammar
+  - name: text-splitter
+    version: 0.13
+    purpose: Semantic text chunking
+  persistence_and_caching:
+  - name: sled
+    version: 0.34
+    purpose: Embedded key-value store for metadata cache
+  - name: rs_merkle
+    version: 1.4
+    purpose: Merkle tree for change detection
+  file_watching:
+  - name: notify
+    version: '6'
+    purpose: File system watching
+  - name: walkdir
+    version: '2'
+    purpose: Directory traversal
+  utilities:
+  - name: serde
+    version: 1.0.219
+    features:
+    - derive
+    purpose: Serialization framework
+  - name: serde_json
+    version: '1.0'
+    purpose: JSON support
+  - name: bincode
+    version: 1.3
+    purpose: Binary serialization
+  - name: uuid
+    version: 1.1
+    features:
+    - v4
+    - serde
+    purpose: Unique chunk IDs
+  - name: sha2
+    version: 0.1
+    purpose: SHA-256 file hashing
+  - name: directories
+    version: '5'
+    purpose: Cross-platform config/data directories
+  - name: anyhow
+    version: '1'
+    purpose: Error handling
+  - name: regex
+    version: '1'
+    purpose: Pattern matching for secrets scanning
+  - name: glob
+    version: 0.3
+    purpose: File pattern matching
+  - name: tracing
+    version: 0.1
+    purpose: Structured logging
+  - name: tracing-subscriber
+    version: 0.3
+    features:
+    - env-filter
+    - std
+    - fmt
+    purpose: Logging subscriber
+  dev_dependencies:
+  - name: tempfile
+    version: '3'
+    purpose: Temporary directories for tests
+architecture_patterns:
+  project_architecture: Modular MCP Server Application
+  design_patterns:
+  - pattern: Layered Architecture
+    layers:
+    - MCP Protocol Layer (mcp/)
+    - Tool Layer (tools/)
+    - Search Layer (search/)
+    - Indexing Layer (indexing/)
+    - Storage Layer (vector_store/, metadata_cache.rs)
+    - Parsing Layer (parser/)
+  - pattern: Hybrid Search Architecture
+    components:
+    - BM25 full-text search (Tantivy)
+    - Vector similarity search (Qdrant)
+    - Reciprocal Rank Fusion (RRF) for result merging
+  - pattern: Incremental Processing
+    features:
+    - Merkle tree for change detection
+    - Metadata caching with sled
+    - Background sync manager
+  - pattern: Event-Driven Architecture
+    implementation: File system watching with notify crate
+  code_organization:
+    module_structure: One module per domain concern
+    visibility: Public API exposed through lib.rs
+    binary_separation: Main server binary separate from library code
+  storage_architecture:
+    layers:
+    - name: Tantivy Index
+      purpose: BM25 full-text search
+      location: ~/.local/share/search/
+    - name: Qdrant Collection
+      purpose: Vector embeddings storage
+      location: storage/collections/
+    - name: Metadata Cache
+      purpose: File hash and change tracking
+      location: ~/.local/share/search/cache/
+    - name: Merkle Snapshots
+      purpose: Directory-level change detection
+      location: ~/.local/share/rust-code-mcp/merkle/
+key_components:
+  mcp_tools:
+  - name: search_code
+    purpose: Hybrid search across codebase
+    implementation: src/tools/search_tool.rs
+    lines: 1000
+  - name: index_directory
+    purpose: Index or reindex a directory
+    implementation: src/tools/index_tool.rs
+    lines: 284
+    features:
+    - Force reindex support
+    - Incremental updates
+    - Background sync
+  - name: health_check
+    purpose: System health monitoring
+    implementation: src/tools/health_tool.rs
+    lines: 121
+  - name: find_definition
+    purpose: Locate symbol definitions
+    note: Part of enhanced MCP tools (Phase 7)
+  - name: find_references
+    purpose: Find symbol references
+    note: Part of enhanced MCP tools (Phase 7)
+  - name: get_dependencies
+    purpose: Extract file dependencies
+    note: Part of enhanced MCP tools (Phase 7)
+  search_components:
+  - name: HybridSearch
+    file: src/search/mod.rs
+    lines: 549
+    capabilities:
+    - BM25 keyword search
+    - Vector similarity search
+    - RRF result fusion
+    - Resilient error handling
+  - name: BM25Search
+    file: src/search/bm25.rs
+    lines: 303
+    purpose: Full-text search using Tantivy
+  - name: RRFTuner
+    file: src/search/rrf_tuner.rs
+    lines: 446
+    purpose: Reciprocal Rank Fusion optimization
+  indexing_components:
+  - name: UnifiedIndexer
+    file: src/indexing/unified.rs
+    lines: 642
+    purpose: Main indexing orchestration
+    features:
+    - Bulk and incremental indexing
+    - Merkle-based change detection
+    - Multi-storage coordination
+  - name: MerkleTree
+    file: src/indexing/merkle.rs
+    lines: 439
+    purpose: Fast directory change detection
+  - name: IncrementalIndexer
+    file: src/indexing/incremental.rs
+    lines: 384
+    purpose: File-level incremental updates
+  - name: BulkIndexer
+    file: src/indexing/bulk.rs
+    lines: 238
+    purpose: Initial full index creation
+  parsing_components:
+  - name: RustParser
+    file: src/parser/mod.rs
+    lines: 807
+    purpose: Tree-sitter based AST parsing
+    capabilities:
+    - Symbol extraction (functions, structs, traits, etc.)
+    - AST node traversal
+    - Source location tracking
+  - name: CallGraph
+    file: src/parser/call_graph.rs
+    lines: 305
+    purpose: Function call relationship tracking
+  - name: TypeReferences
+    file: src/parser/type_references.rs
+    lines: 534
+    purpose: Type usage analysis
+  - name: Imports
+    file: src/parser/imports.rs
+    lines: 269
+    purpose: Import statement extraction
+  vector_components:
+  - name: VectorStore
+    file: src/vector_store/mod.rs
+    lines: 547
+    purpose: Qdrant client wrapper
+    operations:
+    - Collection management
+    - Point insertion
+    - Similarity search
+    - Collection clearing
+  - name: EmbeddingGenerator
+    file: src/embeddings/mod.rs
+    lines: 288
+    purpose: Local embedding generation
+    model: BAAI/bge-small-en-v1.5
+  - name: SemanticChunker
+    file: src/chunker/mod.rs
+    lines: 485
+    purpose: Code-aware text chunking
+  monitoring_components:
+  - name: HealthMonitor
+    file: src/monitoring/health.rs
+    lines: 288
+    purpose: System health checks
+  - name: BackupManager
+    file: src/monitoring/backup.rs
+    lines: 180
+    purpose: Data backup and restore
+  security_components:
+  - name: SecretsScanner
+    file: src/security/secrets.rs
+    lines: 259
+    purpose: Secret detection in code
+  - name: SecurityValidator
+    file: src/security/mod.rs
+    lines: 211
+    purpose: Security policy enforcement
+implementation_phases:
+  completed_phases:
+  - phase: Phase 0
+    focus: Project setup and planning
+    status: Complete
+  - phase: Phase 1
+    focus: Persistent index with incremental updates
+    status: Complete
+    features:
+    - File watching with notify
+    - Metadata caching with sled
+    - SHA-256 file hashing
+    documentation: DOCS/PHASE1_COMPLETE.md
+  - phase: Phase 2
+    focus: Tree-sitter integration and symbol extraction
+    status: Complete
+    features:
+    - AST parsing for Rust
+    - Symbol extraction
+    documentation: DOCS/PHASE2_COMPLETE.md
+  - phase: Phase 3
+    focus: Semantic code chunking
+    status: Complete
+    features:
+    - Code-aware text splitting
+    - Chunk management
+    documentation: DOCS/PHASE3_COMPLETE.md
+  - phase: Phase 4
+    focus: Embedding generation
+    status: Complete
+    features:
+    - Local ONNX embeddings
+    - fastembed integration
+    documentation: DOCS/PHASE4_COMPLETE.md
+  - phase: Phase 5
+    focus: Vector database integration
+    status: Complete
+    features:
+    - Qdrant client
+    - Vector search
+    documentation: DOCS/PHASE5_COMPLETE.md
+  - phase: Phase 6
+    focus: Hybrid search
+    status: Complete
+    features:
+    - BM25 + vector search
+    - RRF fusion
+    documentation: DOCS/PHASE6_COMPLETE.md
+  - phase: Phase 7
+    focus: Enhanced MCP tools
+    status: Complete
+    features:
+    - find_definition
+    - find_references
+    - get_dependencies
+    documentation: DOCS/PHASE7_COMPLETE.md, DOCS/PHASE7_WEEK12_COMPLETE.md
+  current_state: Production-ready with all 7 phases complete
+issues_and_fixes:
+  resolved_issues:
+  - issue_number: 1
+    title: Force Reindex Not Working
+    severity: Medium
+    status: Fixed
+    fix_date: 2025-10-21
+    solution: Added clear_all_data() to clear Merkle, metadata cache, Tantivy, and Qdrant
+    documentation: FIX_FORCE_REINDEX.md
+  - issue_number: 2
+    title: Health Check False Negative for Merkle Snapshot
+    severity: Low
+    status: Fixed
+    fix_date: 2025-10-22
+    solution: Reused get_snapshot_path() function for correct path calculation
+    documentation: FIX_PORT_CONFIGURATION.md, IMPL_PLAN_2.md
+  - issue_number: 3
+    title: Semantic Search Collection Issues
+    status: Fixed
+    documentation: FIX_SEMANTIC_SEARCH_COLLECTION.md
+  active_issues:
+    tracked_in: ISSUES.md
+documentation_structure:
+  root_documentation:
+  - FIX_FORCE_REINDEX.md
+  - FIX_PORT_CONFIGURATION.md
+  - FIX_SEMANTIC_SEARCH_COLLECTION.md
+  - IMPL_PLAN_2.md
+  - ISSUES.md
+  DOCS_directory:
+    count: 26
+    categories:
+      planning:
+      - PLAN.md
+      - NEW_PLAN.md
+      - EXTRACTION_PLAN.md
+      research:
+      - RUST_MCP_CODE_SEARCH_RESEARCH.md
+      - DEEP_RESEARCH_FINDINGS.md
+      - ADVANCED_RESEARCH.md
+      - STATE_OF_THE_ART_CODEBASE_ANALYSIS.md
+      - SEARCH.md
+      architecture:
+      - ARCHITECTURE_COMPARISON.md
+      - COMPARISON_CLAUDE_CONTEXT.md
+      - NIX_INTEGRATION.md
+      indexing_research:
+      - INCREMENTAL_INDEXING_ANALYSIS.md
+      - INCREMENTAL_INDEXING_COMPARISON.md
+      - INCREMENTAL_INDEXING_COMPREHENSIVE.md
+      - INDEXING_STRATEGIES.md
+      phase_completion:
+      - PHASE0_NOTES.md
+      - PHASE1_PLAN.md
+      - PHASE1_COMPLETE.md
+      - PHASE2_COMPLETE.md
+      - PHASE3_COMPLETE.md
+      - PHASE4_COMPLETE.md
+      - PHASE5_COMPLETE.md
+      - PHASE6_COMPLETE.md
+      - PHASE7_COMPLETE.md
+      - PHASE7_WEEK12_COMPLETE.md
+      integration:
+      - INTEGRATION_VERIFIED.md
+  docs_directory:
+    count: 3
+    purpose: Private documentation
+notable_features:
+  performance_optimizations:
+  - Merkle tree for 100x faster change detection
+  - Incremental indexing with metadata caching
+  - Background sync manager (5-minute intervals)
+  - Memory-efficient streaming
+  scalability_targets:
+  - Index 100k LOC in under 2 minutes
+  - Query latency under 500ms p95
+  - Memory usage under 2GB for 100k LOC
+  - Support for 1M+ LOC codebases
+  privacy_features:
+  - Local-first design
+  - No external API calls
+  - ONNX-based embeddings
+  - Secret scanning and filtering
+  reliability_features:
+  - Resilient search with fallbacks
+  - Health monitoring
+  - Backup and restore capabilities
+  - Comprehensive error handling
+testing_infrastructure:
+  test_count: 9
+  test_types:
+    integration_tests: 7
+    benchmarks: 1
+    evaluation: 1
+  test_coverage_areas:
+  - Incremental indexing
+  - Hybrid search
+  - Merkle tree operations
+  - MCP tool integration
+  - Sync manager
+  - Phase integrations
+  test_data:
+  - test_queries.json
+  - fixtures/ directory
+runtime_artifacts:
+  storage_location: storage/
+  snapshot_location: snapshots/
+  cache_location: ~/.local/share/search/cache/
+  merkle_location: ~/.local/share/rust-code-mcp/merkle/
+  qdrant_data:
+    collections: storage/collections/
+    active_collection: code_chunks_eb5e3f03
+    note: Contains WAL, config, and vector data
+project_maturity:
+  development_stage: Production-ready
+  completion_status: All 7 phases complete
+  known_issues: 0 active (3 resolved)
+  documentation_quality: Comprehensive
+  test_coverage: Good
+  strengths:
+  - Complete phase-based implementation
+  - Comprehensive documentation
+  - Modular architecture
+  - Production-grade error handling
+  - Performance optimizations
+  areas_for_enhancement:
+  - CI/CD pipeline (no GitHub Actions)
+  - Benchmark suite (empty benches/ directory)
+  - Example code (empty examples/ directory)
+  - Multi-language support (currently Rust-only)

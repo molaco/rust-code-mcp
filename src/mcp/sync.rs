@@ -33,7 +33,7 @@ impl SyncManager {
     /// Create a new sync manager
     ///
     /// # Arguments
-    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6333")
+    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6334")
     /// * `cache_base` - Base directory for metadata caches
     /// * `tantivy_base` - Base directory for Tantivy indices
     /// * `interval_secs` - Sync interval in seconds (default: 300 = 5 minutes)
@@ -61,7 +61,7 @@ impl SyncManager {
             .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"));
 
         let qdrant_url =
-            std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
+            std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
 
         Self::new(
             qdrant_url,

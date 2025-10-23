@@ -288,8 +288,9 @@ impl UnifiedIndexer {
 
         // 8. Index to both stores
         // This is the CRITICAL FIX - we now actually populate Qdrant!
+        let chunks_count = chunks.len();
         self.index_to_tantivy(&chunks)?;
-        self.index_to_qdrant(&chunks, embeddings).await?;
+        self.index_to_qdrant(chunks, embeddings).await?;
 
         // 9. Update metadata cache
         let file_meta = crate::metadata_cache::FileMetadata::from_content(
@@ -305,12 +306,12 @@ impl UnifiedIndexer {
 
         tracing::info!(
             "✓ Indexed {} chunks from {}",
-            chunks.len(),
+            chunks_count,
             file_path.display()
         );
 
         Ok(IndexFileResult::Indexed {
-            chunks_count: chunks.len(),
+            chunks_count,
         })
     }
 
@@ -342,13 +343,13 @@ impl UnifiedIndexer {
     /// THIS IS THE MISSING PIECE - Qdrant was never being populated!
     async fn index_to_qdrant(
         &self,
-        chunks: &[CodeChunk],
+        chunks: Vec<CodeChunk>,
         embeddings: Vec<Embedding>,
     ) -> Result<()> {
         let chunk_data: Vec<(ChunkId, Embedding, CodeChunk)> = chunks
-            .iter()
+            .into_iter()
             .zip(embeddings.into_iter())
-            .map(|(chunk, embedding)| (chunk.id, embedding, chunk.clone()))
+            .map(|(chunk, embedding)| (chunk.id, embedding, chunk))
             .collect();
 
         self.vector_store
@@ -399,9 +400,6 @@ impl UnifiedIndexer {
 
         // Commit Tantivy changes
         self.tantivy_writer.commit().context("Failed to commit Tantivy index")?;
-
-        // Wait briefly to ensure index is fully committed
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         tracing::info!(
             "✓ Indexing complete: {} files indexed, {} chunks, {} unchanged, {} skipped",

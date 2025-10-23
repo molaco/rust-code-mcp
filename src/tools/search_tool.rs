@@ -258,7 +258,7 @@ impl SearchTool {
 
         // 1. Initialize unified indexer
         let qdrant_url = std::env::var("QDRANT_URL")
-            .unwrap_or_else(|_| "http://localhost:6333".to_string());
+            .unwrap_or_else(|_| "http://localhost:6334".to_string());
 
         // Sanitize project name for collection
         let project_name = dir_path
@@ -886,7 +886,7 @@ impl SearchTool {
 
         let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
         let qdrant_url = std::env::var("QDRANT_URL")
-            .unwrap_or_else(|_| "http://localhost:6333".to_string());
+            .unwrap_or_else(|_| "http://localhost:6334".to_string());
 
         tracing::debug!(
             "Using collection '{}' for directory '{}'",

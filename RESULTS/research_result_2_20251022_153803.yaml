@@ -1,0 +1,519 @@
+hybrid_search_comparison:
+  overview: |
+    Comprehensive comparison of hybrid search implementations between rust-code-mcp (file-search-mcp fork) 
+    and claude-context (zilliztech). Both implement BM25 + vector search with Reciprocal Rank Fusion (RRF).
+
+  architecture_comparison:
+    rust_code_mcp:
+      name: "rust-code-mcp (file-search-mcp architecture)"
+      bm25_engine: "Tantivy"
+      vector_database: "Qdrant"
+      embedding_model: "all-MiniLM-L6-v2 (384 dimensions)"
+      language: "Rust"
+      location: "src/search/mod.rs"
+      
+    claude_context:
+      name: "claude-context (zilliztech)"
+      bm25_engine: "Milvus Built-in BM25"
+      vector_database: "Milvus"
+      embedding_model: "Dense embeddings (model not specified in search)"
+      language: "TypeScript/JavaScript"
+      unified_database: "Milvus handles both BM25 and vector search natively"
+
+  rrf_algorithm_comparison:
+    
+    rust_code_mcp_implementation:
+      location: "src/search/mod.rs:196-263"
+      formula: "score = Σ (weight_i / (k + rank_i))"
+      
+      algorithm_details:
+        k_parameter: 
+          default: 60.0
+          tunable_range: [10.0, 20.0, 40.0, 60.0, 80.0, 100.0]
+          optimization: "Automatic tuning via RRFTuner with NDCG@10"
+        
+        weights:
+          bm25_weight: 
+            default: 0.5
+            range: "0.0-1.0"
+            configurable: true
+          vector_weight:
+            default: 0.5
+            range: "0.0-1.0"
+            configurable: true
+        
+        implementation_steps:
+          - "Create HashMap keyed by ChunkId for deduplication"
+          - "Process vector results: accumulate weighted RRF scores (1/(k + rank) * vector_weight)"
+          - "Process BM25 results: accumulate weighted RRF scores (1/(k + rank) * bm25_weight)"
+          - "Chunks appearing in both get sum of contributions (boosted)"
+          - "Sort by combined RRF score descending"
+          - "Preserve individual scores and ranks for transparency"
+        
+        code_snippet: |
+          for (rank, result) in vector_results.iter().enumerate() {
+              let rrf_score = 1.0 / (k + (rank + 1) as f32);
+              entry.rrf_score += rrf_score * self.config.vector_weight;
+              entry.vector_score = Some(result.score);
+              entry.vector_rank = Some(rank + 1);
+          }
+        
+        normalization_approach: "Rank-based (no explicit normalization needed)"
+        
+    claude_context_implementation:
+      location: "MilvusVectorDatabase.hybridSearch() method"
+      formula: "RRF with configurable dense/sparse weight ratios"
+      
+      algorithm_details:
+        k_parameter:
+          default: 60
+          note: "Standard Milvus RRF implementation"
+        
+        weights:
+          dense_weight: "Configurable weight for dense vector search"
+          sparse_weight: "Configurable weight for BM25 sparse search"
+          default_ranker: "RRFRanker"
+          alternative: "WeightedRanker also supported"
+        
+        milvus_integration:
+          built_in_bm25: true
+          analyzer: "Standard built-in analyzer (tokenizes on punctuation)"
+          enable_sparse: "Set to True for BM25 functionality"
+          unified_api: "Single database handles both vector and BM25"
+        
+        implementation_method: |
+          Context.semanticSearch() orchestrates hybrid retrieval through 
+          MilvusVectorDatabase.hybridSearch(), combining dense embeddings 
+          with BM25 keyword matching, reranked using RRF
+
+  search_flow_comparison:
+    
+    rust_code_mcp_flow:
+      steps:
+        1_query_input: "User provides natural language query"
+        2_parallel_execution:
+          bm25: "spawn_blocking (synchronous Tantivy search)"
+          vector: "async Qdrant search with embedding generation"
+          synchronization: "tokio::join! waits for both"
+        3_candidate_retrieval: "Default 100 candidates from each engine"
+        4_rrf_fusion: "Apply weighted RRF with configurable k and weights"
+        5_result_assembly: "Create SearchResult with all metadata"
+        6_return: "Top N results sorted by RRF score"
+      
+      latency: "~100-150ms typical"
+      parallelism: "True parallel execution (BM25 and vector simultaneous)"
+      
+    claude_context_flow:
+      steps:
+        1_query_input: "Code search query from MCP client"
+        2_semantic_search: "Context.semanticSearch() method invocation"
+        3_hybrid_retrieval: "MilvusVectorDatabase.hybridSearch()"
+        4_unified_execution: "Milvus executes both BM25 and vector internally"
+        5_rrf_reranking: "Built-in RRF reranker with configurable weights"
+        6_return: "Ranked results with relevance scores"
+      
+      latency: "Not specified in documentation"
+      parallelism: "Milvus internal parallelization"
+      token_efficiency: "~40% token reduction vs non-hybrid approaches"
+
+  result_merging_strategies:
+    
+    rust_code_mcp:
+      strategy: "HashMap-based accumulation with weighted contributions"
+      
+      merging_process:
+        deduplication: "ChunkId as HashMap key ensures no duplicates"
+        score_accumulation: "Additive - chunks in both get sum of weighted RRF scores"
+        overlap_handling: "Chunks appearing in both results get boosted scores"
+        transparency: "Preserves original scores and ranks from both engines"
+      
+      result_structure:
+        chunk_id: "Unique identifier"
+        score: "Combined RRF score"
+        bm25_score: "Option<f32> - original BM25 score if present"
+        vector_score: "Option<f32> - original vector similarity if present"
+        bm25_rank: "Option<usize> - rank in BM25 results"
+        vector_rank: "Option<usize> - rank in vector results"
+        chunk: "Full CodeChunk object"
+      
+      advantages:
+        - "Complete transparency - can see contribution from each engine"
+        - "Flexible weight adjustment for different query types"
+        - "No loss of original ranking information"
+        - "Easy debugging and analysis"
+    
+    claude_context:
+      strategy: "Milvus native RRF reranking with weight balancing"
+      
+      merging_process:
+        native_fusion: "Milvus handles fusion internally"
+        weight_balancing: "Dense/sparse weight ratios control influence"
+        ranker_options: "RRFRanker (default) or WeightedRanker"
+        smoothing: "k=60 smoothing parameter in RRF"
+      
+      result_structure:
+        relevance_scores: "Unified relevance score from RRF"
+        metadata: "Code context and file information"
+        token_optimized: "Results optimized for LLM context window"
+      
+      advantages:
+        - "Unified database reduces infrastructure complexity"
+        - "Native Milvus optimization for hybrid search"
+        - "Automatic sparse embedding generation (no manual BM25 setup)"
+        - "Significant token reduction (~40%)"
+
+  score_normalization_approaches:
+    
+    rust_code_mcp:
+      method: "Rank-based normalization (implicit via RRF)"
+      
+      details:
+        no_explicit_normalization: true
+        reason: "RRF formula 1/(k+rank) naturally normalizes to (0, 1/k)"
+        score_range: "All scores fall in similar range automatically"
+        weight_control: "Weights adjust relative importance, not absolute scales"
+        
+      benefits:
+        - "No need to normalize BM25 vs cosine similarity scores"
+        - "Rank-based approach is scale-invariant"
+        - "Robust to score distribution differences between engines"
+        - "Simple and mathematically sound"
+      
+      formula_analysis: |
+        For k=60 (default):
+        - Rank 1: score = 1/61 ≈ 0.0164
+        - Rank 10: score = 1/70 ≈ 0.0143
+        - Rank 100: score = 1/160 ≈ 0.0063
+        
+        This creates a gentle decay that favors top-ranked items 
+        without overly penalizing lower ranks.
+    
+    claude_context:
+      method: "Milvus built-in RRF normalization"
+      
+      details:
+        native_implementation: true
+        smoothing_parameter: "k=60 typical"
+        weight_balancing: "Dense/sparse weights control relative influence"
+        
+      milvus_rrf_formula: |
+        RRF reranking balances influence of each vector field when 
+        there is no clear precedence of importance. Uses reciprocal 
+        of ranks with k as smoothing parameter.
+
+  ranking_quality_metrics:
+    
+    rust_code_mcp:
+      evaluation_framework: "src/search/rrf_tuner.rs"
+      
+      metrics_tracked:
+        ndcg_at_10:
+          description: "Normalized Discounted Cumulative Gain at position 10"
+          range: "0.0 to 1.0 (1.0 = perfect ranking)"
+          usage: "Primary metric for k parameter tuning"
+          formula: "DCG / IDCG where DCG = Σ (1 / log2(i+2)) for relevant items"
+        
+        mrr:
+          description: "Mean Reciprocal Rank"
+          range: "0.0 to 1.0"
+          measures: "How quickly first relevant result appears"
+          formula: "1 / (position of first relevant result)"
+        
+        map:
+          description: "Mean Average Precision"
+          range: "0.0 to 1.0"
+          measures: "Overall precision across all relevant results"
+        
+        recall_at_20:
+          description: "Recall at position 20"
+          measures: "Fraction of relevant results found in top 20"
+        
+        precision_at_10:
+          description: "Precision at position 10"
+          measures: "Fraction of top 10 results that are relevant"
+      
+      tuning_process:
+        test_queries: "8 default Rust programming queries"
+        k_values_tested: [10.0, 20.0, 40.0, 60.0, 80.0, 100.0]
+        optimization_goal: "Maximize NDCG@10"
+        evaluation_mode: "Verbose mode available for per-query analysis"
+      
+      code_location: "src/search/rrf_tuner.rs:1-447"
+    
+    claude_context:
+      evaluation_metrics:
+        token_efficiency:
+          improvement: "~40% token reduction"
+          benefit: "Significant cost and time savings in production"
+          comparison: "vs equivalent retrieval quality without hybrid search"
+        
+        retrieval_quality:
+          approach: "Addresses both exact keyword matches and semantic similarity"
+          dual_coverage: "BM25 for exact terms, vectors for concepts"
+
+  configuration_flexibility:
+    
+    rust_code_mcp:
+      config_struct: "HybridSearchConfig (src/search/mod.rs:20-41)"
+      
+      parameters:
+        bm25_weight:
+          type: "f32"
+          default: 0.5
+          range: "0.0 to 1.0"
+          use_cases:
+            exact_match_queries: "0.7 (favor BM25)"
+            conceptual_queries: "0.3 (favor vector)"
+            balanced: "0.5 (equal weight)"
+        
+        vector_weight:
+          type: "f32"
+          default: 0.5
+          range: "0.0 to 1.0"
+          complementary: "Should sum to ~1.0 with bm25_weight for balanced fusion"
+        
+        rrf_k:
+          type: "f32"
+          default: 60.0
+          typical_range: "10.0 to 100.0"
+          tuning: "Use RRFTuner for optimization"
+          effect: "Lower k = more aggressive rank penalty"
+        
+        candidate_count:
+          type: "usize"
+          default: 100
+          range: "50 to 200 typical"
+          purpose: "How many candidates to fetch from each engine before fusion"
+      
+      flexibility: "Very high - all parameters independently configurable"
+    
+    claude_context:
+      configuration:
+        dense_weight: "Configurable for dense vector search"
+        sparse_weight: "Configurable for BM25 sparse search"
+        ranker_selection: "Choose between RRFRanker and WeightedRanker"
+        enable_sparse: "Boolean to enable/disable BM25"
+        
+      milvus_config:
+        analyzer: "Built-in analyzer (tokenizes on punctuation)"
+        customization: "Limited to Milvus's exposed parameters"
+      
+      flexibility: "Moderate - constrained by Milvus's hybrid search API"
+
+  infrastructure_requirements:
+    
+    rust_code_mcp:
+      components:
+        tantivy: "Embedded Rust library (no separate service)"
+        qdrant: "Separate vector database service (gRPC port 6334)"
+        embedding_model: "fastembed library with all-MiniLM-L6-v2"
+      
+      deployment:
+        tantivy_index: "Local filesystem directory"
+        qdrant_server: "Docker container or standalone service"
+        embedding_generation: "In-process with fastembed"
+      
+      complexity: "Moderate - two separate indexing systems"
+      advantage: "Best-of-breed components (Tantivy for BM25, Qdrant for vectors)"
+    
+    claude_context:
+      components:
+        milvus: "Single unified vector database"
+        bm25: "Built into Milvus (no separate service)"
+        embeddings: "Dense embedding generation (model not specified)"
+      
+      deployment:
+        milvus_service: "Single Milvus instance handles everything"
+        unified_index: "Single database for both sparse and dense vectors"
+      
+      complexity: "Low - single database service"
+      advantage: "Simplified infrastructure, reduced operational overhead"
+
+  resilience_and_fallback:
+    
+    rust_code_mcp:
+      implementation: "ResilientHybridSearch (src/search/resilient.rs:1-245)"
+      
+      fallback_strategy:
+        vector_fails: "Automatically fall back to BM25-only mode"
+        bm25_fails: "Automatically fall back to vector-only mode"
+        both_fail: "Clear error message indicating total failure"
+        fallback_tracking: "AtomicBool tracks degraded mode status"
+      
+      graceful_degradation:
+        automatic: true
+        logging: "Detailed warning logs for each failure mode"
+        recovery: "Automatically recovers when services restore"
+      
+      code_example: |
+        match (bm25_result, vector_result) {
+            (Ok(bm25), Ok(vector)) => Ok(self.merge_results(bm25, vector)),
+            (Ok(bm25), Err(_)) => { warn!("Vector failed, BM25 only"); Ok(bm25) },
+            (Err(_), Ok(vector)) => { warn!("BM25 failed, vector only"); Ok(vector) },
+            (Err(_), Err(_)) => Err("Both engines failed")
+        }
+    
+    claude_context:
+      resilience: "Relies on Milvus service availability"
+      fallback: "Not explicitly documented"
+      consideration: "Milvus handles both BM25 and vector, so single point of failure"
+
+  performance_characteristics:
+    
+    rust_code_mcp:
+      parallelism:
+        true_parallel: "BM25 and vector search execute simultaneously"
+        bm25_execution: "spawn_blocking for synchronous Tantivy"
+        vector_execution: "Async Qdrant search"
+        synchronization: "tokio::join! waits for both"
+      
+      latency:
+        typical: "100-150ms for hybrid search"
+        bm25_alone: "~20-50ms (Tantivy is very fast)"
+        vector_alone: "~80-120ms (Qdrant + embedding generation)"
+      
+      throughput:
+        indexing: "Batch upserts of 100 chunks at a time"
+        concurrent_searches: "Limited by Qdrant connection pool"
+      
+      optimization:
+        incremental_indexing: "Merkle tree-based change detection"
+        batch_operations: "Minimize round trips to Qdrant"
+    
+    claude_context:
+      performance:
+        latency: "Not explicitly documented"
+        internal_optimization: "Milvus handles parallelization internally"
+        token_efficiency: "~40% reduction in LLM tokens"
+      
+      optimization:
+        unified_index: "Single database lookup for both search types"
+        native_bm25: "Eliminates manual sparse embedding generation"
+        incremental_indexing: "Merkle tree-based (similar to rust-code-mcp)"
+
+  use_case_recommendations:
+    
+    rust_code_mcp_best_for:
+      - "Projects requiring fine-grained control over search parameters"
+      - "Use cases needing transparency into BM25 vs vector contributions"
+      - "Scenarios where Tantivy and Qdrant are already in infrastructure"
+      - "Research and experimentation with hybrid search algorithms"
+      - "Rust-native applications"
+      - "Situations requiring automatic fallback to degraded modes"
+    
+    claude_context_best_for:
+      - "Projects prioritizing infrastructure simplicity"
+      - "Use cases with Milvus already deployed"
+      - "Applications needing significant token optimization for LLM context"
+      - "Scenarios where unified vector database management is preferred"
+      - "TypeScript/JavaScript ecosystems"
+      - "MCP (Model Context Protocol) integrations with Claude Code"
+
+  key_differences_summary:
+    
+    architecture:
+      rust_code_mcp: "Dual-system (Tantivy + Qdrant)"
+      claude_context: "Unified (Milvus for both BM25 and vectors)"
+    
+    rrf_implementation:
+      rust_code_mcp: "Custom implementation with extensive tuning framework"
+      claude_context: "Native Milvus RRF with standard configuration"
+    
+    transparency:
+      rust_code_mcp: "High - exposes all individual scores and ranks"
+      claude_context: "Lower - unified relevance score from Milvus"
+    
+    flexibility:
+      rust_code_mcp: "Very high - all parameters independently tunable"
+      claude_context: "Moderate - constrained by Milvus API"
+    
+    infrastructure:
+      rust_code_mcp: "More complex (two separate systems)"
+      claude_context: "Simpler (single Milvus instance)"
+    
+    resilience:
+      rust_code_mcp: "Explicit fallback mechanisms with automatic degradation"
+      claude_context: "Relies on Milvus availability"
+    
+    optimization_focus:
+      rust_code_mcp: "Search quality (NDCG, MRR, MAP metrics)"
+      claude_context: "Token efficiency and operational simplicity"
+
+  mathematical_analysis:
+    
+    rrf_formula_comparison:
+      both_use: "score = 1 / (k + rank)"
+      
+      rust_code_mcp:
+        weighted_version: "score = Σ [weight_i / (k + rank_i)]"
+        independent_weights: true
+        example_calculation: |
+          Chunk appears in both:
+          - Vector rank 1, BM25 rank 3, k=60, weights 0.5/0.5
+          - Vector contribution: 0.5 / (60 + 1) = 0.0082
+          - BM25 contribution: 0.5 / (60 + 3) = 0.0079
+          - Combined score: 0.0161
+      
+      claude_context:
+        milvus_implementation: "RRF with configurable dense/sparse weights"
+        unified_scoring: true
+        smoothing: "k=60 typical"
+    
+    score_distribution:
+      k_parameter_effect:
+        k_10: "Aggressive rank penalty, top results heavily favored"
+        k_60: "Balanced, gentle decay (most common choice)"
+        k_100: "Gentle penalty, considers broader range of ranks"
+      
+      rank_decay_examples:
+        k_60:
+          rank_1: "1/61 = 0.0164"
+          rank_5: "1/65 = 0.0154 (-6% from rank 1)"
+          rank_10: "1/70 = 0.0143 (-13% from rank 1)"
+          rank_50: "1/110 = 0.0091 (-45% from rank 1)"
+          rank_100: "1/160 = 0.0063 (-62% from rank 1)"
+
+  code_quality_and_testing:
+    
+    rust_code_mcp:
+      test_coverage:
+        unit_tests: "Comprehensive (see test modules in all files)"
+        integration_tests: "Require Qdrant server (marked #[ignore])"
+        evaluation_framework: "Full RRFTuner with multiple metrics"
+      
+      code_organization:
+        modular: "Clear separation: bm25.rs, resilient.rs, rrf_tuner.rs"
+        documented: "Extensive rustdoc comments"
+        type_safe: "Strong typing with Rust"
+      
+      error_handling:
+        explicit: "Result types throughout"
+        graceful_degradation: "Automatic fallback mechanisms"
+    
+    claude_context:
+      documentation:
+        readme: "Comprehensive GitHub README"
+        mcp_integration: "Well-documented MCP protocol usage"
+      
+      code_organization:
+        mcp_server: "Model Context Protocol server structure"
+        typescript: "TypeScript for type safety"
+
+  conclusion: |
+    Both systems implement sound hybrid search with RRF, but with different philosophies:
+    
+    **rust-code-mcp** (Tantivy + Qdrant):
+    - Maximizes control and transparency
+    - Best-of-breed components
+    - Extensive tuning and evaluation framework
+    - Explicit resilience with fallback modes
+    - Ideal for research, experimentation, and production systems requiring deep customization
+    
+    **claude-context** (Milvus unified):
+    - Maximizes simplicity and operational efficiency
+    - Unified infrastructure reduces complexity
+    - Focus on token optimization for LLM context
+    - Native Milvus optimizations
+    - Ideal for production systems prioritizing ease of deployment and maintenance
+    
+    The choice between them depends on priorities: control/flexibility vs simplicity/efficiency.

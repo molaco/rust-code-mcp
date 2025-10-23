@@ -1,0 +1,51 @@
+objective: Compare and contrast the file-search-mcp (Rust) and claude-context (TypeScript) codebases to identify architectural similarities, implementation differences, and potential improvements
+prompts:
+- title: MCP Protocol Implementation Comparison
+  query: Compare how both codebases implement the Model Context Protocol (MCP) server functionality. Examine the MCP tool definitions, request/response handling, stdio transport, and tool registration patterns. Identify differences in how file-search-mcp uses the rmcp Rust SDK versus how claude-context uses @modelcontextprotocol/sdk in TypeScript.
+  focus:
+  - MCP server initialization and tool registration
+  - Tool handler architecture and request processing
+  - Error handling and response formatting in MCP context
+  - Stdio transport implementation differences
+- title: Hybrid Search Architecture Analysis
+  query: Analyze the hybrid search implementations in both codebases. Compare how file-search-mcp combines Tantivy (BM25) with Qdrant (vector search) versus how claude-context integrates BM25 with Milvus dense embeddings. Examine the Reciprocal Rank Fusion (RRF) algorithms, result merging strategies, and search result ranking approaches.
+  focus:
+  - BM25 full-text search implementation differences (Tantivy vs Milvus BM25)
+  - Vector similarity search integration patterns
+  - RRF fusion algorithms and tuning parameters
+  - Search result scoring and ranking mechanisms
+- title: Incremental Indexing Strategy Comparison
+  query: Compare the incremental indexing approaches used by both systems. Examine how file-search-mcp uses Merkle trees with sled metadata cache versus claude-context's Merkle tree with snapshot persistence. Analyze change detection mechanisms, file hashing strategies (SHA-256), and the efficiency of detecting modifications, additions, and deletions.
+  focus:
+  - Merkle tree implementation and snapshot management
+  - Metadata caching strategies (sled vs file-based snapshots)
+  - Change detection algorithms and performance
+  - Incremental update triggers and synchronization
+- title: Vector Database Integration Patterns
+  query: Investigate how file-search-mcp integrates with Qdrant versus how claude-context integrates with Milvus/Zilliz Cloud. Compare collection management, point/vector insertion, similarity search APIs, and database configuration. Examine differences in local vs cloud deployment, connection handling, and database abstraction layers.
+  focus:
+  - Vector database client architecture and abstraction
+  - Collection/index management and lifecycle
+  - Batch insertion and indexing patterns
+  - Local vs cloud deployment approaches (Qdrant local vs Zilliz Cloud)
+- title: Embedding Generation Approaches
+  query: Compare embedding generation strategies between the two codebases. Analyze file-search-mcp's use of fastembed (local ONNX models) versus claude-context's pluggable embedding providers (OpenAI, VoyageAI, Ollama, Gemini). Examine the trade-offs between local-first privacy and cloud-based flexibility, model selection, and embedding quality.
+  focus:
+  - Embedding provider architecture (single vs pluggable)
+  - Local vs API-based embedding generation
+  - Model selection and configuration
+  - Privacy and performance trade-offs
+- title: Code Parsing and Chunking Strategies
+  query: Examine the code parsing and semantic chunking implementations in both systems. Compare file-search-mcp's tree-sitter Rust parser with symbol extraction versus claude-context's AST-based splitter supporting 17+ languages. Analyze chunking strategies, code structure preservation, and how each handles different programming languages.
+  focus:
+  - Tree-sitter integration and AST parsing approaches
+  - Semantic chunking algorithms and chunk boundary detection
+  - Multi-language support (Rust-only vs 17+ languages)
+  - Symbol extraction and metadata preservation
+- title: Architecture and Modularity Patterns
+  query: Compare the overall architecture, code organization, and modularity of both projects. Analyze file-search-mcp's Rust module structure versus claude-context's TypeScript monorepo with core/mcp/extensions packages. Examine separation of concerns, component coupling, extensibility, and how each codebase supports different deployment scenarios.
+  focus:
+  - Project structure and module organization
+  - Layered architecture patterns and separation of concerns
+  - Extensibility and plugin architecture
+  - Monorepo vs single-binary deployment models

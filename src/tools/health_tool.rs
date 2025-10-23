@@ -12,6 +12,8 @@ use directories::ProjectDirs;
 use crate::monitoring::health::HealthMonitor;
 use crate::search::Bm25Search;
 use crate::vector_store::{VectorStore, VectorStoreConfig};
+use crate::indexing::incremental::get_snapshot_path;
+use sha2::{Digest, Sha256};
 
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -34,23 +36,30 @@ pub async fn health_check(
 ) -> Result<CallToolResult, McpError> {
     tracing::info!("Performing health check");
 
-    // Determine paths
+    // Determine paths using hash-based approach (consistent with index_tool)
     let (bm25_path, merkle_path, collection_name) = if let Some(ref dir) = directory {
-        let project_name = std::path::Path::new(dir)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("default")
-            .replace(|c: char| !c.is_alphanumeric(), "_");
+        let dir_path = std::path::Path::new(dir);
+
+        // Calculate directory hash for collection name (same as index_tool)
+        let dir_hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(dir_path.to_string_lossy().as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+
+        let cache_hash = &dir_hash[..8];
 
         (
-            data_dir().join(format!("index_{}", project_name)),
-            data_dir().join(format!("cache_{}/merkle.snapshot", project_name)),
-            format!("code_chunks_{}", project_name),
+            data_dir().join("index").join(cache_hash),
+            get_snapshot_path(dir_path),  // ✅ Use actual function for consistency!
+            format!("code_chunks_{}", cache_hash),
         )
     } else {
+        // System-wide check: can't determine specific snapshot path
+        // Merkle snapshots are directory-specific, so this will report as missing
         (
             data_dir().join("index"),
-            data_dir().join("cache/merkle.snapshot"),
+            std::path::PathBuf::from("/nonexistent/merkle.snapshot"),  // Sentinel value
             "code_chunks_default".to_string(),
         )
     };
@@ -59,7 +68,7 @@ pub async fn health_check(
     let bm25 = Bm25Search::new(&bm25_path).ok().map(std::sync::Arc::new);
 
     let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "http://localhost:6333".to_string());
+        .unwrap_or_else(|_| "http://localhost:6334".to_string());
 
     let vector_store = VectorStore::new(VectorStoreConfig {
         url: qdrant_url,
@@ -100,6 +109,7 @@ pub async fn health_check(
     response.push_str("- Healthy: All components operational\n");
     response.push_str("- Degraded: One search engine down OR Merkle snapshot missing\n");
     response.push_str("- Unhealthy: Both BM25 and Vector search are down\n");
+    response.push_str("\nNote: Merkle snapshots are directory-specific. Use 'directory' parameter for accurate check.\n");
 
     if let Some(ref dir) = directory {
         response.push_str(&format!("\nChecked project: {}\n", dir));

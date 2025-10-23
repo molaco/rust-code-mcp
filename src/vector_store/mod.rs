@@ -44,7 +44,7 @@ impl Default for VectorStoreConfig {
             .unwrap_or_else(|| "code_chunks_default".to_string());
 
         Self {
-            url: "http://localhost:6333".to_string(),  // gRPC port
+            url: "http://localhost:6334".to_string(),  // gRPC port
             collection_name,
             vector_size: 384, // all-MiniLM-L6-v2
         }
@@ -133,7 +133,7 @@ impl VectorStore {
                     m: Some(16),
                     ef_construct: Some(100),
                     full_scan_threshold: Some(10000),
-                    max_indexing_threads: Some(0),
+                    max_indexing_threads: Some(4),  // Reasonable default instead of 0 (auto)
                     on_disk: None,
                     payload_m: None,
                 }),

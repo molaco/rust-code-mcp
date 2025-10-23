@@ -1,0 +1,691 @@
+code_parsing_and_semantic_chunking_analysis:
+  
+  system_overview:
+    rust_code_mcp_system: "file-search-mcp"
+    actual_name: "file-search-mcp (Rust-based MCP server)"
+    comparison_target: "claude-context (not present in this repository)"
+    note: "This analysis documents the file-search-mcp implementation only, as claude-context is not available"
+
+  # ============================================================================
+  # PARSING IMPLEMENTATION
+  # ============================================================================
+  
+  parsing_architecture:
+    file_search_mcp:
+      parser_type: "Tree-sitter (Rust grammar only)"
+      implementation_file: "src/parser/mod.rs"
+      lines_of_code: 808
+      tree_sitter_version: "0.20"
+      grammar_package: "tree-sitter-rust 0.20"
+      
+      language_support:
+        total_languages: 1
+        supported: ["Rust"]
+        extensibility: "Limited - requires adding new tree-sitter grammars"
+        
+      core_parsing_interface:
+        main_struct: "RustParser"
+        entry_point_method: "parse_source_complete()"
+        single_pass: true
+        description: "Comprehensive single-pass extraction of all code artifacts"
+        
+      extracted_artifacts:
+        symbols:
+          count: 9
+          types:
+            - name: "Function"
+              modifiers: ["async", "unsafe", "const"]
+              location: "src/parser/mod.rs:37-41"
+            - name: "Struct"
+              location: "src/parser/mod.rs:43"
+            - name: "Enum"
+              location: "src/parser/mod.rs:45"
+            - name: "Trait"
+              location: "src/parser/mod.rs:47"
+            - name: "Impl"
+              details: "Tracks both trait impls and inherent impls"
+              location: "src/parser/mod.rs:49-54"
+            - name: "Module"
+              location: "src/parser/mod.rs:56"
+            - name: "Const"
+              location: "src/parser/mod.rs:58"
+            - name: "Static"
+              location: "src/parser/mod.rs:60"
+            - name: "TypeAlias"
+              location: "src/parser/mod.rs:62"
+        
+        metadata_per_symbol:
+          - "Name (identifier)"
+          - "Kind (function, struct, etc.)"
+          - "Line range (start_line, end_line, start_byte, end_byte)"
+          - "Visibility (pub, pub(crate), pub(in path), private)"
+          - "Docstring (/// and //! comments)"
+          - "Function modifiers (async, unsafe, const)"
+          - "Impl block details (trait name, type name)"
+        
+        call_graph:
+          file: "src/parser/call_graph.rs"
+          lines: 306
+          data_structure: "HashMap<String, HashSet<String>>"
+          tracks: "Caller → Callee relationships"
+          call_types_detected:
+            - "Simple function calls: foo()"
+            - "Method calls: obj.method()"
+            - "Associated function calls: Type::function()"
+            - "Generic function calls: func::<T>()"
+            - "Nested calls (hierarchical)"
+          operations:
+            - "add_call(caller, callee)"
+            - "get_callees(function) → Vec<&str>"
+            - "get_callers(function) → Vec<&str>"
+            - "has_call(caller, callee) → bool"
+            - "all_functions() → HashSet"
+            - "edge_count() → usize"
+        
+        imports:
+          file: "src/parser/imports.rs"
+          lines: 270
+          data_structure: "Vec<Import>"
+          import_patterns:
+            - "Simple: use std::collections::HashMap"
+            - "Glob: use std::collections::*"
+            - "Multiple: use std::collections::{HashMap, HashSet}"
+            - "Alias: use std::collections::HashMap as Map"
+            - "Nested: use crate::parser::{Symbol, Range}"
+          metadata:
+            - "path: Full import path"
+            - "is_glob: Boolean for wildcard imports"
+            - "items: Vec<String> for multi-imports"
+          utility_function: "get_external_dependencies() - extracts crate names"
+        
+        type_references:
+          file: "src/parser/type_references.rs"
+          lines: 535
+          purpose: "Track where types/structs are used throughout codebase"
+          usage_contexts:
+            - "FunctionParameter { function_name }"
+            - "FunctionReturn { function_name }"
+            - "StructField { struct_name, field_name }"
+            - "ImplBlock { trait_name: Option }"
+            - "LetBinding"
+            - "GenericArgument"
+          tracked_patterns:
+            - "Function signatures (params & returns)"
+            - "Struct field types"
+            - "Generic type arguments (Vec<T>, HashMap<K,V>)"
+            - "Impl block types"
+            - "Let bindings with explicit types"
+          operations:
+            - "build(tree, source) → Vec<TypeReference>"
+            - "find_type_references(refs, type_name) → Vec<&TypeReference>"
+            - "group_by_line(refs) → HashMap<line, Vec<TypeReference>>"
+      
+      parsing_strategy:
+        approach: "Recursive AST traversal"
+        method: "traverse_node()"
+        location: "src/parser/mod.rs:188-253"
+        description: |
+          Single recursive pass through the tree-sitter AST:
+          1. Check for documentation comments preceding each node
+          2. Pattern match on node.kind() to identify symbol types
+          3. Extract symbol metadata (name, visibility, modifiers)
+          4. Recurse into children nodes
+          5. Build call graph, imports, and type refs in parallel
+        
+        advantages:
+          - "Single-pass efficiency"
+          - "Complete extraction in one traversal"
+          - "Strongly-typed Rust implementation"
+          - "Parallel artifact extraction"
+        
+        limitations:
+          - "Rust-only (single language)"
+          - "Requires tree-sitter grammar for each new language"
+          - "No cross-language support"
+    
+    claude_context:
+      status: "Not available in this repository"
+      expected_characteristics:
+        - "AST-based splitter"
+        - "17+ language support"
+        - "Cross-language parsing capabilities"
+        - "May use different parsing strategy"
+
+  # ============================================================================
+  # SEMANTIC CHUNKING IMPLEMENTATION
+  # ============================================================================
+  
+  chunking_strategy:
+    file_search_mcp:
+      chunker_file: "src/chunker/mod.rs"
+      lines_of_code: 486
+      approach: "Symbol-based semantic chunking"
+      strategy: "One chunk per symbol (function, struct, trait, impl, etc.)"
+      
+      chunking_philosophy:
+        not_token_based: true
+        not_line_based: true
+        semantic_boundaries: "Uses AST symbol boundaries"
+        context_preservation: "Maintains code structure integrity"
+        description: |
+          Chunks are created at natural code boundaries (symbols) rather than
+          arbitrary token or line counts. Each chunk represents a complete,
+          semantically meaningful unit of code.
+      
+      chunk_structure:
+        chunk_id: "UUID (Uuid::new_v4())"
+        content: "String - the actual code of the symbol"
+        context: "ChunkContext - rich metadata"
+        overlap_prev: "Option<String> - 20% overlap from previous chunk"
+        overlap_next: "Option<String> - 20% overlap to next chunk"
+      
+      chunk_context_metadata:
+        file_path: "PathBuf - source file location"
+        module_path: "Vec<String> - e.g., ['crate', 'parser', 'mod']"
+        symbol_name: "String - name of function/struct/etc."
+        symbol_kind: "String - 'function', 'struct', 'trait', etc."
+        docstring: "Option<String> - extracted doc comments"
+        imports: "Vec<String> - all import paths in file"
+        outgoing_calls: "Vec<String> - functions this symbol calls"
+        line_start: "usize - start line number"
+        line_end: "usize - end line number"
+      
+      overlap_strategy:
+        percentage: 0.2  # 20% overlap
+        configurable: true
+        method: "with_overlap(percentage: f64)"
+        clamping: "0.0 to 0.5 (0% to 50%)"
+        purpose: "Maintains continuity between adjacent chunks"
+        implementation: "src/chunker/mod.rs:286-321"
+        details:
+          - "overlap_prev: First N lines from previous chunk"
+          - "overlap_next: Last N lines for next chunk"
+          - "Calculated as: (lines.len() as f64 * overlap_percentage).ceil()"
+      
+      contextual_retrieval_pattern:
+        methodology: "Anthropic's contextual retrieval approach"
+        performance_gain: "Reduces retrieval errors by up to 49%"
+        location: "src/chunker/mod.rs:76-142"
+        implementation: "format_for_embedding()"
+        
+        context_injection:
+          format: "Multi-line comment header + code content"
+          components:
+            - "// File: {file_path}"
+            - "// Location: lines {start}-{end}"
+            - "// Module: {module_path}"
+            - "// Symbol: {symbol_name} ({symbol_kind})"
+            - "// Purpose: {docstring}"
+            - "// Imports: {first_5_imports}"
+            - "// Calls: {first_5_outgoing_calls}"
+            - "(blank line)"
+            - "{actual_code_content}"
+          
+          rationale: |
+            Adding context to each chunk allows the embedding model to better
+            understand the chunk's purpose and relationships. This dramatically
+            improves retrieval accuracy because the embedding captures both
+            the code content AND its semantic context.
+      
+      chunking_pipeline:
+        steps:
+          1:
+            name: "Parse source code"
+            input: "Source file + parse result"
+            method: "chunk_file(file_path, source, parse_result)"
+          2:
+            name: "Extract module path"
+            method: "extract_module_path()"
+            logic: "Extracts 'crate::parser::mod' from 'src/parser/mod.rs'"
+          3:
+            name: "Convert imports to strings"
+            source: "parse_result.imports"
+          4:
+            name: "Iterate through symbols"
+            for_each_symbol:
+              - "Extract symbol code by line range"
+              - "Get outgoing calls from call graph"
+              - "Create ChunkContext with all metadata"
+              - "Create CodeChunk with unique ID"
+          5:
+            name: "Add overlap between chunks"
+            method: "add_overlap()"
+            details: "Populates overlap_prev and overlap_next fields"
+      
+      advantages:
+        - "Natural semantic boundaries (no code fragmentation)"
+        - "Complete symbols always stay together"
+        - "Rich context improves embedding quality"
+        - "Maintains code structure relationships"
+        - "Configurable overlap for continuity"
+        - "Follows proven Anthropic pattern (49% error reduction)"
+      
+      code_structure_preservation:
+        symbol_integrity: "Each symbol is a complete, unbroken unit"
+        hierarchy_tracking: "Module path preserves code organization"
+        relationship_tracking: "Call graph and imports maintain dependencies"
+        documentation_preservation: "Docstrings extracted and stored"
+        visibility_awareness: "Public/private/crate visibility tracked"
+    
+    claude_context:
+      status: "Not available for comparison"
+      expected_differences:
+        - "May use different chunking granularity"
+        - "Multi-language chunking strategy"
+        - "Potentially different overlap approach"
+
+  # ============================================================================
+  # LANGUAGE HANDLING
+  # ============================================================================
+  
+  language_support_comparison:
+    file_search_mcp:
+      current_languages: 1
+      supported: ["Rust"]
+      parser_architecture: "Tree-sitter based"
+      extensibility_model:
+        approach: "Add tree-sitter grammar crates"
+        requirements:
+          - "Import tree-sitter-{language} crate"
+          - "Create language-specific parser module"
+          - "Implement symbol extraction for language constructs"
+          - "Map language-specific AST nodes to generic Symbol types"
+        effort: "High - requires per-language implementation"
+      
+      rust_specific_features:
+        - "Async/unsafe/const function detection"
+        - "Trait vs inherent impl distinction"
+        - "Visibility modifiers (pub, pub(crate), pub(in path))"
+        - "Rust-style doc comments (///, //!)"
+        - "Generic function call detection"
+        - "Macro call handling"
+      
+      scalability_to_polyglot:
+        feasible: true
+        challenges:
+          - "Each language needs dedicated tree-sitter grammar"
+          - "Language-specific symbol types must map to common model"
+          - "Different languages have different constructs (classes vs traits)"
+          - "Documentation comment formats vary (///, #, /**/, etc.)"
+        recommended_approach:
+          - "Define common Symbol/Chunk interfaces"
+          - "Implement language-specific extractors"
+          - "Use trait-based polymorphism for parser selection"
+    
+    claude_context:
+      claimed_languages: "17+"
+      approach: "AST-based splitter"
+      advantage: "Pre-built multi-language support"
+      note: "Cannot verify without source code"
+
+  # ============================================================================
+  # EMBEDDING AND INDEXING PIPELINE
+  # ============================================================================
+  
+  embedding_pipeline:
+    file_search_mcp:
+      embedding_generator:
+        model: "all-MiniLM-L6-v2"
+        library: "fastembed 4.x (ONNX-based)"
+        dimensions: 384
+        location: "src/embeddings/mod.rs"
+        local_execution: true
+        no_api_calls: true
+      
+      chunking_integration:
+        input: "chunk.format_for_embedding()"
+        format: "Context header + code content"
+        embedding_target: "String with injected context"
+      
+      indexing_backends:
+        tantivy:
+          purpose: "BM25 lexical search"
+          type: "Full-text search index"
+          algorithm: "Best Match 25 (BM25)"
+          strengths:
+            - "Exact keyword matching"
+            - "Fast lexical retrieval"
+            - "Good for specific identifier searches"
+        
+        qdrant:
+          purpose: "Vector similarity search"
+          type: "Vector database (HNSW)"
+          algorithm: "Hierarchical Navigable Small World (HNSW)"
+          distance_metric: "Cosine similarity"
+          configuration:
+            hnsw_m: 16  # Connections per node (small codebase default)
+            ef_construct: 100  # Build-time search depth
+            optimizers:
+              deleted_threshold: 0.2
+              vacuum_min_vector_number: 1000
+              indexing_threshold: 10000
+              flush_interval_sec: 5
+          strengths:
+            - "Semantic similarity search"
+            - "Finds conceptually related code"
+            - "Handles paraphrased queries"
+      
+      hybrid_search:
+        method: "Reciprocal Rank Fusion (RRF)"
+        combines: "BM25 + Vector search results"
+        benefits:
+          - "Lexical precision + semantic understanding"
+          - "Better than either approach alone"
+          - "Robust to different query types"
+
+  # ============================================================================
+  # INCREMENTAL INDEXING
+  # ============================================================================
+  
+  incremental_indexing:
+    file_search_mcp:
+      change_detection:
+        method: "Merkle tree-based file tracking"
+        library: "rs_merkle 1.4"
+        metadata_cache: "sled 0.34 (embedded KV store)"
+        hash_algorithm: "SHA-256"
+        performance: "~100x faster than full reindex"
+        implementation: "src/metadata_cache.rs"
+      
+      workflow:
+        1:
+          action: "Compute file hashes (SHA-256)"
+          storage: "FileMetadata with hash + mtime"
+        2:
+          action: "Build Merkle tree from hashes"
+          comparison: "Compare with cached Merkle root"
+        3:
+          action: "Identify changed files"
+          method: "Hash comparison + mtime check"
+        4:
+          action: "Reindex only changed files"
+          steps:
+            - "Delete old chunks from vector DB"
+            - "Reparse changed files"
+            - "Generate new chunks"
+            - "Update embeddings and indices"
+      
+      force_reindex:
+        capability: true
+        clears: "All indices (Tantivy + Qdrant)"
+        use_case: "Schema changes or corruption recovery"
+      
+      automatic_tracking:
+        file_watcher: "notify 6.x"
+        monitors: "File system changes"
+        triggers: "Automatic reindexing on save"
+
+  # ============================================================================
+  # TESTING COVERAGE
+  # ============================================================================
+  
+  test_coverage:
+    file_search_mcp:
+      parser_tests:
+        file: "src/parser/mod.rs:582-807"
+        test_count: 10
+        coverage:
+          - "Simple function parsing"
+          - "Async function with modifiers"
+          - "Struct extraction"
+          - "Docstring extraction"
+          - "Impl block detection (inherent + trait)"
+          - "Complete parsing (symbols + call graph + imports)"
+          - "Real file parsing (integration test)"
+      
+      call_graph_tests:
+        file: "src/parser/call_graph.rs:181-305"
+        test_count: 7
+        coverage:
+          - "Simple function calls"
+          - "Multiple calls (with deduplication)"
+          - "Method calls (obj.method())"
+          - "Nested calls (hierarchical)"
+          - "All functions enumeration"
+          - "Edge count calculation"
+      
+      import_tests:
+        file: "src/parser/imports.rs:194-269"
+        test_count: 5
+        coverage:
+          - "Simple imports"
+          - "Glob imports (use foo::*)"
+          - "Multiple imports"
+          - "External dependencies extraction"
+          - "Local imports (crate::)"
+      
+      type_reference_tests:
+        file: "src/parser/type_references.rs:339-534"
+        test_count: 9
+        coverage:
+          - "Function parameters"
+          - "Function return types"
+          - "Struct fields"
+          - "Impl blocks (inherent + trait)"
+          - "Generic type arguments"
+          - "Let bindings"
+          - "Multiple contexts (integration)"
+      
+      chunker_tests:
+        file: "src/chunker/mod.rs:330-485"
+        test_count: 6
+        coverage:
+          - "Chunk creation"
+          - "format_for_embedding() output"
+          - "Chunker configuration"
+          - "Module path extraction"
+          - "Full file chunking (integration)"
+          - "Overlap calculation"
+      
+      vector_store_tests:
+        file: "src/vector_store/mod.rs:422-547"
+        test_count: 4
+        integration_tests: true
+        requires: "Running Qdrant server + embedding model"
+        coverage:
+          - "Vector store creation"
+          - "Upsert and search operations"
+          - "Chunk deletion"
+          - "Chunk serialization/deserialization"
+
+  # ============================================================================
+  # ARCHITECTURAL PATTERNS
+  # ============================================================================
+  
+  design_patterns:
+    file_search_mcp:
+      modular_architecture:
+        separation_of_concerns:
+          - "Parser: AST extraction"
+          - "Chunker: Semantic segmentation"
+          - "Embeddings: Vector generation"
+          - "VectorStore: Persistence + search"
+          - "MetadataCache: Change detection"
+      
+      unified_pipeline:
+        phases:
+          1: "Parse (tree-sitter)"
+          2: "Chunk (symbol-based)"
+          3: "Embed (fastembed)"
+          4: "Index (dual: Tantivy + Qdrant)"
+        data_flow: "File → Symbols → Chunks → Embeddings → Indices"
+      
+      performance_optimizations:
+        - "Single-pass AST traversal"
+        - "Merkle tree change detection"
+        - "Batch vector insertions (100 points/batch)"
+        - "Embedded KV store (sled) for metadata"
+        - "Local embedding model (no API latency)"
+        - "HNSW vector index (sub-linear search)"
+      
+      extensibility_points:
+        - "VectorStoreConfig for custom Qdrant settings"
+        - "Chunker.with_overlap() for configurable overlap"
+        - "QdrantOptimizedConfig for codebase size tuning"
+        - "Symbol extraction can be extended with new types"
+
+  # ============================================================================
+  # PERFORMANCE CHARACTERISTICS
+  # ============================================================================
+  
+  performance_analysis:
+    file_search_mcp:
+      parsing_speed:
+        algorithm: "O(n) - single AST traversal"
+        parallel: false  # Single-threaded per file
+        bottleneck: "Tree-sitter parsing (typically <100ms for small files)"
+      
+      chunking_speed:
+        algorithm: "O(s) where s = number of symbols"
+        overhead: "Minimal - simple line extraction"
+        overlap_calculation: "O(lines * overlap_percentage)"
+      
+      embedding_generation:
+        model_inference: "Fast (ONNX runtime, CPU)"
+        local_execution: true
+        batching: "Supported by fastembed"
+        bottleneck: "CPU inference time (typically 10-50ms per chunk)"
+      
+      vector_search:
+        algorithm: "HNSW - O(log n) expected"
+        index_type: "Approximate nearest neighbor"
+        distance_metric: "Cosine similarity"
+        trade_off: "Speed vs accuracy (tunable via ef_construct)"
+      
+      incremental_reindex:
+        change_detection: "O(f) where f = number of files"
+        merkle_tree_comparison: "O(log f)"
+        speedup: "~100x compared to full reindex"
+        cache_storage: "Persistent (survives restarts)"
+
+  # ============================================================================
+  # COMPARISON SUMMARY
+  # ============================================================================
+  
+  key_differences:
+    note: "Cannot fully compare without claude-context source code"
+    
+    file_search_mcp_strengths:
+      - "Strongly-typed Rust implementation (memory safety, performance)"
+      - "Comprehensive symbol extraction (9 types + modifiers)"
+      - "Rich context metadata (call graph, imports, type refs)"
+      - "Merkle tree-based incremental indexing (~100x faster)"
+      - "Dual-backend hybrid search (BM25 + vector)"
+      - "Local embedding model (no API dependencies)"
+      - "Production-ready testing (40+ unit tests)"
+      - "Follows Anthropic's contextual retrieval pattern"
+    
+    file_search_mcp_limitations:
+      - "Single language support (Rust only currently)"
+      - "Requires tree-sitter grammar for each new language"
+      - "High development effort to add language support"
+    
+    expected_claude_context_advantages:
+      - "Multi-language support out-of-box (17+ languages)"
+      - "Unified AST abstraction across languages"
+      - "Potentially easier language addition"
+    
+    expected_claude_context_limitations:
+      - "May lack Rust-specific feature detection"
+      - "May not have call graph or type reference tracking"
+      - "Unclear if incremental indexing is supported"
+      - "Unknown if contextual retrieval pattern is implemented"
+
+  # ============================================================================
+  # RECOMMENDATIONS
+  # ============================================================================
+  
+  recommendations:
+    for_file_search_mcp_improvement:
+      multi_language_support:
+        priority: "High"
+        approach: "Add tree-sitter grammar integrations"
+        suggested_languages:
+          - "Python (tree-sitter-python)"
+          - "JavaScript/TypeScript (tree-sitter-javascript, tree-sitter-typescript)"
+          - "Go (tree-sitter-go)"
+          - "Java (tree-sitter-java)"
+        implementation_strategy:
+          - "Create src/parser/{language}.rs modules"
+          - "Define common Symbol/Chunk traits"
+          - "Implement language-specific extractors"
+          - "Add language detection from file extension"
+      
+      abstract_parser_interface:
+        priority: "Medium"
+        approach: "Trait-based polymorphism"
+        benefits:
+          - "Easier to add new languages"
+          - "Common chunking pipeline for all languages"
+          - "Testable parser implementations"
+      
+      enhanced_chunking_strategies:
+        priority: "Low"
+        options:
+          - "Configurable chunk size limits"
+          - "Cross-file reference tracking"
+          - "Hierarchical chunking (modules → files → symbols)"
+    
+    for_claude_context_improvement:
+      status: "Cannot assess without source code"
+      potential_areas:
+        - "Consider adopting Merkle tree-based incremental indexing"
+        - "Implement contextual retrieval pattern for embedding"
+        - "Add call graph and type reference tracking"
+        - "Provide hybrid search (lexical + semantic)"
+
+  # ============================================================================
+  # CONCLUSION
+  # ============================================================================
+  
+  conclusion:
+    file_search_mcp_assessment:
+      overall_quality: "Production-ready, well-architected"
+      parsing_implementation: "Excellent (comprehensive, tested, performant)"
+      chunking_strategy: "State-of-art (symbol-based with contextual retrieval)"
+      language_support: "Limited but extensible (currently Rust only)"
+      performance: "Excellent (incremental indexing, local embeddings, HNSW)"
+      testing: "Good (40+ tests, integration coverage)"
+      documentation: "Excellent (detailed inline docs, clear patterns)"
+    
+    architectural_strengths:
+      - "Clean separation of concerns"
+      - "Modular, testable design"
+      - "Performance-optimized (Merkle trees, batch operations, local embeddings)"
+      - "Follows industry best practices (Anthropic's contextual retrieval)"
+      - "Comprehensive metadata extraction (call graph, imports, type refs)"
+    
+    comparison_limitations:
+      - "Cannot perform detailed comparison without claude-context source"
+      - "Analysis based solely on file-search-mcp implementation"
+      - "Expected differences are speculative"
+    
+    use_case_recommendations:
+      file_search_mcp_best_for:
+        - "Rust codebases (currently)"
+        - "Projects requiring deep code analysis (call graphs, type refs)"
+        - "Performance-critical applications"
+        - "Large codebases (incremental indexing essential)"
+        - "Self-hosted deployments (local embeddings)"
+      
+      claude_context_expected_best_for:
+        - "Polyglot codebases (17+ languages)"
+        - "Quick setup without per-language configuration"
+        - "Simpler chunking requirements"
+
+metadata:
+  analysis_date: "2025-10-22"
+  repository: "/home/molaco/Documents/rust-code-mcp"
+  actual_project_name: "file-search-mcp"
+  analysis_scope: "Parsing and semantic chunking implementations"
+  code_reviewed:
+    - "src/parser/mod.rs (808 lines)"
+    - "src/parser/call_graph.rs (306 lines)"
+    - "src/parser/imports.rs (270 lines)"
+    - "src/parser/type_references.rs (535 lines)"
+    - "src/chunker/mod.rs (486 lines)"
+    - "src/vector_store/mod.rs (548 lines)"
+    - "Cargo.toml (dependencies)"
+  total_lines_analyzed: 2953
+  comparison_target: "claude-context (not available)"
+  limitation: "Single-system analysis due to missing comparison target"

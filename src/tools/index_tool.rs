@@ -55,7 +55,7 @@ pub async fn index_codebase(
 
     // Get configuration
     let qdrant_url =
-        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
+        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
 
     // Create collection name from directory hash (same strategy as search tool)
     let dir_hash = {
@@ -87,19 +87,50 @@ pub async fn index_codebase(
         }
     }
 
-    // Create incremental indexer
+    // Estimate codebase size for optimal Qdrant configuration
+    let codebase_loc = crate::vector_store::estimate_codebase_size(&dir).ok();
+    if let Some(loc) = codebase_loc {
+        tracing::info!("Estimated codebase size: {} LOC", loc);
+    } else {
+        tracing::warn!("Failed to estimate codebase size, using default Qdrant configuration");
+    }
+
+    // Create incremental indexer with optimized configuration
     let mut indexer = IncrementalIndexer::new(
         &cache_path,
         &tantivy_path,
         &qdrant_url,
         &collection_name,
         384, // all-MiniLM-L6-v2 vector size
-        None,
+        codebase_loc,
     )
     .await
     .map_err(|e| {
         McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None)
     })?;
+
+    // Enable bulk mode if force reindexing
+    let bulk_indexer = if force {
+        use crate::indexing::bulk::{BulkIndexer, HnswConfig};
+
+        tracing::info!("Force reindex: enabling bulk indexing mode for 3-5x speedup");
+
+        // Create Qdrant client
+        let qdrant_client = qdrant_client::Qdrant::from_url(&qdrant_url)
+            .build()
+            .map_err(|e| McpError::invalid_params(format!("Failed to connect to Qdrant: {}", e), None))?;
+
+        let mut bulk_indexer = BulkIndexer::new(qdrant_client, collection_name.clone());
+
+        // Start bulk mode with standard HNSW config
+        let hnsw_config = HnswConfig::new(16, 100);
+        bulk_indexer.start_bulk_mode(hnsw_config).await
+            .map_err(|e| McpError::invalid_params(format!("Failed to start bulk mode: {}", e), None))?;
+
+        Some(bulk_indexer)
+    } else {
+        None
+    };
 
     // Clear all indexed data if force reindex
     if force {
@@ -116,6 +147,14 @@ pub async fn index_codebase(
         .await
         .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
     let elapsed = start.elapsed();
+
+    // Exit bulk mode if it was enabled
+    if let Some(mut bulk_indexer) = bulk_indexer {
+        tracing::info!("Rebuilding HNSW index after bulk insertion...");
+        bulk_indexer.end_bulk_mode().await
+            .map_err(|e| McpError::invalid_params(format!("Failed to exit bulk mode: {}", e), None))?;
+        tracing::info!("✓ HNSW index rebuilt");
+    }
 
     // Track directory for background sync if indexing was successful
     if let Some(sync_mgr) = sync_manager {
