@@ -7,6 +7,7 @@ pub mod embeddings;
 pub mod indexing;
 pub mod mcp;
 pub mod metadata_cache;
+pub mod metrics;
 pub mod monitoring;
 pub mod parser;
 pub mod schema;

@@ -10,6 +10,7 @@
 use crate::chunker::{ChunkId, Chunker, CodeChunk};
 use crate::embeddings::{Embedding, EmbeddingGenerator};
 use crate::metadata_cache::MetadataCache;
+use crate::metrics::{IndexingMetrics, PhaseTimer, memory::MemoryMonitor};
 use crate::parser::RustParser;
 use crate::schema::ChunkSchema;
 use crate::security::secrets::SecretsScanner;
@@ -17,6 +18,7 @@ use crate::security::SensitiveFileFilter;
 use crate::vector_store::VectorStore;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use tantivy::{doc, Index, IndexWriter};
 use tracing;
 use walkdir::WalkDir;
@@ -82,6 +84,10 @@ pub struct UnifiedIndexer {
     secrets_scanner: SecretsScanner,
     /// Sensitive file filter
     file_filter: SensitiveFileFilter,
+    /// Performance metrics
+    metrics: IndexingMetrics,
+    /// Memory usage monitor
+    memory_monitor: MemoryMonitor,
 }
 
 impl UnifiedIndexer {
@@ -208,6 +214,8 @@ impl UnifiedIndexer {
             metadata_cache,
             secrets_scanner,
             file_filter,
+            metrics: IndexingMetrics::new(),
+            memory_monitor: MemoryMonitor::new(),
         })
     }
 
@@ -215,6 +223,8 @@ impl UnifiedIndexer {
     ///
     /// This is the core function that fixes the bug where Qdrant was never populated.
     pub async fn index_file(&mut self, file_path: &Path) -> Result<IndexFileResult> {
+        let file_start = Instant::now();
+
         // 1. Check if file should be excluded (sensitive files)
         if !self.file_filter.should_index(file_path) {
             tracing::warn!("Excluding sensitive file: {}", file_path.display());
@@ -321,10 +331,19 @@ impl UnifiedIndexer {
         self.metadata_cache.set(&file_path_str, &file_meta)
             .map_err(|e| anyhow::anyhow!("Failed to update metadata cache: {}", e))?;
 
+        // Track file latency and update peak memory
+        let file_duration = file_start.elapsed();
+        self.metrics.file_latencies.push(file_duration);
+
+        self.memory_monitor.refresh();
+        self.metrics.peak_memory_bytes = self.metrics.peak_memory_bytes
+            .max(self.memory_monitor.used_bytes());
+
         tracing::info!(
-            "✓ Indexed {} chunks from {}",
+            "✓ Indexed {} chunks from {} in {:?}",
             chunks_count,
-            file_path.display()
+            file_path.display(),
+            file_duration
         );
 
         Ok(IndexFileResult::Indexed {
@@ -379,9 +398,13 @@ impl UnifiedIndexer {
 
     /// Index an entire directory
     pub async fn index_directory(&mut self, dir_path: &Path) -> Result<IndexStats> {
+        let total_start = Instant::now();
         tracing::info!("Indexing directory: {}", dir_path.display());
 
         let mut stats = IndexStats::default();
+
+        // Reset metrics for this indexing run
+        self.metrics = IndexingMetrics::new();
 
         // Find all Rust files with proper error handling
         let mut rust_files = Vec::new();
@@ -438,6 +461,22 @@ impl UnifiedIndexer {
 
         // Commit Tantivy changes
         self.tantivy_writer.commit().context("Failed to commit Tantivy index")?;
+
+        // Finalize metrics
+        self.metrics.total_duration = total_start.elapsed();
+        self.metrics.total_files = stats.total_files;
+        self.metrics.indexed_files = stats.indexed_files;
+        self.metrics.skipped_files = stats.skipped_files;
+        self.metrics.unchanged_files = stats.unchanged_files;
+        self.metrics.total_chunks = stats.total_chunks;
+
+        // Calculate cache hit rate
+        if stats.total_files > 0 {
+            self.metrics.cache_hit_rate = stats.unchanged_files as f64 / stats.total_files as f64;
+        }
+
+        // Print metrics summary
+        self.metrics.print_summary();
 
         tracing::info!(
             "✓ Indexing complete: {} files indexed, {} chunks, {} unchanged, {} skipped",
@@ -511,6 +550,11 @@ impl UnifiedIndexer {
     /// Get access to the Tantivy schema
     pub fn tantivy_schema(&self) -> &ChunkSchema {
         &self.tantivy_schema
+    }
+
+    /// Get access to the current metrics
+    pub fn metrics(&self) -> &IndexingMetrics {
+        &self.metrics
     }
 
     /// Create a Bm25Search instance from the Tantivy index
