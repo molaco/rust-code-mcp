@@ -1,3 +1,6 @@
 /target
 /.TRASH
 /storage
+*.md
+*.yaml
+*.yml
