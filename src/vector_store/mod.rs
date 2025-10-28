@@ -214,8 +214,8 @@ impl VectorStore {
             })
             .collect();
 
-        // Upsert in batches of 100 to avoid overwhelming the server
-        for batch in points.chunks(100) {
+        // Upsert in batches of 500 (optimal for Qdrant performance)
+        for batch in points.chunks(500) {
             let upsert_points = qdrant_client::qdrant::UpsertPoints {
                 collection_name: self.collection_name.clone(),
                 points: batch.to_vec(),

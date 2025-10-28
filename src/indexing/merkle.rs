@@ -92,14 +92,35 @@ impl FileSystemMerkle {
         let mut file_hashes = Vec::new();
         let mut file_to_node = HashMap::new();
 
-        // Collect all Rust files in sorted order (critical for consistency!)
-        let mut files: Vec<PathBuf> = WalkDir::new(root)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| e.path().extension() == Some(std::ffi::OsStr::new("rs")))
-            .map(|e| e.path().to_path_buf())
-            .collect();
+        // Collect all Rust files in sorted order with proper error handling (critical for consistency!)
+        let mut files = Vec::new();
+        let mut walk_errors = 0;
+
+        for entry in WalkDir::new(root) {
+            match entry {
+                Ok(e) if e.file_type().is_file()
+                       && e.path().extension() == Some(std::ffi::OsStr::new("rs")) => {
+                    files.push(e.path().to_path_buf());
+                }
+                Ok(_) => {}, // Directory or non-.rs file, skip silently
+                Err(err) => {
+                    let path = err.path().unwrap_or_else(|| Path::new("<unknown>"));
+                    tracing::warn!(
+                        "Failed to access {} during Merkle tree build: {}",
+                        path.display(),
+                        err
+                    );
+                    walk_errors += 1;
+                }
+            }
+        }
+
+        if walk_errors > 0 {
+            tracing::warn!(
+                "Encountered {} errors during Merkle tree build, continuing with accessible files",
+                walk_errors
+            );
+        }
 
         files.sort();
 

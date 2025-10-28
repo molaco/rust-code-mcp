@@ -106,7 +106,7 @@ impl EmbeddingPipeline {
     pub fn new(generator: EmbeddingGenerator) -> Self {
         Self {
             generator,
-            batch_size: 32, // Process 32 chunks at a time
+            batch_size: 256, // Process 256 chunks at a time (optimal for AllMiniLM-L6-v2)
         }
     }
 

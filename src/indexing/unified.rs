@@ -221,11 +221,28 @@ impl UnifiedIndexer {
             return Ok(IndexFileResult::Skipped);
         }
 
-        // 2. Read file content
+        // 2. Check file size to avoid memory exhaustion
+        let metadata = std::fs::metadata(file_path)
+            .context(format!("Failed to read file metadata: {}", file_path.display()))?;
+
+        let file_size = metadata.len();
+        const MAX_FILE_SIZE: u64 = 10_000_000; // 10 MB
+
+        if file_size > MAX_FILE_SIZE {
+            tracing::warn!(
+                "Skipping large file: {} ({:.2} MB exceeds {:.2} MB limit)",
+                file_path.display(),
+                file_size as f64 / 1_000_000.0,
+                MAX_FILE_SIZE as f64 / 1_000_000.0
+            );
+            return Ok(IndexFileResult::Skipped);
+        }
+
+        // 3. Read file content
         let content = std::fs::read_to_string(file_path)
             .context(format!("Failed to read file: {}", file_path.display()))?;
 
-        // 3. Check for secrets in content
+        // 4. Check for secrets in content
         if self.secrets_scanner.should_exclude(&content) {
             let summary = self.secrets_scanner.scan_summary(&content);
             tracing::warn!(
@@ -236,7 +253,7 @@ impl UnifiedIndexer {
             return Ok(IndexFileResult::Skipped);
         }
 
-        // 4. Check if file changed (using existing metadata cache)
+        // 5. Check if file changed (using existing metadata cache)
         let file_path_str = file_path.to_string_lossy().to_string();
         if !self.metadata_cache.has_changed(&file_path_str, &content)
             .map_err(|e| anyhow::anyhow!("Metadata cache error: {}", e))? {
@@ -246,13 +263,13 @@ impl UnifiedIndexer {
 
         tracing::debug!("Indexing changed file: {}", file_path.display());
 
-        // 5. Parse with tree-sitter
+        // 6. Parse with tree-sitter
         let parse_result = self
             .parser
             .parse_source_complete(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse file {}: {}", file_path.display(), e))?;
 
-        // 6. Chunk the code (symbol-based)
+        // 7. Chunk the code (symbol-based)
         let chunks = self
             .chunker
             .chunk_file(file_path, &content, &parse_result)
@@ -265,7 +282,7 @@ impl UnifiedIndexer {
 
         tracing::debug!("Generated {} chunks from {}", chunks.len(), file_path.display());
 
-        // 7. Generate embeddings (batch processing)
+        // 8. Generate embeddings (batch processing)
         let chunk_texts: Vec<String> = chunks
             .iter()
             .map(|c| c.format_for_embedding())
@@ -286,13 +303,13 @@ impl UnifiedIndexer {
 
         tracing::debug!("Generated {} embeddings", embeddings.len());
 
-        // 8. Index to both stores
+        // 9. Index to both stores
         // This is the CRITICAL FIX - we now actually populate Qdrant!
         let chunks_count = chunks.len();
         self.index_to_tantivy(&chunks)?;
         self.index_to_qdrant(chunks, embeddings).await?;
 
-        // 9. Update metadata cache
+        // 10. Update metadata cache
         let file_meta = crate::metadata_cache::FileMetadata::from_content(
             &content,
             std::fs::metadata(file_path)?
@@ -366,14 +383,35 @@ impl UnifiedIndexer {
 
         let mut stats = IndexStats::default();
 
-        // Find all Rust files
-        let rust_files: Vec<PathBuf> = WalkDir::new(dir_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| e.path().extension() == Some(std::ffi::OsStr::new("rs")))
-            .map(|e| e.path().to_path_buf())
-            .collect();
+        // Find all Rust files with proper error handling
+        let mut rust_files = Vec::new();
+        let mut walk_errors = 0;
+
+        for entry in WalkDir::new(dir_path) {
+            match entry {
+                Ok(e) if e.file_type().is_file()
+                       && e.path().extension() == Some(std::ffi::OsStr::new("rs")) => {
+                    rust_files.push(e.path().to_path_buf());
+                }
+                Ok(_) => {}, // Directory or non-.rs file, skip silently
+                Err(err) => {
+                    let path = err.path().unwrap_or_else(|| Path::new("<unknown>"));
+                    tracing::warn!(
+                        "Failed to access {}: {}",
+                        path.display(),
+                        err
+                    );
+                    walk_errors += 1;
+                }
+            }
+        }
+
+        if walk_errors > 0 {
+            tracing::warn!(
+                "Encountered {} errors during directory walk, continuing with accessible files",
+                walk_errors
+            );
+        }
 
         stats.total_files = rust_files.len();
         tracing::info!("Found {} Rust files in {}", rust_files.len(), dir_path.display());
