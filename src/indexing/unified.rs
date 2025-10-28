@@ -806,52 +806,89 @@ impl UnifiedIndexer {
                 }
             }
 
-            // PHASE 2: Sequential embedding and indexing (I/O-bound)
+            // PHASE 2: Batch embedding for all files (I/O-bound, but maximally batched)
             let embed_start = Instant::now();
 
-            for processed_file in processed {
-                let file_start = Instant::now();
+            if !processed.is_empty() {
+                // Step 1: Collect all chunk texts from ALL processed files
+                let mut all_chunk_texts = Vec::new();
 
-                // Format chunks for embedding
-                let chunk_texts: Vec<String> = processed_file.chunks
-                    .iter()
-                    .map(|c| c.format_for_embedding())
-                    .collect();
+                for processed_file in processed.iter() {
+                    for chunk in &processed_file.chunks {
+                        all_chunk_texts.push(chunk.format_for_embedding());
+                    }
+                }
 
-                // Generate embeddings
-                let embeddings = self.embedding_generator.embed_batch(chunk_texts)
+                tracing::info!(
+                    "Batch embedding {} chunks from {} files...",
+                    all_chunk_texts.len(),
+                    processed.len()
+                );
+
+                // Step 2: Single batch embedding call for ALL chunks
+                let all_embeddings = self.embedding_generator.embed_batch(all_chunk_texts)
                     .map_err(|e| anyhow::anyhow!("Failed to generate embeddings: {}", e))?;
 
-                // Index to Tantivy
-                self.index_to_tantivy(&processed_file.chunks)?;
+                let embed_duration = embed_start.elapsed();
+                self.metrics.embed_duration += embed_duration;
 
-                // Index to Qdrant
-                self.index_to_qdrant(processed_file.chunks.clone(), embeddings).await?;
-
-                // Update cache
-                let file_meta = crate::metadata_cache::FileMetadata::from_content(
-                    &processed_file.content,
-                    std::fs::metadata(&processed_file.path)?
-                        .modified()?
-                        .duration_since(std::time::UNIX_EPOCH)?
-                        .as_secs(),
-                    std::fs::metadata(&processed_file.path)?.len(),
+                tracing::info!(
+                    "Generated {} embeddings in {:.2}s ({:.1} chunks/sec)",
+                    all_embeddings.len(),
+                    embed_duration.as_secs_f64(),
+                    all_embeddings.len() as f64 / embed_duration.as_secs_f64()
                 );
-                self.metadata_cache.set(
-                    &processed_file.path.to_string_lossy(),
-                    &file_meta
-                ).map_err(|e| anyhow::anyhow!("Failed to update metadata cache: {}", e))?;
 
-                // Update stats
-                stats.indexed_files += 1;
-                stats.total_chunks += processed_file.chunks.len();
+                // Step 3: Distribute embeddings back to files and index
+                let index_start = Instant::now();
+                let mut embedding_idx = 0;
 
-                let file_duration = file_start.elapsed();
-                self.metrics.file_latencies.push(file_duration);
+                for processed_file in &processed {
+                    let file_start = Instant::now();
+                    let num_chunks = processed_file.chunks.len();
+
+                    // Extract embeddings for this file
+                    let file_embeddings: Vec<_> = all_embeddings[embedding_idx..embedding_idx + num_chunks].to_vec();
+                    embedding_idx += num_chunks;
+
+                    // Index to Tantivy
+                    self.index_to_tantivy(&processed_file.chunks)?;
+
+                    // Index to Qdrant
+                    self.index_to_qdrant(processed_file.chunks.clone(), file_embeddings).await?;
+
+                    // Update cache
+                    let file_meta = crate::metadata_cache::FileMetadata::from_content(
+                        &processed_file.content,
+                        std::fs::metadata(&processed_file.path)?
+                            .modified()?
+                            .duration_since(std::time::UNIX_EPOCH)?
+                            .as_secs(),
+                        std::fs::metadata(&processed_file.path)?.len(),
+                    );
+                    self.metadata_cache.set(
+                        &processed_file.path.to_string_lossy(),
+                        &file_meta
+                    ).map_err(|e| anyhow::anyhow!("Failed to update metadata cache: {}", e))?;
+
+                    // Update stats
+                    stats.indexed_files += 1;
+                    stats.total_chunks += processed_file.chunks.len();
+
+                    let file_duration = file_start.elapsed();
+                    self.metrics.file_latencies.push(file_duration);
+                }
+
+                let index_duration = index_start.elapsed();
+                self.metrics.index_duration += index_duration;
+
+                tracing::info!(
+                    "Indexed {} files in {:.2}s ({:.1} files/sec)",
+                    processed.len(),
+                    index_duration.as_secs_f64(),
+                    processed.len() as f64 / index_duration.as_secs_f64()
+                );
             }
-
-            let embed_duration = embed_start.elapsed();
-            self.metrics.embed_duration += embed_duration;
 
             // Commit after each batch to free memory
             self.tantivy_writer.commit()?;
