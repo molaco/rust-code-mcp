@@ -3,6 +3,7 @@
 //! Library modules for the MCP server
 
 pub mod chunker;
+pub mod config;
 pub mod embeddings;
 pub mod indexing;
 pub mod mcp;

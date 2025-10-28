@@ -6,6 +6,7 @@ pub mod config;
 
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::Embedding;
+use crate::indexing::retry::retry_with_backoff;
 pub use config::{estimate_codebase_size, QdrantOptimizedConfig};
 use qdrant_client::qdrant::vectors_config::Config;
 use qdrant_client::qdrant::{
@@ -15,6 +16,7 @@ use qdrant_client::Qdrant as QdrantClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Configuration for the vector store
 #[derive(Debug, Clone)]
@@ -214,15 +216,30 @@ impl VectorStore {
             })
             .collect();
 
-        // Upsert in batches of 500 (optimal for Qdrant performance)
+        // Upsert in batches of 500 (optimal for Qdrant performance) with retry logic
         for batch in points.chunks(500) {
-            let upsert_points = qdrant_client::qdrant::UpsertPoints {
-                collection_name: self.collection_name.clone(),
-                points: batch.to_vec(),
-                ..Default::default()
-            };
-            self.client.upsert_points(upsert_points).await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
+            let collection_name = self.collection_name.clone();
+            let points_batch = batch.to_vec();
+            let client = self.client.clone();
+
+            retry_with_backoff(
+                || {
+                    let collection_name = collection_name.clone();
+                    let points_batch = points_batch.clone();
+                    let client = client.clone();
+                    async move {
+                        let upsert_points = qdrant_client::qdrant::UpsertPoints {
+                            collection_name,
+                            points: points_batch,
+                            ..Default::default()
+                        };
+                        client.upsert_points(upsert_points).await
+                            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)
+                    }
+                },
+                3, // Max 3 attempts
+                Duration::from_millis(100), // Start with 100ms delay
+            ).await?;
         }
 
         Ok(())
