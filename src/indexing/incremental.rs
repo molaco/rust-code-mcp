@@ -116,9 +116,9 @@ impl IncrementalIndexer {
             self.incremental_update(codebase_path, &old, &new_merkle)
                 .await?
         } else {
-            // First time: full index
-            tracing::info!("Performing full index (first time)");
-            self.indexer.index_directory(codebase_path).await?
+            // First time: full index with parallel processing
+            tracing::info!("Performing full index (first time) with parallel processing");
+            self.indexer.index_directory_parallel(codebase_path).await?
         };
 
         // Step 4: Save new snapshot for next time
