@@ -825,9 +825,11 @@ impl UnifiedIndexer {
                     processed.len()
                 );
 
-                // Step 2: Batch embedding in GPU-friendly chunks (16 at a time for 6GB VRAM)
+                // Step 2: GPU batch embedding with memory-safe batch size
+                // Conservative batch size to avoid OOM on 8GB VRAM (5.5GB available)
+                // Testing shows 64-128 chunks is optimal balance
                 let mut all_embeddings = Vec::new();
-                const GPU_BATCH_SIZE: usize = 16;
+                const GPU_BATCH_SIZE: usize = 96; // Sweet spot for 8GB VRAM
 
                 for (batch_idx, chunk_batch) in all_chunk_texts.chunks(GPU_BATCH_SIZE).enumerate() {
                     let batch_embeddings = self.embedding_generator.embed_batch(chunk_batch.to_vec())

@@ -33,9 +33,9 @@ impl EmbeddingGenerator {
     /// - Good balance of speed and quality
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Configure CUDA with GPU-friendly settings
-        // GTX 1660 Ti has 6GB VRAM, limit to 2GB to leave room for model + buffers
+        // 8GB VRAM available, use 5.5GB to leave headroom for peak allocations
         let cuda_provider = CUDAExecutionProvider::default()
-            .with_memory_limit(2_000_000_000); // 2GB memory limit
+            .with_memory_limit(5_500_000_000); // 5.5GB limit for safety
 
         let execution_providers = vec![
             cuda_provider.build(),
@@ -120,7 +120,7 @@ impl EmbeddingPipeline {
     pub fn new(generator: EmbeddingGenerator) -> Self {
         Self {
             generator,
-            batch_size: 64, // Reduced for GPU memory constraints (was 256)
+            batch_size: 128, // Optimized for 8GB VRAM - maximizes GPU parallelism
         }
     }
 
