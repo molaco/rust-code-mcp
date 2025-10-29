@@ -825,9 +825,15 @@ impl UnifiedIndexer {
                     processed.len()
                 );
 
-                // Step 2: Single batch embedding call for ALL chunks
-                let all_embeddings = self.embedding_generator.embed_batch(all_chunk_texts)
-                    .map_err(|e| anyhow::anyhow!("Failed to generate embeddings: {}", e))?;
+                // Step 2: Batch embedding in GPU-friendly chunks (16 at a time for 6GB VRAM)
+                let mut all_embeddings = Vec::new();
+                const GPU_BATCH_SIZE: usize = 16;
+
+                for (batch_idx, chunk_batch) in all_chunk_texts.chunks(GPU_BATCH_SIZE).enumerate() {
+                    let batch_embeddings = self.embedding_generator.embed_batch(chunk_batch.to_vec())
+                        .map_err(|e| anyhow::anyhow!("Failed to generate embeddings (batch {}): {}", batch_idx, e))?;
+                    all_embeddings.extend(batch_embeddings);
+                }
 
                 let embed_duration = embed_start.elapsed();
                 self.metrics.embed_duration += embed_duration;

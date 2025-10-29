@@ -4,6 +4,7 @@
 
 use crate::chunker::{ChunkId, CodeChunk};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use ort::execution_providers::{CPUExecutionProvider, CUDAExecutionProvider};
 use std::sync::{Arc, Mutex};
 
 /// An embedding vector (384 dimensions for all-MiniLM-L6-v2)
@@ -31,11 +32,20 @@ impl EmbeddingGenerator {
     /// - ~80MB download
     /// - Good balance of speed and quality
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        // Use CPU only - CUDA runs out of memory on 6GB GPU with real code chunks
-        // (Model needs 3GB+ for batches of 490 chunks, exceeds available VRAM)
+        // Configure CUDA with GPU-friendly settings
+        // GTX 1660 Ti has 6GB VRAM, limit to 2GB to leave room for model + buffers
+        let cuda_provider = CUDAExecutionProvider::default()
+            .with_memory_limit(2_000_000_000); // 2GB memory limit
+
+        let execution_providers = vec![
+            cuda_provider.build(),
+            CPUExecutionProvider::default().build(),
+        ];
+
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(true),
+                .with_show_download_progress(true)
+                .with_execution_providers(execution_providers),
         )?;
 
         Ok(Self {
