@@ -48,7 +48,8 @@ tree-sitter-rust = "0.20"  # Rust grammar
 text-splitter = "0.13"  # Semantic text chunking
 
 # Phase 4: Embedding Generation
-fastembed = "4"        # Local embeddings (ONNX-based)
+fastembed = { git = "https://github.com/Anush008/fastembed-rs" }  # Local embeddings (ONNX-based) from GitHub
+ort = { version = "=2.0.0-rc.10", features = ["cuda", "download-binaries", "ndarray", "std"] }  # ONNX Runtime with CUDA support
 
 # Phase 5: Vector Database
 qdrant-client = "1"    # Vector search with Qdrant
