@@ -31,6 +31,8 @@ impl EmbeddingGenerator {
     /// - ~80MB download
     /// - Good balance of speed and quality
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // Use CPU only - CUDA runs out of memory on 6GB GPU with real code chunks
+        // (Model needs 3GB+ for batches of 490 chunks, exceeds available VRAM)
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::AllMiniLML6V2)
                 .with_show_download_progress(true),
@@ -108,7 +110,7 @@ impl EmbeddingPipeline {
     pub fn new(generator: EmbeddingGenerator) -> Self {
         Self {
             generator,
-            batch_size: 256, // Process 256 chunks at a time (optimal for AllMiniLM-L6-v2)
+            batch_size: 64, // Reduced for GPU memory constraints (was 256)
         }
     }
 
