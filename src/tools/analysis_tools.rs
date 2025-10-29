@@ -1,13 +1,84 @@
 //! Analysis tools module
 //!
-//! This module provides MCP tools for analyzing Rust codebases.
+//! This module provides MCP tools for static analysis of Rust codebases using tree-sitter.
+//! It enables code understanding through symbol analysis, complexity metrics, and
+//! relationship mapping.
 //!
-//! ## Tools
-//! - `analyze_complexity`: Calculate code metrics (LOC, cyclomatic complexity)
-//! - `find_references`: Find all references to a symbol
-//! - `find_definition`: Find where a symbol is defined
-//! - `get_call_graph`: Get function call relationships
-//! - `get_dependencies`: Get import dependencies
+//! ## Overview
+//!
+//! The analysis tools provide deep code insights through:
+//! - **Symbol Analysis**: Find definitions and references (functions, structs, traits)
+//! - **Call Graph Analysis**: Map function call relationships
+//! - **Dependency Analysis**: Track imports and module relationships
+//! - **Complexity Metrics**: Calculate LOC, cyclomatic complexity, and function counts
+//!
+//! ## MCP Tools
+//!
+//! - [`find_definition`]: Locate where symbols (functions, structs, traits) are defined
+//! - [`find_references`]: Find all usages of a symbol (calls + type references)
+//! - [`get_call_graph`]: Analyze function call relationships (callers/callees)
+//! - [`get_dependencies`]: List file imports and dependencies
+//! - [`analyze_complexity`]: Calculate code complexity metrics
+//!
+//! ## Tree-sitter Integration
+//!
+//! All analysis tools use tree-sitter for accurate Rust parsing:
+//! - AST-based symbol extraction (not regex)
+//! - Full Rust syntax support (2021 edition)
+//! - Fast incremental parsing
+//!
+//! ## Examples
+//!
+//! ### Find Symbol Definition
+//! ```rust,no_run
+//! use file_search_mcp::tools::analysis_tools::find_definition;
+//!
+//! # async fn example() -> Result<(), rmcp::ErrorData> {
+//! // Find where a function is defined
+//! let result = find_definition(
+//!     "parse_tokens",
+//!     "/path/to/rust/project"
+//! ).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Analyze Code Complexity
+//! ```rust,no_run
+//! use file_search_mcp::tools::analysis_tools::analyze_complexity;
+//!
+//! # async fn example() -> Result<(), rmcp::ErrorData> {
+//! // Get complexity metrics for a file
+//! let metrics = analyze_complexity(
+//!     "/path/to/rust/project/src/main.rs"
+//! ).await?;
+//! // Returns: LOC, cyclomatic complexity, function count, etc.
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Get Call Graph
+//! ```rust,no_run
+//! use file_search_mcp::tools::analysis_tools::get_call_graph;
+//!
+//! # async fn example() -> Result<(), rmcp::ErrorData> {
+//! // Get call graph for a specific function
+//! let graph = get_call_graph(
+//!     "/path/to/file.rs",
+//!     Some("process_data")  // Optional: specific symbol
+//! ).await?;
+//! // Shows what it calls and what calls it
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Architecture
+//!
+//! This module is part of the refactored tools layer (Phase 1 refactoring).
+//! It uses:
+//! - `RustParser` for tree-sitter-based AST parsing
+//! - `CallGraph` for tracking function relationships
+//! - `TypeReference` for type usage analysis
 
 use rmcp::{
     ErrorData as McpError,

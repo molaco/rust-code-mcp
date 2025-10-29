@@ -2,6 +2,12 @@
 //!
 //! Provides a centralized configuration system for the MCP server
 
+pub mod errors;
+pub mod indexer;
+
+pub use errors::{Error, ErrorContextExt, Result};
+pub use indexer::{IndexerConfig, IndexerCoreConfig, QdrantConfig, TantivyConfig};
+
 use std::env;
 use std::path::PathBuf;
 

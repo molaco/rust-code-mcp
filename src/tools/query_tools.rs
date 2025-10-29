@@ -1,11 +1,70 @@
 //! Query tools module
 //!
-//! This module provides MCP tools for searching and querying Rust codebases.
+//! This module provides MCP tools for searching and querying indexed Rust codebases.
+//! It implements hybrid search combining BM25 keyword search with semantic vector search
+//! for optimal code discovery.
 //!
-//! ## Tools
-//! - `search`: Hybrid search (BM25 + Vector)
-//! - `get_similar_code`: Semantic similarity search
-//! - `read_file_content`: Read file contents
+//! ## Overview
+//!
+//! The query tools enable intelligent code search through:
+//! - **Hybrid Search**: Combines BM25 (keyword) + Vector (semantic) search with RRF ranking
+//! - **Semantic Search**: Pure vector-based similarity using code embeddings
+//! - **File Reading**: Safe file content retrieval with binary file detection
+//!
+//! ## MCP Tools
+//!
+//! - [`search`]: Hybrid keyword + semantic search (automatically indexes if needed)
+//! - [`get_similar_code`]: Find semantically similar code snippets using embeddings
+//! - [`read_file_content`]: Read and validate file contents
+//!
+//! ## Search Architecture
+//!
+//! ```text
+//! Query → HybridSearch
+//!     ├─ BM25 Search (Tantivy)      → Keyword matches
+//!     ├─ Vector Search (Qdrant)     → Semantic matches
+//!     └─ RRF Fusion                 → Combined ranking
+//! ```
+//!
+//! ## Examples
+//!
+//! ### Hybrid Search
+//! ```rust,no_run
+//! use file_search_mcp::tools::query_tools::search;
+//!
+//! # async fn example() -> Result<(), rmcp::ErrorData> {
+//! // Search with hybrid approach (BM25 + semantic)
+//! let results = search(
+//!     "/path/to/rust/project",
+//!     "async tokio spawn",
+//!     None  // No sync manager
+//! ).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Semantic Search
+//! ```rust,no_run
+//! use file_search_mcp::tools::query_tools::get_similar_code;
+//!
+//! # async fn example() -> Result<(), rmcp::ErrorData> {
+//! // Find code similar to a description
+//! let results = get_similar_code(
+//!     "function that parses JSON and validates schema",
+//!     "/path/to/project",
+//!     10  // Return top 10 results
+//! ).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Architecture
+//!
+//! This module is part of the refactored tools layer (Phase 1 refactoring).
+//! It delegates to:
+//! - `HybridSearch` for search logic
+//! - `UnifiedIndexer` for automatic indexing
+//! - `VectorStore` for semantic search
 
 use rmcp::{
     ErrorData as McpError,

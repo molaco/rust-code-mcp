@@ -145,7 +145,7 @@ impl HnswConfig {
 ///
 /// # Example
 /// ```no_run
-/// use rust_code_mcp::indexing::bulk::{bulk_index_with_auto_mode, HnswConfig};
+/// use file_search_mcp::indexing::bulk::{bulk_index_with_auto_mode, HnswConfig};
 /// use qdrant_client::Qdrant as QdrantClient;
 ///
 /// async fn index_large_batch() -> anyhow::Result<()> {

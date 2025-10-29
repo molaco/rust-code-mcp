@@ -1,10 +1,77 @@
 //! Search tool router module
 //!
-//! This module provides the MCP tool routing for all search and analysis tools.
-//! It delegates actual implementation to specialized modules:
-//! - `indexing_tools`: Indexing operations
-//! - `query_tools`: Search and query operations
-//! - `analysis_tools`: Code analysis operations
+//! This module provides the MCP tool routing layer for all search and analysis tools.
+//! It acts as a facade, delegating to specialized modules while handling MCP protocol
+//! concerns like parameter validation and response formatting.
+//!
+//! ## Overview
+//!
+//! The `SearchToolRouter` is the main entry point for MCP clients. It:
+//! - Routes tool calls to specialized implementations
+//! - Handles parameter validation and error formatting
+//! - Manages optional sync manager for background indexing
+//! - Exposes 10 tools via MCP protocol
+//!
+//! ## Architecture
+//!
+//! ```text
+//! MCP Client
+//!     ↓
+//! SearchToolRouter (this module)
+//!     ├─→ query_tools      (search, get_similar_code, read_file_content)
+//!     ├─→ analysis_tools   (find_*, get_*, analyze_complexity)
+//!     ├─→ index_tool       (index_codebase)
+//!     └─→ health_tool      (health_check)
+//! ```
+//!
+//! ## Exposed MCP Tools
+//!
+//! 1. **read_file_content** - Read file contents
+//! 2. **search** - Hybrid keyword + semantic search
+//! 3. **get_similar_code** - Semantic similarity search
+//! 4. **find_definition** - Locate symbol definitions
+//! 5. **find_references** - Find all symbol references
+//! 6. **get_dependencies** - Analyze file imports
+//! 7. **get_call_graph** - Function call relationships
+//! 8. **analyze_complexity** - Code complexity metrics
+//! 9. **health_check** - System health status
+//! 10. **index_codebase** - Manual indexing with change detection
+//!
+//! ## Refactoring Notes
+//!
+//! This module is the result of Phase 1 refactoring, which split the monolithic
+//! `search_tool.rs` (1000 LOC, 242 cyclomatic complexity) into focused modules:
+//! - Reduced router to ~200 LOC with routing-only logic
+//! - Extracted business logic to specialized modules
+//! - Achieved 90% complexity reduction
+//! - Maintained full backward compatibility
+//!
+//! ## Examples
+//!
+//! ### Basic Usage
+//! ```rust,no_run
+//! use file_search_mcp::tools::search_tool_router::SearchToolRouter;
+//!
+//! // Create router without sync manager
+//! let router = SearchToolRouter::new();
+//! ```
+//!
+//! ### With Background Sync
+//! ```rust,no_run
+//! use file_search_mcp::tools::search_tool_router::SearchToolRouter;
+//! use file_search_mcp::mcp::SyncManager;
+//! use std::sync::Arc;
+//! use std::path::PathBuf;
+//!
+//! // Create router with background sync
+//! let sync_mgr = Arc::new(SyncManager::new(
+//!     "http://localhost:6334".to_string(),
+//!     PathBuf::from("/tmp/cache"),
+//!     PathBuf::from("/tmp/index"),
+//!     300  // 5-minute sync interval
+//! ));
+//! let router = SearchToolRouter::with_sync_manager(sync_mgr);
+//! ```
 
 use rmcp::{
     ErrorData as McpError, ServerHandler,

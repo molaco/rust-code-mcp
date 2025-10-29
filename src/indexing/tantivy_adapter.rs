@@ -1,56 +1,62 @@
-//! Tantivy adapter for BM25 indexing operations
+//! Tantivy adapter for BM25 keyword indexing
 //!
 //! This module encapsulates all Tantivy-specific operations, providing a clean
-//! interface for indexing and searching code chunks using BM25 algorithm.
+//! interface for indexing and searching code chunks using the BM25 algorithm.
+//!
+//! ## Overview
+//!
+//! The `TantivyAdapter` provides:
+//! - **Thread-safe indexing**: Configurable writer with multi-threading support
+//! - **Batch operations**: Efficient bulk indexing of code chunks
+//! - **File-based deletion**: Remove all chunks for modified/deleted files
+//! - **BM25 search creation**: Build search instances from the index
+//!
+//! ## Architecture
+//!
+//! ```text
+//! TantivyAdapter
+//!     ├─ Index (persistent on disk)
+//!     ├─ IndexWriter (exclusive, one per adapter)
+//!     └─ ChunkSchema (field definitions)
+//! ```
+//!
+//! ## Refactoring Notes
+//!
+//! This module was extracted during Phase 2 refactoring to separate concerns:
+//! - Moved from `unified.rs` (1047 LOC → 743 LOC)
+//! - Encapsulates all Tantivy-specific logic
+//! - Reduces coupling with Qdrant and embedding components
+//!
+//! ## Examples
+//!
+//! ```rust,no_run
+//! use file_search_mcp::indexing::tantivy_adapter::TantivyAdapter;
+//! use file_search_mcp::config::TantivyConfig;
+//! use std::path::Path;
+//!
+//! # fn example() -> anyhow::Result<()> {
+//! // Create adapter with configuration
+//! let config = TantivyConfig::default(Path::new("./tantivy"));
+//! let mut adapter = TantivyAdapter::new(config)?;
+//!
+//! // Index chunks (chunks from ChunkSchema)
+//! // adapter.index_chunks(&chunks)?;
+//!
+//! // Commit changes
+//! adapter.commit()?;
+//!
+//! // Create BM25 search instance
+//! let bm25 = adapter.create_bm25_search()?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::chunker::CodeChunk;
+use crate::config::TantivyConfig;
 use crate::schema::ChunkSchema;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tantivy::{doc, Index, IndexWriter};
-
-/// Configuration for TantivyAdapter
-#[derive(Debug, Clone)]
-pub struct TantivyConfig {
-    /// Path to Tantivy index directory
-    pub index_path: std::path::PathBuf,
-    /// Memory budget in MB per thread
-    pub memory_budget_mb: usize,
-    /// Number of threads for indexing
-    pub num_threads: usize,
-}
-
-impl TantivyConfig {
-    /// Create configuration optimized for codebase size
-    pub fn for_codebase_size(index_path: &Path, codebase_loc: Option<usize>) -> Self {
-        let (memory_budget_mb, num_threads) = if let Some(loc) = codebase_loc {
-            if loc < 100_000 {
-                (50, 2)
-            } else if loc < 1_000_000 {
-                (100, 4)
-            } else {
-                (200, 8)
-            }
-        } else {
-            (50, 2) // Default for unknown size
-        };
-
-        Self {
-            index_path: index_path.to_path_buf(),
-            memory_budget_mb,
-            num_threads,
-        }
-    }
-
-    /// Create default configuration
-    pub fn default(index_path: &Path) -> Self {
-        Self {
-            index_path: index_path.to_path_buf(),
-            memory_budget_mb: 50,
-            num_threads: 2,
-        }
-    }
-}
 
 /// Adapter for Tantivy BM25 indexing operations
 pub struct TantivyAdapter {

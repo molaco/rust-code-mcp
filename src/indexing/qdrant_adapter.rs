@@ -1,7 +1,58 @@
-//! Qdrant adapter for vector indexing operations
+//! Qdrant adapter for semantic vector indexing
 //!
 //! This module encapsulates all Qdrant-specific operations, providing a clean
 //! interface for indexing and searching code chunks using vector embeddings.
+//!
+//! ## Overview
+//!
+//! The `QdrantAdapter` provides:
+//! - **Batch vector indexing**: Efficient upsert of embeddings with metadata
+//! - **File-based deletion**: Remove all vectors for modified/deleted files
+//! - **Collection management**: Clear and count operations
+//! - **Vector store access**: Clone-able store for concurrent searches
+//!
+//! ## Architecture
+//!
+//! ```text
+//! QdrantAdapter
+//!     └─ VectorStore (wraps Arc<QdrantClient>)
+//!         ├─ Async batched upserts
+//!         └─ Concurrent-safe operations
+//! ```
+//!
+//! ## Refactoring Notes
+//!
+//! This module was extracted during Phase 2 refactoring to separate concerns:
+//! - Moved from `unified.rs` (1047 LOC → 743 LOC)
+//! - Encapsulates all Qdrant-specific logic
+//! - Reduces coupling with Tantivy and chunking components
+//!
+//! ## Examples
+//!
+//! ```rust,no_run
+//! use file_search_mcp::indexing::qdrant_adapter::QdrantAdapter;
+//! use file_search_mcp::vector_store::{VectorStore, VectorStoreConfig};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create vector store
+//! let config = VectorStoreConfig {
+//!     url: "http://localhost:6334".to_string(),
+//!     collection_name: "code_chunks".to_string(),
+//!     vector_size: 384,
+//! };
+//! let vector_store = VectorStore::new(config).await?;
+//!
+//! // Create adapter
+//! let adapter = QdrantAdapter::new(vector_store);
+//!
+//! // Index chunks with embeddings
+//! // adapter.index_chunks(chunks, embeddings).await?;
+//!
+//! // Get count
+//! let count = adapter.count().await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::Embedding;

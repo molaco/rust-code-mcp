@@ -6,11 +6,12 @@
 //! - IndexerCore: Core file processing and embedding generation
 
 use crate::chunker::CodeChunk;
+use crate::config::IndexerConfig;
 use crate::embeddings::EmbeddingGenerator;
 use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
-use crate::indexing::indexer_core::{IndexerCore, IndexerCoreConfig};
+use crate::indexing::indexer_core::IndexerCore;
 use crate::indexing::qdrant_adapter::QdrantAdapter;
-use crate::indexing::tantivy_adapter::{TantivyAdapter, TantivyConfig};
+use crate::indexing::tantivy_adapter::TantivyAdapter;
 use crate::metrics::IndexingMetrics;
 use crate::vector_store::VectorStore;
 use anyhow::{Context, Result};
@@ -92,6 +93,55 @@ impl UnifiedIndexer {
         .await
     }
 
+    /// Create a new unified indexer from a consolidated configuration
+    ///
+    /// This is the preferred constructor that uses dependency injection
+    /// to reduce coupling and simplify configuration management.
+    ///
+    /// # Arguments
+    /// * `config` - Consolidated indexer configuration
+    pub async fn from_config(config: IndexerConfig) -> Result<Self> {
+        tracing::info!("Initializing UnifiedIndexer from config...");
+
+        // Initialize core with injected config
+        let core = IndexerCore::new(&config.core.cache_path, Some(config.core.clone()))?;
+
+        // Initialize Tantivy adapter with injected config
+        let tantivy = TantivyAdapter::new(config.tantivy)?;
+
+        // Initialize Qdrant adapter with injected config
+        let base_config = crate::vector_store::VectorStoreConfig {
+            url: config.qdrant.url.clone(),
+            collection_name: config.qdrant.collection_name.clone(),
+            vector_size: config.qdrant.vector_size,
+        };
+
+        let optimized_config = crate::vector_store::QdrantOptimizedConfig {
+            base_config: base_config.clone(),
+            hnsw_m: config.qdrant.hnsw_m,
+            hnsw_ef_construct: config.qdrant.hnsw_ef_construct,
+            hnsw_ef: config.qdrant.hnsw_ef,
+            indexing_threads: config.qdrant.indexing_threads,
+            full_scan_threshold: config.qdrant.full_scan_threshold,
+            memmap_threshold: config.qdrant.memmap_threshold,
+        };
+
+        let vector_store = VectorStore::new_with_optimization(base_config, Some(optimized_config))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?;
+
+        let qdrant = QdrantAdapter::new(vector_store);
+
+        tracing::info!("UnifiedIndexer initialized successfully from config");
+
+        Ok(Self {
+            core,
+            tantivy,
+            qdrant,
+            metrics: IndexingMetrics::new(),
+        })
+    }
+
     /// Create a new unified indexer with optimized configuration
     ///
     /// # Arguments
@@ -115,7 +165,7 @@ impl UnifiedIndexer {
         let core = IndexerCore::new(cache_path, None)?;
 
         // Initialize Tantivy adapter
-        let tantivy_config = TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
+        let tantivy_config = crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
         let tantivy = TantivyAdapter::new(tantivy_config)?;
 
         // Initialize Qdrant adapter

@@ -1,9 +1,63 @@
-//! Core indexing logic for processing files and generating embeddings
+//! Core indexing logic for file processing and embedding generation
 //!
 //! This module contains the core business logic for indexing operations,
-//! including file processing, chunking, and embedding generation.
+//! including file processing, security filtering, chunking, and batch embedding generation.
+//!
+//! ## Overview
+//!
+//! The `IndexerCore` provides:
+//! - **Secure file processing**: Secrets scanning and sensitive file filtering
+//! - **Change detection**: Metadata cache for incremental indexing
+//! - **Tree-sitter parsing**: Accurate Rust AST parsing
+//! - **Symbol-based chunking**: Semantic code chunk generation
+//! - **Batch embeddings**: GPU-optimized embedding generation
+//! - **Memory monitoring**: Safe batch sizing based on available RAM
+//!
+//! ## Processing Pipeline
+//!
+//! ```text
+//! File → Security Checks → Parse (tree-sitter) → Chunk → Embeddings
+//!        ├─ Sensitive file filter
+//!        ├─ Secrets scanner
+//!        └─ Size limits
+//! ```
+//!
+//! ## Refactoring Notes
+//!
+//! This module was extracted during Phase 2 refactoring:
+//! - Moved core logic from `unified.rs` (~400 LOC of processing code)
+//! - Separates file processing from storage adapters
+//! - Thread-safe design for parallel processing with Rayon
+//!
+//! ## Examples
+//!
+//! ```rust,no_run
+//! use file_search_mcp::indexing::indexer_core::IndexerCore;
+//! use std::path::Path;
+//!
+//! # fn example() -> anyhow::Result<()> {
+//! // Create indexer core
+//! let core = IndexerCore::new(
+//!     Path::new("./cache"),
+//!     None  // Use default config
+//! )?;
+//!
+//! // Process a file (synchronous, suitable for Rayon)
+//! let processed = core.process_file_sync(
+//!     Path::new("src/main.rs")
+//! )?;
+//!
+//! // Generate embeddings in batches
+//! let embeddings = core.generate_embeddings_batched(&processed.chunks)?;
+//!
+//! // Calculate safe batch size for parallel processing
+//! let batch_size = core.calculate_safe_batch_size();
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::chunker::{Chunker, CodeChunk};
+use crate::config::IndexerCoreConfig;
 use crate::embeddings::{Embedding, EmbeddingGenerator};
 use crate::metadata_cache::MetadataCache;
 use crate::metrics::memory::MemoryMonitor;
@@ -28,24 +82,6 @@ pub struct ProcessedFile {
     pub parse_duration: Duration,
 }
 
-/// Configuration for IndexerCore
-#[derive(Debug, Clone)]
-pub struct IndexerCoreConfig {
-    /// Maximum file size to process (in bytes)
-    pub max_file_size: u64,
-    /// GPU batch size for embedding generation
-    pub gpu_batch_size: usize,
-}
-
-impl Default for IndexerCoreConfig {
-    fn default() -> Self {
-        Self {
-            max_file_size: 10_000_000, // 10 MB
-            gpu_batch_size: 96,        // Optimized for 8GB VRAM
-        }
-    }
-}
-
 /// Core indexing logic handler
 pub struct IndexerCore {
     /// Rust code parser
@@ -60,7 +96,7 @@ pub struct IndexerCore {
     secrets_scanner: SecretsScanner,
     /// File filter for sensitive files
     file_filter: SensitiveFileFilter,
-    /// Memory monitor (wrapped in Arc<Mutex> for thread-safe interior mutability)
+    /// Memory monitor (wrapped in `Arc<Mutex>` for thread-safe interior mutability)
     memory_monitor: Arc<Mutex<MemoryMonitor>>,
     /// Configuration
     config: IndexerCoreConfig,
