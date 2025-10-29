@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_router_creation() {
-        let router = SearchToolRouter::new();
+        let _router = SearchToolRouter::new();
         // Just verify it can be created
         assert!(true);
     }
@@ -190,8 +190,14 @@ mod tests {
     #[test]
     fn test_router_with_sync_manager() {
         use std::sync::Arc;
-        let sync_mgr = Arc::new(crate::mcp::SyncManager::new());
-        let router = SearchToolRouter::with_sync_manager(sync_mgr);
-        assert!(router.sync_manager.is_some());
+        use std::path::PathBuf;
+        let sync_mgr = Arc::new(crate::mcp::SyncManager::new(
+            "http://localhost:6334".to_string(),
+            PathBuf::from("/tmp/cache"),
+            PathBuf::from("/tmp/index"),
+            300, // 5 minutes
+        ));
+        let _router = SearchToolRouter::with_sync_manager(sync_mgr);
+        assert!(_router.sync_manager.is_some());
     }
 }

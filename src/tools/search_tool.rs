@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn test_search_tool_backward_compat() {
         // Verify SearchTool can still be created
-        let tool = SearchTool::new();
+        let _tool = SearchTool::new();
         // Just verify construction works
         assert!(true);
     }

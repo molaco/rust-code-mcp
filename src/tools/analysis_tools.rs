@@ -20,7 +20,7 @@ use tracing;
 use crate::parser::RustParser;
 
 /// Helper function to recursively visit Rust files
-fn visit_rust_files<F>(dir: &Path, mut visitor: F) -> Result<(), String>
+fn visit_rust_files<F>(dir: &Path, visitor: &mut F) -> Result<(), String>
 where
     F: FnMut(&Path) -> Result<(), String>,
 {
@@ -29,7 +29,7 @@ where
         let path = entry.path();
 
         if path.is_dir() {
-            visit_rust_files(&path, &mut visitor)?;
+            visit_rust_files(&path, visitor)?;
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             visitor(&path)?;
         }
@@ -58,7 +58,7 @@ pub async fn find_definition(
     })?;
 
     // Recursively search .rs files
-    let search_result = visit_rust_files(dir_path, |path| {
+    let mut visitor = |path: &Path| -> Result<(), String> {
         if let Ok(symbols) = parser.parse_file(path) {
             for symbol in symbols {
                 if symbol.name == symbol_name {
@@ -71,9 +71,9 @@ pub async fn find_definition(
             }
         }
         Ok(())
-    });
+    };
 
-    search_result.map_err(|e| McpError::invalid_params(e, None))?;
+    visit_rust_files(dir_path, &mut visitor).map_err(|e| McpError::invalid_params(e, None))?;
 
     if found_definitions.is_empty() {
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -115,7 +115,7 @@ pub async fn find_references(
     })?;
 
     // Recursively search .rs files for references (both function calls and type usage)
-    let search_result = visit_rust_files(dir_path, |path| {
+    let mut visitor = |path: &Path| -> Result<(), String> {
         if let Ok(parse_result) = parser.parse_file_complete(path) {
             // Check function call references
             let callers = parse_result.call_graph.get_callers(symbol_name);
@@ -169,9 +169,9 @@ pub async fn find_references(
             }
         }
         Ok(())
-    });
+    };
 
-    search_result.map_err(|e| McpError::invalid_params(e, None))?;
+    visit_rust_files(dir_path, &mut visitor).map_err(|e| McpError::invalid_params(e, None))?;
 
     if found_call_refs.is_empty() && found_type_refs.is_empty() {
         Ok(CallToolResult::success(vec![Content::text(format!(
