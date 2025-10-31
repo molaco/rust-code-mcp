@@ -7,6 +7,14 @@ edition = "2024"
 name = "build_hypergraph"
 path = "src/bin/build_hypergraph.rs"
 
+[[bin]]
+name = "visualize_hypergraph"
+path = "src/bin/visualize_hypergraph.rs"
+
+[[bin]]
+name = "visualize_test"
+path = "src/bin/visualize_test.rs"
+
 [dependencies]
 # MCP and async runtime
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = [
@@ -79,6 +87,23 @@ indexmap = { version = "2.6", features = ["rayon"] }
 ahash = "0.8"
 thiserror = "2.0"
 ordered-float = "4.0"
+
+# Phase 3: Bevy Visualization
+bevy = { version = "0.14", default-features = false, features = [
+    "bevy_asset",
+    "bevy_winit",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_ui",
+    "bevy_text",
+    "default_font",
+    "wayland",
+    "png",
+    "tonemapping_luts",
+] }
+bevy_panorbit_camera = "0.19"
+rand = "0.8"
 
 
 [dev-dependencies]

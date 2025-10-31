@@ -8,6 +8,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Configuration for hypergraph construction
+#[derive(Debug, Clone)]
+pub struct HypergraphConfig {
+    /// If true, only include symbol nodes (functions, structs, traits, enums)
+    /// If false, include file nodes and module relationships
+    pub symbol_only: bool,
+}
+
+impl Default for HypergraphConfig {
+    fn default() -> Self {
+        Self {
+            symbol_only: true, // Default to symbol-only view
+        }
+    }
+}
+
 /// Builder for constructing hypergraphs from Rust source code
 pub struct HypergraphBuilder {
     /// Underlying hypergraph being built
@@ -21,11 +37,19 @@ pub struct HypergraphBuilder {
 
     /// Map: file path → file NodeId
     file_index: HashMap<PathBuf, NodeId>,
+
+    /// Configuration
+    config: HypergraphConfig,
 }
 
 impl HypergraphBuilder {
-    /// Creates a new builder
+    /// Creates a new builder with default config (symbol-only mode)
     pub fn new() -> Result<Self> {
+        Self::with_config(HypergraphConfig::default())
+    }
+
+    /// Creates a new builder with custom configuration
+    pub fn with_config(config: HypergraphConfig) -> Result<Self> {
         Ok(Self {
             hypergraph: Hypergraph::new(),
             parser: RustParser::new()
@@ -34,6 +58,7 @@ impl HypergraphBuilder {
                 ))?,
             symbol_index: HashMap::new(),
             file_index: HashMap::new(),
+            config,
         })
     }
 
@@ -103,10 +128,12 @@ impl HypergraphBuilder {
 
     /// First pass: Create file node and symbol nodes for a file
     fn process_file_nodes(&mut self, file_path: &Path) -> Result<()> {
-        // Create file node
-        let file_node = HyperNode::from_file(file_path.to_path_buf());
-        let file_node_id = self.hypergraph.add_node(file_node)?;
-        self.file_index.insert(file_path.to_path_buf(), file_node_id);
+        // Create file node (only if not in symbol-only mode)
+        if !self.config.symbol_only {
+            let file_node = HyperNode::from_file(file_path.to_path_buf());
+            let file_node_id = self.hypergraph.add_node(file_node)?;
+            self.file_index.insert(file_path.to_path_buf(), file_node_id);
+        }
 
         // Parse file
         let parse_result = self.parser.parse_file_complete(file_path)
@@ -138,23 +165,29 @@ impl HypergraphBuilder {
 
     /// Second pass: Create edges for a file
     fn process_file_edges(&mut self, file_path: &Path) -> Result<()> {
-        // Get file node ID
-        let file_node_id = *self.file_index.get(file_path)
-            .ok_or_else(|| crate::hypergraph::HypergraphError::NodeNameExists(
-                format!("File node not found: {:?}", file_path)
-            ))?;
-
         // Parse file again (TODO: cache parse results)
         let parse_result = self.parser.parse_file_complete(file_path)
             .map_err(|e| crate::hypergraph::HypergraphError::NodeNameExists(
                 format!("Parse error: {}", e)
             ))?;
 
-        // Create different types of edges
-        self.build_module_containment_edges(file_node_id, &parse_result.symbols)?;
-        self.build_call_pattern_edges(&parse_result.call_graph)?;
-        self.build_import_cluster_edges(file_node_id, &parse_result.imports)?;
-        self.build_type_edges(&parse_result.type_references)?;
+        // Create different types of edges based on mode
+        if self.config.symbol_only {
+            // Symbol-only mode: only create symbol-to-symbol edges
+            self.build_call_pattern_edges(&parse_result.call_graph)?;
+            self.build_type_edges(&parse_result.type_references)?;
+        } else {
+            // Full mode: include file-based edges
+            let file_node_id = *self.file_index.get(file_path)
+                .ok_or_else(|| crate::hypergraph::HypergraphError::NodeNameExists(
+                    format!("File node not found: {:?}", file_path)
+                ))?;
+
+            self.build_module_containment_edges(file_node_id, &parse_result.symbols)?;
+            self.build_call_pattern_edges(&parse_result.call_graph)?;
+            self.build_import_cluster_edges(file_node_id, &parse_result.imports)?;
+            self.build_type_edges(&parse_result.type_references)?;
+        }
 
         Ok(())
     }

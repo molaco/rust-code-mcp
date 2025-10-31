@@ -15,12 +15,20 @@ pub mod types;
 pub mod hyperedges;
 pub mod nodes;
 
+// Phase 3: Visualization
+pub mod layout;
+pub mod viz;
+mod viz_ui;
+
 // Re-exports
-pub use builder::HypergraphBuilder;
+pub use builder::{HypergraphBuilder, HypergraphConfig};
 pub use errors::{HypergraphError, Result};
 pub use indexes::{HyperedgeId, NodeId};
 pub use stats::Stats;
 pub use types::{HyperNode, Hyperedge, HyperedgeType, NodeType};
+
+// Re-export visualization function
+pub use viz::visualize;
 
 use ahash::RandomState;
 use bi_hash_map::BiHashMap;
