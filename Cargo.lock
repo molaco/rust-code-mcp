@@ -896,13 +896,16 @@ dependencies = [
 name = "file-search-mcp"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "bincode",
  "directories",
  "fastembed",
  "glob",
+ "indexmap 2.11.4",
  "notify",
  "num_cpus",
+ "ordered-float",
  "ort",
  "qdrant-client",
  "rayon",
@@ -917,6 +920,7 @@ dependencies = [
  "tantivy",
  "tempfile",
  "text-splitter",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1591,6 +1595,7 @@ checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.2",
+ "rayon",
 ]
 
 [[package]]
@@ -2276,6 +2281,15 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "ordered-float"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "ort"

@@ -5,6 +5,7 @@
 pub mod chunker;
 pub mod config;
 pub mod embeddings;
+pub mod hypergraph;
 pub mod indexing;
 pub mod mcp;
 pub mod metadata_cache;
