@@ -7,6 +7,16 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::path::PathBuf;
 
+/// Type of node in the hypergraph
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeType {
+    /// A file/module node
+    File { path: PathBuf },
+
+    /// A code symbol node (function, struct, etc.)
+    Symbol { symbol: Symbol },
+}
+
 /// A node in the hypergraph (wraps Symbol from parser)
 #[derive(Debug, Clone, PartialEq)]
 pub struct HyperNode {
@@ -15,7 +25,7 @@ pub struct HyperNode {
     pub file_path: PathBuf,
     pub line_start: usize,
     pub line_end: usize,
-    pub symbol: Symbol,  // Reuse existing parser Symbol
+    pub node_type: NodeType,  // Distinguish file vs symbol
 }
 
 impl Display for HyperNode {
@@ -32,6 +42,39 @@ impl std::hash::Hash for HyperNode {
 }
 
 impl Eq for HyperNode {}
+
+impl HyperNode {
+    /// Create a file node
+    pub fn from_file(path: PathBuf) -> Self {
+        // Use the full path as the name to ensure uniqueness
+        let name = path.to_str()
+            .unwrap_or("unknown")
+            .to_string();
+
+        Self {
+            id: NodeId(0),  // Will be reassigned
+            name,
+            file_path: path.clone(),
+            line_start: 0,
+            line_end: 0,
+            node_type: NodeType::File { path },
+        }
+    }
+
+    /// Create a symbol node
+    pub fn from_symbol(symbol: Symbol, file_path: PathBuf) -> Self {
+        Self {
+            id: NodeId(0),  // Will be reassigned
+            name: symbol.name.clone(),
+            file_path,
+            line_start: symbol.range.start_line,
+            line_end: symbol.range.end_line,
+            node_type: NodeType::Symbol {
+                symbol: symbol.clone()
+            },
+        }
+    }
+}
 
 /// Types of hyperedges for code analysis
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]

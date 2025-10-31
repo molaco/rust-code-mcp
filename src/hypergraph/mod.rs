@@ -6,19 +6,21 @@
 //! - Sources → Targets captures directionality
 
 pub mod bi_hash_map;
+pub mod builder;
 pub mod errors;
 pub mod indexes;
 pub mod stats;
 pub mod types;
 
-pub mod nodes;
 pub mod hyperedges;
+pub mod nodes;
 
 // Re-exports
+pub use builder::HypergraphBuilder;
 pub use errors::{HypergraphError, Result};
 pub use indexes::{HyperedgeId, NodeId};
 pub use stats::Stats;
-pub use types::{Hyperedge, HyperedgeType, HyperNode};
+pub use types::{HyperNode, Hyperedge, HyperedgeType, NodeType};
 
 use ahash::RandomState;
 use bi_hash_map::BiHashMap;
@@ -102,7 +104,10 @@ impl Hypergraph {
     }
 
     /// Helper: Get multiple internal indexes from NodeIds
-    pub(crate) fn get_nodes_internal(&self, node_ids: &std::collections::HashSet<NodeId>) -> Result<Vec<usize>> {
+    pub(crate) fn get_nodes_internal(
+        &self,
+        node_ids: &std::collections::HashSet<NodeId>,
+    ) -> Result<Vec<usize>> {
         node_ids
             .iter()
             .map(|&id| self.get_node_internal(id))
