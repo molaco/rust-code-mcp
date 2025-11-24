@@ -1,0 +1,161 @@
+flowchart TB
+    subgraph Entry["Entry Point"]
+        main["main.rs"]
+    end
+
+    subgraph MCP["MCP Server Layer"]
+        router["SearchToolRouter<br/>(rmcp ServerHandler)"]
+        sync["SyncManager<br/>(Background Sync)"]
+    end
+
+    subgraph Tools["MCP Tool Categories"]
+        direction TB
+        query["Query Tools"]
+        analysis["Analysis Tools"]
+        index["Index Tools"]
+    end
+
+    subgraph QueryTools["Query Tools"]
+        search_tool["search()"]
+        read_file["read_file_content()"]
+        similar["get_similar_code()"]
+    end
+
+    subgraph AnalysisTools["Analysis Tools"]
+        find_def["find_definition()"]
+        find_ref["find_references()"]
+        get_deps["get_dependencies()"]
+        call_graph["get_call_graph()"]
+        complexity["analyze_complexity()"]
+    end
+
+    subgraph IndexTools["Index Tools"]
+        index_cb["index_codebase()"]
+        health["health_check()"]
+    end
+
+    subgraph Indexing["Indexing Pipeline"]
+        incremental["IncrementalIndexer"]
+        unified["UnifiedIndexer"]
+        merkle["FileSystemMerkle<br/>(Change Detection)"]
+    end
+
+    subgraph Processing["Code Processing"]
+        parser["RustParser<br/>(tree-sitter)"]
+        chunker["Chunker<br/>(Symbol-based)"]
+        embedder["EmbeddingGenerator<br/>(fastembed)"]
+    end
+
+    subgraph Storage["Dual Storage"]
+        tantivy["TantivyAdapter<br/>(BM25 Index)"]
+        qdrant["QdrantAdapter<br/>(Vector Store)"]
+    end
+
+    subgraph Search["Search Engine"]
+        resilient["ResilientHybridSearch"]
+        bm25["Bm25Search"]
+        vector["VectorSearch"]
+        rrf["RRF Fusion"]
+    end
+
+    subgraph DataFlow["Data Sources"]
+        files[("Rust Source<br/>Files")]
+        cache[("Metadata<br/>Cache")]
+    end
+
+    %% Entry flow
+    main -->|"spawn"| sync
+    main -->|"serve(stdio)"| router
+
+    %% Router to tools
+    router --> query
+    router --> analysis
+    router --> index
+
+    query --> QueryTools
+    analysis --> AnalysisTools
+    index --> IndexTools
+
+    %% Sync manager flow
+    sync -->|"5-min interval"| incremental
+
+    %% Index tool flow
+    index_cb --> incremental
+
+    %% Indexing pipeline
+    incremental -->|"detect changes"| merkle
+    merkle -->|"ChangeSet"| incremental
+    incremental -->|"new/modified files"| unified
+
+    %% Processing pipeline
+    unified -->|"read"| files
+    unified --> parser
+    parser -->|"Symbols"| chunker
+    chunker -->|"CodeChunks"| embedder
+    embedder -->|"Embeddings"| unified
+
+    %% Dual indexing
+    unified -->|"chunks + text"| tantivy
+    unified -->|"chunks + vectors"| qdrant
+    unified -->|"file metadata"| cache
+
+    %% Search flow
+    search_tool --> resilient
+    similar --> vector
+
+    resilient -->|"keyword"| bm25
+    resilient -->|"semantic"| vector
+    bm25 --> tantivy
+    vector --> qdrant
+    bm25 -->|"results"| rrf
+    vector -->|"results"| rrf
+    rrf -->|"merged results"| resilient
+
+    %% Analysis tools use parser
+    find_def --> parser
+    find_ref --> parser
+    get_deps --> parser
+    call_graph --> parser
+    complexity --> parser
+
+    %% Health check
+    health -->|"check"| tantivy
+    health -->|"check"| qdrant
+    health -->|"check"| merkle
+
+    %% Node Styling - Dark text on lighter backgrounds
+    classDef entry fill:#2196F3,stroke:#1565C0,color:#ffffff,stroke-width:2px
+    classDef mcp fill:#9C27B0,stroke:#6A1B9A,color:#ffffff,stroke-width:2px
+    classDef queryTool fill:#FF9800,stroke:#E65100,color:#000000,stroke-width:2px
+    classDef analysisTool fill:#4CAF50,stroke:#2E7D32,color:#ffffff,stroke-width:2px
+    classDef indexTool fill:#F44336,stroke:#C62828,color:#ffffff,stroke-width:2px
+    classDef process fill:#00BCD4,stroke:#00838F,color:#000000,stroke-width:2px
+    classDef storage fill:#E91E63,stroke:#AD1457,color:#ffffff,stroke-width:2px
+    classDef search fill:#009688,stroke:#00695C,color:#ffffff,stroke-width:2px
+    classDef data fill:#607D8B,stroke:#37474F,color:#ffffff,stroke-width:2px
+    classDef category fill:#FFC107,stroke:#FF8F00,color:#000000,stroke-width:2px
+
+    %% Apply styles
+    class main entry
+    class router,sync mcp
+    class query,analysis,index category
+    class search_tool,read_file,similar queryTool
+    class find_def,find_ref,get_deps,call_graph,complexity analysisTool
+    class index_cb,health indexTool
+    class parser,chunker,embedder,incremental,unified,merkle process
+    class tantivy,qdrant storage
+    class resilient,bm25,vector,rrf search
+    class files,cache data
+
+    %% Subgraph styling
+    style Entry fill:#BBDEFB,stroke:#1976D2,stroke-width:3px,color:#0D47A1
+    style MCP fill:#E1BEE7,stroke:#7B1FA2,stroke-width:3px,color:#4A148C
+    style Tools fill:#FFF9C4,stroke:#F9A825,stroke-width:3px,color:#F57F17
+    style QueryTools fill:#FFE0B2,stroke:#EF6C00,stroke-width:2px,color:#E65100
+    style AnalysisTools fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1B5E20
+    style IndexTools fill:#FFCDD2,stroke:#D32F2F,stroke-width:2px,color:#B71C1C
+    style Indexing fill:#B2EBF2,stroke:#0097A7,stroke-width:3px,color:#006064
+    style Processing fill:#B2EBF2,stroke:#0097A7,stroke-width:3px,color:#006064
+    style Storage fill:#F8BBD9,stroke:#C2185B,stroke-width:3px,color:#880E4F
+    style Search fill:#B2DFDB,stroke:#00796B,stroke-width:3px,color:#004D40
+    style DataFlow fill:#CFD8DC,stroke:#455A64,stroke-width:3px,color:#263238
