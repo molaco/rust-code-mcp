@@ -10,3 +10,4 @@
 /DOCS/
 *.sh
 *.md
+!README.md
