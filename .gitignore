@@ -7,3 +7,6 @@
 .mcp.json
 /OUTPUT/
 /RESULTS/
+/DOCS/
+*.sh
+*.md
