@@ -30,6 +30,15 @@ An MCP server for semantic code search in Rust codebases. Combines BM25 full-tex
 | `index_codebase` | Manually trigger indexing |
 | `health_check` | Check system status |
 
+## Prerequisites
+
+A [Qdrant](https://qdrant.tech/) instance must be running for vector storage. By default, the server connects to `localhost:6334`.
+
+```bash
+# Using Docker
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
 ## Building
 
 ```bash
