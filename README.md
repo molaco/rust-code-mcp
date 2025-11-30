@@ -45,6 +45,20 @@ docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
 cargo build --release
 ```
 
+## Nix
+
+A Nix flake is provided for easy setup:
+
+```bash
+# Enter dev shell with all dependencies
+nix develop github:molaco/rust-code-mcp
+
+# Build the binary
+nix build github:molaco/rust-code-mcp
+```
+
+The dev shell includes nightly Rust, CUDA support, and Qdrant.
+
 ## Configuration
 
 The server uses stdio transport. Add to your MCP client config:
