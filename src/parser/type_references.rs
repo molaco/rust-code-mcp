@@ -57,7 +57,7 @@ impl TypeReferenceTracker {
         }
     }
 
-    /// Build type references from source code
+    /// Build type references from source code (convenience wrapper that parses internally)
     pub fn build(source: &str) -> Vec<TypeReference> {
         Self::build_with_edition(source, Edition::Edition2021)
     }
@@ -66,6 +66,12 @@ impl TypeReferenceTracker {
     pub fn build_with_edition(source: &str, edition: Edition) -> Vec<TypeReference> {
         let parse = SourceFile::parse(source, edition);
         let file = parse.tree();
+        Self::build_from_ast(&file, source)
+    }
+
+    /// Build type references from a pre-parsed AST (avoids re-parsing)
+    /// Requires source string for line number calculation
+    pub fn build_from_ast(file: &SourceFile, source: &str) -> Vec<TypeReference> {
         let mut refs = Vec::new();
 
         for item in file.items() {

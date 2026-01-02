@@ -23,7 +23,7 @@ impl CallGraph {
         }
     }
 
-    /// Build a call graph from source code
+    /// Build a call graph from source code (convenience wrapper that parses internally)
     pub fn build(source: &str) -> Self {
         Self::build_with_edition(source, Edition::Edition2021)
     }
@@ -32,6 +32,11 @@ impl CallGraph {
     pub fn build_with_edition(source: &str, edition: Edition) -> Self {
         let parse = SourceFile::parse(source, edition);
         let file = parse.tree();
+        Self::build_from_ast(&file)
+    }
+
+    /// Build a call graph from a pre-parsed AST (avoids re-parsing)
+    pub fn build_from_ast(file: &SourceFile) -> Self {
         let mut graph = Self::new();
 
         for item in file.items() {
