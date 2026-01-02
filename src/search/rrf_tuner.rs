@@ -91,11 +91,11 @@ impl RRFTuner {
                     ],
                 },
                 TestQuery {
-                    query: "parse rust source code with tree-sitter".to_string(),
+                    query: "parse rust source code with rust-analyzer".to_string(),
                     relevant_chunk_ids: vec![
                         "RustParser".to_string(),
                         "parse_source".to_string(),
-                        "tree_sitter".to_string(),
+                        "rust_analyzer".to_string(),
                     ],
                 },
                 TestQuery {

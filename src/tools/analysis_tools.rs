@@ -1,6 +1,6 @@
 //! Analysis tools module
 //!
-//! This module provides MCP tools for static analysis of Rust codebases using tree-sitter.
+//! This module provides MCP tools for static analysis of Rust codebases using rust-analyzer.
 //! It enables code understanding through symbol analysis, complexity metrics, and
 //! relationship mapping.
 //!
@@ -20,9 +20,9 @@
 //! - [`get_dependencies`]: List file imports and dependencies
 //! - [`analyze_complexity`]: Calculate code complexity metrics
 //!
-//! ## Tree-sitter Integration
+//! ## Rust-Analyzer Integration
 //!
-//! All analysis tools use tree-sitter for accurate Rust parsing:
+//! All analysis tools use rust-analyzer for accurate Rust parsing:
 //! - AST-based symbol extraction (not regex)
 //! - Full Rust syntax support (2021 edition)
 //! - Fast incremental parsing
@@ -76,7 +76,7 @@
 //!
 //! This module is part of the refactored tools layer (Phase 1 refactoring).
 //! It uses:
-//! - `RustParser` for tree-sitter-based AST parsing
+//! - `RustParser` for rust-analyzer-based AST parsing
 //! - `CallGraph` for tracking function relationships
 //! - `TypeReference` for type usage analysis
 

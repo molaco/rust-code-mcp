@@ -16,7 +16,7 @@
 //! ## Processing Pipeline
 //!
 //! ```text
-//! File → Security Checks → Parse (tree-sitter) → Chunk → Embeddings
+//! File → Security Checks → Parse (rust-analyzer) → Chunk → Embeddings
 //!        ├─ Sensitive file filter
 //!        ├─ Secrets scanner
 //!        └─ Size limits
@@ -214,7 +214,7 @@ impl IndexerCore {
             anyhow::bail!("File unchanged");
         }
 
-        // Parse with tree-sitter (CPU-intensive)
+        // Parse with rust-analyzer (CPU-intensive)
         // Create fresh parser for thread safety
         let mut parser = RustParser::new()
             .map_err(|e| anyhow::anyhow!("Failed to create parser: {}", e))?;
