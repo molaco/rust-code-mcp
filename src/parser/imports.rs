@@ -1,6 +1,9 @@
 //! Import extraction for tracking dependencies
 
-use tree_sitter::{Node, Tree};
+use ra_ap_syntax::{
+    ast::{self, HasModuleItem, HasName},
+    AstNode, Edition, SourceFile,
+};
 
 /// An import statement in Rust code
 #[derive(Debug, Clone, PartialEq)]
@@ -13,169 +16,73 @@ pub struct Import {
     pub items: Vec<String>,
 }
 
-/// Extract all import statements from a parse tree
-pub fn extract_imports(tree: &Tree, source: &str) -> Vec<Import> {
+/// Extract all import statements from source code
+pub fn extract_imports(source: &str) -> Vec<Import> {
+    extract_imports_with_edition(source, Edition::Edition2021)
+}
+
+/// Extract all import statements from source code with a specific Rust edition
+pub fn extract_imports_with_edition(source: &str, edition: Edition) -> Vec<Import> {
+    let parse = SourceFile::parse(source, edition);
+    let file = parse.tree();
     let mut imports = Vec::new();
-    extract_imports_recursive(tree.root_node(), source, &mut imports);
+
+    for item in file.items() {
+        if let ast::Item::Use(use_item) = item {
+            extract_use_tree(use_item.use_tree(), &mut imports, String::new());
+        }
+    }
+
     imports
 }
 
-/// Recursively extract imports from AST
-fn extract_imports_recursive(node: Node, source: &str, imports: &mut Vec<Import>) {
-    if node.kind() == "use_declaration" {
-        if let Some(import) = parse_use_declaration(node, source) {
-            imports.push(import);
-        }
+/// Extract imports from a use tree recursively
+fn extract_use_tree(use_tree: Option<ast::UseTree>, imports: &mut Vec<Import>, prefix: String) {
+    let Some(tree) = use_tree else { return };
+
+    let path = tree
+        .path()
+        .map(|p| {
+            let path_str = p.syntax().text().to_string();
+            if prefix.is_empty() {
+                path_str
+            } else {
+                format!("{}::{}", prefix, path_str)
+            }
+        })
+        .unwrap_or(prefix.clone());
+
+    // Check for glob (*)
+    if tree.star_token().is_some() {
+        imports.push(Import {
+            path: path.clone(),
+            is_glob: true,
+            items: vec![],
+        });
+        return;
     }
 
-    // Recurse into children
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        extract_imports_recursive(child, source, imports);
+    // Check for use list {a, b, c}
+    if let Some(use_tree_list) = tree.use_tree_list() {
+        for subtree in use_tree_list.use_trees() {
+            extract_use_tree(Some(subtree), imports, path.clone());
+        }
+        return;
     }
-}
 
-/// Parse a use declaration node into an Import
-fn parse_use_declaration(node: Node, source: &str) -> Option<Import> {
-    // Simpler approach: just get the full text and parse it
-    let text = get_node_text(node, source)?;
+    // Check for rename (as)
+    let rename = tree
+        .rename()
+        .and_then(|r| r.name().map(|n| n.text().to_string()));
 
-    // Remove "use " and ";"
-    let path_part = text
-        .trim()
-        .strip_prefix("use")?
-        .trim()
-        .strip_suffix(";")?
-        .trim();
-
-    // Check for glob import
-    let is_glob = path_part.ends_with("*");
-    let path = if is_glob {
-        path_part.strip_suffix("::*").unwrap_or(path_part).trim().to_string()
-    } else {
-        path_part.to_string()
-    };
-
-    Some(Import {
-        path,
-        is_glob,
-        items: vec![],
-    })
-}
-
-/// Parse a use clause (recursive for nested imports)
-fn parse_use_clause(node: Node, source: &str, prefix: String) -> Option<Import> {
-    match node.kind() {
-        "scoped_identifier" => {
-            // Simple import: use std::collections::HashMap;
-            let path = get_node_text(node, source)?;
-            let full_path = if prefix.is_empty() {
-                path
-            } else {
-                format!("{}::{}", prefix, path)
-            };
-            Some(Import {
-                path: full_path,
-                is_glob: false,
-                items: vec![],
-            })
-        }
-        "identifier" => {
-            // Single identifier: use foo;
-            let path = get_node_text(node, source)?;
-            let full_path = if prefix.is_empty() {
-                path
-            } else {
-                format!("{}::{}", prefix, path)
-            };
-            Some(Import {
-                path: full_path,
-                is_glob: false,
-                items: vec![],
-            })
-        }
-        "use_wildcard" | "use_as_clause" => {
-            // Glob import: use std::collections::*;
-            // or: use std::collections::HashMap as Map;
-            let mut path_node = node.prev_sibling();
-            let mut path_parts = Vec::new();
-
-            // Walk backwards to collect the path
-            while let Some(prev) = path_node {
-                if prev.kind() == "identifier" || prev.kind() == "scoped_identifier" {
-                    if let Some(text) = get_node_text(prev, source) {
-                        path_parts.insert(0, text);
-                    }
-                }
-                path_node = prev.prev_sibling();
-            }
-
-            let path = if !prefix.is_empty() {
-                format!("{}::{}", prefix, path_parts.join("::"))
-            } else {
-                path_parts.join("::")
-            };
-
-            Some(Import {
-                path,
-                is_glob: node.kind() == "use_wildcard",
-                items: vec![],
-            })
-        }
-        "use_list" => {
-            // Multiple imports: use std::collections::{HashMap, HashSet};
-            let mut items = Vec::new();
-
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() == "identifier" || child.kind() == "scoped_identifier" {
-                    if let Some(item) = get_node_text(child, source) {
-                        items.push(item);
-                    }
-                }
-            }
-
-            // Get the base path (everything before the {})
-            let mut path_node = node.prev_sibling();
-            let mut path_parts = Vec::new();
-
-            while let Some(prev) = path_node {
-                if prev.kind() == "identifier" || prev.kind() == "scoped_identifier" {
-                    if let Some(text) = get_node_text(prev, source) {
-                        path_parts.insert(0, text);
-                    }
-                }
-                path_node = prev.prev_sibling();
-            }
-
-            let path = if !prefix.is_empty() {
-                format!("{}::{}", prefix, path_parts.join("::"))
-            } else {
-                path_parts.join("::")
-            };
-
-            Some(Import {
-                path,
-                is_glob: false,
-                items,
-            })
-        }
-        _ => {
-            // Try to parse children
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if let Some(import) = parse_use_clause(child, source, prefix.clone()) {
-                    return Some(import);
-                }
-            }
-            None
-        }
+    // Simple import
+    if !path.is_empty() {
+        imports.push(Import {
+            path,
+            is_glob: false,
+            items: rename.map(|r| vec![r]).unwrap_or_default(),
+        });
     }
-}
-
-/// Helper: Get text content of a node
-fn get_node_text(node: Node, source: &str) -> Option<String> {
-    node.utf8_text(source.as_bytes()).ok().map(String::from)
 }
 
 /// Get just the module/crate names from imports (for dependency tracking)
@@ -194,21 +101,11 @@ pub fn get_external_dependencies(imports: &[Import]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tree_sitter::Parser;
-
-    fn parse_rust(source: &str) -> Tree {
-        let mut parser = Parser::new();
-        parser
-            .set_language(tree_sitter_rust::language().into())
-            .unwrap();
-        parser.parse(source, None).unwrap()
-    }
 
     #[test]
     fn test_simple_import() {
         let source = "use std::collections::HashMap;";
-        let tree = parse_rust(source);
-        let imports = extract_imports(&tree, source);
+        let imports = extract_imports(source);
 
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].path, "std::collections::HashMap");
@@ -218,8 +115,7 @@ mod tests {
     #[test]
     fn test_glob_import() {
         let source = "use std::collections::*;";
-        let tree = parse_rust(source);
-        let imports = extract_imports(&tree, source);
+        let imports = extract_imports(source);
 
         assert_eq!(imports.len(), 1);
         assert!(imports[0].is_glob);
@@ -232,13 +128,22 @@ mod tests {
             use std::fs::File;
             use std::io::Read;
         "#;
-        let tree = parse_rust(source);
-        let imports = extract_imports(&tree, source);
+        let imports = extract_imports(source);
 
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|i| i.path.contains("HashMap")));
         assert!(imports.iter().any(|i| i.path.contains("File")));
         assert!(imports.iter().any(|i| i.path.contains("Read")));
+    }
+
+    #[test]
+    fn test_grouped_imports() {
+        let source = "use std::io::{Read, Write};";
+        let imports = extract_imports(source);
+
+        assert_eq!(imports.len(), 2);
+        assert!(imports.iter().any(|i| i.path.contains("Read")));
+        assert!(imports.iter().any(|i| i.path.contains("Write")));
     }
 
     #[test]
@@ -248,8 +153,7 @@ mod tests {
             use serde::Serialize;
             use tokio::runtime::Runtime;
         "#;
-        let tree = parse_rust(source);
-        let imports = extract_imports(&tree, source);
+        let imports = extract_imports(source);
         let deps = get_external_dependencies(&imports);
 
         assert!(deps.contains(&"std".to_string()));
@@ -260,8 +164,7 @@ mod tests {
     #[test]
     fn test_local_import() {
         let source = "use crate::parser::Symbol;";
-        let tree = parse_rust(source);
-        let imports = extract_imports(&tree, source);
+        let imports = extract_imports(source);
 
         assert_eq!(imports.len(), 1);
         assert!(imports[0].path.starts_with("crate"));

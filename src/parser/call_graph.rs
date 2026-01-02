@@ -1,7 +1,11 @@
 //! Call graph construction for tracking function relationships
 
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Tree};
+
+use ra_ap_syntax::{
+    ast::{self, HasModuleItem, HasName},
+    AstNode, Edition, SourceFile, SyntaxKind,
+};
 
 /// A call graph tracking function call relationships
 #[derive(Debug, Clone, Default)]
@@ -19,10 +23,45 @@ impl CallGraph {
         }
     }
 
-    /// Build a call graph from a parse tree
-    pub fn build(tree: &Tree, source: &str) -> Self {
+    /// Build a call graph from source code
+    pub fn build(source: &str) -> Self {
+        Self::build_with_edition(source, Edition::Edition2021)
+    }
+
+    /// Build a call graph from source code with a specific Rust edition
+    pub fn build_with_edition(source: &str, edition: Edition) -> Self {
+        let parse = SourceFile::parse(source, edition);
+        let file = parse.tree();
         let mut graph = Self::new();
-        graph.extract_calls(tree.root_node(), source, None);
+
+        for item in file.items() {
+            match &item {
+                ast::Item::Fn(f) => {
+                    if let Some(name) = f.name() {
+                        let caller = name.text().to_string();
+                        if let Some(body) = f.body() {
+                            extract_calls_from_expr(body.syntax(), &caller, &mut graph);
+                        }
+                    }
+                }
+                ast::Item::Impl(i) => {
+                    if let Some(assoc_items) = i.assoc_item_list() {
+                        for assoc in assoc_items.assoc_items() {
+                            if let ast::AssocItem::Fn(f) = assoc {
+                                if let Some(name) = f.name() {
+                                    let caller = name.text().to_string();
+                                    if let Some(body) = f.body() {
+                                        extract_calls_from_expr(body.syntax(), &caller, &mut graph);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         graph
     }
 
@@ -75,121 +114,52 @@ impl CallGraph {
             .map(|callees| callees.contains(callee))
             .unwrap_or(false)
     }
+}
 
-    /// Extract function calls from AST
-    fn extract_calls(&mut self, node: Node, source: &str, current_function: Option<String>) {
-        match node.kind() {
-            "function_item" => {
-                // Found a function definition - extract its name and recurse into its body
-                if let Some(name) = self.get_function_name(node, source) {
-                    // Recurse into function body with this as the current function
-                    let mut cursor = node.walk();
-                    for child in node.children(&mut cursor) {
-                        self.extract_calls(child, source, Some(name.clone()));
-                    }
+/// Extract function calls from an expression
+fn extract_calls_from_expr(
+    node: &ra_ap_syntax::SyntaxNode,
+    caller: &str,
+    graph: &mut CallGraph,
+) {
+    for descendant in node.descendants() {
+        if descendant.kind() == SyntaxKind::CALL_EXPR {
+            if let Some(call) = ast::CallExpr::cast(descendant.clone()) {
+                if let Some(callee_name) = extract_call_target(&call) {
+                    graph.add_call(caller.to_string(), callee_name);
                 }
             }
-            "call_expression" => {
-                // Found a function call
-                if let (Some(caller), Some(callee)) =
-                    (current_function.as_ref(), self.get_call_target(node, source))
-                {
-                    self.add_call(caller.clone(), callee);
-                }
-                // Continue recursing (calls can be nested)
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    self.extract_calls(child, source, current_function.clone());
-                }
-            }
-            _ => {
-                // Recurse into children
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    self.extract_calls(child, source, current_function.clone());
+        }
+        if descendant.kind() == SyntaxKind::METHOD_CALL_EXPR {
+            if let Some(method_call) = ast::MethodCallExpr::cast(descendant.clone()) {
+                if let Some(name) = method_call.name_ref() {
+                    graph.add_call(caller.to_string(), name.text().to_string());
                 }
             }
         }
     }
+}
 
-    /// Extract function name from function_item node
-    fn get_function_name(&self, node: Node, source: &str) -> Option<String> {
-        node.children(&mut node.walk())
-            .find(|c| c.kind() == "identifier")
-            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-            .map(String::from)
-    }
+/// Extract the target function name from a call expression
+fn extract_call_target(call: &ast::CallExpr) -> Option<String> {
+    let expr = call.expr()?;
 
-    /// Extract the target function name from a call_expression
-    fn get_call_target(&self, node: Node, source: &str) -> Option<String> {
-        // A call expression looks like:
-        //   function(args)         - simple call
-        //   obj.method(args)       - method call
-        //   Type::function(args)   - associated function call
-
-        // The first child is usually the function/method being called
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            match child.kind() {
-                "identifier" => {
-                    // Simple function call: foo()
-                    return child.utf8_text(source.as_bytes()).ok().map(String::from);
-                }
-                "field_expression" => {
-                    // Method call: obj.method()
-                    // Get the field (method) name - it's usually the last child
-                    let mut field_cursor = child.walk();
-                    for field_child in child.children(&mut field_cursor) {
-                        if field_child.kind() == "field_identifier" {
-                            return field_child
-                                .utf8_text(source.as_bytes())
-                                .ok()
-                                .map(String::from);
-                        }
-                    }
-                }
-                "scoped_identifier" => {
-                    // Associated function: Type::function()
-                    // Get the last identifier
-                    let mut scoped_cursor = child.walk();
-                    let identifiers: Vec<_> = child
-                        .children(&mut scoped_cursor)
-                        .filter(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                        .collect();
-
-                    if let Some(last) = identifiers.last() {
-                        return last.utf8_text(source.as_bytes()).ok().map(String::from);
-                    }
-                }
-                "generic_function" => {
-                    // Generic function call: func::<T>()
-                    // Look for the identifier inside
-                    let mut gen_cursor = child.walk();
-                    for gen_child in child.children(&mut gen_cursor) {
-                        if gen_child.kind() == "identifier" || gen_child.kind() == "scoped_identifier" {
-                            return self.get_call_target(gen_child, source);
-                        }
-                    }
-                }
-                _ => continue,
-            }
+    match expr {
+        ast::Expr::PathExpr(path_expr) => {
+            let path = path_expr.path()?;
+            // Get the last segment (function name)
+            path.segments()
+                .last()
+                .and_then(|seg| seg.name_ref())
+                .map(|name| name.text().to_string())
         }
-        None
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tree_sitter::Parser;
-
-    fn parse_rust(source: &str) -> Tree {
-        let mut parser = Parser::new();
-        parser
-            .set_language(tree_sitter_rust::language().into())
-            .unwrap();
-        parser.parse(source, None).unwrap()
-    }
 
     #[test]
     fn test_simple_call() {
@@ -200,8 +170,7 @@ mod tests {
             fn callee() {}
         "#;
 
-        let tree = parse_rust(source);
-        let graph = CallGraph::build(&tree, source);
+        let graph = CallGraph::build(source);
 
         assert!(graph.has_call("caller", "callee"));
         assert_eq!(graph.get_callees("caller"), vec!["callee"]);
@@ -220,8 +189,7 @@ mod tests {
             fn bar() {}
         "#;
 
-        let tree = parse_rust(source);
-        let graph = CallGraph::build(&tree, source);
+        let graph = CallGraph::build(source);
 
         let callees = graph.get_callees("main");
         assert_eq!(callees.len(), 2); // foo and bar (deduplicated)
@@ -239,8 +207,7 @@ mod tests {
             }
         "#;
 
-        let tree = parse_rust(source);
-        let graph = CallGraph::build(&tree, source);
+        let graph = CallGraph::build(source);
 
         let callees = graph.get_callees("process");
         assert!(callees.contains(&"new"));
@@ -260,8 +227,7 @@ mod tests {
             fn helper() {}
         "#;
 
-        let tree = parse_rust(source);
-        let graph = CallGraph::build(&tree, source);
+        let graph = CallGraph::build(source);
 
         assert!(graph.has_call("outer", "inner"));
         assert!(graph.has_call("inner", "helper"));
@@ -276,8 +242,7 @@ mod tests {
             fn c() {}
         "#;
 
-        let tree = parse_rust(source);
-        let graph = CallGraph::build(&tree, source);
+        let graph = CallGraph::build(source);
 
         let functions = graph.all_functions();
         assert_eq!(functions.len(), 3);
@@ -297,8 +262,7 @@ mod tests {
             fn c() {}
         "#;
 
-        let tree = parse_rust(source);
-        let graph = CallGraph::build(&tree, source);
+        let graph = CallGraph::build(source);
 
         assert_eq!(graph.edge_count(), 3); // a->b, a->c, b->c
     }
