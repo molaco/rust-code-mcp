@@ -41,8 +41,11 @@ sha2 = "0.10"          # SHA-256 file hashing
 directories = "5"      # Cross-platform config/data directories
 
 # Phase 2: Tree-sitter Integration + Symbol Extraction
-tree-sitter = "0.20"   # AST parsing
-tree-sitter-rust = "0.20"  # Rust grammar
+tree-sitter = "0.20"   # AST parsing (legacy - will be removed after migration)
+tree-sitter-rust = "0.20"  # Rust grammar (legacy - will be removed after migration)
+
+# rust-analyzer syntax (new parser for migration)
+ra_ap_syntax = "0.0.295"
 
 # Phase 3: Semantic Code Chunking
 text-splitter = "0.13"  # Semantic text chunking
@@ -72,3 +75,4 @@ num_cpus = "1.16"      # CPU count detection
 
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests
+walkdir = "2"          # For test file discovery

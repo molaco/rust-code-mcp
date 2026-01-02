@@ -5,6 +5,7 @@
 
 pub mod call_graph;
 pub mod imports;
+pub mod ra_parser;
 pub mod type_references;
 
 use std::fs;
