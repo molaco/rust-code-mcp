@@ -377,11 +377,6 @@ impl VectorStoreBackend for LanceDbBackend {
     }
 }
 
-// Implement Send + Sync for LanceDbBackend
-// LanceDB Connection is thread-safe
-unsafe impl Send for LanceDbBackend {}
-unsafe impl Sync for LanceDbBackend {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
