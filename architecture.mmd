@@ -48,7 +48,7 @@ flowchart TB
 
     subgraph Storage["Dual Storage"]
         tantivy["TantivyAdapter<br/>(BM25 Index)"]
-        qdrant["QdrantAdapter<br/>(Vector Store)"]
+        lancedb["VectorStore<br/>(LanceDB)"]
     end
 
     subgraph Search["Search Engine"]
@@ -96,7 +96,7 @@ flowchart TB
 
     %% Dual indexing
     unified -->|"chunks + text"| tantivy
-    unified -->|"chunks + vectors"| qdrant
+    unified -->|"chunks + vectors"| lancedb
     unified -->|"file metadata"| cache
 
     %% Search flow
@@ -106,7 +106,7 @@ flowchart TB
     resilient -->|"keyword"| bm25
     resilient -->|"semantic"| vector
     bm25 --> tantivy
-    vector --> qdrant
+    vector --> lancedb
     bm25 -->|"results"| rrf
     vector -->|"results"| rrf
     rrf -->|"merged results"| resilient
@@ -120,7 +120,7 @@ flowchart TB
 
     %% Health check
     health -->|"check"| tantivy
-    health -->|"check"| qdrant
+    health -->|"check"| lancedb
     health -->|"check"| merkle
 
     %% Node Styling - Dark text on lighter backgrounds
@@ -143,7 +143,7 @@ flowchart TB
     class find_def,find_ref,get_deps,call_graph,complexity analysisTool
     class index_cb,health indexTool
     class parser,chunker,embedder,incremental,unified,merkle process
-    class tantivy,qdrant storage
+    class tantivy,lancedb storage
     class resilient,bm25,vector,rrf search
     class files,cache data
 

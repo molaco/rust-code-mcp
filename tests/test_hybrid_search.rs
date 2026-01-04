@@ -15,12 +15,12 @@ async fn test_manual_hybrid_search() {
     println!("1. Creating UnifiedIndexer...");
 
     // 2. Initialize UnifiedIndexer
-    let mut indexer = UnifiedIndexer::new(
+    let mut indexer = UnifiedIndexer::for_embedded(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6333",
         "test_manual_search",
         384,
+        None,
     )
     .await
     .expect("Failed to create UnifiedIndexer");
@@ -44,12 +44,12 @@ async fn test_manual_hybrid_search() {
     // Verify we actually indexed something
     assert!(stats.total_chunks > 0, "Should have indexed some chunks!");
 
-    // 4. Verify Qdrant has data
-    println!("\n3. Verifying Qdrant population...");
+    // 4. Verify vector store has data
+    println!("\n3. Verifying vector store population...");
     let vector_store = indexer.vector_store_cloned();
-    let count = vector_store.count().await.expect("Failed to get count from Qdrant");
-    println!("   ✓ Qdrant has {} vectors", count);
-    assert!(count > 0, "Qdrant should have vectors! Phase 1 requires dual indexing.");
+    let count = vector_store.count().await.expect("Failed to get count from vector store");
+    println!("   ✓ Vector store has {} vectors", count);
+    assert!(count > 0, "Vector store should have vectors! Dual indexing required.");
 
     // 5. Create hybrid search
     println!("\n4. Creating hybrid search...");
@@ -123,10 +123,10 @@ async fn test_manual_hybrid_search() {
     // 9. Summary
     println!("\n=== Test Summary ===");
     println!("✓ Phase 1 UnifiedIndexer working");
-    println!("✓ Qdrant population confirmed ({} vectors)", count);
+    println!("✓ Vector store population confirmed ({} vectors)", count);
     println!("✓ Hybrid search functional");
     println!("✓ Both BM25 and Vector search active");
-    println!("\nPhase 1 Complete! 🎉");
+    println!("\nPhase 1 Complete!");
 }
 
 #[tokio::test]
@@ -138,12 +138,12 @@ async fn test_incremental_indexing() {
     let tantivy_dir = TempDir::new().unwrap();
 
     println!("1. First indexing pass...");
-    let mut indexer = UnifiedIndexer::new(
+    let mut indexer = UnifiedIndexer::for_embedded(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6333",
         "test_incremental",
         384,
+        None,
     )
     .await
     .unwrap();
@@ -166,30 +166,28 @@ async fn test_incremental_indexing() {
 
 #[tokio::test]
 #[ignore]
-async fn test_qdrant_connection() {
-    println!("\n=== Qdrant Connection Test ===\n");
+async fn test_vector_store_connection() {
+    println!("\n=== Vector Store Connection Test ===\n");
 
     let cache_dir = TempDir::new().unwrap();
     let tantivy_dir = TempDir::new().unwrap();
 
-    println!("Connecting to Qdrant at http://localhost:6333...");
+    println!("Initializing embedded vector store (LanceDB)...");
 
-    let result = UnifiedIndexer::new(
+    let result = UnifiedIndexer::for_embedded(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6333",
         "test_connection",
         384,
+        None,
     )
     .await;
 
     match result {
-        Ok(_) => println!("✓ Qdrant connection successful"),
+        Ok(_) => println!("✓ Vector store initialization successful"),
         Err(e) => {
-            println!("✗ Qdrant connection failed: {}", e);
-            println!("\nMake sure Qdrant is running:");
-            println!("  docker run -p 6333:6333 -p 6333:6333 qdrant/qdrant");
-            panic!("Qdrant not available");
+            println!("✗ Vector store initialization failed: {}", e);
+            panic!("Vector store not available");
         }
     }
 }

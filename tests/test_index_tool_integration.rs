@@ -85,7 +85,7 @@ async fn test_index_tool_not_a_directory() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_basic_indexing() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -120,7 +120,7 @@ async fn test_index_tool_basic_indexing() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_empty_directory() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -141,7 +141,7 @@ async fn test_index_tool_empty_directory() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_no_changes_detection() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -161,7 +161,7 @@ async fn test_index_tool_no_changes_detection() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_force_reindex() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -181,7 +181,7 @@ async fn test_index_tool_force_reindex() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_with_sync_manager() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -213,7 +213,7 @@ async fn test_index_tool_with_sync_manager() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_nested_structure() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -234,7 +234,7 @@ async fn test_index_tool_nested_structure() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_incremental_update() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -259,7 +259,7 @@ async fn test_index_tool_incremental_update() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_result_format() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -282,7 +282,7 @@ async fn test_index_tool_result_format() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_with_non_rust_files() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
@@ -302,7 +302,7 @@ async fn test_index_tool_with_non_rust_files() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_index_tool_performance() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 

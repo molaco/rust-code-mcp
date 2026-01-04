@@ -42,7 +42,6 @@ impl SyncTestEnv {
 
     fn create_sync_manager(&self, interval_secs: u64) -> SyncManager {
         SyncManager::new(
-            "http://localhost:6333".to_string(),
             self.data_dir.join("cache"),
             self.data_dir.join("index"),
             interval_secs,
@@ -106,7 +105,7 @@ async fn test_sync_manager_no_duplicate_tracking() {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_manual_sync_trigger() -> Result<()> {
     let env = SyncTestEnv::new()?;
     let sync_manager = env.create_sync_manager(300);
@@ -131,7 +130,7 @@ async fn test_manual_sync_trigger() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_sync_single_directory_manual() -> Result<()> {
     let env = SyncTestEnv::new()?;
     let sync_manager = env.create_sync_manager(300);
@@ -157,7 +156,7 @@ async fn test_sync_single_directory_manual() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant and is time-consuming
+#[ignore] // Requires embedding model and is time-consuming
 async fn test_background_sync_detects_changes() -> Result<()> {
     let env = SyncTestEnv::new()?;
 
@@ -207,7 +206,7 @@ async fn test_background_sync_detects_changes() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_multiple_directories_sync() -> Result<()> {
     let env = SyncTestEnv::new()?;
     let sync_manager = env.create_sync_manager(300);
@@ -230,7 +229,7 @@ async fn test_multiple_directories_sync() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_sync_empty_directory() -> Result<()> {
     let env = SyncTestEnv::new()?;
     let sync_manager = env.create_sync_manager(300);
@@ -248,7 +247,7 @@ async fn test_sync_empty_directory() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_sync_with_nested_directories() -> Result<()> {
     let env = SyncTestEnv::new()?;
     let sync_manager = env.create_sync_manager(300);
@@ -284,7 +283,7 @@ async fn test_sync_manager_with_defaults() {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn test_sync_recovers_from_errors() -> Result<()> {
     let env = SyncTestEnv::new()?;
     let sync_manager = env.create_sync_manager(300);

@@ -33,7 +33,6 @@ impl BenchmarkConfig {
         IncrementalIndexer::new(
             &self.cache_path,
             &self.tantivy_path,
-            "http://localhost:6333",
             &self.collection_name,
             384,
             None,
@@ -85,7 +84,7 @@ impl BenchmarkResults {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn benchmark_gpu_performance() -> Result<()> {
     println!("\n{}", "*".repeat(60));
     println!("GPU PERFORMANCE BENCHMARK");
@@ -170,7 +169,7 @@ async fn benchmark_gpu_performance() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
     println!("\n{}", "*".repeat(60));
     println!("SEQUENTIAL vs PARALLEL COMPARISON");
@@ -190,7 +189,6 @@ async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
     let mut indexer_seq = IncrementalIndexer::new(
         &cache_path_seq,
         &tantivy_path_seq,
-        "http://localhost:6333",
         &collection_seq,
         384,
         None,
@@ -215,7 +213,6 @@ async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
     let mut indexer_par = IncrementalIndexer::new(
         &cache_path_par,
         &tantivy_path_par,
-        "http://localhost:6333",
         &collection_par,
         384,
         None,

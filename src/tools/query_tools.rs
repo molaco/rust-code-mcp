@@ -22,7 +22,7 @@
 //! ```text
 //! Query → HybridSearch
 //!     ├─ BM25 Search (Tantivy)      → Keyword matches
-//!     ├─ Vector Search (Qdrant)     → Semantic matches
+//!     ├─ Vector Search (LanceDB)    → Semantic matches
 //!     └─ RRF Fusion                 → Combined ranking
 //! ```
 //!

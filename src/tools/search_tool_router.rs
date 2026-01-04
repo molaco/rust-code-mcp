@@ -65,7 +65,6 @@
 //!
 //! // Create router with background sync
 //! let sync_mgr = Arc::new(SyncManager::new(
-//!     "http://localhost:6334".to_string(),
 //!     PathBuf::from("/tmp/cache"),
 //!     PathBuf::from("/tmp/index"),
 //!     300  // 5-minute sync interval
@@ -259,7 +258,6 @@ mod tests {
         use std::sync::Arc;
         use std::path::PathBuf;
         let sync_mgr = Arc::new(crate::mcp::SyncManager::new(
-            "http://localhost:6334".to_string(),
             PathBuf::from("/tmp/cache"),
             PathBuf::from("/tmp/index"),
             300, // 5 minutes

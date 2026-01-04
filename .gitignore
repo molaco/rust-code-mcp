@@ -3,7 +3,6 @@
 /storage
 /.fastembed_cache/
 /.tantivy_bench/
-.qdrant-initialized
 .mcp.json
 /OUTPUT/
 /RESULTS/

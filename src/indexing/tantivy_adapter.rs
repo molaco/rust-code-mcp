@@ -25,7 +25,7 @@
 //! This module was extracted during Phase 2 refactoring to separate concerns:
 //! - Moved from `unified.rs` (1047 LOC → 743 LOC)
 //! - Encapsulates all Tantivy-specific logic
-//! - Reduces coupling with Qdrant and embedding components
+//! - Reduces coupling with vector store and embedding components
 //!
 //! ## Examples
 //!

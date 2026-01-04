@@ -59,7 +59,7 @@ pub struct SearchResult {
     pub chunk: CodeChunk,
 }
 
-/// Vector search wrapper that generates embeddings and queries Qdrant
+/// Vector search wrapper that generates embeddings and queries the vector store
 pub struct VectorSearch {
     embedding_generator: EmbeddingGenerator,
     vector_store: VectorStore,
@@ -398,87 +398,6 @@ mod tests {
         assert_eq!(config.vector_weight, 0.5);
         assert_eq!(config.rrf_k, 60.0);
         assert_eq!(config.candidate_count, 100);
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires Qdrant server and embedding model
-    #[cfg(feature = "qdrant")]
-    async fn test_rrf_calculation() {
-        let chunk_id1 = ChunkId::new();
-        let chunk_id2 = ChunkId::new();
-        let chunk_id3 = ChunkId::new();
-
-        let chunk1 = create_test_chunk(chunk_id1, "func1");
-        let chunk2 = create_test_chunk(chunk_id2, "func2");
-        let chunk3 = create_test_chunk(chunk_id3, "func3");
-
-        // Simulate vector results: chunk1 (rank 1), chunk2 (rank 2)
-        let vector_results = vec![
-            VectorSearchResult {
-                chunk_id: chunk_id1,
-                score: 0.95,
-                chunk: chunk1.clone(),
-            },
-            VectorSearchResult {
-                chunk_id: chunk_id2,
-                score: 0.85,
-                chunk: chunk2.clone(),
-            },
-        ];
-
-        // Simulate BM25 results: chunk2 (rank 1), chunk3 (rank 2)
-        let bm25_results = vec![
-            (chunk_id2, 10.5, chunk2.clone()),
-            (chunk_id3, 8.3, chunk3.clone()),
-        ];
-
-        let config = HybridSearchConfig::default();
-        let embedding_generator = EmbeddingGenerator::new().unwrap();
-        let vector_store = VectorStore::new(crate::vector_store::QdrantConfig::default())
-            .await
-            .unwrap();
-
-        let hybrid_search = HybridSearch::new(embedding_generator, vector_store, None, config);
-
-        let results = hybrid_search.reciprocal_rank_fusion(&vector_results, &bm25_results);
-
-        // chunk2 should be first (appears in both)
-        // chunk1 should be second (only in vector, but high rank)
-        // chunk3 should be third (only in BM25, lower rank)
-        assert_eq!(results.len(), 3);
-
-        // Verify chunk2 has scores from both sources
-        let chunk2_result = results.iter().find(|r| r.chunk_id == chunk_id2).unwrap();
-        assert!(chunk2_result.vector_score.is_some());
-        assert!(chunk2_result.bm25_score.is_some());
-        assert!(chunk2_result.vector_rank.is_some());
-        assert!(chunk2_result.bm25_rank.is_some());
-
-        // Verify chunk1 only has vector score
-        let chunk1_result = results.iter().find(|r| r.chunk_id == chunk_id1).unwrap();
-        assert!(chunk1_result.vector_score.is_some());
-        assert!(chunk1_result.bm25_score.is_none());
-
-        // Verify chunk3 only has BM25 score
-        let chunk3_result = results.iter().find(|r| r.chunk_id == chunk_id3).unwrap();
-        assert!(chunk3_result.vector_score.is_none());
-        assert!(chunk3_result.bm25_score.is_some());
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires Qdrant server and embedding model
-    #[cfg(feature = "qdrant")]
-    async fn test_vector_only_search() {
-        let embedding_generator = EmbeddingGenerator::new().unwrap();
-        let vector_store = VectorStore::new(crate::vector_store::QdrantConfig::default())
-            .await
-            .unwrap();
-
-        let hybrid_search = HybridSearch::with_defaults(embedding_generator, vector_store, None);
-
-        // This test would require indexed data
-        let results = hybrid_search.vector_only_search("test query", 10).await;
-        assert!(results.is_ok());
     }
 
     #[test]

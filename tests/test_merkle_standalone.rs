@@ -1,7 +1,6 @@
-//! Standalone Merkle tree tests (no Qdrant required)
+//! Standalone Merkle tree tests
 //!
-//! These tests verify the core Merkle tree functionality without
-//! requiring a running Qdrant instance.
+//! These tests verify the core Merkle tree functionality.
 
 use anyhow::Result;
 use file_search_mcp::indexing::merkle::{ChangeSet, FileSystemMerkle};

@@ -30,15 +30,6 @@ An MCP server for semantic code search in Rust codebases. Combines BM25 full-tex
 | `index_codebase` | Manually trigger indexing |
 | `health_check` | Check system status |
 
-## Prerequisites
-
-A [Qdrant](https://qdrant.tech/) instance must be running for vector storage. By default, the server connects to `localhost:6334`.
-
-```bash
-# Using Docker
-docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
-
 ## Building
 
 ```bash
@@ -57,7 +48,7 @@ nix develop github:molaco/rust-code-mcp
 nix build github:molaco/rust-code-mcp
 ```
 
-The dev shell includes nightly Rust, CUDA support, and Qdrant.
+The dev shell includes nightly Rust and CUDA support.
 
 ## Configuration
 
@@ -77,7 +68,7 @@ The server uses stdio transport. Add to your MCP client config:
 
 - [tantivy](https://github.com/quickwit-oss/tantivy) - Full-text search
 - [fastembed](https://github.com/Anush008/fastembed-rs) - Local embeddings (ONNX)
-- [qdrant](https://qdrant.tech/) - Vector storage
+- [lancedb](https://lancedb.com/) - Embedded vector storage
 - [tree-sitter](https://tree-sitter.github.io/) - AST parsing
 - [rmcp](https://github.com/modelcontextprotocol/rust-sdk) - MCP protocol
 

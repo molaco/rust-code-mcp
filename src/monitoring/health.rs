@@ -2,7 +2,7 @@
 //!
 //! Provides component-level health checks for:
 //! - BM25 search (Tantivy)
-//! - Vector search (Qdrant)
+//! - Vector search (LanceDB)
 //! - Merkle tree snapshots
 //!
 //! Health states: Healthy, Degraded, Unhealthy

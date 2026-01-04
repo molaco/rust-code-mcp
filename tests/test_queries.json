@@ -31,7 +31,7 @@
       "category": "embeddings"
     },
     {
-      "query": "vector search with Qdrant",
+      "query": "vector search with embeddings",
       "relevant_chunks": ["VectorStore", "search", "upsert_chunks"],
       "language": "Rust",
       "category": "vector search"
@@ -55,8 +55,8 @@
       "category": "ranking"
     },
     {
-      "query": "optimize HNSW parameters for Qdrant",
-      "relevant_chunks": ["QdrantOptimizedConfig", "for_codebase_size", "apply_to_collection"],
+      "query": "optimize vector search parameters",
+      "relevant_chunks": ["VectorStore", "search", "LanceDbBackend"],
       "language": "Rust",
       "category": "optimization"
     },
@@ -67,8 +67,8 @@
       "category": "tuning"
     },
     {
-      "query": "bulk indexing mode for faster processing",
-      "relevant_chunks": ["BulkIndexer", "start_bulk_mode", "end_bulk_mode"],
+      "query": "batch indexing mode for faster processing",
+      "relevant_chunks": ["index_directory_parallel", "UnifiedIndexer", "IndexStats"],
       "language": "Rust",
       "category": "performance"
     },
@@ -122,7 +122,7 @@
     },
     {
       "query": "estimate lines of code in codebase",
-      "relevant_chunks": ["estimate_codebase_size", "QdrantOptimizedConfig"],
+      "relevant_chunks": ["estimate_codebase_size", "UnifiedIndexer"],
       "language": "Rust",
       "category": "metrics"
     },
@@ -145,8 +145,8 @@
       "category": "evaluation"
     },
     {
-      "query": "connect to Qdrant vector database",
-      "relevant_chunks": ["VectorStore", "new", "create_collection_if_not_exists"],
+      "query": "connect to vector database",
+      "relevant_chunks": ["VectorStore", "new", "LanceDbBackend"],
       "language": "Rust",
       "category": "database"
     },
@@ -163,8 +163,8 @@
       "category": "indexing"
     },
     {
-      "query": "upsert vectors to Qdrant collection",
-      "relevant_chunks": ["upsert_chunks", "index_to_qdrant", "VectorStore"],
+      "query": "upsert vectors to collection",
+      "relevant_chunks": ["upsert_chunks", "VectorStore", "LanceDbBackend"],
       "language": "Rust",
       "category": "indexing"
     },

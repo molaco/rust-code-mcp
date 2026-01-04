@@ -9,7 +9,6 @@
 
 use file_search_mcp::indexing::UnifiedIndexer;
 use file_search_mcp::search::{HybridSearch, SearchResult};
-use file_search_mcp::vector_store::estimate_codebase_size;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tempfile::TempDir;
@@ -258,19 +257,15 @@ async fn setup_hybrid_search() -> Result<HybridSearch, Box<dyn std::error::Error
     let cache_dir = TempDir::new().unwrap();
     let tantivy_dir = TempDir::new().unwrap();
 
-    // Estimate codebase size for optimization
     let repo_path = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let estimated_loc = estimate_codebase_size(repo_path)
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-    // Create optimized indexer
-    let mut indexer = UnifiedIndexer::new_with_optimization(
+    // Create indexer
+    let mut indexer = UnifiedIndexer::for_embedded(
         cache_dir.path(),
         tantivy_dir.path(),
-        "http://localhost:6333",
         "evaluation_test",
         384,
-        Some(estimated_loc),
+        None,
     )
     .await
     .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -305,7 +300,7 @@ async fn setup_hybrid_search() -> Result<HybridSearch, Box<dyn std::error::Error
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server and embedding model
+#[ignore] // Requires embedding model
 async fn test_search_quality_evaluation() {
     println!("\n=== Search Quality Evaluation ===\n");
 

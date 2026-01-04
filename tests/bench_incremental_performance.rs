@@ -41,7 +41,6 @@ impl BenchEnvironment {
         IncrementalIndexer::new(
             &self.cache_path,
             &self.tantivy_path,
-            "http://localhost:6333",
             &self.collection_name,
             384,
             None,
@@ -82,7 +81,7 @@ pub fn function_{i}() -> i32 {{
 
 /// Benchmark: Unchanged detection with 10,000 files target
 #[tokio::test]
-#[ignore] // Requires Qdrant and is time-consuming
+#[ignore] // Requires embedding model and is time-consuming
 async fn bench_unchanged_detection_large_codebase() -> Result<()> {
     let env = BenchEnvironment::new()?;
 
@@ -166,7 +165,7 @@ async fn bench_unchanged_detection_large_codebase() -> Result<()> {
 
 /// Benchmark: Incremental updates with varying change sizes
 #[tokio::test]
-#[ignore] // Requires Qdrant and is time-consuming
+#[ignore] // Requires embedding model and is time-consuming
 async fn bench_incremental_updates_varying_sizes() -> Result<()> {
     let env = BenchEnvironment::new()?;
 
@@ -234,7 +233,7 @@ async fn bench_incremental_updates_varying_sizes() -> Result<()> {
 
 /// Benchmark: Scaling characteristics
 #[tokio::test]
-#[ignore] // Requires Qdrant and is time-consuming
+#[ignore] // Requires embedding model and is time-consuming
 async fn bench_scaling_characteristics() -> Result<()> {
     println!("\n=== BENCHMARK: Scaling Characteristics ===\n");
 
@@ -287,7 +286,7 @@ async fn bench_scaling_characteristics() -> Result<()> {
 
 /// Micro-benchmark: Merkle tree comparison only
 #[tokio::test]
-#[ignore] // Requires Qdrant
+#[ignore] // Requires embedding model
 async fn bench_merkle_comparison_overhead() -> Result<()> {
     let env = BenchEnvironment::new()?;
 

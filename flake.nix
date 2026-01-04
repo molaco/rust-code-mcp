@@ -58,9 +58,6 @@
           cudaPackages.cuda_cudart
           cudaPackages.libcublas
           cudaPackages.cudnn
-
-          # Runtime
-          qdrant
         ];
 
         LIBCLANG_PATH = "${pkgs.llvmPackages_latest.libclang.lib}/lib";
@@ -80,7 +77,7 @@
           export CUDA_HOME=${pkgs.cudaPackages.cudatoolkit}
           export PATH=${pkgs.cudaPackages.cudatoolkit}/bin:$PATH
           echo "rust-code-mcp dev shell"
-          echo "Run 'qdrant' in another terminal, then 'cargo build --release'"
+          echo "Run 'cargo build --release' to build"
         '';
       };
 

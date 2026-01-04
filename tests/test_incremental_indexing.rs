@@ -46,7 +46,6 @@ impl TestEnv {
         IncrementalIndexer::new(
             &self.cache_path,
             &self.tantivy_path,
-            "http://localhost:6333",
             &self.collection_name,
             384,
             None,
@@ -74,7 +73,7 @@ impl TestEnv {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_first_time_indexing() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -112,7 +111,7 @@ async fn test_first_time_indexing() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_no_changes_detection() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -147,7 +146,7 @@ async fn test_no_changes_detection() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_file_addition_detection() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -180,7 +179,7 @@ async fn test_file_addition_detection() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_file_modification_detection() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -218,7 +217,7 @@ async fn test_file_modification_detection() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_file_deletion_detection() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -248,7 +247,7 @@ async fn test_file_deletion_detection() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_multiple_changes() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -286,7 +285,7 @@ async fn test_multiple_changes() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_snapshot_persistence() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -318,7 +317,7 @@ async fn test_snapshot_persistence() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_performance_large_codebase() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -380,7 +379,7 @@ async fn test_performance_large_codebase() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_empty_codebase() -> Result<()> {
     let env = TestEnv::new()?;
 
@@ -397,7 +396,7 @@ async fn test_empty_codebase() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_reindex_after_snapshot_corruption() -> Result<()> {
     let env = TestEnv::new()?;
 

@@ -45,7 +45,6 @@ impl TestEnvironment {
         IncrementalIndexer::new(
             &self.cache_path,
             &self.tantivy_path,
-            "http://localhost:6333",
             &self.collection_name,
             384,
             None,
@@ -74,7 +73,7 @@ impl TestEnvironment {
 }
 
 #[tokio::test]
-#[ignore] // Requires Qdrant server running
+#[ignore] // Requires embedding model
 async fn test_full_incremental_flow() -> Result<()> {
     let env = TestEnvironment::new()?;
 

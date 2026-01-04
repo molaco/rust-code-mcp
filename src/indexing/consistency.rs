@@ -1,6 +1,6 @@
 //! Consistency checker for validating and repairing index integrity
 //!
-//! Verifies that Tantivy and Qdrant indexes are in sync
+//! Verifies that Tantivy and vector store indexes are in sync
 
 use crate::chunker::ChunkId;
 use anyhow::{Context, Result};
@@ -15,11 +15,11 @@ use crate::schema::ChunkSchema;
 pub struct ConsistencyReport {
     /// Number of chunks in Tantivy
     pub tantivy_count: usize,
-    /// Number of chunks in Qdrant
-    pub qdrant_count: usize,
-    /// Chunk IDs present in Tantivy but missing from Qdrant
-    pub missing_from_qdrant: Vec<ChunkId>,
-    /// Chunk IDs present in Qdrant but missing from Tantivy
+    /// Number of chunks in vector store
+    pub vector_count: usize,
+    /// Chunk IDs present in Tantivy but missing from vector store
+    pub missing_from_vectors: Vec<ChunkId>,
+    /// Chunk IDs present in vector store but missing from Tantivy
     pub missing_from_tantivy: Vec<ChunkId>,
     /// Whether the indexes are consistent
     pub is_consistent: bool,
@@ -30,22 +30,22 @@ impl ConsistencyReport {
     pub fn print_summary(&self) {
         println!("\n=== Index Consistency Report ===");
         println!("Tantivy chunks: {}", self.tantivy_count);
-        println!("Qdrant chunks:  {}", self.qdrant_count);
+        println!("Vector chunks:  {}", self.vector_count);
 
         if self.is_consistent {
             println!("✓ Indexes are CONSISTENT");
         } else {
             println!("✗ Indexes are INCONSISTENT");
 
-            if !self.missing_from_qdrant.is_empty() {
-                println!("\nMissing from Qdrant: {} chunks", self.missing_from_qdrant.len());
-                if self.missing_from_qdrant.len() <= 10 {
-                    for chunk_id in &self.missing_from_qdrant {
+            if !self.missing_from_vectors.is_empty() {
+                println!("\nMissing from vector store: {} chunks", self.missing_from_vectors.len());
+                if self.missing_from_vectors.len() <= 10 {
+                    for chunk_id in &self.missing_from_vectors {
                         println!("  - {:?}", chunk_id);
                     }
                 } else {
                     println!("  (showing first 10)");
-                    for chunk_id in self.missing_from_qdrant.iter().take(10) {
+                    for chunk_id in self.missing_from_vectors.iter().take(10) {
                         println!("  - {:?}", chunk_id);
                     }
                 }
@@ -90,7 +90,7 @@ impl ConsistencyChecker {
         }
     }
 
-    /// Check consistency between Tantivy and Qdrant indexes
+    /// Check consistency between Tantivy and vector store indexes
     pub async fn check(&self) -> Result<ConsistencyReport> {
         tracing::info!("Starting consistency check...");
 
@@ -98,20 +98,20 @@ impl ConsistencyChecker {
         let tantivy_ids = self.get_tantivy_chunk_ids()?;
         tracing::info!("Found {} chunks in Tantivy", tantivy_ids.len());
 
-        // Get count from Qdrant
-        let qdrant_count = self.vector_store.count().await
-            .map_err(|e| anyhow::anyhow!("Failed to count Qdrant chunks: {}", e))?;
-        tracing::info!("Found {} chunks in Qdrant", qdrant_count);
+        // Get count from vector store
+        let vector_count = self.vector_store.count().await
+            .map_err(|e| anyhow::anyhow!("Failed to count vector store chunks: {}", e))?;
+        tracing::info!("Found {} chunks in vector store", vector_count);
 
         // For now, we can only check counts
-        // TODO: Implement full chunk ID verification for Qdrant
+        // TODO: Implement full chunk ID verification
         //       (requires adding a method to list all chunk IDs)
-        let is_consistent = tantivy_ids.len() == qdrant_count;
+        let is_consistent = tantivy_ids.len() == vector_count;
 
         let report = ConsistencyReport {
             tantivy_count: tantivy_ids.len(),
-            qdrant_count,
-            missing_from_qdrant: Vec::new(), // Would require Qdrant ID listing
+            vector_count,
+            missing_from_vectors: Vec::new(), // Would require vector store ID listing
             missing_from_tantivy: Vec::new(),
             is_consistent,
         };
@@ -160,8 +160,8 @@ impl ConsistencyChecker {
     /// This is a placeholder for future implementation
     pub async fn repair(&self, _report: &ConsistencyReport) -> Result<()> {
         // TODO: Implement repair logic
-        // - For chunks missing from Qdrant: re-embed and re-index
-        // - For chunks missing from Tantivy: re-index from source or remove from Qdrant
+        // - For chunks missing from vector store: re-embed and re-index
+        // - For chunks missing from Tantivy: re-index from source or remove from vector store
         anyhow::bail!("Repair not yet implemented. Use force reindex instead.");
     }
 }
@@ -174,28 +174,28 @@ mod tests {
     fn test_consistency_report_creation() {
         let report = ConsistencyReport {
             tantivy_count: 100,
-            qdrant_count: 100,
-            missing_from_qdrant: Vec::new(),
+            vector_count: 100,
+            missing_from_vectors: Vec::new(),
             missing_from_tantivy: Vec::new(),
             is_consistent: true,
         };
 
         assert!(report.is_consistent);
         assert_eq!(report.tantivy_count, 100);
-        assert_eq!(report.qdrant_count, 100);
+        assert_eq!(report.vector_count, 100);
     }
 
     #[test]
     fn test_inconsistent_report() {
         let report = ConsistencyReport {
             tantivy_count: 100,
-            qdrant_count: 95,
-            missing_from_qdrant: vec![ChunkId::new()],
+            vector_count: 95,
+            missing_from_vectors: vec![ChunkId::new()],
             missing_from_tantivy: Vec::new(),
             is_consistent: false,
         };
 
         assert!(!report.is_consistent);
-        assert_eq!(report.missing_from_qdrant.len(), 1);
+        assert_eq!(report.missing_from_vectors.len(), 1);
     }
 }

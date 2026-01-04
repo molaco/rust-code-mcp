@@ -291,7 +291,7 @@ impl VectorStoreBackend for LanceDbBackend {
 
                 // Convert cosine distance to similarity score
                 // Cosine distance range is [0, 2], where 0 = identical, 2 = opposite
-                // Convert to similarity [0, 1] to match Qdrant's cosine similarity
+                // Convert to similarity [0, 1] (standard cosine similarity range)
                 let score = 1.0 - (distance / 2.0);
 
                 search_results.push(SearchResult {
