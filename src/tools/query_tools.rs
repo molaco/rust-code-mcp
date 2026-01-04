@@ -177,20 +177,29 @@ pub async fn search(
     }
 
     // 1. Initialize unified indexer with embedded LanceDB backend
-    // Sanitize project name for collection
-    let project_name = dir_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("default")
-        .replace(|c: char| !c.is_alphanumeric(), "_");
+    // Use hash-based paths consistent with index_tool.rs
+    let dir_hash = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(dir_path.to_string_lossy().as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
 
-    let collection_name = format!("code_chunks_{}", project_name);
+    let cache_path = data_dir().join("cache").join(&dir_hash);
+    let tantivy_path = data_dir().join("index").join(&dir_hash);
+    let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
+    tracing::debug!(
+        "Using collection: {}, cache: {}, index: {}",
+        collection_name,
+        cache_path.display(),
+        tantivy_path.display()
+    );
 
     let mut indexer = UnifiedIndexer::for_embedded(
-        &data_dir().join("cache"),
-        &data_dir().join("index"),
+        &cache_path,
+        &tantivy_path,
         &collection_name,
         384, // all-MiniLM-L6-v2 vector size
         None,
@@ -326,11 +335,10 @@ pub async fn get_similar_code(
     })?;
 
     // Create embedded vector store (LanceDB)
+    // Path must match index_tool.rs: data_dir()/cache/vectors/{collection_name}
     let vector_store = {
-        let cache_dir = directories::ProjectDirs::from("", "", "rust-code-mcp")
-            .map(|dirs| dirs.cache_dir().to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from(".cache/rust-code-mcp"));
-        let vector_path = cache_dir.join("vectors").join(&collection_name);
+        use crate::tools::indexing_tools::data_dir;
+        let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
         VectorStore::new_embedded(vector_path, 384).await.map_err(|e| {
             McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
         })?
