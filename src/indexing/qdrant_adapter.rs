@@ -143,7 +143,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires Qdrant server running
     async fn test_qdrant_adapter_creation() {
-        let config = crate::vector_store::VectorStoreConfig {
+        let config = crate::vector_store::QdrantConfig {
             url: "http://localhost:6333".to_string(),
             collection_name: "test_adapter".to_string(),
             vector_size: 384,

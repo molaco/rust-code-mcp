@@ -88,6 +88,7 @@ impl VectorSearch {
 
         // Search in vector store
         self.vector_store.search(query_embedding, limit).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)
     }
 }
 
@@ -432,7 +433,7 @@ mod tests {
 
         let config = HybridSearchConfig::default();
         let embedding_generator = EmbeddingGenerator::new().unwrap();
-        let vector_store = VectorStore::new(crate::vector_store::VectorStoreConfig::default())
+        let vector_store = VectorStore::new(crate::vector_store::QdrantConfig::default())
             .await
             .unwrap();
 
@@ -467,7 +468,7 @@ mod tests {
     #[ignore] // Requires Qdrant server and embedding model
     async fn test_vector_only_search() {
         let embedding_generator = EmbeddingGenerator::new().unwrap();
-        let vector_store = VectorStore::new(crate::vector_store::VectorStoreConfig::default())
+        let vector_store = VectorStore::new(crate::vector_store::QdrantConfig::default())
             .await
             .unwrap();
 

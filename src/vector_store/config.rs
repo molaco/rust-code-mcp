@@ -1,15 +1,19 @@
 //! Optimized Qdrant configuration based on codebase size
 //!
 //! Automatically tunes HNSW parameters for optimal performance
+//!
+//! This module is only available when the `qdrant` feature is enabled.
 
-use crate::vector_store::VectorStoreConfig;
+#![cfg(feature = "qdrant")]
+
+use super::qdrant::QdrantConfig;
 use qdrant_client::qdrant::{HnswConfigDiff, OptimizersConfigDiff, UpdateCollectionBuilder};
 use qdrant_client::Qdrant as QdrantClient;
 
 /// Optimized Qdrant configuration for different codebase sizes
 #[derive(Debug, Clone)]
 pub struct QdrantOptimizedConfig {
-    pub base_config: VectorStoreConfig,
+    pub base_config: QdrantConfig,
     pub hnsw_m: usize,
     pub hnsw_ef_construct: usize,
     pub hnsw_ef: usize,
@@ -20,7 +24,7 @@ pub struct QdrantOptimizedConfig {
 
 impl QdrantOptimizedConfig {
     /// Auto-configure based on estimated lines of code
-    pub fn for_codebase_size(estimated_loc: usize, base_config: VectorStoreConfig) -> Self {
+    pub fn for_codebase_size(estimated_loc: usize, base_config: QdrantConfig) -> Self {
         if estimated_loc < 100_000 {
             // Small codebase (< 100k LOC)
             // ~1-3k chunks, optimize for memory efficiency
@@ -162,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_small_codebase_config() {
-        let config = VectorStoreConfig::default();
+        let config = QdrantConfig::default();
         let optimized = QdrantOptimizedConfig::for_codebase_size(50_000, config);
 
         assert_eq!(optimized.hnsw_m, 16);
@@ -173,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_medium_codebase_config() {
-        let config = VectorStoreConfig::default();
+        let config = QdrantConfig::default();
         let optimized = QdrantOptimizedConfig::for_codebase_size(500_000, config);
 
         assert_eq!(optimized.hnsw_m, 16);
@@ -184,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_large_codebase_config() {
-        let config = VectorStoreConfig::default();
+        let config = QdrantConfig::default();
         let optimized = QdrantOptimizedConfig::for_codebase_size(2_000_000, config);
 
         assert_eq!(optimized.hnsw_m, 32);
@@ -195,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_boundary_conditions() {
-        let config = VectorStoreConfig::default();
+        let config = QdrantConfig::default();
 
         // Test at exact boundaries
         let at_100k = QdrantOptimizedConfig::for_codebase_size(100_000, config.clone());

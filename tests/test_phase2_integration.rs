@@ -10,7 +10,7 @@ use file_search_mcp::chunker::{ChunkContext, ChunkId, CodeChunk};
 use file_search_mcp::embeddings::EmbeddingGenerator;
 use file_search_mcp::indexing::{bulk_index_with_auto_mode, BulkIndexer, HnswConfig, UnifiedIndexer};
 use file_search_mcp::search::{HybridSearch, RRFTuner, TestQuery};
-use file_search_mcp::vector_store::{estimate_codebase_size, QdrantOptimizedConfig, VectorStore, VectorStoreConfig};
+use file_search_mcp::vector_store::{estimate_codebase_size, QdrantOptimizedConfig, VectorStore, QdrantConfig};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -28,7 +28,7 @@ async fn test_qdrant_hnsw_optimization() {
     println!("1. Estimated codebase size: {} LOC", estimated_loc);
 
     // 2. Create optimized config
-    let base_config = VectorStoreConfig {
+    let base_config = QdrantConfig {
         url: "http://localhost:6333".to_string(),
         collection_name: "test_phase2_hnsw_opt".to_string(),
         vector_size: 384,
@@ -127,7 +127,7 @@ async fn test_bulk_indexing_mode() {
     let collection_name = "test_phase2_bulk_mode".to_string();
 
     // 2. Create collection first
-    let vector_store = VectorStore::new(VectorStoreConfig {
+    let vector_store = VectorStore::new(QdrantConfig {
         url: "http://localhost:6333".to_string(),
         collection_name: collection_name.clone(),
         vector_size: 384,

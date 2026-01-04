@@ -5,7 +5,6 @@
 
 use crate::search::{HybridSearch, SearchResult};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Test query with ground truth relevant results
 #[derive(Debug, Clone, Serialize, Deserialize)]

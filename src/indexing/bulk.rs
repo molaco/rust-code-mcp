@@ -2,6 +2,10 @@
 //!
 //! When indexing large numbers of vectors at once, temporarily disabling HNSW
 //! indexing and re-enabling it after the bulk operation can provide 3-5x speedup.
+//!
+//! This module is only available when the `qdrant` feature is enabled.
+
+#![cfg(feature = "qdrant")]
 
 use anyhow::Result;
 use qdrant_client::qdrant::{HnswConfigDiff, OptimizersConfigDiff, UpdateCollectionBuilder};

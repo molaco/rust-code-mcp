@@ -76,7 +76,7 @@ use tracing;
 
 use crate::embeddings::EmbeddingGenerator;
 use crate::search::HybridSearch;
-use crate::vector_store::{VectorStore, VectorStoreConfig};
+use crate::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
 pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
@@ -331,7 +331,7 @@ pub async fn get_similar_code(
     })?;
 
     // Create vector store config with collection name based on directory
-    let vector_store_config = VectorStoreConfig {
+    let vector_store_config = crate::vector_store::QdrantConfig {
         url: qdrant_url,
         collection_name: collection_name.clone(),
         vector_size: 384, // all-MiniLM-L6-v2

@@ -88,11 +88,15 @@ pub async fn index_codebase(
     }
 
     // Estimate codebase size for optimal Qdrant configuration
+    #[cfg(feature = "qdrant")]
     let codebase_loc = crate::vector_store::estimate_codebase_size(&dir).ok();
+    #[cfg(not(feature = "qdrant"))]
+    let codebase_loc: Option<usize> = None;
+
     if let Some(loc) = codebase_loc {
         tracing::info!("Estimated codebase size: {} LOC", loc);
     } else {
-        tracing::warn!("Failed to estimate codebase size, using default Qdrant configuration");
+        tracing::debug!("Codebase size estimation skipped or failed");
     }
 
     // Create incremental indexer with optimized configuration
@@ -109,7 +113,8 @@ pub async fn index_codebase(
         McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None)
     })?;
 
-    // Enable bulk mode if force reindexing
+    // Enable bulk mode if force reindexing (Qdrant feature only)
+    #[cfg(feature = "qdrant")]
     let bulk_indexer = if force {
         use crate::indexing::bulk::{BulkIndexer, HnswConfig};
 
@@ -131,6 +136,8 @@ pub async fn index_codebase(
     } else {
         None
     };
+    #[cfg(not(feature = "qdrant"))]
+    let bulk_indexer: Option<()> = None;
 
     // Clear all indexed data if force reindex
     if force {
@@ -148,13 +155,16 @@ pub async fn index_codebase(
         .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
     let elapsed = start.elapsed();
 
-    // Exit bulk mode if it was enabled
+    // Exit bulk mode if it was enabled (Qdrant feature only)
+    #[cfg(feature = "qdrant")]
     if let Some(mut bulk_indexer) = bulk_indexer {
         tracing::info!("Rebuilding HNSW index after bulk insertion...");
         bulk_indexer.end_bulk_mode().await
             .map_err(|e| McpError::invalid_params(format!("Failed to exit bulk mode: {}", e), None))?;
         tracing::info!("✓ HNSW index rebuilt");
     }
+    #[cfg(not(feature = "qdrant"))]
+    let _ = bulk_indexer; // Suppress unused warning
 
     // Track directory for background sync if indexing was successful
     if let Some(sync_mgr) = sync_manager {

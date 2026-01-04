@@ -1,5 +1,6 @@
-//! Indexing module - Unified pipeline for both Tantivy and Qdrant
+//! Indexing module - Unified pipeline for both Tantivy and vector store
 
+#[cfg(feature = "qdrant")]
 pub mod bulk;
 pub mod consistency;
 pub mod errors;
@@ -11,6 +12,7 @@ pub mod retry;
 pub mod tantivy_adapter;
 pub mod unified;
 
+#[cfg(feature = "qdrant")]
 pub use bulk::{bulk_index_with_auto_mode, BulkIndexer, HnswConfig};
 pub use consistency::{ConsistencyChecker, ConsistencyReport};
 pub use errors::{ErrorCategory, ErrorCollector, ErrorDetail};

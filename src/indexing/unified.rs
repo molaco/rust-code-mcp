@@ -110,7 +110,7 @@ impl UnifiedIndexer {
         let tantivy = TantivyAdapter::new(config.tantivy)?;
 
         // Initialize Qdrant adapter with injected config
-        let base_config = crate::vector_store::VectorStoreConfig {
+        let base_config = crate::vector_store::QdrantConfig {
             url: config.qdrant.url.clone(),
             collection_name: config.qdrant.collection_name.clone(),
             vector_size: config.qdrant.vector_size,
@@ -169,7 +169,7 @@ impl UnifiedIndexer {
         let tantivy = TantivyAdapter::new(tantivy_config)?;
 
         // Initialize Qdrant adapter
-        let base_config = crate::vector_store::VectorStoreConfig {
+        let base_config = crate::vector_store::QdrantConfig {
             url: qdrant_url.to_string(),
             collection_name: collection_name.to_string(),
             vector_size,

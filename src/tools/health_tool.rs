@@ -11,7 +11,7 @@ use directories::ProjectDirs;
 
 use crate::monitoring::health::HealthMonitor;
 use crate::search::Bm25Search;
-use crate::vector_store::{VectorStore, VectorStoreConfig};
+use crate::vector_store::VectorStore;
 use crate::indexing::incremental::get_snapshot_path;
 use sha2::{Digest, Sha256};
 
@@ -70,7 +70,7 @@ pub async fn health_check(
     let qdrant_url = std::env::var("QDRANT_URL")
         .unwrap_or_else(|_| "http://localhost:6334".to_string());
 
-    let vector_store = VectorStore::new(VectorStoreConfig {
+    let vector_store = VectorStore::new(crate::vector_store::QdrantConfig {
         url: qdrant_url,
         collection_name,
         vector_size: 384,

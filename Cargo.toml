@@ -51,7 +51,17 @@ fastembed = { git = "https://github.com/Anush008/fastembed-rs" }  # Local embedd
 ort = { version = "=2.0.0-rc.10", features = ["cuda", "download-binaries", "ndarray", "std"] }  # ONNX Runtime with CUDA support
 
 # Phase 5: Vector Database
-qdrant-client = "1"    # Vector search with Qdrant
+async-trait = "0.1"    # Async trait support
+thiserror = "1"        # Error derive macros
+futures = "0.3"        # Futures traits for stream operations
+
+# Vector database - embedded (default)
+lancedb = "0.15"
+arrow-array = "53"
+arrow-schema = "53"
+
+# Vector database - remote (optional, feature-gated)
+qdrant-client = { version = "1", optional = true }
 
 # Additional dependencies for Phase 1
 walkdir = "2"          # Directory traversal for indexing
@@ -68,6 +78,11 @@ sysinfo = "0.30"       # System memory monitoring
 # Parallel processing
 rayon = "1.10"         # Data parallelism
 num_cpus = "1.16"      # CPU count detection
+
+[features]
+default = ["embedded", "qdrant"]  # Both enabled by default during migration
+embedded = []  # LanceDB is always included, this is just a marker
+qdrant = ["qdrant-client"]
 
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests
