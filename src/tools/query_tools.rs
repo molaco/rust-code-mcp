@@ -176,10 +176,7 @@ pub async fn search(
         ));
     }
 
-    // 1. Initialize unified indexer
-    let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "http://localhost:6334".to_string());
-
+    // 1. Initialize unified indexer with embedded LanceDB backend
     // Sanitize project name for collection
     let project_name = dir_path
         .file_name()
@@ -191,12 +188,12 @@ pub async fn search(
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
 
-    let mut indexer = UnifiedIndexer::new(
+    let mut indexer = UnifiedIndexer::for_embedded(
         &data_dir().join("cache"),
         &data_dir().join("index"),
-        &qdrant_url,
         &collection_name,
         384, // all-MiniLM-L6-v2 vector size
+        None,
     )
     .await
     .map_err(|e| McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None))?;
@@ -328,22 +325,7 @@ pub async fn get_similar_code(
         )
     })?;
 
-    // Create vector store based on available backend
-    #[cfg(feature = "qdrant")]
-    let vector_store = {
-        let qdrant_url = std::env::var("QDRANT_URL")
-            .unwrap_or_else(|_| "http://localhost:6334".to_string());
-        let vector_store_config = crate::vector_store::QdrantConfig {
-            url: qdrant_url,
-            collection_name: collection_name.clone(),
-            vector_size: 384, // all-MiniLM-L6-v2
-        };
-        VectorStore::new(vector_store_config).await.map_err(|e| {
-            McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
-        })?
-    };
-
-    #[cfg(not(feature = "qdrant"))]
+    // Create embedded vector store (LanceDB)
     let vector_store = {
         let cache_dir = directories::ProjectDirs::from("", "", "rust-code-mcp")
             .map(|dirs| dirs.cache_dir().to_path_buf())

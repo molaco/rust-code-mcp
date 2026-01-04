@@ -60,9 +60,6 @@ lancedb = "0.15"
 arrow-array = "53"
 arrow-schema = "53"
 
-# Vector database - remote (optional, feature-gated)
-qdrant-client = { version = "1", optional = true }
-
 # Additional dependencies for Phase 1
 walkdir = "2"          # Directory traversal for indexing
 anyhow = "1"           # Error handling
@@ -82,7 +79,6 @@ num_cpus = "1.16"      # CPU count detection
 [features]
 default = ["embedded"]  # LanceDB embedded backend (zero-config)
 embedded = []  # LanceDB is always included, this is just a marker
-qdrant = ["qdrant-client"]  # Optional: enables Qdrant remote backend
 
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests

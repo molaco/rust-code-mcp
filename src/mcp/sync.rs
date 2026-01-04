@@ -22,8 +22,6 @@ pub struct SyncManager {
     tracked_dirs: Arc<RwLock<HashSet<PathBuf>>>,
     /// Sync interval (default: 5 minutes)
     interval: Duration,
-    /// Qdrant connection info
-    qdrant_url: String,
     /// Base paths for cache and indices
     cache_base: PathBuf,
     tantivy_base: PathBuf,
@@ -33,12 +31,10 @@ impl SyncManager {
     /// Create a new sync manager
     ///
     /// # Arguments
-    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6334")
     /// * `cache_base` - Base directory for metadata caches
     /// * `tantivy_base` - Base directory for Tantivy indices
     /// * `interval_secs` - Sync interval in seconds (default: 300 = 5 minutes)
     pub fn new(
-        qdrant_url: String,
         cache_base: PathBuf,
         tantivy_base: PathBuf,
         interval_secs: u64,
@@ -46,7 +42,6 @@ impl SyncManager {
         Self {
             tracked_dirs: Arc::new(RwLock::new(HashSet::new())),
             interval: Duration::from_secs(interval_secs),
-            qdrant_url,
             cache_base,
             tantivy_base,
         }
@@ -60,11 +55,7 @@ impl SyncManager {
             .map(|dirs| dirs.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"));
 
-        let qdrant_url =
-            std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
-
         Self::new(
-            qdrant_url,
             data_dir.join("cache"),
             data_dir.join("index"),
             interval_secs,
@@ -167,11 +158,10 @@ impl SyncManager {
         let tantivy_path = self.tantivy_base.join(&dir_hash);
         let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
 
-        // Create incremental indexer
+        // Create incremental indexer with embedded LanceDB backend
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            &self.qdrant_url,
             &collection_name,
             384, // vector size for all-MiniLM-L6-v2
             None,
@@ -278,7 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires Qdrant
+    #[ignore] // Requires embedding model
     async fn test_sync_directory_now() {
         let temp_dir = TempDir::new().unwrap();
         let test_codebase = temp_dir.path().join("codebase");

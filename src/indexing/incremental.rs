@@ -46,19 +46,17 @@ pub struct IncrementalIndexer {
 }
 
 impl IncrementalIndexer {
-    /// Create a new incremental indexer
+    /// Create a new incremental indexer with embedded LanceDB backend
     pub async fn new(
         cache_path: &Path,
         tantivy_path: &Path,
-        qdrant_url: &str,
         collection_name: &str,
         vector_size: usize,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
-        let indexer = UnifiedIndexer::new_with_optimization(
+        let indexer = UnifiedIndexer::for_embedded(
             cache_path,
             tantivy_path,
-            qdrant_url,
             collection_name,
             vector_size,
             codebase_loc,
@@ -244,7 +242,7 @@ impl IncrementalIndexer {
         &mut self.indexer
     }
 
-    /// Clear all indexed data (metadata cache, Tantivy, and Qdrant)
+    /// Clear all indexed data (metadata cache, Tantivy, and vector store)
     ///
     /// This is used for force reindexing to ensure a completely clean slate.
     /// Note: This does NOT delete the Merkle snapshot - that should be handled separately
@@ -260,7 +258,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    #[ignore] // Requires Qdrant
+    #[ignore] // Requires embedding model
     async fn test_first_time_indexing() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
@@ -277,7 +275,6 @@ mod tests {
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6333",
             "test_incremental",
             384,
             None,
@@ -294,7 +291,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires Qdrant
+    #[ignore] // Requires embedding model
     async fn test_no_changes_detection() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
@@ -311,7 +308,6 @@ mod tests {
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6333",
             "test_no_changes",
             384,
             None,
@@ -335,7 +331,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires Qdrant
+    #[ignore] // Requires embedding model
     async fn test_incremental_update() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
@@ -352,7 +348,6 @@ mod tests {
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6333",
             "test_incremental_update",
             384,
             None,

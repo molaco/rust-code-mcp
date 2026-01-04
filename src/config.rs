@@ -6,7 +6,7 @@ pub mod errors;
 pub mod indexer;
 
 pub use errors::{Error, ErrorContextExt, Result};
-pub use indexer::{IndexerConfig, IndexerCoreConfig, QdrantConfig, TantivyConfig};
+pub use indexer::{IndexerConfig, IndexerCoreConfig, TantivyConfig};
 
 use std::env;
 use std::path::PathBuf;
@@ -14,8 +14,6 @@ use std::path::PathBuf;
 /// Server configuration
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Qdrant server URL
-    pub qdrant_url: String,
     /// Port for the MCP server
     pub server_port: u16,
     /// Directory for storing indexes and cache
@@ -35,7 +33,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            qdrant_url: "http://localhost:6334".to_string(),
             server_port: 3000,
             data_dir: default_data_dir(),
             max_file_size: 10_000_000, // 10 MB
@@ -51,7 +48,6 @@ impl Config {
     /// Load configuration from environment variables
     ///
     /// Supported environment variables:
-    /// - QDRANT_URL: Qdrant server URL (default: http://localhost:6334)
     /// - SERVER_PORT: MCP server port (default: 3000)
     /// - DATA_DIR: Data directory path (default: ~/.local/share/rust-code-mcp)
     /// - MAX_FILE_SIZE: Maximum file size in MB (default: 10)
@@ -61,10 +57,6 @@ impl Config {
     /// - RETRY_DELAY_MS: Initial retry delay in ms (default: 100)
     pub fn from_env() -> Self {
         let mut config = Self::default();
-
-        if let Ok(url) = env::var("QDRANT_URL") {
-            config.qdrant_url = url;
-        }
 
         if let Ok(port) = env::var("SERVER_PORT") {
             if let Ok(port_num) = port.parse::<u16>() {
@@ -120,7 +112,6 @@ impl Config {
     /// Print configuration summary
     pub fn print_summary(&self) {
         println!("\n=== Configuration ===");
-        println!("Qdrant URL:      {}", self.qdrant_url);
         println!("Server Port:     {}", self.server_port);
         println!("Data Directory:  {}", self.data_dir.display());
         println!("Max File Size:   {} MB", self.max_file_size / 1_000_000);
@@ -149,7 +140,6 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.qdrant_url, "http://localhost:6334");
         assert_eq!(config.server_port, 3000);
         assert_eq!(config.max_file_size, 10_000_000);
         assert_eq!(config.retry_attempts, 3);
@@ -173,7 +163,6 @@ mod tests {
     fn test_from_env() {
         // Set environment variables
         unsafe {
-            env::set_var("QDRANT_URL", "http://test:6334");
             env::set_var("SERVER_PORT", "8080");
             env::set_var("MAX_FILE_SIZE", "20");
             env::set_var("DEBUG", "true");
@@ -181,7 +170,6 @@ mod tests {
         }
 
         let config = Config::from_env();
-        assert_eq!(config.qdrant_url, "http://test:6334");
         assert_eq!(config.server_port, 8080);
         assert_eq!(config.max_file_size, 20_000_000);
         assert!(config.debug);
@@ -189,7 +177,6 @@ mod tests {
 
         // Clean up
         unsafe {
-            env::remove_var("QDRANT_URL");
             env::remove_var("SERVER_PORT");
             env::remove_var("MAX_FILE_SIZE");
             env::remove_var("DEBUG");

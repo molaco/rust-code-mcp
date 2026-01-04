@@ -2,16 +2,13 @@
 //!
 //! This module coordinates indexing operations by delegating to specialized adapters:
 //! - TantivyAdapter: BM25 indexing operations
-//! - QdrantAdapter: Vector indexing operations (renamed but works with any VectorStore)
+//! - VectorStore: Vector indexing operations (LanceDB embedded backend)
 //! - IndexerCore: Core file processing and embedding generation
 
-use crate::chunker::CodeChunk;
-#[cfg(feature = "qdrant")]
-use crate::config::IndexerConfig;
+use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::EmbeddingGenerator;
 use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
 use crate::indexing::indexer_core::IndexerCore;
-use crate::indexing::qdrant_adapter::QdrantAdapter;
 use crate::indexing::tantivy_adapter::TantivyAdapter;
 use crate::metrics::IndexingMetrics;
 use crate::vector_store::VectorStore;
@@ -55,169 +52,31 @@ pub enum IndexFileResult {
     Skipped,
 }
 
-/// Unified indexer that coordinates Tantivy and Qdrant operations
+/// Unified indexer that coordinates Tantivy and vector store operations
 pub struct UnifiedIndexer {
     /// Core indexing logic
     core: IndexerCore,
     /// Tantivy adapter for BM25 indexing
     tantivy: TantivyAdapter,
-    /// Qdrant adapter for vector indexing
-    qdrant: QdrantAdapter,
+    /// Vector store for semantic indexing (LanceDB)
+    vector_store: VectorStore,
     /// Performance metrics
     metrics: IndexingMetrics,
 }
 
 impl UnifiedIndexer {
-    /// Create a new unified indexer
-    ///
-    /// # Arguments
-    /// * `cache_path` - Path to metadata cache directory
-    /// * `tantivy_path` - Path to Tantivy index directory
-    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6333")
-    /// * `collection_name` - Qdrant collection name
-    /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
-    pub async fn new(
-        cache_path: &Path,
-        tantivy_path: &Path,
-        qdrant_url: &str,
-        collection_name: &str,
-        vector_size: usize,
-    ) -> Result<Self> {
-        Self::new_with_optimization(
-            cache_path,
-            tantivy_path,
-            qdrant_url,
-            collection_name,
-            vector_size,
-            None,
-        )
-        .await
-    }
-
-    /// Create a new unified indexer from a consolidated configuration
-    ///
-    /// This is the preferred constructor that uses dependency injection
-    /// to reduce coupling and simplify configuration management.
-    ///
-    /// # Arguments
-    /// * `config` - Consolidated indexer configuration
-    #[cfg(feature = "qdrant")]
-    pub async fn from_config(config: IndexerConfig) -> Result<Self> {
-        tracing::info!("Initializing UnifiedIndexer from config...");
-
-        // Initialize core with injected config
-        let core = IndexerCore::new(&config.core.cache_path, Some(config.core.clone()))?;
-
-        // Initialize Tantivy adapter with injected config
-        let tantivy = TantivyAdapter::new(config.tantivy)?;
-
-        // Initialize Qdrant adapter with injected config
-        let base_config = crate::vector_store::QdrantConfig {
-            url: config.qdrant.url.clone(),
-            collection_name: config.qdrant.collection_name.clone(),
-            vector_size: config.qdrant.vector_size,
-        };
-
-        let optimized_config = crate::vector_store::QdrantOptimizedConfig {
-            base_config: base_config.clone(),
-            hnsw_m: config.qdrant.hnsw_m,
-            hnsw_ef_construct: config.qdrant.hnsw_ef_construct,
-            hnsw_ef: config.qdrant.hnsw_ef,
-            indexing_threads: config.qdrant.indexing_threads,
-            full_scan_threshold: config.qdrant.full_scan_threshold,
-            memmap_threshold: config.qdrant.memmap_threshold,
-        };
-
-        let vector_store = VectorStore::new_with_optimization(base_config, Some(optimized_config))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?;
-
-        let qdrant = QdrantAdapter::new(vector_store);
-
-        tracing::info!("UnifiedIndexer initialized successfully from config");
-
-        Ok(Self {
-            core,
-            tantivy,
-            qdrant,
-            metrics: IndexingMetrics::new(),
-        })
-    }
-
-    /// Create a new unified indexer with optimized Qdrant configuration
-    ///
-    /// # Arguments
-    /// * `cache_path` - Path to metadata cache directory
-    /// * `tantivy_path` - Path to Tantivy index directory
-    /// * `qdrant_url` - Qdrant server URL (e.g., "http://localhost:6333")
-    /// * `collection_name` - Qdrant collection name
-    /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
-    /// * `codebase_loc` - Estimated lines of code (for optimization)
-    #[cfg(feature = "qdrant")]
-    pub async fn new_with_optimization(
-        cache_path: &Path,
-        tantivy_path: &Path,
-        qdrant_url: &str,
-        collection_name: &str,
-        vector_size: usize,
-        codebase_loc: Option<usize>,
-    ) -> Result<Self> {
-        tracing::info!("Initializing UnifiedIndexer with Qdrant...");
-
-        // Initialize core
-        let core = IndexerCore::new(cache_path, None)?;
-
-        // Initialize Tantivy adapter
-        let tantivy_config = crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
-        let tantivy = TantivyAdapter::new(tantivy_config)?;
-
-        // Initialize Qdrant adapter
-        let base_config = crate::vector_store::QdrantConfig {
-            url: qdrant_url.to_string(),
-            collection_name: collection_name.to_string(),
-            vector_size,
-        };
-
-        let vector_store = if let Some(loc) = codebase_loc {
-            let optimized_config = crate::vector_store::QdrantOptimizedConfig::for_codebase_size(
-                loc,
-                base_config.clone(),
-            );
-            VectorStore::new_with_optimization(base_config, Some(optimized_config))
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?
-        } else {
-            VectorStore::new(base_config)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to connect to VectorStore: {}", e))?
-        };
-
-        let qdrant = QdrantAdapter::new(vector_store);
-
-        tracing::info!("UnifiedIndexer initialized successfully");
-
-        Ok(Self {
-            core,
-            tantivy,
-            qdrant,
-            metrics: IndexingMetrics::new(),
-        })
-    }
-
     /// Create a new unified indexer with embedded LanceDB backend
     ///
     /// # Arguments
     /// * `cache_path` - Path to metadata cache directory
     /// * `tantivy_path` - Path to Tantivy index directory
-    /// * `vector_path` - Path to LanceDB vector storage
+    /// * `collection_name` - Collection/table name for vector store
     /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
-    /// * `codebase_loc` - Estimated lines of code (for optimization)
-    #[cfg(not(feature = "qdrant"))]
-    pub async fn new_with_optimization(
+    /// * `codebase_loc` - Estimated lines of code (for Tantivy optimization)
+    pub async fn for_embedded(
         cache_path: &Path,
         tantivy_path: &Path,
-        _qdrant_url: &str,  // Ignored in embedded mode
-        _collection_name: &str,  // Used to derive vector path
+        collection_name: &str,
         vector_size: usize,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
@@ -231,24 +90,22 @@ impl UnifiedIndexer {
         let tantivy = TantivyAdapter::new(tantivy_config)?;
 
         // Initialize embedded vector store
-        let vector_path = cache_path.parent().unwrap_or(cache_path).join("vectors");
+        let vector_path = cache_path.parent().unwrap_or(cache_path).join("vectors").join(collection_name);
         let vector_store = VectorStore::new_embedded(vector_path, vector_size)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to initialize VectorStore: {}", e))?;
-
-        let qdrant = QdrantAdapter::new(vector_store);
 
         tracing::info!("UnifiedIndexer initialized successfully with embedded backend");
 
         Ok(Self {
             core,
             tantivy,
-            qdrant,
+            vector_store,
             metrics: IndexingMetrics::new(),
         })
     }
 
-    /// Index a single file to both Tantivy and Qdrant
+    /// Index a single file to both Tantivy and vector store
     pub async fn index_file(&mut self, file_path: &Path) -> Result<IndexFileResult> {
         let file_start = Instant::now();
 
@@ -291,9 +148,16 @@ impl UnifiedIndexer {
         // Index to both stores
         let chunks_count = processed.chunks.len();
         self.tantivy.index_chunks(&processed.chunks)?;
-        self.qdrant
-            .index_chunks(processed.chunks, embeddings)
-            .await?;
+
+        // Index to vector store
+        let chunk_data: Vec<(ChunkId, Vec<f32>, CodeChunk)> = processed
+            .chunks
+            .into_iter()
+            .zip(embeddings.into_iter())
+            .map(|(chunk, embedding)| (chunk.id, embedding, chunk))
+            .collect();
+        self.vector_store.upsert_chunks(chunk_data).await
+            .map_err(|e| anyhow::anyhow!("Failed to index chunks to vector store: {}", e))?;
 
         // Update metadata cache
         self.core.update_file_metadata(file_path, &content)?;
@@ -503,10 +367,12 @@ impl UnifiedIndexer {
         Ok(stats)
     }
 
-    /// Delete all chunks for a specific file from both Tantivy and Qdrant
+    /// Delete all chunks for a specific file from both Tantivy and vector store
     pub async fn delete_file_chunks(&mut self, file_path: &Path) -> Result<()> {
         self.tantivy.delete_file_chunks(file_path)?;
-        self.qdrant.delete_file_chunks(file_path).await?;
+        let file_path_str = file_path.to_string_lossy().to_string();
+        self.vector_store.delete_by_file_path(&file_path_str).await
+            .map_err(|e| anyhow::anyhow!("Failed to delete chunks from vector store: {}", e))?;
         tracing::debug!("Deleted chunks for file: {}", file_path.display());
         Ok(())
     }
@@ -516,9 +382,9 @@ impl UnifiedIndexer {
         self.tantivy.commit()
     }
 
-    /// Clear all indexed data (metadata cache, Tantivy, and Qdrant)
+    /// Clear all indexed data (metadata cache, Tantivy, and vector store)
     pub async fn clear_all_data(&mut self) -> Result<()> {
-        tracing::info!("Clearing all indexed data (metadata cache, Tantivy, Qdrant)...");
+        tracing::info!("Clearing all indexed data (metadata cache, Tantivy, vector store)...");
 
         self.core.clear_metadata_cache()?;
         tracing::info!("✓ Cleared metadata cache");
@@ -527,8 +393,9 @@ impl UnifiedIndexer {
         self.tantivy.commit()?;
         tracing::info!("✓ Cleared Tantivy index");
 
-        self.qdrant.clear_collection().await?;
-        tracing::info!("✓ Cleared Qdrant collection");
+        self.vector_store.clear_collection().await
+            .map_err(|e| anyhow::anyhow!("Failed to clear vector store: {}", e))?;
+        tracing::info!("✓ Cleared vector store");
 
         tracing::info!("✓ All indexed data cleared successfully");
         Ok(())
@@ -541,7 +408,7 @@ impl UnifiedIndexer {
 
     /// Get cloned vector store for searching
     pub fn vector_store_cloned(&self) -> VectorStore {
-        self.qdrant.vector_store_cloned()
+        self.vector_store.clone()
     }
 
     /// Get cloned embedding generator for searching
@@ -666,9 +533,17 @@ impl UnifiedIndexer {
             embedding_idx += num_chunks;
 
             self.tantivy.index_chunks(&processed_file.chunks)?;
-            self.qdrant
-                .index_chunks(processed_file.chunks.clone(), file_embeddings)
-                .await?;
+
+            // Index to vector store
+            let chunk_data: Vec<(ChunkId, Vec<f32>, CodeChunk)> = processed_file
+                .chunks
+                .iter()
+                .cloned()
+                .zip(file_embeddings.into_iter())
+                .map(|(chunk, embedding)| (chunk.id, embedding, chunk))
+                .collect();
+            self.vector_store.upsert_chunks(chunk_data).await
+                .map_err(|e| anyhow::anyhow!("Failed to index chunks to vector store: {}", e))?;
 
             self.core
                 .update_file_metadata(&processed_file.path, &processed_file.content)?;
@@ -722,18 +597,18 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    #[ignore] // Requires Qdrant server running
+    #[ignore] // Requires embedding model
     async fn test_unified_indexer_creation() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
         let tantivy_path = temp_dir.path().join("tantivy");
 
-        let indexer = UnifiedIndexer::new(
+        let indexer = UnifiedIndexer::for_embedded(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6333",
             "test_collection",
             384,
+            None,
         )
         .await;
 
@@ -745,18 +620,18 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires Qdrant server and embedding model
+    #[ignore] // Requires embedding model
     async fn test_index_file() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
         let tantivy_path = temp_dir.path().join("tantivy");
 
-        let mut indexer = UnifiedIndexer::new(
+        let mut indexer = UnifiedIndexer::for_embedded(
             &cache_path,
             &tantivy_path,
-            "http://localhost:6333",
             "test_index_file",
             384,
+            None,
         )
         .await
         .unwrap();
@@ -785,6 +660,6 @@ pub fn test_function() {
 
         let vector_store = indexer.vector_store_cloned();
         let count = vector_store.count().await.unwrap();
-        assert!(count > 0, "Qdrant should have at least one vector");
+        assert!(count > 0, "Vector store should have at least one vector");
     }
 }
