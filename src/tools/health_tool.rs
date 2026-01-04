@@ -40,19 +40,20 @@ pub async fn health_check(
     let (bm25_path, merkle_path, collection_name) = if let Some(ref dir) = directory {
         let dir_path = std::path::Path::new(dir);
 
-        // Calculate directory hash for collection name (same as index_tool)
+        // Calculate directory hash (same as index_tool)
         let dir_hash = {
             let mut hasher = Sha256::new();
             hasher.update(dir_path.to_string_lossy().as_bytes());
             format!("{:x}", hasher.finalize())
         };
 
-        let cache_hash = &dir_hash[..8];
+        // index_tool uses full hash for paths, but first 8 chars for collection name
+        let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
 
         (
-            data_dir().join("index").join(cache_hash),
-            get_snapshot_path(dir_path),  // ✅ Use actual function for consistency!
-            format!("code_chunks_{}", cache_hash),
+            data_dir().join("index").join(&dir_hash),  // Full hash, matching index_tool
+            get_snapshot_path(dir_path),
+            collection_name,
         )
     } else {
         // System-wide check: can't determine specific snapshot path
@@ -68,8 +69,9 @@ pub async fn health_check(
     let bm25 = Bm25Search::new(&bm25_path).ok().map(std::sync::Arc::new);
 
     // Initialize embedded vector store (LanceDB)
+    // Path must match unified.rs: cache_path.parent().join("vectors").join(collection_name)
     let vector_store = {
-        let vector_path = data_dir().join("vectors").join(&collection_name);
+        let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
         VectorStore::new_embedded(vector_path, 384)
             .await
             .ok()
