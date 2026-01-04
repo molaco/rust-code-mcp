@@ -313,8 +313,6 @@ pub async fn get_similar_code(
     };
 
     let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
-    let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "http://localhost:6334".to_string());
 
     tracing::debug!(
         "Using collection '{}' for directory '{}'",
@@ -330,16 +328,31 @@ pub async fn get_similar_code(
         )
     })?;
 
-    // Create vector store config with collection name based on directory
-    let vector_store_config = crate::vector_store::QdrantConfig {
-        url: qdrant_url,
-        collection_name: collection_name.clone(),
-        vector_size: 384, // all-MiniLM-L6-v2
+    // Create vector store based on available backend
+    #[cfg(feature = "qdrant")]
+    let vector_store = {
+        let qdrant_url = std::env::var("QDRANT_URL")
+            .unwrap_or_else(|_| "http://localhost:6334".to_string());
+        let vector_store_config = crate::vector_store::QdrantConfig {
+            url: qdrant_url,
+            collection_name: collection_name.clone(),
+            vector_size: 384, // all-MiniLM-L6-v2
+        };
+        VectorStore::new(vector_store_config).await.map_err(|e| {
+            McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
+        })?
     };
 
-    let vector_store = VectorStore::new(vector_store_config).await.map_err(|e| {
-        McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
-    })?;
+    #[cfg(not(feature = "qdrant"))]
+    let vector_store = {
+        let cache_dir = directories::ProjectDirs::from("", "", "rust-code-mcp")
+            .map(|dirs| dirs.cache_dir().to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from(".cache/rust-code-mcp"));
+        let vector_path = cache_dir.join("vectors").join(&collection_name);
+        VectorStore::new_embedded(vector_path, 384).await.map_err(|e| {
+            McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
+        })?
+    };
 
     // Create hybrid search (vector-only mode)
     let hybrid_search = HybridSearch::with_defaults(

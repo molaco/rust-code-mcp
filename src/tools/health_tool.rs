@@ -67,17 +67,29 @@ pub async fn health_check(
     // Initialize components (optional)
     let bm25 = Bm25Search::new(&bm25_path).ok().map(std::sync::Arc::new);
 
-    let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "http://localhost:6334".to_string());
+    // Initialize vector store based on available backend
+    #[cfg(feature = "qdrant")]
+    let vector_store = {
+        let qdrant_url = std::env::var("QDRANT_URL")
+            .unwrap_or_else(|_| "http://localhost:6334".to_string());
+        VectorStore::new(crate::vector_store::QdrantConfig {
+            url: qdrant_url,
+            collection_name,
+            vector_size: 384,
+        })
+        .await
+        .ok()
+        .map(std::sync::Arc::new)
+    };
 
-    let vector_store = VectorStore::new(crate::vector_store::QdrantConfig {
-        url: qdrant_url,
-        collection_name,
-        vector_size: 384,
-    })
-    .await
-    .ok()
-    .map(std::sync::Arc::new);
+    #[cfg(not(feature = "qdrant"))]
+    let vector_store = {
+        let vector_path = data_dir().join("vectors");
+        VectorStore::new_embedded(vector_path, 384)
+            .await
+            .ok()
+            .map(std::sync::Arc::new)
+    };
 
     // Create health monitor
     let monitor = HealthMonitor::new(bm25, vector_store, merkle_path);

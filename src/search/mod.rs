@@ -402,6 +402,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Requires Qdrant server and embedding model
+    #[cfg(feature = "qdrant")]
     async fn test_rrf_calculation() {
         let chunk_id1 = ChunkId::new();
         let chunk_id2 = ChunkId::new();
@@ -466,6 +467,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Requires Qdrant server and embedding model
+    #[cfg(feature = "qdrant")]
     async fn test_vector_only_search() {
         let embedding_generator = EmbeddingGenerator::new().unwrap();
         let vector_store = VectorStore::new(crate::vector_store::QdrantConfig::default())

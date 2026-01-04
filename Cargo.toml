@@ -80,9 +80,9 @@ rayon = "1.10"         # Data parallelism
 num_cpus = "1.16"      # CPU count detection
 
 [features]
-default = ["embedded", "qdrant"]  # Both enabled by default during migration
+default = ["embedded"]  # LanceDB embedded backend (zero-config)
 embedded = []  # LanceDB is always included, this is just a marker
-qdrant = ["qdrant-client"]
+qdrant = ["qdrant-client"]  # Optional: enables Qdrant remote backend
 
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests

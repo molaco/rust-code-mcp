@@ -136,7 +136,7 @@ impl QdrantAdapter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qdrant"))]
 mod tests {
     use super::*;
 

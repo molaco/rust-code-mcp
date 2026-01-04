@@ -5,6 +5,7 @@
 //! - LanceDB (default): Embedded, zero-config
 //! - Qdrant (optional): Remote server, feature-gated
 
+#[cfg(feature = "qdrant")]
 pub mod config;
 pub mod error;
 pub mod lancedb;

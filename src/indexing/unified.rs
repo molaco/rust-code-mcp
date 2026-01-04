@@ -1,11 +1,12 @@
-//! Unified indexing pipeline that populates both Tantivy (BM25) and Qdrant (Vector)
+//! Unified indexing pipeline that populates both Tantivy (BM25) and vector store
 //!
 //! This module coordinates indexing operations by delegating to specialized adapters:
 //! - TantivyAdapter: BM25 indexing operations
-//! - QdrantAdapter: Vector indexing operations
+//! - QdrantAdapter: Vector indexing operations (renamed but works with any VectorStore)
 //! - IndexerCore: Core file processing and embedding generation
 
 use crate::chunker::CodeChunk;
+#[cfg(feature = "qdrant")]
 use crate::config::IndexerConfig;
 use crate::embeddings::EmbeddingGenerator;
 use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
@@ -100,6 +101,7 @@ impl UnifiedIndexer {
     ///
     /// # Arguments
     /// * `config` - Consolidated indexer configuration
+    #[cfg(feature = "qdrant")]
     pub async fn from_config(config: IndexerConfig) -> Result<Self> {
         tracing::info!("Initializing UnifiedIndexer from config...");
 
@@ -142,7 +144,7 @@ impl UnifiedIndexer {
         })
     }
 
-    /// Create a new unified indexer with optimized configuration
+    /// Create a new unified indexer with optimized Qdrant configuration
     ///
     /// # Arguments
     /// * `cache_path` - Path to metadata cache directory
@@ -151,6 +153,7 @@ impl UnifiedIndexer {
     /// * `collection_name` - Qdrant collection name
     /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
     /// * `codebase_loc` - Estimated lines of code (for optimization)
+    #[cfg(feature = "qdrant")]
     pub async fn new_with_optimization(
         cache_path: &Path,
         tantivy_path: &Path,
@@ -159,7 +162,7 @@ impl UnifiedIndexer {
         vector_size: usize,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
-        tracing::info!("Initializing UnifiedIndexer...");
+        tracing::info!("Initializing UnifiedIndexer with Qdrant...");
 
         // Initialize core
         let core = IndexerCore::new(cache_path, None)?;
@@ -192,6 +195,50 @@ impl UnifiedIndexer {
         let qdrant = QdrantAdapter::new(vector_store);
 
         tracing::info!("UnifiedIndexer initialized successfully");
+
+        Ok(Self {
+            core,
+            tantivy,
+            qdrant,
+            metrics: IndexingMetrics::new(),
+        })
+    }
+
+    /// Create a new unified indexer with embedded LanceDB backend
+    ///
+    /// # Arguments
+    /// * `cache_path` - Path to metadata cache directory
+    /// * `tantivy_path` - Path to Tantivy index directory
+    /// * `vector_path` - Path to LanceDB vector storage
+    /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
+    /// * `codebase_loc` - Estimated lines of code (for optimization)
+    #[cfg(not(feature = "qdrant"))]
+    pub async fn new_with_optimization(
+        cache_path: &Path,
+        tantivy_path: &Path,
+        _qdrant_url: &str,  // Ignored in embedded mode
+        _collection_name: &str,  // Used to derive vector path
+        vector_size: usize,
+        codebase_loc: Option<usize>,
+    ) -> Result<Self> {
+        tracing::info!("Initializing UnifiedIndexer with embedded LanceDB...");
+
+        // Initialize core
+        let core = IndexerCore::new(cache_path, None)?;
+
+        // Initialize Tantivy adapter
+        let tantivy_config = crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
+        let tantivy = TantivyAdapter::new(tantivy_config)?;
+
+        // Initialize embedded vector store
+        let vector_path = cache_path.parent().unwrap_or(cache_path).join("vectors");
+        let vector_store = VectorStore::new_embedded(vector_path, vector_size)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize VectorStore: {}", e))?;
+
+        let qdrant = QdrantAdapter::new(vector_store);
+
+        tracing::info!("UnifiedIndexer initialized successfully with embedded backend");
 
         Ok(Self {
             core,
