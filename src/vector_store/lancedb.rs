@@ -11,6 +11,7 @@ use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::connect;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::DistanceType;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -236,6 +237,7 @@ impl VectorStoreBackend for LanceDbBackend {
         let results = table
             .vector_search(query_vector)
             .map_err(|e| VectorStoreError::query(format!("Failed to create search: {}", e)))?
+            .distance_type(DistanceType::Cosine)
             .limit(limit)
             .execute()
             .await
@@ -287,9 +289,10 @@ impl VectorStoreBackend for LanceDbBackend {
                     VectorStoreError::serialization(format!("Failed to deserialize chunk: {}", e))
                 })?;
 
-                // Convert distance to similarity score (LanceDB uses L2 by default)
-                // For L2: similarity = 1 / (1 + distance)
-                let score = 1.0 / (1.0 + distance);
+                // Convert cosine distance to similarity score
+                // Cosine distance range is [0, 2], where 0 = identical, 2 = opposite
+                // Convert to similarity [0, 1] to match Qdrant's cosine similarity
+                let score = 1.0 - (distance / 2.0);
 
                 search_results.push(SearchResult {
                     chunk_id,
