@@ -1,6 +1,6 @@
 # rust-code-mcp
 
-An MCP server for semantic code search in Rust codebases. Combines BM25 full-text search with vector embeddings for hybrid search, plus tree-sitter based code analysis.
+An MCP server for semantic code search in Rust codebases. Combines BM25 full-text search with vector embeddings for hybrid search, plus rust-analyzer based code analysis.
 
 ## Architecture
 
@@ -69,7 +69,7 @@ The server uses stdio transport. Add to your MCP client config:
 - [tantivy](https://github.com/quickwit-oss/tantivy) - Full-text search
 - [fastembed](https://github.com/Anush008/fastembed-rs) - Local embeddings (ONNX)
 - [lancedb](https://lancedb.com/) - Embedded vector storage
-- [tree-sitter](https://tree-sitter.github.io/) - AST parsing
+- [ra_ap_syntax](https://github.com/rust-lang/rust-analyzer) - AST parsing (rust-analyzer)
 - [rmcp](https://github.com/modelcontextprotocol/rust-sdk) - MCP protocol
 
 ## License
