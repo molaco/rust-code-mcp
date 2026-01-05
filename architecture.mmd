@@ -41,7 +41,7 @@ flowchart TB
     end
 
     subgraph Processing["Code Processing"]
-        parser["RustParser<br/>(tree-sitter)"]
+        parser["RustParser<br/>(rust-analyzer)"]
         chunker["Chunker<br/>(Symbol-based)"]
         embedder["EmbeddingGenerator<br/>(fastembed)"]
     end

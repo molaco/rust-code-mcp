@@ -52,6 +52,7 @@
           pkg-config
           openssl
           sqlite
+          protobuf  # Required by LanceDB
 
           # CUDA / GPU (for fastembed ONNX)
           cudaPackages.cudatoolkit
@@ -91,6 +92,7 @@
           cmake
           pkg-config
           clang
+          protobuf  # Required by LanceDB
         ];
 
         buildInputs = with pkgs; [
