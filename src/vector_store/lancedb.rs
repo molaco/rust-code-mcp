@@ -10,6 +10,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::connect;
+use lancedb::index::scalar::BTreeIndexBuilder;
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::DistanceType;
 use std::path::PathBuf;
@@ -28,6 +30,8 @@ pub struct LanceDbBackend {
     db: lancedb::Connection,
     table_name: String,
     vector_dim: usize,
+    /// Cached Arrow schema to avoid recreation on every batch
+    schema: Arc<Schema>,
 }
 
 impl LanceDbBackend {
@@ -47,10 +51,14 @@ impl LanceDbBackend {
             .await
             .map_err(|e| VectorStoreError::connection(format!("Failed to connect: {}", e)))?;
 
+        // Create and cache schema once
+        let schema = Arc::new(Self::create_schema_for_dim(vector_dim));
+
         let backend = Self {
             db,
             table_name: TABLE_NAME.to_string(),
             vector_dim,
+            schema,
         };
 
         // Ensure table exists
@@ -59,21 +67,26 @@ impl LanceDbBackend {
         Ok(backend)
     }
 
-    /// Create Arrow schema for vectors table
-    fn create_schema(&self) -> Schema {
+    /// Create Arrow schema for vectors table (static version for initialization)
+    fn create_schema_for_dim(vector_dim: usize) -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new(
                 "vector",
                 DataType::FixedSizeList(
                     Arc::new(Field::new("item", DataType::Float32, true)),
-                    self.vector_dim as i32,
+                    vector_dim as i32,
                 ),
                 false,
             ),
             Field::new("chunk_json", DataType::Utf8, false),
             Field::new("file_path", DataType::Utf8, false),
         ])
+    }
+
+    /// Get cached Arrow schema for vectors table
+    fn schema(&self) -> Arc<Schema> {
+        self.schema.clone()
     }
 
     /// Ensure the vectors table exists
@@ -86,8 +99,8 @@ impl LanceDbBackend {
             .map_err(|e| VectorStoreError::backend(format!("Failed to list tables: {}", e)))?;
 
         if !tables.contains(&self.table_name) {
-            // Create empty table with schema
-            let schema = Arc::new(self.create_schema());
+            // Create empty table with cached schema
+            let schema = self.schema();
 
             // Create empty arrays for initial table
             let id_array = StringArray::from(Vec::<String>::new());
@@ -108,13 +121,24 @@ impl LanceDbBackend {
 
             let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
 
-            self.db
+            let table = self.db
                 .create_table(&self.table_name, Box::new(batches))
                 .execute()
                 .await
                 .map_err(|e| VectorStoreError::backend(format!("Failed to create table: {}", e)))?;
 
             tracing::info!("Created LanceDB table: {}", self.table_name);
+
+            // Create BTree index on id column for fast merge_insert lookups
+            table
+                .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    VectorStoreError::backend(format!("Failed to create id index: {}", e))
+                })?;
+
+            tracing::info!("Created BTree index on 'id' column for fast upserts");
         }
 
         Ok(())
@@ -132,7 +156,7 @@ impl LanceDbBackend {
         &self,
         chunks: &[(ChunkId, Embedding, CodeChunk)],
     ) -> Result<RecordBatch, VectorStoreError> {
-        let schema = Arc::new(self.create_schema());
+        let schema = self.schema();
 
         // Extract IDs
         let ids: Vec<String> = chunks.iter().map(|(id, _, _)| id.to_string()).collect();
@@ -201,29 +225,26 @@ impl VectorStoreBackend for LanceDbBackend {
             return Ok(());
         }
 
-        // For upsert, we delete existing entries first, then add new ones
-        let chunk_ids: Vec<ChunkId> = chunks_with_embeddings.iter().map(|(id, _, _)| *id).collect();
-
-        // Delete existing chunks (ignore errors if they don't exist)
-        let _ = self.delete_chunks(chunk_ids).await;
-
+        let num_chunks = chunks_with_embeddings.len();
         let table = self.get_table().await?;
         let batch = self.chunks_to_batch(&chunks_with_embeddings)?;
         let schema = batch.schema();
-
         let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
 
-        // Add new data
-        table
-            .add(Box::new(batches))
-            .execute()
+        // Use native merge_insert for atomic upsert (replaces delete-then-add pattern)
+        // - when_matched_update_all: update existing rows with matching id
+        // - when_not_matched_insert_all: insert new rows
+        // This is a single atomic operation vs. two separate delete + add operations
+        let mut merge_builder = table.merge_insert(&["id"]);
+        merge_builder
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merge_builder
+            .execute(Box::new(batches))
             .await
-            .map_err(|e| VectorStoreError::backend(format!("Failed to add chunks: {}", e)))?;
+            .map_err(|e| VectorStoreError::backend(format!("Failed to upsert chunks: {}", e)))?;
 
-        tracing::debug!(
-            "Upserted {} chunks to LanceDB",
-            chunks_with_embeddings.len()
-        );
+        tracing::debug!("Upserted {} chunks to LanceDB via merge_insert", num_chunks);
         Ok(())
     }
 

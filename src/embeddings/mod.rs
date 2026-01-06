@@ -4,7 +4,7 @@
 
 use crate::chunker::{ChunkId, CodeChunk};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use ort::execution_providers::{CPUExecutionProvider, CUDAExecutionProvider};
+use ort::execution_providers::{CPUExecutionProvider, CUDAExecutionProvider, ExecutionProvider};
 use std::sync::{Arc, Mutex};
 
 /// An embedding vector (384 dimensions for all-MiniLM-L6-v2)
@@ -32,21 +32,42 @@ impl EmbeddingGenerator {
     /// - ~80MB download
     /// - Good balance of speed and quality
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        // Configure CUDA with GPU-friendly settings
-        // 8GB VRAM available, use 5.5GB to leave headroom for peak allocations
-        let cuda_provider = CUDAExecutionProvider::default()
-            .with_memory_limit(5_500_000_000); // 5.5GB limit for safety
+        // Check CUDA availability BEFORE building provider
+        let cuda_available = CUDAExecutionProvider::default()
+            .is_available()
+            .unwrap_or_else(|e| {
+                tracing::warn!("CUDA availability check failed: {}", e);
+                false
+            });
+        tracing::info!("CUDA execution provider available: {}", cuda_available);
 
-        let execution_providers = vec![
-            cuda_provider.build(),
-            CPUExecutionProvider::default().build(),
-        ];
+        // Configure execution providers based on availability
+        let execution_providers = if cuda_available {
+            tracing::info!("Configuring CUDA with 5.5GB memory limit");
+            // 8GB VRAM available, use 5.5GB to leave headroom for peak allocations
+            let cuda_provider = CUDAExecutionProvider::default()
+                .with_memory_limit(5_500_000_000); // 5.5GB limit for safety
 
+            vec![
+                cuda_provider.build(),
+                CPUExecutionProvider::default().build(), // Fallback if CUDA init fails
+            ]
+        } else {
+            tracing::warn!("CUDA not available - using CPU only (embeddings will be slower)");
+            vec![CPUExecutionProvider::default().build()]
+        };
+
+        tracing::info!("Initializing embedding model (all-MiniLM-L6-v2)...");
         let model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::AllMiniLML6V2)
                 .with_show_download_progress(true)
                 .with_execution_providers(execution_providers),
         )?;
+
+        tracing::info!(
+            "EmbeddingGenerator initialized successfully (CUDA: {}, dimensions: 384)",
+            cuda_available
+        );
 
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
