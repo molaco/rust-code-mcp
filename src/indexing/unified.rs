@@ -487,28 +487,22 @@ impl UnifiedIndexer {
     ) -> Result<()> {
         let embed_start = Instant::now();
 
-        // Collect all chunk texts
-        let mut all_chunk_texts = Vec::new();
-        for processed_file in processed.iter() {
-            for chunk in &processed_file.chunks {
-                all_chunk_texts.push(chunk.format_for_embedding());
-            }
-        }
+        // Collect all chunks from all files for batch processing
+        let all_chunks: Vec<CodeChunk> = processed
+            .iter()
+            .flat_map(|p| p.chunks.iter())
+            .cloned()
+            .collect();
 
+        let total_chunks = all_chunks.len();
         tracing::info!(
             "Batch embedding {} chunks from {} files...",
-            all_chunk_texts.len(),
+            total_chunks,
             processed.len()
         );
 
         // Generate embeddings in GPU-optimized batches
-        let all_embeddings = self.core.generate_embeddings_batched(
-            &processed
-                .iter()
-                .flat_map(|p| p.chunks.iter())
-                .cloned()
-                .collect::<Vec<CodeChunk>>(),
-        )?;
+        let all_embeddings = self.core.generate_embeddings_batched(&all_chunks)?;
 
         let embed_duration = embed_start.elapsed();
         self.metrics.embed_duration += embed_duration;
@@ -520,49 +514,50 @@ impl UnifiedIndexer {
             all_embeddings.len() as f64 / embed_duration.as_secs_f64()
         );
 
-        // Index files
+        // PHASE 3: Batched indexing (Tantivy + LanceDB)
+        // Instead of N file-by-file calls, make single batched calls to each store
         let index_start = Instant::now();
-        let mut embedding_idx = 0;
 
-        for processed_file in processed {
-            let file_start = Instant::now();
-            let num_chunks = processed_file.chunks.len();
+        // Batch all chunks for Tantivy (single call instead of N calls)
+        tracing::debug!("Indexing {} chunks to Tantivy...", all_chunks.len());
+        self.tantivy.index_chunks(&all_chunks)?;
 
-            let file_embeddings: Vec<_> =
-                all_embeddings[embedding_idx..embedding_idx + num_chunks].to_vec();
-            embedding_idx += num_chunks;
+        // Prepare all chunk data for vector store (single batch)
+        let all_chunk_data: Vec<(ChunkId, Vec<f32>, CodeChunk)> = all_chunks
+            .into_iter()
+            .zip(all_embeddings.into_iter())
+            .map(|(chunk, embedding)| (chunk.id, embedding, chunk))
+            .collect();
 
-            self.tantivy.index_chunks(&processed_file.chunks)?;
-
-            // Index to vector store
-            let chunk_data: Vec<(ChunkId, Vec<f32>, CodeChunk)> = processed_file
-                .chunks
-                .iter()
-                .cloned()
-                .zip(file_embeddings.into_iter())
-                .map(|(chunk, embedding)| (chunk.id, embedding, chunk))
-                .collect();
-            self.vector_store.upsert_chunks(chunk_data).await
-                .map_err(|e| anyhow::anyhow!("Failed to index chunks to vector store: {}", e))?;
-
-            self.core
-                .update_file_metadata(&processed_file.path, &processed_file.content)?;
-
-            stats.indexed_files += 1;
-            stats.total_chunks += num_chunks;
-
-            let file_duration = file_start.elapsed();
-            self.metrics.file_latencies.push(file_duration);
-        }
+        // Single batched upsert to vector store (instead of N calls)
+        tracing::debug!("Upserting {} chunks to vector store...", all_chunk_data.len());
+        self.vector_store
+            .upsert_chunks(all_chunk_data)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to batch index chunks to vector store: {}", e))?;
 
         let index_duration = index_start.elapsed();
         self.metrics.index_duration += index_duration;
 
+        // Update metadata for all files after successful indexing
+        for processed_file in processed {
+            self.core
+                .update_file_metadata(&processed_file.path, &processed_file.content)?;
+
+            stats.indexed_files += 1;
+            stats.total_chunks += processed_file.chunks.len();
+
+            // Track per-file latency (approximated as batch time / num files)
+            let approx_file_duration = index_duration / processed.len() as u32;
+            self.metrics.file_latencies.push(approx_file_duration);
+        }
+
         tracing::info!(
-            "Indexed {} files in {:.2}s ({:.1} files/sec)",
+            "Indexed {} chunks ({} files) in {:.2}s ({:.1} chunks/sec)",
+            total_chunks,
             processed.len(),
             index_duration.as_secs_f64(),
-            processed.len() as f64 / index_duration.as_secs_f64()
+            total_chunks as f64 / index_duration.as_secs_f64()
         );
 
         Ok(())

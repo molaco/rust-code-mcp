@@ -152,21 +152,38 @@ impl LanceDbBackend {
     }
 
     /// Convert chunks to Arrow RecordBatch
+    ///
+    /// Optimized single-pass implementation that:
+    /// - Pre-allocates all vectors with known capacity
+    /// - Iterates over chunks only once
+    /// - Uses extend_from_slice for efficient vector flattening
     fn chunks_to_batch(
         &self,
         chunks: &[(ChunkId, Embedding, CodeChunk)],
     ) -> Result<RecordBatch, VectorStoreError> {
+        let n = chunks.len();
         let schema = self.schema();
 
-        // Extract IDs
-        let ids: Vec<String> = chunks.iter().map(|(id, _, _)| id.to_string()).collect();
-        let id_array = StringArray::from(ids);
+        // Pre-allocate all vectors with exact capacity
+        let mut ids = Vec::with_capacity(n);
+        let mut flat_vectors = Vec::with_capacity(n * self.vector_dim);
+        let mut chunk_jsons = Vec::with_capacity(n);
+        let mut file_paths = Vec::with_capacity(n);
 
-        // Extract vectors - flatten all vectors into a single array
-        let flat_vectors: Vec<f32> = chunks
-            .iter()
-            .flat_map(|(_, embedding, _)| embedding.iter().copied())
-            .collect();
+        // Single pass over all chunks
+        for (id, embedding, chunk) in chunks {
+            ids.push(id.to_string());
+            flat_vectors.extend_from_slice(embedding);
+            chunk_jsons.push(
+                serde_json::to_string(chunk).map_err(|e| {
+                    VectorStoreError::serialization(format!("Failed to serialize chunk: {}", e))
+                })?,
+            );
+            file_paths.push(chunk.context.file_path.display().to_string());
+        }
+
+        // Build Arrow arrays from pre-allocated vectors
+        let id_array = StringArray::from(ids);
         let values = Float32Array::from(flat_vectors);
         let field = Arc::new(Field::new("item", DataType::Float32, true));
         let vector_array =
@@ -174,23 +191,7 @@ impl LanceDbBackend {
                 .map_err(|e| {
                     VectorStoreError::serialization(format!("Failed to create vector array: {}", e))
                 })?;
-
-        // Serialize chunks to JSON
-        let chunk_jsons: Result<Vec<String>, _> = chunks
-            .iter()
-            .map(|(_, _, chunk)| {
-                serde_json::to_string(chunk).map_err(|e| {
-                    VectorStoreError::serialization(format!("Failed to serialize chunk: {}", e))
-                })
-            })
-            .collect();
-        let chunk_json_array = StringArray::from(chunk_jsons?);
-
-        // Extract file paths
-        let file_paths: Vec<String> = chunks
-            .iter()
-            .map(|(_, _, chunk)| chunk.context.file_path.display().to_string())
-            .collect();
+        let chunk_json_array = StringArray::from(chunk_jsons);
         let file_path_array = StringArray::from(file_paths);
 
         RecordBatch::try_new(
