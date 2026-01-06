@@ -2,8 +2,17 @@
 
 use file_search_mcp::embeddings::EmbeddingGenerator;
 use std::time::Instant;
+use tracing_subscriber::EnvFilter;
 
 fn main() {
+    // Initialize tracing to see CUDA debug logs
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
         std::process::exit(1);

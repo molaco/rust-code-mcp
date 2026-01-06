@@ -32,13 +32,37 @@ impl EmbeddingGenerator {
     /// - ~80MB download
     /// - Good balance of speed and quality
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // Debug: Log environment variables critical for CUDA
+        tracing::info!("=== CUDA INITIALIZATION DEBUG ===");
+        tracing::info!("CUDA_HOME: {:?}", std::env::var("CUDA_HOME").ok());
+        tracing::info!("CUDA_PATH: {:?}", std::env::var("CUDA_PATH").ok());
+        tracing::info!("LD_LIBRARY_PATH: {:?}", std::env::var("LD_LIBRARY_PATH").ok());
+
+        // Check if CUDA libraries are accessible
+        if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
+            for path in ld_path.split(':').take(5) {
+                let p = std::path::Path::new(path);
+                let exists = p.exists();
+                let has_cuda = if exists {
+                    p.join("libcudart.so").exists() ||
+                    p.join("libcublas.so").exists() ||
+                    std::fs::read_dir(p).map(|d| d.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().contains("cuda"))).unwrap_or(false)
+                } else {
+                    false
+                };
+                tracing::info!("  LD path '{}': exists={}, has_cuda_libs={}", path, exists, has_cuda);
+            }
+        }
+
         // Check CUDA availability BEFORE building provider
-        let cuda_available = CUDAExecutionProvider::default()
-            .is_available()
-            .unwrap_or_else(|e| {
-                tracing::warn!("CUDA availability check failed: {}", e);
-                false
-            });
+        tracing::info!("Checking CUDAExecutionProvider availability...");
+        let cuda_check_result = CUDAExecutionProvider::default().is_available();
+        tracing::info!("CUDA is_available() result: {:?}", cuda_check_result);
+
+        let cuda_available = cuda_check_result.unwrap_or_else(|e| {
+            tracing::warn!("CUDA availability check failed: {}", e);
+            false
+        });
         tracing::info!("CUDA execution provider available: {}", cuda_available);
 
         // Configure execution providers based on availability
