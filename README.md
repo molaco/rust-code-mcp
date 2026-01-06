@@ -30,17 +30,6 @@ An MCP server for semantic code search in Rust codebases. Combines BM25 full-tex
 | `index_codebase` | Manually trigger indexing |
 | `health_check` | Check system status |
 
-<details>
-<summary>Screenshots</summary>
-
-![Screenshot 1](./assets/screenshot-2026-01-06-10-25-00.png)
-![Screenshot 2](./assets/screenshot-2026-01-06-10-25-31.png)
-![Screenshot 3](./assets/screenshot-2026-01-06-10-25-54.png)
-![Screenshot 4](./assets/screenshot-2026-01-06-10-26-16.png)
-![Screenshot 5](./assets/screenshot-2026-01-06-10-26-34.png)
-
-</details>
-
 ## Building
 
 ```bash
@@ -83,6 +72,20 @@ The server uses stdio transport. Add to your MCP client config:
 - [ra_ap_syntax](https://github.com/rust-lang/rust-analyzer) - AST parsing
 - [ra_ap_ide](https://github.com/rust-lang/rust-analyzer) - Semantic analysis (goto definition, find references)
 - [rmcp](https://github.com/modelcontextprotocol/rust-sdk) - MCP protocol
+
+## Screenshots
+
+![Screenshot](./assets/screenshot-2026-01-06-10-25-00.png)
+
+<details>
+<summary>More screenshots</summary>
+
+![Screenshot 2](./assets/screenshot-2026-01-06-10-25-31.png)
+![Screenshot 3](./assets/screenshot-2026-01-06-10-25-54.png)
+![Screenshot 4](./assets/screenshot-2026-01-06-10-26-16.png)
+![Screenshot 5](./assets/screenshot-2026-01-06-10-26-34.png)
+
+</details>
 
 ## License
 
