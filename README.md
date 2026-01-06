@@ -82,21 +82,49 @@ For CUDA to work when the MCP server is spawned by Claude Code (or other MCP cli
 2. **CUDA libraries** - `libcudart.so`, `libcublas.so`, `libcublasLt.so`
 3. **cuDNN libraries** - `libcudnn.so`
 
-The included `flake.nix` automatically generates `.mcp.json` with the correct `LD_LIBRARY_PATH` when you enter the dev shell:
+#### Option 1: Using flake.nix (recommended)
+
+The included `flake.nix` automatically generates `.mcp.json` with the correct `LD_LIBRARY_PATH`:
 
 ```bash
 nix develop
 # Generates .mcp.json with dynamically discovered ORT cache path
 ```
 
-For manual configuration, the `LD_LIBRARY_PATH` must include:
+#### Option 2: Manual configuration
+
+First, find your ORT cache path:
 
 ```bash
-# Find your ORT cache path (contains libonnxruntime_providers_shared.so)
 find ~/.cache/ort.pyke.io/dfbin -name "libonnxruntime_providers_shared.so" -printf '%h\n' | head -1
+# Example output: /home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/8BBB.../onnxruntime/lib
 ```
 
-Then add it to your MCP config along with CUDA libraries.
+Then configure your MCP client (e.g., `~/.claude.json` for Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "rust-code-mcp": {
+      "command": "/path/to/file-search-mcp",
+      "args": [],
+      "env": {
+        "RUST_LOG": "info",
+        "CUDA_HOME": "/usr/local/cuda",
+        "CUDA_PATH": "/usr/local/cuda",
+        "LD_LIBRARY_PATH": "/home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/<HASH>/onnxruntime/lib:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
+      }
+    }
+  }
+}
+```
+
+Replace:
+- `/path/to/file-search-mcp` with your binary path
+- `<HASH>` with the hash from the `find` command above
+- CUDA paths with your system's CUDA installation
+
+> **Note:** The ORT cache hash changes when ONNX Runtime is updated. If CUDA stops working, re-run the `find` command to get the new path.
 
 ### Performance
 
