@@ -41,7 +41,8 @@ flowchart TB
     end
 
     subgraph Processing["Code Processing"]
-        parser["RustParser<br/>(rust-analyzer)"]
+        parser["RustParser<br/>(ra_ap_syntax)"]
+        semantic["SemanticService<br/>(ra_ap_ide)"]
         chunker["Chunker<br/>(Symbol-based)"]
         embedder["EmbeddingGenerator<br/>(fastembed)"]
     end
@@ -111,9 +112,10 @@ flowchart TB
     vector -->|"results"| rrf
     rrf -->|"merged results"| resilient
 
-    %% Analysis tools use parser
-    find_def --> parser
-    find_ref --> parser
+    %% Analysis tools
+    find_def --> semantic
+    find_ref --> semantic
+    semantic -->|"lazy load"| files
     get_deps --> parser
     call_graph --> parser
     complexity --> parser
@@ -142,7 +144,7 @@ flowchart TB
     class search_tool,read_file,similar queryTool
     class find_def,find_ref,get_deps,call_graph,complexity analysisTool
     class index_cb,health indexTool
-    class parser,chunker,embedder,incremental,unified,merkle process
+    class parser,semantic,chunker,embedder,incremental,unified,merkle process
     class tantivy,lancedb storage
     class resilient,bm25,vector,rrf search
     class files,cache data

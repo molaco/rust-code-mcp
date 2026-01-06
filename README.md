@@ -21,8 +21,8 @@ An MCP server for semantic code search in Rust codebases. Combines BM25 full-tex
 |------|-------------|
 | `search` | Keyword search using hybrid BM25 + vectors |
 | `get_similar_code` | Find semantically similar code snippets |
-| `find_definition` | Locate where a symbol is defined |
-| `find_references` | Find all usages of a symbol |
+| `find_definition` | Locate where a symbol is defined (by name) |
+| `find_references` | Find all usages of a symbol (by name) |
 | `get_dependencies` | List imports for a file |
 | `get_call_graph` | Show function call relationships |
 | `analyze_complexity` | Calculate code complexity metrics |
@@ -69,7 +69,8 @@ The server uses stdio transport. Add to your MCP client config:
 - [tantivy](https://github.com/quickwit-oss/tantivy) - Full-text search
 - [fastembed](https://github.com/Anush008/fastembed-rs) - Local embeddings (ONNX)
 - [lancedb](https://lancedb.com/) - Embedded vector storage
-- [ra_ap_syntax](https://github.com/rust-lang/rust-analyzer) - AST parsing (rust-analyzer)
+- [ra_ap_syntax](https://github.com/rust-lang/rust-analyzer) - AST parsing
+- [ra_ap_ide](https://github.com/rust-lang/rust-analyzer) - Semantic analysis (goto definition, find references)
 - [rmcp](https://github.com/modelcontextprotocol/rust-sdk) - MCP protocol
 
 ## License

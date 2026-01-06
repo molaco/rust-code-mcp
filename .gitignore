@@ -10,5 +10,6 @@
 *.sh
 *.md
 !README.md
+!TOOLS.md
 .docs/
 .plan/

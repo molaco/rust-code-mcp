@@ -90,7 +90,6 @@ use tracing;
 
 use crate::parser::RustParser;
 
-#[cfg(feature = "ide")]
 use crate::semantic::SEMANTIC;
 
 /// Helper function to recursively visit Rust files
@@ -112,7 +111,6 @@ where
 }
 
 /// Find the definition of a symbol by name
-#[cfg(feature = "ide")]
 pub async fn find_definition(
     symbol_name: &str,
     directory: &str,
@@ -150,19 +148,7 @@ pub async fn find_definition(
     }
 }
 
-/// Find the definition of a symbol by name (stub when IDE feature is disabled)
-#[cfg(not(feature = "ide"))]
-pub async fn find_definition(
-    _symbol_name: &str,
-    _directory: &str,
-) -> Result<CallToolResult, McpError> {
-    Ok(CallToolResult::success(vec![Content::text(
-        "IDE feature not enabled. Compile with --features ide to enable semantic analysis."
-    )]))
-}
-
 /// Find all references to a symbol by name
-#[cfg(feature = "ide")]
 pub async fn find_references(
     symbol_name: &str,
     directory: &str,
@@ -198,17 +184,6 @@ pub async fn find_references(
             result
         ))]))
     }
-}
-
-/// Find all references to a symbol by name (stub when IDE feature is disabled)
-#[cfg(not(feature = "ide"))]
-pub async fn find_references(
-    _symbol_name: &str,
-    _directory: &str,
-) -> Result<CallToolResult, McpError> {
-    Ok(CallToolResult::success(vec![Content::text(
-        "IDE feature not enabled. Compile with --features ide to enable semantic analysis."
-    )]))
 }
 
 /// Get dependencies for a file (imports and files that depend on it)
@@ -435,7 +410,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[cfg(feature = "ide")]
     async fn test_find_definition_invalid_project() {
         // /tmp is not a valid Cargo project, should return an error
         let result = find_definition("nonexistent_symbol_xyz", "/tmp").await;
@@ -443,7 +417,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "ide")]
     async fn test_find_references_invalid_project() {
         // /tmp is not a valid Cargo project, should return an error
         let result = find_references("nonexistent_symbol_xyz", "/tmp").await;
