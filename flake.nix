@@ -55,6 +55,8 @@
               RUST_LOG = "info";
               CUDA_HOME = "${pkgs.cudaPackages.cudatoolkit}";
               CUDA_PATH = "${pkgs.cudaPackages.cudatoolkit}";
+              # ORT cache (libonnxruntime_providers_shared.so) + cuda-merged (all CUDA libs) + cudnn
+              LD_LIBRARY_PATH = "/home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/8BBB8416566A668A240B72A56DBBB82F99F430AF86F64D776D7EBF53E144EFC9/onnxruntime/lib:${pkgs.cudaPackages.cudatoolkit}/lib:${pkgs.cudaPackages.cudnn.lib}/lib:${pkgs.stdenv.cc.cc.lib}/lib";
             };
           };
         };
@@ -109,41 +111,42 @@
           export CUDA_HOME=${pkgs.cudaPackages.cudatoolkit}
           export PATH=${pkgs.cudaPackages.cudatoolkit}/bin:$PATH
 
-          # Find ORT cache path dynamically (contains libonnxruntime_providers_shared.so)
-          ORT_LIB_PATH=$(find "$HOME/.cache/ort.pyke.io/dfbin" -name "libonnxruntime_providers_shared.so" -printf '%h\n' 2>/dev/null | head -1)
+          # # Find ORT cache path dynamically (contains libonnxruntime_providers_shared.so)
+          # ORT_LIB_PATH=$(find "$HOME/.cache/ort.pyke.io/dfbin" -name "libonnxruntime_providers_shared.so" -printf '%h\n' 2>/dev/null | head -1)
+          #
+          # if [ -n "$ORT_LIB_PATH" ]; then
+          #   echo "Found ORT libraries: $ORT_LIB_PATH"
+          #   FULL_LD_PATH="$ORT_LIB_PATH:${cudaLibPath}"
+          # else
+          #   echo "Warning: ORT cache not found. Run 'cargo build --release' first to download ONNX Runtime."
+          #   echo "CUDA will not work until ORT libraries are cached."
+          #   FULL_LD_PATH="${cudaLibPath}"
+          # fi
+          #
+          # # Generate .mcp.json with dynamic LD_LIBRARY_PATH
+          # cat > .mcp.json << EOF
+          # {
+          #   "mcpServers": {
+          #     "rust-code-mcp": {
+          #       "command": "./target/release/file-search-mcp",
+          #       "args": [],
+          #       "env": {
+          #         "RUST_LOG": "info",
+          #         "CUDA_HOME": "${pkgs.cudaPackages.cudatoolkit}",
+          #         "CUDA_PATH": "${pkgs.cudaPackages.cudatoolkit}",
+          #         "LD_LIBRARY_PATH": "$FULL_LD_PATH"
+          #       }
+          #     },
+          #     "sequential-thinking": $(cat ${mcpConfigBase} | ${pkgs.jq}/bin/jq '.mcpServers["sequential-thinking"]'),
+          #     "fetch": $(cat ${mcpConfigBase} | ${pkgs.jq}/bin/jq '.mcpServers["fetch"]')
+          #   }
+          # }
+          # EOF
 
-          if [ -n "$ORT_LIB_PATH" ]; then
-            echo "Found ORT libraries: $ORT_LIB_PATH"
-            FULL_LD_PATH="$ORT_LIB_PATH:${cudaLibPath}"
-          else
-            echo "Warning: ORT cache not found. Run 'cargo build --release' first to download ONNX Runtime."
-            echo "CUDA will not work until ORT libraries are cached."
-            FULL_LD_PATH="${cudaLibPath}"
-          fi
-
-          # Generate .mcp.json with dynamic LD_LIBRARY_PATH
-          cat > .mcp.json << EOF
-          {
-            "mcpServers": {
-              "rust-code-mcp": {
-                "command": "./target/release/file-search-mcp",
-                "args": [],
-                "env": {
-                  "RUST_LOG": "info",
-                  "CUDA_HOME": "${pkgs.cudaPackages.cudatoolkit}",
-                  "CUDA_PATH": "${pkgs.cudaPackages.cudatoolkit}",
-                  "LD_LIBRARY_PATH": "$FULL_LD_PATH"
-                }
-              },
-              "sequential-thinking": $(cat ${mcpConfigBase} | ${pkgs.jq}/bin/jq '.mcpServers["sequential-thinking"]'),
-              "fetch": $(cat ${mcpConfigBase} | ${pkgs.jq}/bin/jq '.mcpServers["fetch"]')
-            }
-          }
-          EOF
-
+          echo "you should set up ort lib path to use cuda in line 59 LD_LIBRARY_PATH"
           echo "rust-code-mcp dev shell"
           echo "Run 'cargo build --release' to build"
-          echo "MCP config generated with CUDA support"
+          # echo "MCP config generated with CUDA support"
         '';
       };
 
