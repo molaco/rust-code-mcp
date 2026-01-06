@@ -64,6 +64,56 @@ The server uses stdio transport. Add to your MCP client config:
 }
 ```
 
+## GPU Acceleration
+
+Embedding generation uses ONNX Runtime with CUDA support for 10-15x faster indexing on NVIDIA GPUs.
+
+### Requirements
+
+- NVIDIA GPU (Maxwell or newer)
+- CUDA 12.x + cuDNN 9.x
+- The `ort` crate downloads ONNX Runtime binaries to `~/.cache/ort.pyke.io/`
+
+### MCP Server CUDA Configuration
+
+For CUDA to work when the MCP server is spawned by Claude Code (or other MCP clients), the `LD_LIBRARY_PATH` must include:
+
+1. **ORT cache** - Contains `libonnxruntime_providers_shared.so` and `libonnxruntime_providers_cuda.so`
+2. **CUDA libraries** - `libcudart.so`, `libcublas.so`, `libcublasLt.so`
+3. **cuDNN libraries** - `libcudnn.so`
+
+Example configuration with [mcp-servers-nix](https://github.com/natsukium/mcp-servers-nix):
+
+```nix
+mcpConfig = mcp-servers-nix.lib.mkConfig pkgs {
+  settings.servers = {
+    rust-code-mcp = {
+      command = "./target/release/file-search-mcp";
+      env = {
+        CUDA_HOME = "${pkgs.cudaPackages.cudatoolkit}";
+        CUDA_PATH = "${pkgs.cudaPackages.cudatoolkit}";
+        LD_LIBRARY_PATH = lib.concatStringsSep ":" [
+          "/home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/<hash>/onnxruntime/lib"
+          "${pkgs.cudaPackages.cudatoolkit}/lib"
+          "${pkgs.cudaPackages.cudnn.lib}/lib"
+          "${pkgs.stdenv.cc.cc.lib}/lib"
+        ];
+      };
+    };
+  };
+};
+```
+
+> **Note:** The ORT cache path contains a hash that may change when ONNX Runtime is updated. Check `~/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/` for the current hash.
+
+### Performance
+
+| Mode | Throughput |
+|------|-----------|
+| CPU only | ~50 chunks/sec |
+| GPU (RTX 3090) | ~500 chunks/sec (full pipeline) |
+| GPU isolated embedding | ~8000 chunks/sec |
+
 ## Stack
 
 - [tantivy](https://github.com/quickwit-oss/tantivy) - Full-text search
