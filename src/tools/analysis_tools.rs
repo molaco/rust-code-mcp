@@ -111,31 +111,29 @@ where
     Ok(())
 }
 
-/// Find the definition of a symbol at a specific position
+/// Find the definition of a symbol by name
 #[cfg(feature = "ide")]
 pub async fn find_definition(
-    file_path: &str,
-    line: u32,
-    column: u32,
+    symbol_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
     use std::path::Path;
 
     let project_path = Path::new(directory);
-    let file = Path::new(file_path);
 
-    tracing::debug!("Searching for definition at {}:{}:{}", file_path, line, column);
+    tracing::debug!("Searching for definition of '{}'", symbol_name);
 
     let locations = SEMANTIC
         .lock()
         .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .goto_definition(project_path, file, line, column)
-        .map_err(|e| McpError::internal_error(format!("Goto definition failed: {}", e), None))?;
+        .symbol_search(project_path, symbol_name, 50)
+        .map_err(|e| McpError::internal_error(format!("Symbol search failed: {}", e), None))?;
 
     if locations.is_empty() {
-        Ok(CallToolResult::success(vec![Content::text(
-            "No definition found at this position"
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "No definition found for symbol '{}'",
+            symbol_name
+        ))]))
     } else {
         let result = locations
             .iter()
@@ -144,19 +142,18 @@ pub async fn find_definition(
             .join("\n");
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} definition(s):\n{}",
+            "Found {} definition(s) for '{}':\n{}",
             locations.len(),
+            symbol_name,
             result
         ))]))
     }
 }
 
-/// Find the definition of a symbol at a specific position (stub when IDE feature is disabled)
+/// Find the definition of a symbol by name (stub when IDE feature is disabled)
 #[cfg(not(feature = "ide"))]
 pub async fn find_definition(
-    _file_path: &str,
-    _line: u32,
-    _column: u32,
+    _symbol_name: &str,
     _directory: &str,
 ) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::success(vec![Content::text(
@@ -164,31 +161,29 @@ pub async fn find_definition(
     )]))
 }
 
-/// Find all references to the symbol at a specific position
+/// Find all references to a symbol by name
 #[cfg(feature = "ide")]
 pub async fn find_references(
-    file_path: &str,
-    line: u32,
-    column: u32,
+    symbol_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
     use std::path::Path;
 
     let project_path = Path::new(directory);
-    let file = Path::new(file_path);
 
-    tracing::debug!("Searching for references at {}:{}:{}", file_path, line, column);
+    tracing::debug!("Searching for references to '{}'", symbol_name);
 
     let locations = SEMANTIC
         .lock()
         .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .find_references(project_path, file, line, column)
+        .find_references_by_name(project_path, symbol_name)
         .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))?;
 
     if locations.is_empty() {
-        Ok(CallToolResult::success(vec![Content::text(
-            "No references found at this position"
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "No references found for symbol '{}'",
+            symbol_name
+        ))]))
     } else {
         let result = locations
             .iter()
@@ -197,19 +192,18 @@ pub async fn find_references(
             .join("\n");
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Found {} reference(s):\n{}",
+            "Found {} reference(s) for '{}':\n{}",
             locations.len(),
+            symbol_name,
             result
         ))]))
     }
 }
 
-/// Find all references to the symbol at a specific position (stub when IDE feature is disabled)
+/// Find all references to a symbol by name (stub when IDE feature is disabled)
 #[cfg(not(feature = "ide"))]
 pub async fn find_references(
-    _file_path: &str,
-    _line: u32,
-    _column: u32,
+    _symbol_name: &str,
     _directory: &str,
 ) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::success(vec![Content::text(
@@ -442,16 +436,18 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "ide")]
-    async fn test_find_definition_invalid_file() {
-        let result = find_definition("/nonexistent/file.rs", 1, 1, "/nonexistent/directory").await;
-        assert!(result.is_err() || result.unwrap().is_error.unwrap_or(false) == false);
+    async fn test_find_definition_invalid_project() {
+        // /tmp is not a valid Cargo project, should return an error
+        let result = find_definition("nonexistent_symbol_xyz", "/tmp").await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
     #[cfg(feature = "ide")]
-    async fn test_find_references_invalid_file() {
-        let result = find_references("/nonexistent/file.rs", 1, 1, "/nonexistent/directory").await;
-        assert!(result.is_err() || result.unwrap().is_error.unwrap_or(false) == false);
+    async fn test_find_references_invalid_project() {
+        // /tmp is not a valid Cargo project, should return an error
+        let result = find_references("nonexistent_symbol_xyz", "/tmp").await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 //! Position and coordinate utilities
 
 use std::path::{Path, PathBuf};
-use ra_ap_ide::{AnalysisHost, FilePosition, LineCol, NavigationTarget, TextSize};
+use ra_ap_ide::{AnalysisHost, FilePosition, LineCol, NavigationTarget, Query, TextSize};
 use ra_ap_vfs::{Vfs, VfsPath};
 use anyhow::{Result, Context};
 
@@ -163,4 +163,97 @@ pub fn find_references(
     }
 
     Ok(locations)
+}
+
+/// Search for symbols by name
+pub fn symbol_search(
+    host: &AnalysisHost,
+    vfs: &Vfs,
+    symbol_name: &str,
+    limit: usize,
+) -> Result<Vec<Location>> {
+    let analysis = host.analysis();
+
+    let query = Query::new(symbol_name.to_string());
+    let results = analysis.symbol_search(query, limit)
+        .context("symbol_search query failed")?;
+
+    results
+        .iter()
+        .map(|target| nav_target_to_location(vfs, &analysis, target))
+        .collect()
+}
+
+/// Find all references to symbols matching a name
+/// First finds all symbols with that name, then finds references for each
+pub fn find_references_by_name(
+    host: &AnalysisHost,
+    vfs: &Vfs,
+    symbol_name: &str,
+) -> Result<Vec<Location>> {
+    let analysis = host.analysis();
+
+    // First, find all symbols matching the name
+    let query = Query::new(symbol_name.to_string());
+    let symbols = analysis.symbol_search(query, 50)
+        .context("symbol_search query failed")?;
+
+    let mut all_locations = Vec::new();
+
+    // For each symbol found, find its references
+    for symbol in &symbols {
+        // Get the position of this symbol definition
+        let file_id = symbol.file_id;
+        let offset = symbol.focus_range.unwrap_or(symbol.full_range).start();
+        let position = FilePosition { file_id, offset };
+
+        let config = ra_ap_ide::FindAllRefsConfig {
+            minicore: Default::default(),
+            search_scope: None,
+        };
+
+        if let Some(search_results) = analysis.find_all_refs(position, &config)
+            .context("find_all_refs query failed")?
+        {
+            // Process each search result
+            for search_result in search_results {
+                // Add the declaration if present
+                if let Some(decl) = &search_result.declaration {
+                    let decl_location = nav_target_to_location(vfs, &analysis, &decl.nav)?;
+                    all_locations.push(decl_location);
+                }
+
+                // Add all references
+                for (ref_file_id, refs) in &search_result.references {
+                    let ref_vfs_path = vfs.file_path(*ref_file_id);
+                    let ref_file_path: PathBuf = ref_vfs_path.as_path()
+                        .ok_or_else(|| anyhow::anyhow!("Not a real path"))?
+                        .to_path_buf()
+                        .into();
+
+                    let ref_line_index = analysis.file_line_index(*ref_file_id)?;
+
+                    for (range, _category) in refs {
+                        let line_col = ref_line_index.line_col(range.start());
+                        all_locations.push(Location {
+                            file_path: ref_file_path.clone(),
+                            line: line_col.line + 1,
+                            column: line_col.col + 1,
+                            name: "reference".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Deduplicate locations (same file:line:col)
+    all_locations.sort_by(|a, b| {
+        (&a.file_path, a.line, a.column).cmp(&(&b.file_path, b.line, b.column))
+    });
+    all_locations.dedup_by(|a, b| {
+        a.file_path == b.file_path && a.line == b.line && a.column == b.column
+    });
+
+    Ok(all_locations)
 }

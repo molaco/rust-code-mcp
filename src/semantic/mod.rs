@@ -103,4 +103,36 @@ impl SemanticService {
             self.projects.remove(&canonical);
         }
     }
+
+    /// Search for symbols by name (for find_definition)
+    pub fn symbol_search(
+        &mut self,
+        project_path: &Path,
+        symbol_name: &str,
+        limit: usize,
+    ) -> Result<Vec<Location>> {
+        self.get_or_load(project_path)?;
+
+        let canonical = project_path.canonicalize()?;
+        let ctx = self.projects.get(&canonical)
+            .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
+
+        position::symbol_search(&ctx.host, &ctx.vfs, symbol_name, limit)
+    }
+
+    /// Find all references to symbols matching a name
+    /// First finds all symbols matching the name, then finds references for each
+    pub fn find_references_by_name(
+        &mut self,
+        project_path: &Path,
+        symbol_name: &str,
+    ) -> Result<Vec<Location>> {
+        self.get_or_load(project_path)?;
+
+        let canonical = project_path.canonicalize()?;
+        let ctx = self.projects.get(&canonical)
+            .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
+
+        position::find_references_by_name(&ctx.host, &ctx.vfs, symbol_name)
+    }
 }

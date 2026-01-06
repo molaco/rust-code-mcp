@@ -132,32 +132,28 @@ impl SearchToolRouter {
         crate::tools::query_tools::search(&directory, &keyword, self.sync_manager.as_ref()).await
     }
 
-    /// Find the definition of a symbol in Rust code
-    #[tool(description = "Find where a Rust symbol is defined at a specific position")]
+    /// Find the definition of a symbol by name
+    #[tool(description = "Find where a Rust symbol (function, struct, trait, const, etc.) is defined")]
     async fn find_definition(
         &self,
         Parameters(FindDefinitionParams {
-            file_path,
-            line,
-            column,
+            symbol_name,
             directory,
         }): Parameters<FindDefinitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_definition(&file_path, line, column, &directory).await
+        crate::tools::analysis_tools::find_definition(&symbol_name, &directory).await
     }
 
-    /// Find all references to a symbol in the codebase
-    #[tool(description = "Find all references to the symbol at a specific position")]
+    /// Find all references to a symbol by name
+    #[tool(description = "Find all places where a symbol is used (calls, type references, etc.)")]
     async fn find_references(
         &self,
         Parameters(FindReferencesParams {
-            file_path,
-            line,
-            column,
+            symbol_name,
             directory,
         }): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_references(&file_path, line, column, &directory).await
+        crate::tools::analysis_tools::find_references(&symbol_name, &directory).await
     }
 
     /// Get dependencies for a file (imports and files that depend on it)
