@@ -31,17 +31,25 @@ pub struct FileContentParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FindDefinitionParams {
-    #[schemars(description = "Symbol name to find the definition for")]
-    pub symbol_name: String,
-    #[schemars(description = "Directory to search in")]
+    #[schemars(description = "Absolute path to the source file")]
+    pub file_path: String,
+    #[schemars(description = "Line number (1-based)")]
+    pub line: u32,
+    #[schemars(description = "Column number (1-based)")]
+    pub column: u32,
+    #[schemars(description = "Project root directory containing Cargo.toml")]
     pub directory: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FindReferencesParams {
-    #[schemars(description = "Symbol name to find references to")]
-    pub symbol_name: String,
-    #[schemars(description = "Directory to search in")]
+    #[schemars(description = "Absolute path to the source file")]
+    pub file_path: String,
+    #[schemars(description = "Line number (1-based)")]
+    pub line: u32,
+    #[schemars(description = "Column number (1-based)")]
+    pub column: u32,
+    #[schemars(description = "Project root directory containing Cargo.toml")]
     pub directory: String,
 }
 

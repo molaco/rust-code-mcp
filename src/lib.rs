@@ -17,5 +17,8 @@ pub mod security;
 pub mod tools;
 pub mod vector_store;
 
+#[cfg(feature = "ide")]
+pub mod semantic;
+
 // Will be added in later steps:
 // pub mod watcher;

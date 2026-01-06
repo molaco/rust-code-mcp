@@ -41,7 +41,16 @@ sha2 = "0.10"          # SHA-256 file hashing
 directories = "5"      # Cross-platform config/data directories
 
 # Phase 2: Rust code parsing with rust-analyzer syntax
-ra_ap_syntax = "0.0.295"
+ra_ap_syntax = "0.0.313"
+
+# IDE integration for semantic analysis (optional, for benchmarking)
+ra_ap_ide = { version = "0.0.313", optional = true }
+ra_ap_ide_db = { version = "0.0.313", optional = true }
+"ra_ap_load-cargo" = { version = "0.0.313", optional = true }
+ra_ap_project_model = { version = "0.0.313", optional = true }
+ra_ap_vfs = { version = "0.0.313", optional = true }
+ra_ap_paths = { version = "0.0.313", optional = true }
+ra_ap_hir = { version = "0.0.313", optional = true }
 
 # Phase 3: Semantic Code Chunking
 text-splitter = "0.13"  # Semantic text chunking
@@ -79,6 +88,21 @@ num_cpus = "1.16"      # CPU count detection
 [features]
 default = ["embedded"]  # LanceDB embedded backend (zero-config)
 embedded = []  # LanceDB is always included, this is just a marker
+ide = ["ra_ap_ide", "ra_ap_ide_db", "ra_ap_load-cargo", "ra_ap_project_model", "ra_ap_vfs", "ra_ap_paths", "ra_ap_hir"]
+
+[[example]]
+name = "load_benchmark"
+path = "examples/load_benchmark.rs"
+
+[[example]]
+name = "ide_load_benchmark"
+path = "examples/ide_load_benchmark.rs"
+required-features = ["ide"]
+
+[[example]]
+name = "ide_functional_test"
+path = "examples/ide_functional_test.rs"
+required-features = ["ide"]
 
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests

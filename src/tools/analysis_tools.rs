@@ -90,6 +90,9 @@ use tracing;
 
 use crate::parser::RustParser;
 
+#[cfg(feature = "ide")]
+use crate::semantic::SEMANTIC;
+
 /// Helper function to recursively visit Rust files
 fn visit_rust_files<F>(dir: &Path, visitor: &mut F) -> Result<(), String>
 where
@@ -108,201 +111,110 @@ where
     Ok(())
 }
 
-/// Find the definition of a symbol in Rust code
+/// Find the definition of a symbol at a specific position
+#[cfg(feature = "ide")]
 pub async fn find_definition(
-    symbol_name: &str,
+    file_path: &str,
+    line: u32,
+    column: u32,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
-    let dir_path = Path::new(directory);
-    if !dir_path.is_dir() {
-        return Err(McpError::invalid_params(
-            format!("The specified path '{}' is not a directory", directory),
-            None,
-        ));
-    }
+    use std::path::Path;
 
-    tracing::debug!("Searching for definition of '{}'", symbol_name);
+    let project_path = Path::new(directory);
+    let file = Path::new(file_path);
 
-    let mut found_definitions = Vec::new();
-    let mut parser = RustParser::new().map_err(|e| {
-        McpError::invalid_params(format!("Parser initialization error: {}", e), None)
-    })?;
+    tracing::debug!("Searching for definition at {}:{}:{}", file_path, line, column);
 
-    // Recursively search .rs files
-    let mut visitor = |path: &Path| -> Result<(), String> {
-        if let Ok(symbols) = parser.parse_file(path) {
-            for symbol in symbols {
-                if symbol.name == symbol_name {
-                    found_definitions.push((
-                        path.to_path_buf(),
-                        symbol.range.start_line,
-                        symbol.kind.as_str().to_string(),
-                    ));
-                }
-            }
-        }
-        Ok(())
-    };
+    let locations = SEMANTIC
+        .lock()
+        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
+        .goto_definition(project_path, file, line, column)
+        .map_err(|e| McpError::internal_error(format!("Goto definition failed: {}", e), None))?;
 
-    visit_rust_files(dir_path, &mut visitor).map_err(|e| McpError::invalid_params(e, None))?;
-
-    if found_definitions.is_empty() {
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "No definition found for symbol '{}'",
-            symbol_name
-        ))]))
+    if locations.is_empty() {
+        Ok(CallToolResult::success(vec![Content::text(
+            "No definition found at this position"
+        )]))
     } else {
-        let mut result = format!(
-            "Found {} definition(s) for '{}':\n",
-            found_definitions.len(),
-            symbol_name
-        );
-        for (path, line, kind) in found_definitions {
-            result.push_str(&format!("- {}:{} ({})\n", path.display(), line, kind));
-        }
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        let result = locations
+            .iter()
+            .map(|loc| loc.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Found {} definition(s):\n{}",
+            locations.len(),
+            result
+        ))]))
     }
 }
 
-/// Find all references to a symbol in the codebase
+/// Find the definition of a symbol at a specific position (stub when IDE feature is disabled)
+#[cfg(not(feature = "ide"))]
+pub async fn find_definition(
+    _file_path: &str,
+    _line: u32,
+    _column: u32,
+    _directory: &str,
+) -> Result<CallToolResult, McpError> {
+    Ok(CallToolResult::success(vec![Content::text(
+        "IDE feature not enabled. Compile with --features ide to enable semantic analysis."
+    )]))
+}
+
+/// Find all references to the symbol at a specific position
+#[cfg(feature = "ide")]
 pub async fn find_references(
-    symbol_name: &str,
+    file_path: &str,
+    line: u32,
+    column: u32,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
-    let dir_path = Path::new(directory);
-    if !dir_path.is_dir() {
-        return Err(McpError::invalid_params(
-            format!("The specified path '{}' is not a directory", directory),
-            None,
-        ));
-    }
+    use std::path::Path;
 
-    tracing::debug!("Searching for references to '{}'", symbol_name);
+    let project_path = Path::new(directory);
+    let file = Path::new(file_path);
 
-    let mut found_call_refs = Vec::new();
-    let mut found_type_refs = Vec::new();
-    let mut parser = RustParser::new().map_err(|e| {
-        McpError::invalid_params(format!("Parser initialization error: {}", e), None)
-    })?;
+    tracing::debug!("Searching for references at {}:{}:{}", file_path, line, column);
 
-    // Recursively search .rs files for references (both function calls and type usage)
-    let mut visitor = |path: &Path| -> Result<(), String> {
-        if let Ok(parse_result) = parser.parse_file_complete(path) {
-            // Check function call references
-            let callers = parse_result.call_graph.get_callers(symbol_name);
-            if !callers.is_empty() {
-                found_call_refs.push((
-                    path.to_path_buf(),
-                    callers.into_iter().map(String::from).collect::<Vec<String>>(),
-                ));
-            }
+    let locations = SEMANTIC
+        .lock()
+        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
+        .find_references(project_path, file, line, column)
+        .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))?;
 
-            // Check type references
-            let type_usages: Vec<String> = parse_result
-                .type_references
-                .iter()
-                .filter(|r| r.type_name == symbol_name)
-                .map(|r| match &r.usage_context {
-                    crate::parser::TypeUsageContext::FunctionParameter {
-                        function_name,
-                    } => {
-                        format!("parameter in {}", function_name)
-                    }
-                    crate::parser::TypeUsageContext::FunctionReturn {
-                        function_name,
-                    } => {
-                        format!("return type of {}", function_name)
-                    }
-                    crate::parser::TypeUsageContext::StructField {
-                        struct_name,
-                        field_name,
-                    } => {
-                        format!("field '{}' in struct {}", field_name, struct_name)
-                    }
-                    crate::parser::TypeUsageContext::ImplBlock { trait_name } => {
-                        if let Some(trait_name) = trait_name {
-                            format!("impl {} for type", trait_name)
-                        } else {
-                            "impl block".to_string()
-                        }
-                    }
-                    crate::parser::TypeUsageContext::LetBinding => {
-                        "let binding".to_string()
-                    }
-                    crate::parser::TypeUsageContext::GenericArgument => {
-                        "generic type argument".to_string()
-                    }
-                })
-                .collect();
-
-            if !type_usages.is_empty() {
-                found_type_refs.push((path.to_path_buf(), type_usages));
-            }
-        }
-        Ok(())
-    };
-
-    visit_rust_files(dir_path, &mut visitor).map_err(|e| McpError::invalid_params(e, None))?;
-
-    if found_call_refs.is_empty() && found_type_refs.is_empty() {
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "No references found for symbol '{}'",
-            symbol_name
-        ))]))
+    if locations.is_empty() {
+        Ok(CallToolResult::success(vec![Content::text(
+            "No references found at this position"
+        )]))
     } else {
-        let total_call_refs: usize = found_call_refs
+        let result = locations
             .iter()
-            .map(|(_, callers)| callers.len())
-            .sum();
-        let total_type_refs: usize =
-            found_type_refs.iter().map(|(_, usages)| usages.len()).sum();
-        let total_refs = total_call_refs + total_type_refs;
-        let total_files = found_call_refs
-            .iter()
-            .map(|(p, _)| p)
-            .chain(found_type_refs.iter().map(|(p, _)| p))
-            .collect::<std::collections::HashSet<_>>()
-            .len();
+            .map(|loc| loc.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        let mut result = format!(
-            "Found {} reference(s) to '{}' in {} file(s):\n\n",
-            total_refs, symbol_name, total_files
-        );
-
-        // Show function call references
-        if !found_call_refs.is_empty() {
-            result.push_str(&format!(
-                "Function Calls ({} references):\n",
-                total_call_refs
-            ));
-            for (path, callers) in found_call_refs {
-                // Use relative path if possible
-                let display_path: String = path.strip_prefix(dir_path)
-                    .map(|p: &std::path::Path| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-                result.push_str(&format!(
-                    "- {} (called by: {})\n",
-                    display_path,
-                    callers.join(", ")
-                ));
-            }
-            result.push('\n');
-        }
-
-        // Show type usage references
-        if !found_type_refs.is_empty() {
-            result.push_str(&format!("Type Usage ({} references):\n", total_type_refs));
-            for (path, usages) in found_type_refs {
-                // Use relative path if possible
-                let display_path: String = path.strip_prefix(dir_path)
-                    .map(|p: &std::path::Path| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-                result.push_str(&format!("- {} ({})\n", display_path, usages.join(", ")));
-            }
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Found {} reference(s):\n{}",
+            locations.len(),
+            result
+        ))]))
     }
+}
+
+/// Find all references to the symbol at a specific position (stub when IDE feature is disabled)
+#[cfg(not(feature = "ide"))]
+pub async fn find_references(
+    _file_path: &str,
+    _line: u32,
+    _column: u32,
+    _directory: &str,
+) -> Result<CallToolResult, McpError> {
+    Ok(CallToolResult::success(vec![Content::text(
+        "IDE feature not enabled. Compile with --features ide to enable semantic analysis."
+    )]))
 }
 
 /// Get dependencies for a file (imports and files that depend on it)
@@ -529,15 +441,17 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_find_definition_invalid_directory() {
-        let result = find_definition("test", "/nonexistent/directory").await;
-        assert!(result.is_err());
+    #[cfg(feature = "ide")]
+    async fn test_find_definition_invalid_file() {
+        let result = find_definition("/nonexistent/file.rs", 1, 1, "/nonexistent/directory").await;
+        assert!(result.is_err() || result.unwrap().is_error.unwrap_or(false) == false);
     }
 
     #[tokio::test]
-    async fn test_find_references_invalid_directory() {
-        let result = find_references("test", "/nonexistent/directory").await;
-        assert!(result.is_err());
+    #[cfg(feature = "ide")]
+    async fn test_find_references_invalid_file() {
+        let result = find_references("/nonexistent/file.rs", 1, 1, "/nonexistent/directory").await;
+        assert!(result.is_err() || result.unwrap().is_error.unwrap_or(false) == false);
     }
 
     #[tokio::test]

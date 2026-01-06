@@ -133,29 +133,31 @@ impl SearchToolRouter {
     }
 
     /// Find the definition of a symbol in Rust code
-    #[tool(description = "Find where a Rust symbol (function, struct, trait, etc.) is defined")]
+    #[tool(description = "Find where a Rust symbol is defined at a specific position")]
     async fn find_definition(
         &self,
         Parameters(FindDefinitionParams {
-            symbol_name,
+            file_path,
+            line,
+            column,
             directory,
         }): Parameters<FindDefinitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_definition(&symbol_name, &directory).await
+        crate::tools::analysis_tools::find_definition(&file_path, line, column, &directory).await
     }
 
     /// Find all references to a symbol in the codebase
-    #[tool(
-        description = "Find all places where a symbol is referenced or called (includes function calls and type usage)"
-    )]
+    #[tool(description = "Find all references to the symbol at a specific position")]
     async fn find_references(
         &self,
         Parameters(FindReferencesParams {
-            symbol_name,
+            file_path,
+            line,
+            column,
             directory,
         }): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_references(&symbol_name, &directory).await
+        crate::tools::analysis_tools::find_references(&file_path, line, column, &directory).await
     }
 
     /// Get dependencies for a file (imports and files that depend on it)
