@@ -58,7 +58,7 @@ The server uses stdio transport. Add to your MCP client config:
 {
   "mcpServers": {
     "rust-code-mcp": {
-      "command": "/path/to/rust-code-mcp"
+      "command": "/path/to/file-search-mcp"
     }
   }
 }
