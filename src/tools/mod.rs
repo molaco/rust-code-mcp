@@ -1,3 +1,4 @@
+pub mod clear_cache_tool;
 pub mod health_tool;
 pub mod index_tool;
 pub mod search_tool;

@@ -55,6 +55,10 @@ pub struct MetadataCache {
 impl MetadataCache {
     /// Open or create a metadata cache at the given path
     pub fn new(path: &Path) -> Result<Self, sled::Error> {
+        // Ensure parent directories exist (sled only creates the final directory)
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
         let db = sled::open(path)?;
         Ok(Self { db })
     }

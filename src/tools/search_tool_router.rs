@@ -36,6 +36,7 @@
 //! 8. **analyze_complexity** - Code complexity metrics
 //! 9. **health_check** - System health status
 //! 10. **index_codebase** - Manual indexing with change detection
+//! 11. **clear_cache** - Clear corrupted cache/index files
 //!
 //! ## Refactoring Notes
 //!
@@ -219,6 +220,15 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::index_tool::index_codebase(params, self.sync_manager.as_ref()).await
     }
+
+    /// Clear corrupted cache, index, and vector store files
+    #[tool(description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store.")]
+    async fn clear_cache(
+        &self,
+        Parameters(params): Parameters<crate::tools::clear_cache_tool::ClearCacheParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::clear_cache_tool::clear_cache(params).await
+    }
 }
 
 #[tool_handler]
@@ -233,7 +243,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection"
+                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files to fix MetadataCache errors"
                     .into(),
             ),
         }
