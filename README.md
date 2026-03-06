@@ -30,11 +30,71 @@ An MCP server for semantic code search in Rust codebases. Combines BM25 full-tex
 | `index_codebase` | Manually trigger indexing |
 | `health_check` | Check system status |
 
-## Building
+## Installation
+
+### 1. Build the binary
 
 ```bash
+git clone https://github.com/molaco/rust-code-mcp.git
+cd rust-code-mcp
 cargo build --release
 ```
+
+The binary is at `target/release/file-search-mcp`.
+
+Optionally, copy it somewhere on your PATH:
+
+```bash
+cp target/release/file-search-mcp ~/.local/bin/
+```
+
+### 2. Add to Claude Code
+
+In your Rust project directory, create `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "rust-code-mcp": {
+      "command": "/absolute/path/to/file-search-mcp"
+    }
+  }
+}
+```
+
+Or add it globally in `~/.claude.json` so it's available in all projects:
+
+```json
+{
+  "mcpServers": {
+    "rust-code-mcp": {
+      "command": "/absolute/path/to/file-search-mcp"
+    }
+  }
+}
+```
+
+### 3. Index your codebase
+
+Once Claude Code starts, the server is running. Use the `index_codebase` tool to index your project:
+
+```
+> index my codebase at /absolute/path/to/my-rust-project
+```
+
+Or call the tool directly with the `directory` parameter set to your project root. Indexing is incremental — subsequent runs only process changed files (via Merkle tree change detection). A background sync also re-indexes every 5 minutes automatically.
+
+### 4. Start using it
+
+All tools accept a `directory` parameter pointing to your project root. Examples:
+
+- **Search code**: `search` with a query like "error handling in parser"
+- **Find definitions**: `find_definition` for a symbol name
+- **Find references**: `find_references` to see all usages of a symbol
+- **Call graph**: `get_call_graph` to trace function relationships
+- **Similar code**: `get_similar_code` for semantic similarity search
+
+Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path — it never writes to your project directory.
 
 ## Nix
 
@@ -49,20 +109,6 @@ nix build github:molaco/rust-code-mcp
 ```
 
 The dev shell includes nightly Rust and CUDA support.
-
-## Configuration
-
-The server uses stdio transport. Add to your MCP client config:
-
-```json
-{
-  "mcpServers": {
-    "rust-code-mcp": {
-      "command": "/path/to/file-search-mcp"
-    }
-  }
-}
-```
 
 ## GPU Acceleration
 
