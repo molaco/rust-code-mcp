@@ -28,7 +28,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut indexer = IncrementalIndexer::new(
         &cache_path,
         &tantivy_path,
-        "http://localhost:6333",
         &collection_name,
         384,
         None,

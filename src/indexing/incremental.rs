@@ -11,7 +11,7 @@
 
 use crate::indexing::merkle::{ChangeSet, FileSystemMerkle};
 use crate::indexing::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing;
 

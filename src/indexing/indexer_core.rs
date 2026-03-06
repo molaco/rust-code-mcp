@@ -85,7 +85,7 @@ pub struct ProcessedFile {
 /// Core indexing logic handler
 pub struct IndexerCore {
     /// Rust code parser
-    parser: RustParser,
+    _parser: RustParser,
     /// Code chunker
     chunker: Chunker,
     /// Embedding generator
@@ -124,7 +124,7 @@ impl IndexerCore {
         let memory_monitor = MemoryMonitor::new();
 
         Ok(Self {
-            parser,
+            _parser: parser,
             chunker,
             embedding_generator,
             metadata_cache,
@@ -160,7 +160,17 @@ impl IndexerCore {
         Ok(true)
     }
 
-    /// Check if file has changed (using metadata cache)
+    /// Fast check if file has likely changed using only stat info (mtime + size).
+    /// Avoids reading file content. Use as a pre-filter before `has_file_changed`.
+    pub fn has_stat_changed(&self, file_path: &Path) -> Result<bool> {
+        let file_path_str = file_path.to_string_lossy().to_string();
+        let stat = crate::metadata_cache::FileStat::from_path(file_path)
+            .map_err(|e| anyhow::anyhow!("Failed to stat file: {}", e))?;
+        self.metadata_cache.has_stat_changed(&file_path_str, &stat)
+            .map_err(|e| anyhow::anyhow!("Metadata cache error: {}", e))
+    }
+
+    /// Check if file has changed (using metadata cache, reads content hash)
     pub fn has_file_changed(&self, file_path: &Path, content: &str) -> Result<bool> {
         let file_path_str = file_path.to_string_lossy().to_string();
         self.metadata_cache.has_changed(&file_path_str, content)
@@ -194,7 +204,12 @@ impl IndexerCore {
             anyhow::bail!("File filtered: security check failed");
         }
 
-        // Read file
+        // Fast stat-based change detection (avoids reading file content)
+        if !self.has_stat_changed(file_path)? {
+            anyhow::bail!("File unchanged");
+        }
+
+        // Read file (only if stat suggests change)
         let content = std::fs::read_to_string(file_path)
             .context(format!("Failed to read file: {}", file_path.display()))?;
 
@@ -209,7 +224,7 @@ impl IndexerCore {
             anyhow::bail!("Contains secrets");
         }
 
-        // Check cache
+        // Content hash check (confirms stat-based detection)
         if !self.has_file_changed(file_path, &content)? {
             anyhow::bail!("File unchanged");
         }

@@ -24,7 +24,6 @@ async fn main() {
     let mut indexer = IncrementalIndexer::new(
         &cache,
         &tantivy,
-        "http://localhost:6333",
         &format!("rust_code_bench_{}", uuid::Uuid::new_v4()),
         384,
         None,

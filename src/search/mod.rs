@@ -186,7 +186,7 @@ impl HybridSearch {
     /// score(item) = sum(1 / (k + rank_i)) for all systems i where item appears
     ///
     /// Where k is a constant (typically 60) and rank_i is 1-indexed rank
-    fn reciprocal_rank_fusion(
+    fn _reciprocal_rank_fusion(
         &self,
         vector_results: &[VectorSearchResult],
         bm25_results: &[(ChunkId, f32, CodeChunk)],

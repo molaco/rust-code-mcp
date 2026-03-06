@@ -8,7 +8,6 @@
 
 use crate::indexing::incremental::IncrementalIndexer;
 use anyhow::Result;
-use directories::ProjectDirs;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,9 +21,6 @@ pub struct SyncManager {
     tracked_dirs: Arc<RwLock<HashSet<PathBuf>>>,
     /// Sync interval (default: 5 minutes)
     interval: Duration,
-    /// Base paths for cache and indices
-    cache_base: PathBuf,
-    tantivy_base: PathBuf,
 }
 
 impl SyncManager {
@@ -35,15 +31,13 @@ impl SyncManager {
     /// * `tantivy_base` - Base directory for Tantivy indices
     /// * `interval_secs` - Sync interval in seconds (default: 300 = 5 minutes)
     pub fn new(
-        cache_base: PathBuf,
-        tantivy_base: PathBuf,
+        _cache_base: PathBuf,
+        _tantivy_base: PathBuf,
         interval_secs: u64,
     ) -> Self {
         Self {
             tracked_dirs: Arc::new(RwLock::new(HashSet::new())),
             interval: Duration::from_secs(interval_secs),
-            cache_base,
-            tantivy_base,
         }
     }
 
@@ -51,15 +45,10 @@ impl SyncManager {
     ///
     /// Uses XDG-compliant directories or falls back to current directory
     pub fn with_defaults(interval_secs: u64) -> Self {
-        let data_dir = ProjectDirs::from("dev", "rust-code-mcp", "search")
-            .map(|dirs| dirs.data_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"));
-
-        Self::new(
-            data_dir.join("cache"),
-            data_dir.join("index"),
-            interval_secs,
-        )
+        Self {
+            tracked_dirs: Arc::new(RwLock::new(HashSet::new())),
+            interval: Duration::from_secs(interval_secs),
+        }
     }
 
     /// Add a directory to track
@@ -146,23 +135,14 @@ impl SyncManager {
     /// - < 10ms if no changes
     /// - Only reindexes changed files if changes detected
     async fn sync_directory(&self, dir: &PathBuf) -> Result<()> {
-        // Create paths for this directory
-        let dir_hash = {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(dir.to_string_lossy().as_bytes());
-            format!("{:x}", hasher.finalize())
-        };
-
-        let cache_path = self.cache_base.join(&dir_hash);
-        let tantivy_path = self.tantivy_base.join(&dir_hash);
-        let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
+        use crate::tools::project_paths::ProjectPaths;
+        let paths = ProjectPaths::from_directory(dir);
 
         // Create incremental indexer with embedded LanceDB backend
         let mut indexer = IncrementalIndexer::new(
-            &cache_path,
-            &tantivy_path,
-            &collection_name,
+            &paths.cache_path,
+            &paths.tantivy_path,
+            &paths.collection_name,
             384, // vector size for all-MiniLM-L6-v2
             None,
         )

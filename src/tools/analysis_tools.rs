@@ -93,7 +93,7 @@ use crate::parser::RustParser;
 use crate::semantic::SEMANTIC;
 
 /// Helper function to recursively visit Rust files
-fn visit_rust_files<F>(dir: &Path, visitor: &mut F) -> Result<(), String>
+fn _visit_rust_files<F>(dir: &Path, visitor: &mut F) -> Result<(), String>
 where
     F: FnMut(&Path) -> Result<(), String>,
 {
@@ -102,7 +102,7 @@ where
         let path = entry.path();
 
         if path.is_dir() {
-            visit_rust_files(&path, visitor)?;
+            _visit_rust_files(&path, visitor)?;
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             visitor(&path)?;
         }

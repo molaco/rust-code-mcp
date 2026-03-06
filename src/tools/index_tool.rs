@@ -4,8 +4,7 @@
 //! incremental indexing with optional force reindex.
 
 use crate::indexing::incremental::{get_snapshot_path, IncrementalIndexer};
-use anyhow::Result;
-use directories::ProjectDirs;
+use crate::tools::project_paths::ProjectPaths;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
 use std::path::PathBuf;
 use tracing;
@@ -16,13 +15,6 @@ pub struct IndexCodebaseParams {
     pub directory: String,
     #[schemars(description = "Force full reindex even if already indexed (default: false)")]
     pub force_reindex: Option<bool>,
-}
-
-/// Get the data directory for storing caches and indices
-fn data_dir() -> PathBuf {
-    ProjectDirs::from("dev", "rust-code-mcp", "search")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
 }
 
 /// Index a codebase directory with automatic change detection
@@ -53,23 +45,13 @@ pub async fn index_codebase(
 
     tracing::info!("Indexing codebase: {} (force: {})", dir.display(), force);
 
-    // Create collection name from directory hash (same strategy as search tool)
-    let dir_hash = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(dir.to_string_lossy().as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
-
-    let cache_path = data_dir().join("cache").join(&dir_hash);
-    let tantivy_path = data_dir().join("index").join(&dir_hash);
-    let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
+    let paths = ProjectPaths::from_directory(&dir);
 
     tracing::debug!(
         "Using collection: {}, cache: {}, index: {}",
-        collection_name,
-        cache_path.display(),
-        tantivy_path.display()
+        paths.collection_name,
+        paths.cache_path.display(),
+        paths.tantivy_path.display()
     );
 
     // Handle force reindex by deleting snapshot
@@ -85,9 +67,9 @@ pub async fn index_codebase(
 
     // Create incremental indexer with embedded LanceDB backend
     let mut indexer = IncrementalIndexer::new(
-        &cache_path,
-        &tantivy_path,
-        &collection_name,
+        &paths.cache_path,
+        &paths.tantivy_path,
+        &paths.collection_name,
         384, // all-MiniLM-L6-v2 vector size
         None,
     )
@@ -155,7 +137,7 @@ pub async fn index_codebase(
             } else {
                 "disabled"
             },
-            collection_name
+            paths.collection_name
         )
     } else {
         // Changes detected and indexed
@@ -181,7 +163,7 @@ pub async fn index_codebase(
             } else {
                 "disabled"
             },
-            collection_name
+            paths.collection_name
         )
     };
 

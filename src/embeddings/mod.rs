@@ -106,13 +106,31 @@ impl EmbeddingGenerator {
 
     /// Generate embedding for a single text
     pub fn embed(&self, text: &str) -> Result<Embedding, Box<dyn std::error::Error + Send>> {
-        let mut model = self.model.lock().unwrap();
-        let embeddings = model.embed(vec![text], None)
+        let model = self.model.clone();
+        let text = text.to_string();
+        let mut model = model.lock().unwrap();
+        let embeddings = model.embed(vec![&text], None)
             .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?;
         embeddings
             .into_iter()
             .next()
             .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No embedding generated")) as Box<dyn std::error::Error + Send>)
+    }
+
+    /// Generate embedding for a single text, non-blocking (runs on blocking thread pool)
+    pub async fn embed_async(&self, text: String) -> Result<Embedding, Box<dyn std::error::Error + Send>> {
+        let model = self.model.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut model = model.lock().unwrap();
+            let embeddings = model.embed(vec![&text], None)
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?;
+            embeddings
+                .into_iter()
+                .next()
+                .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No embedding generated")) as Box<dyn std::error::Error + Send>)
+        })
+        .await
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?
     }
 
     /// Generate embeddings for multiple texts (batch processing)
@@ -124,6 +142,22 @@ impl EmbeddingGenerator {
         let mut model = self.model.lock().unwrap();
         Ok(model.embed(text_refs, None)
             .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?)
+    }
+
+    /// Generate embeddings for multiple texts, non-blocking (runs on blocking thread pool)
+    pub async fn embed_batch_async(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<Vec<Embedding>, Box<dyn std::error::Error + Send>> {
+        let model = self.model.clone();
+        tokio::task::spawn_blocking(move || {
+            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            let mut model = model.lock().unwrap();
+            model.embed(text_refs, None)
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)
+        })
+        .await
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?
     }
 
     /// Generate embeddings for code chunks

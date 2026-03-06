@@ -1,70 +1,7 @@
 //! Query tools module
 //!
-//! This module provides MCP tools for searching and querying indexed Rust codebases.
-//! It implements hybrid search combining BM25 keyword search with semantic vector search
-//! for optimal code discovery.
-//!
-//! ## Overview
-//!
-//! The query tools enable intelligent code search through:
-//! - **Hybrid Search**: Combines BM25 (keyword) + Vector (semantic) search with RRF ranking
-//! - **Semantic Search**: Pure vector-based similarity using code embeddings
-//! - **File Reading**: Safe file content retrieval with binary file detection
-//!
-//! ## MCP Tools
-//!
-//! - [`search`]: Hybrid keyword + semantic search (automatically indexes if needed)
-//! - [`get_similar_code`]: Find semantically similar code snippets using embeddings
-//! - [`read_file_content`]: Read and validate file contents
-//!
-//! ## Search Architecture
-//!
-//! ```text
-//! Query → HybridSearch
-//!     ├─ BM25 Search (Tantivy)      → Keyword matches
-//!     ├─ Vector Search (LanceDB)    → Semantic matches
-//!     └─ RRF Fusion                 → Combined ranking
-//! ```
-//!
-//! ## Examples
-//!
-//! ### Hybrid Search
-//! ```rust,no_run
-//! use file_search_mcp::tools::query_tools::search;
-//!
-//! # async fn example() -> Result<(), rmcp::ErrorData> {
-//! // Search with hybrid approach (BM25 + semantic)
-//! let results = search(
-//!     "/path/to/rust/project",
-//!     "async tokio spawn",
-//!     None  // No sync manager
-//! ).await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Semantic Search
-//! ```rust,no_run
-//! use file_search_mcp::tools::query_tools::get_similar_code;
-//!
-//! # async fn example() -> Result<(), rmcp::ErrorData> {
-//! // Find code similar to a description
-//! let results = get_similar_code(
-//!     "function that parses JSON and validates schema",
-//!     "/path/to/project",
-//!     10  // Return top 10 results
-//! ).await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## Architecture
-//!
-//! This module is part of the refactored tools layer (Phase 1 refactoring).
-//! It delegates to:
-//! - `HybridSearch` for search logic
-//! - `UnifiedIndexer` for automatic indexing
-//! - `VectorStore` for semantic search
+//! MCP tools for searching and querying indexed Rust codebases.
+//! Implements hybrid search combining BM25 keyword search with semantic vector search.
 
 use rmcp::{
     ErrorData as McpError,
@@ -76,14 +13,13 @@ use tracing;
 
 use crate::embeddings::EmbeddingGenerator;
 use crate::search::HybridSearch;
+use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
 pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
-    // Validate file path
     let file_path_obj = Path::new(file_path);
 
-    // Check if the path exists
     if !file_path_obj.exists() {
         return Err(McpError::invalid_params(
             format!("The specified path '{}' does not exist", file_path),
@@ -91,7 +27,6 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
         ));
     }
 
-    // Check if the path is a file
     if !file_path_obj.is_file() {
         return Err(McpError::invalid_params(
             format!("The specified path '{}' is not a file", file_path),
@@ -99,7 +34,6 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
         ));
     }
 
-    // Try to read the file content
     match fs::read_to_string(file_path_obj) {
         Ok(content) => {
             if content.is_empty() {
@@ -111,13 +45,9 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
             }
         }
         Err(e) => {
-            // Handle binary files or read errors
             tracing::error!("Error reading file '{}': {}", file_path_obj.display(), e);
-
-            // Try to read as binary and check if it's a binary file
             match fs::read(file_path_obj) {
                 Ok(bytes) => {
-                    // Check if it seems to be a binary file
                     if bytes.iter().any(|&b| b == 0)
                         || bytes
                             .iter()
@@ -151,15 +81,142 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
     }
 }
 
+/// Check if an index already exists for a directory (Tantivy meta.json present)
+fn index_exists(paths: &ProjectPaths) -> bool {
+    paths.tantivy_path.join("meta.json").exists()
+}
+
+/// Initialize indexer and run incremental indexing, returning stats.
+/// Only called when we actually need to index.
+async fn ensure_indexed(
+    dir_path: &Path,
+    paths: &ProjectPaths,
+    sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
+) -> Result<crate::indexing::unified::IndexStats, McpError> {
+    use crate::indexing::unified::UnifiedIndexer;
+
+    tracing::info!("Initializing unified indexer for {}", dir_path.display());
+
+    let mut indexer = UnifiedIndexer::for_embedded(
+        &paths.cache_path,
+        &paths.tantivy_path,
+        &paths.collection_name,
+        384,
+        None,
+    )
+    .await
+    .map_err(|e| McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None))?;
+
+    let stats = indexer
+        .index_directory(dir_path)
+        .await
+        .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
+
+    tracing::info!(
+        "Indexed {} files ({} chunks), {} unchanged, {} skipped",
+        stats.indexed_files, stats.total_chunks, stats.unchanged_files, stats.skipped_files
+    );
+
+    // Track directory for background sync
+    if let Some(ref sync_mgr) = sync_manager {
+        if stats.indexed_files > 0 || stats.unchanged_files > 0 {
+            sync_mgr.track_directory(dir_path.to_path_buf()).await;
+        }
+    }
+
+    Ok(stats)
+}
+
+/// Create a HybridSearch configured for a project directory
+async fn create_hybrid_search(
+    paths: &ProjectPaths,
+    include_bm25: bool,
+) -> Result<HybridSearch, McpError> {
+    let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
+        McpError::invalid_params(format!("Failed to initialize embedding generator: {}", e), None)
+    })?;
+
+    let vector_store = VectorStore::new_embedded(paths.vector_path.clone(), 384)
+        .await
+        .map_err(|e| {
+            McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
+        })?;
+
+    let bm25_search = if include_bm25 {
+        use crate::indexing::tantivy_adapter::TantivyAdapter;
+        use crate::config::indexer::TantivyConfig;
+        let tantivy_config = TantivyConfig::default(&paths.tantivy_path);
+        TantivyAdapter::new(tantivy_config)
+            .ok()
+            .and_then(|adapter| adapter.create_bm25_search().ok())
+    } else {
+        None
+    };
+
+    Ok(HybridSearch::with_defaults(
+        embedding_generator,
+        vector_store,
+        bm25_search,
+    ))
+}
+
+/// Format search results into a display string
+fn format_results(
+    results: &[crate::search::SearchResult],
+    keyword: &str,
+    stats: Option<&crate::indexing::unified::IndexStats>,
+) -> String {
+    if results.is_empty() {
+        let mut s = format!("No results found for '{}'.", keyword);
+        if let Some(st) = stats {
+            s.push_str(&format!(
+                "\nIndexed {} files ({} chunks), {} unchanged, {} skipped",
+                st.indexed_files, st.total_chunks, st.unchanged_files, st.skipped_files
+            ));
+        }
+        return s;
+    }
+
+    let mut result_str = format!("Found {} results for '{}':\n\n", results.len(), keyword);
+
+    for (idx, result) in results.iter().enumerate() {
+        result_str.push_str(&format!(
+            "{}. Score: {:.4} | File: {} | Symbol: {} ({})\n",
+            idx + 1,
+            result.score,
+            result.chunk.context.file_path.display(),
+            result.chunk.context.symbol_name,
+            result.chunk.context.symbol_kind,
+        ));
+        result_str.push_str(&format!(
+            "   Lines: {}-{}\n",
+            result.chunk.context.line_start, result.chunk.context.line_end
+        ));
+        if let Some(ref doc) = result.chunk.context.docstring {
+            result_str.push_str(&format!("   Doc: {}\n", doc));
+        }
+        result_str.push_str(&format!(
+            "   Preview:\n   {}\n\n",
+            result.chunk.content.lines().take(3).collect::<Vec<_>>().join("\n   ")
+        ));
+    }
+
+    if let Some(st) = stats {
+        result_str.push_str(&format!(
+            "\n--- Indexing stats: {} files indexed ({} chunks), {} unchanged, {} skipped ---",
+            st.indexed_files, st.total_chunks, st.unchanged_files, st.skipped_files
+        ));
+    }
+
+    result_str
+}
+
 /// Perform hybrid search (BM25 + Vector) on Rust code
 pub async fn search(
     directory: &str,
     keyword: &str,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
 ) -> Result<CallToolResult, McpError> {
-    use crate::indexing::unified::UnifiedIndexer;
-    use crate::tools::indexing_tools::data_dir;
-
     let dir_path = Path::new(directory);
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
@@ -168,7 +225,6 @@ pub async fn search(
         ));
     }
 
-    // Ensure the keyword is not empty
     if keyword.trim().is_empty() {
         return Err(McpError::invalid_params(
             "Search keyword is empty. Please enter a valid keyword.".to_string(),
@@ -176,76 +232,33 @@ pub async fn search(
         ));
     }
 
-    // 1. Initialize unified indexer with embedded LanceDB backend
-    // Use hash-based paths consistent with index_tool.rs
-    let dir_hash = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(dir_path.to_string_lossy().as_bytes());
-        format!("{:x}", hasher.finalize())
+    let paths = ProjectPaths::from_directory(dir_path);
+
+    // Only run full indexing if no index exists yet.
+    // If index exists, skip re-indexing (background sync handles updates).
+    let stats = if index_exists(&paths) {
+        // Lightweight: just open existing index, no file walking
+        tracing::info!("Using existing index for {}", dir_path.display());
+        // Track for background sync so it stays fresh
+        if let Some(ref sync_mgr) = sync_manager {
+            sync_mgr.track_directory(dir_path.to_path_buf()).await;
+        }
+        None
+    } else {
+        Some(ensure_indexed(dir_path, &paths, sync_manager).await?)
     };
 
-    let cache_path = data_dir().join("cache").join(&dir_hash);
-    let tantivy_path = data_dir().join("index").join(&dir_hash);
-    let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
-
-    tracing::info!("Initializing unified indexer for {}", dir_path.display());
-    tracing::debug!(
-        "Using collection: {}, cache: {}, index: {}",
-        collection_name,
-        cache_path.display(),
-        tantivy_path.display()
-    );
-
-    let mut indexer = UnifiedIndexer::for_embedded(
-        &cache_path,
-        &tantivy_path,
-        &collection_name,
-        384, // all-MiniLM-L6-v2 vector size
-        None,
-    )
-    .await
-    .map_err(|e| McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None))?;
-
-    // 2. Index directory (incremental - only changed files)
-    tracing::info!("Indexing directory: {}", dir_path.display());
-    let stats = indexer
-        .index_directory(dir_path)
-        .await
-        .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
-
-    tracing::info!(
-        "Indexed {} files ({} chunks), {} unchanged, {} skipped",
-        stats.indexed_files,
-        stats.total_chunks,
-        stats.unchanged_files,
-        stats.skipped_files
-    );
-
-    // Track directory for background sync if indexing was successful
-    if let Some(ref sync_mgr) = sync_manager {
-        if stats.indexed_files > 0 || stats.unchanged_files > 0 {
-            sync_mgr.track_directory(dir_path.to_path_buf()).await;
-            tracing::info!("Directory tracked for background sync: {}", dir_path.display());
+    // Handle case where first-time indexing produced nothing
+    if let Some(ref st) = stats {
+        if st.total_chunks == 0 && st.unchanged_files == 0 {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No Rust files suitable for indexing were found in '{}'.\nSkipped files: {}",
+                directory, st.skipped_files
+            ))]));
         }
     }
 
-    if stats.total_chunks == 0 && stats.unchanged_files == 0 {
-        return Ok(CallToolResult::success(vec![Content::text(format!(
-            "No Rust files suitable for indexing were found in '{}'.\nSkipped files: {}",
-            directory, stats.skipped_files
-        ))]));
-    }
-
-    // 3. Perform hybrid search
-    let bm25_search = indexer.create_bm25_search()
-        .map_err(|e| McpError::invalid_params(format!("Failed to create BM25 search: {}", e), None))?;
-
-    let hybrid_search = HybridSearch::with_defaults(
-        indexer.embedding_generator_cloned(),
-        indexer.vector_store_cloned(),
-        Some(bm25_search),
-    );
+    let hybrid_search = create_hybrid_search(&paths, true).await?;
 
     tracing::info!("Performing hybrid search for: {}", keyword);
     let results = hybrid_search
@@ -253,45 +266,9 @@ pub async fn search(
         .await
         .map_err(|e| McpError::invalid_params(format!("Search failed: {}", e), None))?;
 
-    // 4. Format results
-    if results.is_empty() {
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "No results found for '{}'.\nIndexed {} files ({} chunks), {} unchanged, {} skipped",
-            keyword, stats.indexed_files, stats.total_chunks, stats.unchanged_files, stats.skipped_files
-        ))]))
-    } else {
-        let mut result_str = format!("Found {} results for '{}':\n\n", results.len(), keyword);
-
-        for (idx, result) in results.iter().enumerate() {
-            result_str.push_str(&format!(
-                "{}. Score: {:.4} | File: {} | Symbol: {} ({})\n",
-                idx + 1,
-                result.score,
-                result.chunk.context.file_path.display(),
-                result.chunk.context.symbol_name,
-                result.chunk.context.symbol_kind,
-            ));
-            result_str.push_str(&format!(
-                "   Lines: {}-{}\n",
-                result.chunk.context.line_start,
-                result.chunk.context.line_end
-            ));
-            if let Some(ref doc) = result.chunk.context.docstring {
-                result_str.push_str(&format!("   Doc: {}\n", doc));
-            }
-            result_str.push_str(&format!(
-                "   Preview:\n   {}\n\n",
-                result.chunk.content.lines().take(3).collect::<Vec<_>>().join("\n   ")
-            ));
-        }
-
-        result_str.push_str(&format!(
-            "\n--- Indexing stats: {} files indexed ({} chunks), {} unchanged, {} skipped ---",
-            stats.indexed_files, stats.total_chunks, stats.unchanged_files, stats.skipped_files
-        ));
-
-        Ok(CallToolResult::success(vec![Content::text(result_str)]))
-    }
+    Ok(CallToolResult::success(vec![Content::text(
+        format_results(&results, keyword, stats.as_ref()),
+    )]))
 }
 
 /// Find semantically similar code using vector search
@@ -308,50 +285,10 @@ pub async fn get_similar_code(
         ));
     }
 
-    tracing::debug!("Searching for similar code in '{}' to: {}", directory, query);
+    let paths = ProjectPaths::from_directory(dir_path);
 
-    // Calculate directory hash to determine collection name
-    let dir_hash = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(dir_path.to_string_lossy().as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
+    let hybrid_search = create_hybrid_search(&paths, false).await?;
 
-    let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
-
-    tracing::debug!(
-        "Using collection '{}' for directory '{}'",
-        collection_name,
-        dir_path.display()
-    );
-
-    // Initialize components
-    let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
-        McpError::invalid_params(
-            format!("Failed to initialize embedding generator: {}", e),
-            None,
-        )
-    })?;
-
-    // Create embedded vector store (LanceDB)
-    // Path must match index_tool.rs: data_dir()/cache/vectors/{collection_name}
-    let vector_store = {
-        use crate::tools::indexing_tools::data_dir;
-        let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
-        VectorStore::new_embedded(vector_path, 384).await.map_err(|e| {
-            McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
-        })?
-    };
-
-    // Create hybrid search (vector-only mode)
-    let hybrid_search = HybridSearch::with_defaults(
-        embedding_generator,
-        vector_store,
-        None, // No BM25 for this tool
-    );
-
-    // Perform vector search
     let results = hybrid_search
         .vector_only_search(query, limit)
         .await
@@ -372,9 +309,9 @@ pub async fn get_similar_code(
 
     for (idx, search_result) in results.iter().enumerate() {
         let chunk = &search_result.chunk;
-        result.push_str(&format!("{}. ", idx + 1));
         result.push_str(&format!(
-            "Score: {:.4} | File: {} | Symbol: {} ({})\n",
+            "{}. Score: {:.4} | File: {} | Symbol: {} ({})\n",
+            idx + 1,
             search_result.score,
             chunk.context.file_path.display(),
             chunk.context.symbol_name,
@@ -389,12 +326,7 @@ pub async fn get_similar_code(
         }
         result.push_str(&format!(
             "   Code preview:\n   {}\n\n",
-            chunk
-                .content
-                .lines()
-                .take(3)
-                .collect::<Vec<_>>()
-                .join("\n   ")
+            chunk.content.lines().take(3).collect::<Vec<_>>().join("\n   ")
         ));
     }
 
