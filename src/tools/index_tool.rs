@@ -3,6 +3,7 @@
 //! Provides the `index_codebase` tool which allows manual triggering of
 //! incremental indexing with optional force reindex.
 
+use crate::embeddings::EMBEDDING_DIM;
 use crate::indexing::incremental::{get_snapshot_path, IncrementalIndexer};
 use crate::tools::project_paths::ProjectPaths;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
@@ -70,7 +71,7 @@ pub async fn index_codebase(
         &paths.cache_path,
         &paths.tantivy_path,
         &paths.collection_name,
-        384, // all-MiniLM-L6-v2 vector size
+        EMBEDDING_DIM,
         None,
     )
     .await

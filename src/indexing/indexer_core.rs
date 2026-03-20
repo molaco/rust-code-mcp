@@ -84,8 +84,6 @@ pub struct ProcessedFile {
 
 /// Core indexing logic handler
 pub struct IndexerCore {
-    /// Rust code parser
-    _parser: RustParser,
     /// Code chunker
     chunker: Chunker,
     /// Embedding generator
@@ -108,9 +106,6 @@ impl IndexerCore {
         cache_path: &Path,
         config: Option<IndexerCoreConfig>,
     ) -> Result<Self> {
-        let parser = RustParser::new()
-            .map_err(|e| anyhow::anyhow!("Failed to create RustParser: {}", e))?;
-
         let chunker = Chunker::new();
 
         let embedding_generator = EmbeddingGenerator::new()
@@ -124,7 +119,6 @@ impl IndexerCore {
         let memory_monitor = MemoryMonitor::new();
 
         Ok(Self {
-            _parser: parser,
             chunker,
             embedding_generator,
             metadata_cache,

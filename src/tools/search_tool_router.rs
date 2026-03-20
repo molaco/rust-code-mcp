@@ -62,13 +62,9 @@
 //! use file_search_mcp::tools::search_tool_router::SearchToolRouter;
 //! use file_search_mcp::mcp::SyncManager;
 //! use std::sync::Arc;
-//! use std::path::PathBuf;
 //!
 //! // Create router with background sync
-//! let sync_mgr = Arc::new(SyncManager::new(
-//!     PathBuf::from("/tmp/cache"),
-//!     PathBuf::from("/tmp/index"),
-//!     300  // 5-minute sync interval
+//! let sync_mgr = Arc::new(SyncManager::new(300  // 5-minute sync interval
 //! ));
 //! let router = SearchToolRouter::with_sync_manager(sync_mgr);
 //! ```
@@ -264,12 +260,7 @@ mod tests {
     #[test]
     fn test_router_with_sync_manager() {
         use std::sync::Arc;
-        use std::path::PathBuf;
-        let sync_mgr = Arc::new(crate::mcp::SyncManager::new(
-            PathBuf::from("/tmp/cache"),
-            PathBuf::from("/tmp/index"),
-            300, // 5 minutes
-        ));
+        let sync_mgr = Arc::new(crate::mcp::SyncManager::new(300));
         let _router = SearchToolRouter::with_sync_manager(sync_mgr);
         assert!(_router.sync_manager.is_some());
     }

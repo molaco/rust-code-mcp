@@ -180,20 +180,6 @@ impl HybridSearch {
         Ok(merged.into_iter().take(limit).collect())
     }
 
-    /// Reciprocal Rank Fusion (RRF) algorithm
-    ///
-    /// Combines rankings from multiple search systems using the formula:
-    /// score(item) = sum(1 / (k + rank_i)) for all systems i where item appears
-    ///
-    /// Where k is a constant (typically 60) and rank_i is 1-indexed rank
-    fn _reciprocal_rank_fusion(
-        &self,
-        vector_results: &[VectorSearchResult],
-        bm25_results: &[(ChunkId, f32, CodeChunk)],
-    ) -> Vec<SearchResult> {
-        self.reciprocal_rank_fusion_with_k(vector_results, bm25_results, self.config.rrf_k)
-    }
-
     /// Reciprocal Rank Fusion with custom k parameter
     fn reciprocal_rank_fusion_with_k(
         &self,

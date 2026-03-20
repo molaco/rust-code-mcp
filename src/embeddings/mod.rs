@@ -2,6 +2,9 @@
 //!
 //! Generates embeddings for code chunks using local ONNX models
 
+/// Embedding dimension for all-MiniLM-L6-v2
+pub const EMBEDDING_DIM: usize = 384;
+
 use crate::chunker::{ChunkId, CodeChunk};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ort::execution_providers::{CPUExecutionProvider, CUDAExecutionProvider, ExecutionProvider};
@@ -106,10 +109,8 @@ impl EmbeddingGenerator {
 
     /// Generate embedding for a single text
     pub fn embed(&self, text: &str) -> Result<Embedding, Box<dyn std::error::Error + Send>> {
-        let model = self.model.clone();
-        let text = text.to_string();
-        let mut model = model.lock().unwrap();
-        let embeddings = model.embed(vec![&text], None)
+        let mut model = self.model.lock().unwrap();
+        let embeddings = model.embed(vec![text], None)
             .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?;
         embeddings
             .into_iter()

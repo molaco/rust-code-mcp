@@ -44,17 +44,12 @@ pub enum TypeUsageContext {
 
 /// Type reference tracker
 #[derive(Debug, Default)]
-pub struct TypeReferenceTracker {
-    /// All type references found
-    _references: Vec<TypeReference>,
-}
+pub struct TypeReferenceTracker {}
 
 impl TypeReferenceTracker {
     /// Create a new empty tracker
     pub fn new() -> Self {
-        Self {
-            _references: Vec::new(),
-        }
+        Self {}
     }
 
     /// Build type references from source code (convenience wrapper that parses internally)

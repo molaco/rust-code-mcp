@@ -6,10 +6,11 @@
 //! - Uses IncrementalIndexer for fast change detection
 //! - Tracks multiple directories independently
 
+use crate::embeddings::EMBEDDING_DIM;
 use crate::indexing::incremental::IncrementalIndexer;
 use anyhow::Result;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -27,14 +28,8 @@ impl SyncManager {
     /// Create a new sync manager
     ///
     /// # Arguments
-    /// * `cache_base` - Base directory for metadata caches
-    /// * `tantivy_base` - Base directory for Tantivy indices
     /// * `interval_secs` - Sync interval in seconds (default: 300 = 5 minutes)
-    pub fn new(
-        _cache_base: PathBuf,
-        _tantivy_base: PathBuf,
-        interval_secs: u64,
-    ) -> Self {
+    pub fn new(interval_secs: u64) -> Self {
         Self {
             tracked_dirs: Arc::new(RwLock::new(HashSet::new())),
             interval: Duration::from_secs(interval_secs),
@@ -62,7 +57,7 @@ impl SyncManager {
     }
 
     /// Remove a directory from tracking
-    pub async fn untrack_directory(&self, dir: &PathBuf) {
+    pub async fn untrack_directory(&self, dir: &Path) {
         let mut dirs = self.tracked_dirs.write().await;
         if dirs.remove(dir) {
             tracing::info!("Stopped tracking directory: {}", dir.display());
@@ -134,7 +129,7 @@ impl SyncManager {
     /// Uses IncrementalIndexer for fast change detection:
     /// - < 10ms if no changes
     /// - Only reindexes changed files if changes detected
-    async fn sync_directory(&self, dir: &PathBuf) -> Result<()> {
+    async fn sync_directory(&self, dir: &Path) -> Result<()> {
         use crate::tools::project_paths::ProjectPaths;
         let paths = ProjectPaths::from_directory(dir);
 
@@ -143,7 +138,7 @@ impl SyncManager {
             &paths.cache_path,
             &paths.tantivy_path,
             &paths.collection_name,
-            384, // vector size for all-MiniLM-L6-v2
+            EMBEDDING_DIM,
             None,
         )
         .await?;
@@ -174,7 +169,7 @@ impl SyncManager {
     }
 
     /// Trigger an immediate sync for a specific directory
-    pub async fn sync_directory_now(&self, dir: &PathBuf) -> Result<()> {
+    pub async fn sync_directory_now(&self, dir: &Path) -> Result<()> {
         tracing::info!("Manual sync triggered for: {}", dir.display());
         self.sync_directory(dir).await
     }

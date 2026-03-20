@@ -11,7 +11,7 @@ use std::fs;
 use std::path::Path;
 use tracing;
 
-use crate::embeddings::EmbeddingGenerator;
+use crate::embeddings::{EmbeddingGenerator, EMBEDDING_DIM};
 use crate::search::HybridSearch;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStore;
@@ -128,7 +128,7 @@ async fn ensure_indexed(
         &paths.cache_path,
         &paths.tantivy_path,
         &paths.collection_name,
-        384,
+        EMBEDDING_DIM,
         None,
     )
     .await
@@ -163,7 +163,7 @@ async fn create_hybrid_search(
         McpError::invalid_params(format!("Failed to initialize embedding generator: {}", e), None)
     })?;
 
-    let vector_store = VectorStore::new_embedded(paths.vector_path.clone(), 384)
+    let vector_store = VectorStore::new_embedded(paths.vector_path.clone(), EMBEDDING_DIM)
         .await
         .map_err(|e| {
             McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)

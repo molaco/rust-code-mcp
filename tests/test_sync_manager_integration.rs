@@ -15,7 +15,6 @@ use tempfile::TempDir;
 
 struct SyncTestEnv {
     _temp_dir: TempDir,
-    data_dir: PathBuf,
     codebase1: PathBuf,
     codebase2: PathBuf,
 }
@@ -23,8 +22,6 @@ struct SyncTestEnv {
 impl SyncTestEnv {
     fn new() -> Result<Self> {
         let temp_dir = TempDir::new()?;
-        let data_dir = temp_dir.path().join("data");
-        std::fs::create_dir(&data_dir)?;
 
         let codebase1 = temp_dir.path().join("codebase1");
         let codebase2 = temp_dir.path().join("codebase2");
@@ -34,18 +31,13 @@ impl SyncTestEnv {
 
         Ok(Self {
             _temp_dir: temp_dir,
-            data_dir,
             codebase1,
             codebase2,
         })
     }
 
     fn create_sync_manager(&self, interval_secs: u64) -> SyncManager {
-        SyncManager::new(
-            self.data_dir.join("cache"),
-            self.data_dir.join("index"),
-            interval_secs,
-        )
+        SyncManager::new(interval_secs)
     }
 
     fn write_file(&self, codebase: &PathBuf, name: &str, content: &str) -> Result<PathBuf> {
