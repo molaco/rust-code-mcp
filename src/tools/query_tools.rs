@@ -81,9 +81,36 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
     }
 }
 
-/// Check if an index already exists for a directory (Tantivy meta.json present)
-fn index_exists(paths: &ProjectPaths) -> bool {
-    paths.tantivy_path.join("meta.json").exists()
+/// Try to open BM25 search for an existing index.
+/// Returns None if the index doesn't exist or is corrupt.
+fn try_open_bm25(paths: &ProjectPaths) -> Option<crate::search::bm25::Bm25Search> {
+    use crate::config::indexer::TantivyConfig;
+    use crate::indexing::tantivy_adapter::TantivyAdapter;
+
+    let config = TantivyConfig::default(&paths.tantivy_path);
+    TantivyAdapter::new(config)
+        .and_then(|adapter| adapter.create_bm25_search())
+        .ok()
+}
+
+/// Remove stale index artifacts so ensure_indexed does a full rebuild.
+/// Called when try_open_bm25 detects a corrupt or missing tantivy index.
+fn clean_stale_index(paths: &ProjectPaths, dir: &Path) {
+    use crate::indexing::incremental::get_snapshot_path;
+
+    // Remove corrupt tantivy index
+    if paths.tantivy_path.exists() {
+        std::fs::remove_dir_all(&paths.tantivy_path).ok();
+    }
+    // Remove merkle snapshot so incremental indexer does a full pass
+    let snapshot = get_snapshot_path(dir);
+    if snapshot.exists() {
+        std::fs::remove_file(&snapshot).ok();
+    }
+    // Clear metadata cache so files are re-processed
+    if paths.cache_path.exists() {
+        std::fs::remove_dir_all(&paths.cache_path).ok();
+    }
 }
 
 /// Initialize indexer and run incremental indexing, returning stats.
@@ -127,10 +154,10 @@ async fn ensure_indexed(
     Ok(stats)
 }
 
-/// Create a HybridSearch configured for a project directory
+/// Create a HybridSearch with a pre-validated BM25 search
 async fn create_hybrid_search(
     paths: &ProjectPaths,
-    include_bm25: bool,
+    bm25_search: Option<crate::search::bm25::Bm25Search>,
 ) -> Result<HybridSearch, McpError> {
     let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
         McpError::invalid_params(format!("Failed to initialize embedding generator: {}", e), None)
@@ -141,17 +168,6 @@ async fn create_hybrid_search(
         .map_err(|e| {
             McpError::invalid_params(format!("Failed to initialize vector store: {}", e), None)
         })?;
-
-    let bm25_search = if include_bm25 {
-        use crate::indexing::tantivy_adapter::TantivyAdapter;
-        use crate::config::indexer::TantivyConfig;
-        let tantivy_config = TantivyConfig::default(&paths.tantivy_path);
-        TantivyAdapter::new(tantivy_config)
-            .ok()
-            .and_then(|adapter| adapter.create_bm25_search().ok())
-    } else {
-        None
-    };
 
     Ok(HybridSearch::with_defaults(
         embedding_generator,
@@ -165,6 +181,7 @@ fn format_results(
     results: &[crate::search::SearchResult],
     keyword: &str,
     stats: Option<&crate::indexing::unified::IndexStats>,
+    rebuilt: bool,
 ) -> String {
     if results.is_empty() {
         let mut s = format!("No results found for '{}'.", keyword);
@@ -177,7 +194,11 @@ fn format_results(
         return s;
     }
 
-    let mut result_str = format!("Found {} results for '{}':\n\n", results.len(), keyword);
+    let mut result_str = if rebuilt {
+        format!("Note: corrupt index detected and rebuilt.\n\nFound {} results for '{}':\n\n", results.len(), keyword)
+    } else {
+        format!("Found {} results for '{}':\n\n", results.len(), keyword)
+    };
 
     for (idx, result) in results.iter().enumerate() {
         result_str.push_str(&format!(
@@ -234,18 +255,21 @@ pub async fn search(
 
     let paths = ProjectPaths::from_directory(dir_path);
 
-    // Only run full indexing if no index exists yet.
-    // If index exists, skip re-indexing (background sync handles updates).
-    let stats = if index_exists(&paths) {
-        // Lightweight: just open existing index, no file walking
-        tracing::info!("Using existing index for {}", dir_path.display());
-        // Track for background sync so it stays fresh
+    // Try existing index; if corrupt or missing, rebuild
+    let mut bm25 = try_open_bm25(&paths);
+    let mut rebuilt = false;
+    let stats = if bm25.is_some() {
         if let Some(ref sync_mgr) = sync_manager {
             sync_mgr.track_directory(dir_path.to_path_buf()).await;
         }
         None
     } else {
-        Some(ensure_indexed(dir_path, &paths, sync_manager).await?)
+        // Corrupt or missing — clean stale caches to force full reindex
+        rebuilt = paths.tantivy_path.exists();
+        clean_stale_index(&paths, dir_path);
+        let st = ensure_indexed(dir_path, &paths, sync_manager).await?;
+        bm25 = try_open_bm25(&paths);
+        Some(st)
     };
 
     // Handle case where first-time indexing produced nothing
@@ -258,7 +282,7 @@ pub async fn search(
         }
     }
 
-    let hybrid_search = create_hybrid_search(&paths, true).await?;
+    let hybrid_search = create_hybrid_search(&paths, bm25).await?;
 
     tracing::info!("Performing hybrid search for: {}", keyword);
     let results = hybrid_search
@@ -267,7 +291,7 @@ pub async fn search(
         .map_err(|e| McpError::invalid_params(format!("Search failed: {}", e), None))?;
 
     Ok(CallToolResult::success(vec![Content::text(
-        format_results(&results, keyword, stats.as_ref()),
+        format_results(&results, keyword, stats.as_ref(), rebuilt),
     )]))
 }
 
@@ -287,7 +311,7 @@ pub async fn get_similar_code(
 
     let paths = ProjectPaths::from_directory(dir_path);
 
-    let hybrid_search = create_hybrid_search(&paths, false).await?;
+    let hybrid_search = create_hybrid_search(&paths, None).await?;
 
     let results = hybrid_search
         .vector_only_search(query, limit)
