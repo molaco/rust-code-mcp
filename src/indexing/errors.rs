@@ -78,7 +78,7 @@ impl Default for ErrorCollector {
 }
 
 /// Categorize an error based on its message
-pub fn categorize_error(error: &anyhow::Error) -> ErrorCategory {
+pub fn categorize_error(error: &dyn std::error::Error) -> ErrorCategory {
     let error_str = error.to_string().to_lowercase();
 
     // Permanent errors
@@ -178,16 +178,16 @@ mod tests {
 
     #[test]
     fn test_categorize_permanent_errors() {
-        let error = anyhow::anyhow!("Permission denied");
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied");
         assert_eq!(categorize_error(&error), ErrorCategory::Permanent);
 
-        let error = anyhow::anyhow!("File not found");
+        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "File not found");
         assert_eq!(categorize_error(&error), ErrorCategory::Permanent);
     }
 
     #[test]
     fn test_categorize_transient_errors() {
-        let error = anyhow::anyhow!("Network timeout");
+        let error = std::io::Error::new(std::io::ErrorKind::TimedOut, "Network timeout");
         assert_eq!(categorize_error(&error), ErrorCategory::Transient);
     }
 }

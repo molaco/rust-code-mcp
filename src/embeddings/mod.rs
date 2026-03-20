@@ -2,6 +2,9 @@
 //!
 //! Generates embeddings for code chunks using local ONNX models
 
+mod error;
+pub use error::EmbeddingError;
+
 /// Embedding dimension for all-MiniLM-L6-v2
 pub const EMBEDDING_DIM: usize = 384;
 
@@ -34,7 +37,7 @@ impl EmbeddingGenerator {
     /// - 384 dimensions
     /// - ~80MB download
     /// - Good balance of speed and quality
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new() -> Result<Self, EmbeddingError> {
         // Debug: Log environment variables critical for CUDA
         tracing::info!("=== CUDA INITIALIZATION DEBUG ===");
         tracing::info!("CUDA_HOME: {:?}", std::env::var("CUDA_HOME").ok());
@@ -89,7 +92,8 @@ impl EmbeddingGenerator {
             InitOptions::new(EmbeddingModel::AllMiniLML6V2)
                 .with_show_download_progress(true)
                 .with_execution_providers(execution_providers),
-        )?;
+        )
+        .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
 
         tracing::info!(
             "EmbeddingGenerator initialized successfully (CUDA: {}, dimensions: 384)",
@@ -108,64 +112,64 @@ impl EmbeddingGenerator {
     }
 
     /// Generate embedding for a single text
-    pub fn embed(&self, text: &str) -> Result<Embedding, Box<dyn std::error::Error + Send>> {
+    pub fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError> {
         let mut model = self.model.lock().unwrap();
         let embeddings = model.embed(vec![text], None)
-            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?;
+            .map_err(|e| EmbeddingError::embed_failed(e.to_string()))?;
         embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No embedding generated")) as Box<dyn std::error::Error + Send>)
+            .ok_or(EmbeddingError::NoEmbeddingGenerated)
     }
 
     /// Generate embedding for a single text, non-blocking (runs on blocking thread pool)
-    pub async fn embed_async(&self, text: String) -> Result<Embedding, Box<dyn std::error::Error + Send>> {
+    pub async fn embed_async(&self, text: String) -> Result<Embedding, EmbeddingError> {
         let model = self.model.clone();
         tokio::task::spawn_blocking(move || {
             let mut model = model.lock().unwrap();
             let embeddings = model.embed(vec![&text], None)
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?;
+                .map_err(|e| EmbeddingError::embed_failed(e.to_string()))?;
             embeddings
                 .into_iter()
                 .next()
-                .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "No embedding generated")) as Box<dyn std::error::Error + Send>)
+                .ok_or(EmbeddingError::NoEmbeddingGenerated)
         })
         .await
-        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?
+        .map_err(|e| EmbeddingError::task_join(e.to_string()))?
     }
 
     /// Generate embeddings for multiple texts (batch processing)
     pub fn embed_batch(
         &self,
         texts: Vec<String>,
-    ) -> Result<Vec<Embedding>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<Embedding>, EmbeddingError> {
         let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
         let mut model = self.model.lock().unwrap();
-        Ok(model.embed(text_refs, None)
-            .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?)
+        model.embed(text_refs, None)
+            .map_err(|e| EmbeddingError::embed_failed(e.to_string()))
     }
 
     /// Generate embeddings for multiple texts, non-blocking (runs on blocking thread pool)
     pub async fn embed_batch_async(
         &self,
         texts: Vec<String>,
-    ) -> Result<Vec<Embedding>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<Embedding>, EmbeddingError> {
         let model = self.model.clone();
         tokio::task::spawn_blocking(move || {
             let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
             let mut model = model.lock().unwrap();
             model.embed(text_refs, None)
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)
+                .map_err(|e| EmbeddingError::embed_failed(e.to_string()))
         })
         .await
-        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send>)?
+        .map_err(|e| EmbeddingError::task_join(e.to_string()))?
     }
 
     /// Generate embeddings for code chunks
     pub fn embed_chunks(
         &self,
         chunks: &[CodeChunk],
-    ) -> Result<Vec<ChunkWithEmbedding>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<ChunkWithEmbedding>, EmbeddingError> {
         // Format chunks for embedding
         let formatted: Vec<String> = chunks
             .iter()
@@ -219,7 +223,7 @@ impl EmbeddingPipeline {
         &self,
         chunks: Vec<CodeChunk>,
         mut progress: F,
-    ) -> Result<Vec<ChunkWithEmbedding>, Box<dyn std::error::Error + Send>>
+    ) -> Result<Vec<ChunkWithEmbedding>, EmbeddingError>
     where
         F: FnMut(usize, usize),
     {

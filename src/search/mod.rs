@@ -3,10 +3,12 @@
 //! Implements Reciprocal Rank Fusion (RRF) to merge results from multiple search engines
 
 pub mod bm25;
+pub mod error;
 pub mod resilient;
 pub mod rrf_tuner;
 
 pub use bm25::Bm25Search;
+pub use error::SearchError;
 pub use resilient::ResilientHybridSearch;
 pub use rrf_tuner::{evaluate_hybrid_search, EvaluationMetrics, RRFTuner, TestQuery, TuningResult};
 
@@ -82,13 +84,13 @@ impl VectorSearch {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<VectorSearchResult>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<VectorSearchResult>, SearchError> {
         // Generate embedding for the query
         let query_embedding = self.embedding_generator.embed(query)?;
 
         // Search in vector store
         self.vector_store.search(query_embedding, limit).await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)
+            .map_err(SearchError::VectorStore)
     }
 }
 
@@ -131,7 +133,7 @@ impl HybridSearch {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<SearchResult>, SearchError> {
         self.search_with_k(query, limit, self.config.rrf_k).await
     }
 
@@ -143,7 +145,7 @@ impl HybridSearch {
         query: &str,
         limit: usize,
         rrf_k: f32,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<SearchResult>, SearchError> {
         // Run vector search and BM25 search in parallel (if BM25 is available)
         let (vector_results, bm25_results) = if let Some(bm25) = &self.bm25_search {
             // BM25 search is sync, run in blocking task
@@ -159,8 +161,9 @@ impl HybridSearch {
             );
 
             let vector_results = vector_future?;
-            let bm25_results = bm25_future.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?
-                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e))) as Box<dyn std::error::Error + Send>)?;
+            let bm25_results = bm25_future
+                .map_err(|e| SearchError::Bm25(Box::new(e)))?
+                .map_err(|e| SearchError::Bm25(e))?;
 
             (vector_results, bm25_results)
         } else {
@@ -254,7 +257,7 @@ impl HybridSearch {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<SearchResult>, SearchError> {
         let results = self.vector_search.search(query, limit).await?;
 
         Ok(results

@@ -15,9 +15,11 @@ use ra_ap_syntax::{
     AstNode, AstToken, Edition, SourceFile,
 };
 
-pub use call_graph::CallGraph;
-pub use imports::{extract_imports, extract_imports_from_ast, get_external_dependencies, Import};
-pub use type_references::{TypeReference, TypeReferenceTracker, TypeUsageContext};
+pub use imports::{extract_imports, extract_imports_from_ast, get_external_dependencies};
+
+use call_graph::CallGraph;
+use imports::Import;
+use type_references::TypeReference;
 
 /// A symbol extracted from Rust code
 #[derive(Debug, Clone, PartialEq)]
@@ -185,7 +187,7 @@ impl RustParser {
         let imports = extract_imports_from_ast(&file);
 
         // Extract type references from AST (no re-parsing)
-        let type_references = TypeReferenceTracker::build_from_ast(&file, source);
+        let type_references = type_references::build_type_references_from_ast(&file, source);
 
         Ok(ParseResult {
             symbols,

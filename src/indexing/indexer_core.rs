@@ -35,7 +35,7 @@
 //! use file_search_mcp::indexing::indexer_core::IndexerCore;
 //! use std::path::Path;
 //!
-//! # fn example() -> anyhow::Result<()> {
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create indexer core
 //! let core = IndexerCore::new(
 //!     Path::new("./cache"),
@@ -64,7 +64,7 @@ use crate::metrics::memory::MemoryMonitor;
 use crate::parser::RustParser;
 use crate::security::secrets::SecretsScanner;
 use crate::security::SensitiveFileFilter;
-use anyhow::{Context, Result};
+use crate::indexing::IndexingError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -105,14 +105,13 @@ impl IndexerCore {
     pub fn new(
         cache_path: &Path,
         config: Option<IndexerCoreConfig>,
-    ) -> Result<Self> {
+    ) -> Result<Self, IndexingError> {
         let chunker = Chunker::new();
 
-        let embedding_generator = EmbeddingGenerator::new()
-            .map_err(|e| anyhow::anyhow!("Failed to create EmbeddingGenerator: {}", e))?;
+        let embedding_generator = EmbeddingGenerator::new()?;
 
         let metadata_cache = MetadataCache::new(cache_path)
-            .context("Failed to open MetadataCache")?;
+            .map_err(|e| IndexingError::Cache(e.to_string()))?;
 
         let secrets_scanner = SecretsScanner::new();
         let file_filter = SensitiveFileFilter::default();
@@ -130,7 +129,7 @@ impl IndexerCore {
     }
 
     /// Check if a file should be processed (security and size checks)
-    pub fn should_process_file(&self, file_path: &Path) -> Result<bool> {
+    pub fn should_process_file(&self, file_path: &Path) -> Result<bool, IndexingError> {
         // Check sensitive file filter
         if !self.file_filter.should_index(file_path) {
             tracing::warn!("Excluding sensitive file: {}", file_path.display());
@@ -138,8 +137,7 @@ impl IndexerCore {
         }
 
         // Check file size
-        let metadata = std::fs::metadata(file_path)
-            .context(format!("Failed to read file metadata: {}", file_path.display()))?;
+        let metadata = std::fs::metadata(file_path)?;
 
         if metadata.len() > self.config.max_file_size {
             tracing::warn!(
@@ -156,56 +154,56 @@ impl IndexerCore {
 
     /// Fast check if file has likely changed using only stat info (mtime + size).
     /// Avoids reading file content. Use as a pre-filter before `has_file_changed`.
-    pub fn has_stat_changed(&self, file_path: &Path) -> Result<bool> {
+    pub fn has_stat_changed(&self, file_path: &Path) -> Result<bool, IndexingError> {
         let file_path_str = file_path.to_string_lossy().to_string();
         let stat = crate::metadata_cache::FileStat::from_path(file_path)
-            .map_err(|e| anyhow::anyhow!("Failed to stat file: {}", e))?;
+            .map_err(|e| IndexingError::Cache(e.to_string()))?;
         self.metadata_cache.has_stat_changed(&file_path_str, &stat)
-            .map_err(|e| anyhow::anyhow!("Metadata cache error: {}", e))
+            .map_err(|e| IndexingError::Cache(e.to_string()))
     }
 
     /// Check if file has changed (using metadata cache, reads content hash)
-    pub fn has_file_changed(&self, file_path: &Path, content: &str) -> Result<bool> {
+    pub fn has_file_changed(&self, file_path: &Path, content: &str) -> Result<bool, IndexingError> {
         let file_path_str = file_path.to_string_lossy().to_string();
         self.metadata_cache.has_changed(&file_path_str, content)
-            .map_err(|e| anyhow::anyhow!("Metadata cache error: {}", e))
+            .map_err(|e| IndexingError::Cache(e.to_string()))
     }
 
     /// Update metadata cache for a file
-    pub fn update_file_metadata(&self, file_path: &Path, content: &str) -> Result<()> {
+    pub fn update_file_metadata(&self, file_path: &Path, content: &str) -> Result<(), IndexingError> {
         let file_path_str = file_path.to_string_lossy().to_string();
         let metadata = std::fs::metadata(file_path)?;
         let file_meta = crate::metadata_cache::FileMetadata::from_content(
             content,
             metadata
                 .modified()?
-                .duration_since(std::time::UNIX_EPOCH)?
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| IndexingError::Cache(e.to_string()))?
                 .as_secs(),
             metadata.len(),
         );
         self.metadata_cache.set(&file_path_str, &file_meta)
-            .map_err(|e| anyhow::anyhow!("Failed to update metadata cache: {}", e))
+            .map_err(|e| IndexingError::Cache(e.to_string()))
     }
 
     /// Process a single file: parse, chunk, and prepare for indexing
     ///
     /// This is a synchronous operation suitable for parallel processing with Rayon.
-    pub fn process_file_sync(&self, file_path: &Path) -> Result<ProcessedFile> {
+    pub fn process_file_sync(&self, file_path: &Path) -> Result<ProcessedFile, IndexingError> {
         let parse_start = Instant::now();
 
         // Security checks
         if !self.should_process_file(file_path)? {
-            anyhow::bail!("File filtered: security check failed");
+            return Err(IndexingError::Parser("File filtered: security check failed".into()));
         }
 
         // Fast stat-based change detection (avoids reading file content)
         if !self.has_stat_changed(file_path)? {
-            anyhow::bail!("File unchanged");
+            return Err(IndexingError::Parser("File unchanged".into()));
         }
 
         // Read file (only if stat suggests change)
-        let content = std::fs::read_to_string(file_path)
-            .context(format!("Failed to read file: {}", file_path.display()))?;
+        let content = std::fs::read_to_string(file_path)?;
 
         // Secrets check
         if self.secrets_scanner.should_exclude(&content) {
@@ -215,28 +213,28 @@ impl IndexerCore {
                 file_path.display(),
                 summary
             );
-            anyhow::bail!("Contains secrets");
+            return Err(IndexingError::Parser("Contains secrets".into()));
         }
 
         // Content hash check (confirms stat-based detection)
         if !self.has_file_changed(file_path, &content)? {
-            anyhow::bail!("File unchanged");
+            return Err(IndexingError::Parser("File unchanged".into()));
         }
 
         // Parse with rust-analyzer (CPU-intensive)
         // Create fresh parser for thread safety
         let mut parser = RustParser::new()
-            .map_err(|e| anyhow::anyhow!("Failed to create parser: {}", e))?;
+            .map_err(|e| IndexingError::Parser(e.to_string()))?;
         let parse_result = parser.parse_source_complete(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse file: {}", e))?;
+            .map_err(|e| IndexingError::Parser(e.to_string()))?;
 
         // Chunk (CPU-intensive)
         let chunks = self.chunker.chunk_file(file_path, &content, &parse_result)
-            .map_err(|e| anyhow::anyhow!("Failed to chunk file: {}", e))?;
+            .map_err(|e| IndexingError::Parser(e.to_string()))?;
 
         if chunks.is_empty() {
             tracing::warn!("No chunks generated for {}", file_path.display());
-            anyhow::bail!("No chunks generated");
+            return Err(IndexingError::Parser("No chunks generated".into()));
         }
 
         let parse_duration = parse_start.elapsed();
@@ -252,7 +250,7 @@ impl IndexerCore {
     /// Generate embeddings for chunks in batches
     ///
     /// Uses GPU-optimized batch size to avoid OOM on GPU memory.
-    pub fn generate_embeddings_batched(&self, chunks: &[CodeChunk]) -> Result<Vec<Embedding>> {
+    pub fn generate_embeddings_batched(&self, chunks: &[CodeChunk]) -> Result<Vec<Embedding>, IndexingError> {
         let chunk_texts: Vec<String> = chunks
             .iter()
             .map(|c| c.format_for_embedding())
@@ -260,10 +258,9 @@ impl IndexerCore {
 
         let mut all_embeddings = Vec::new();
 
-        for (batch_idx, chunk_batch) in chunk_texts.chunks(self.config.gpu_batch_size).enumerate() {
+        for chunk_batch in chunk_texts.chunks(self.config.gpu_batch_size) {
             let batch_embeddings = self.embedding_generator
-                .embed_batch(chunk_batch.to_vec())
-                .map_err(|e| anyhow::anyhow!("Failed to generate embeddings (batch {}): {}", batch_idx, e))?;
+                .embed_batch(chunk_batch.to_vec())?;
             all_embeddings.extend(batch_embeddings);
         }
 
@@ -318,10 +315,10 @@ impl IndexerCore {
     }
 
     /// Clear metadata cache
-    pub fn clear_metadata_cache(&self) -> Result<()> {
+    pub fn clear_metadata_cache(&self) -> Result<(), IndexingError> {
         self.metadata_cache
             .clear()
-            .map_err(|e| anyhow::anyhow!("Failed to clear metadata cache: {}", e))
+            .map_err(|e| IndexingError::Cache(e.to_string()))
     }
 }
 
