@@ -7,7 +7,7 @@ use rmcp::{
     ErrorData as McpError,
     model::{CallToolResult, Content},
 };
-use std::fs;
+use tokio::fs;
 use std::path::Path;
 use tracing;
 
@@ -34,7 +34,7 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
         ));
     }
 
-    match fs::read_to_string(file_path_obj) {
+    match fs::read_to_string(file_path_obj).await {
         Ok(content) => {
             if content.is_empty() {
                 Ok(CallToolResult::success(vec![Content::text(
@@ -46,7 +46,7 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
         }
         Err(e) => {
             tracing::error!("Error reading file '{}': {}", file_path_obj.display(), e);
-            match fs::read(file_path_obj) {
+            match fs::read(file_path_obj).await {
                 Ok(bytes) => {
                     if bytes.iter().any(|&b| b == 0)
                         || bytes

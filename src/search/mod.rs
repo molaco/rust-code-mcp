@@ -86,7 +86,7 @@ impl VectorSearch {
         limit: usize,
     ) -> Result<Vec<VectorSearchResult>, SearchError> {
         // Generate embedding for the query
-        let query_embedding = self.embedding_generator.embed(query)?;
+        let query_embedding = self.embedding_generator.embed_async(query.to_string()).await?;
 
         // Search in vector store
         self.vector_store.search(query_embedding, limit).await
@@ -190,66 +190,10 @@ impl HybridSearch {
         bm25_results: &[(ChunkId, f32, CodeChunk)],
         k: f32,
     ) -> Vec<SearchResult> {
-        let mut scores: HashMap<ChunkId, RrfScore> = HashMap::new();
-
-        // Process vector search results
-        for (rank, result) in vector_results.iter().enumerate() {
-            let rrf_score = 1.0 / (k + (rank + 1) as f32);
-            let entry = scores.entry(result.chunk_id).or_insert_with(|| RrfScore {
-                chunk_id: result.chunk_id,
-                rrf_score: 0.0,
-                vector_score: None,
-                vector_rank: None,
-                bm25_score: None,
-                bm25_rank: None,
-                chunk: result.chunk.clone(),
-            });
-
-            entry.rrf_score += rrf_score * self.config.vector_weight;
-            entry.vector_score = Some(result.score);
-            entry.vector_rank = Some(rank + 1);
-        }
-
-        // Process BM25 results
-        for (rank, (chunk_id, score, chunk)) in bm25_results.iter().enumerate() {
-            let rrf_score = 1.0 / (k + (rank + 1) as f32);
-            let entry = scores.entry(*chunk_id).or_insert_with(|| RrfScore {
-                chunk_id: *chunk_id,
-                rrf_score: 0.0,
-                vector_score: None,
-                vector_rank: None,
-                bm25_score: None,
-                bm25_rank: None,
-                chunk: chunk.clone(),
-            });
-
-            entry.rrf_score += rrf_score * self.config.bm25_weight;
-            entry.bm25_score = Some(*score);
-            entry.bm25_rank = Some(rank + 1);
-        }
-
-        // Convert to SearchResult and sort by RRF score
-        let mut results: Vec<SearchResult> = scores
-            .into_values()
-            .map(|rrf_score| SearchResult {
-                chunk_id: rrf_score.chunk_id,
-                score: rrf_score.rrf_score,
-                bm25_score: rrf_score.bm25_score,
-                vector_score: rrf_score.vector_score,
-                bm25_rank: rrf_score.bm25_rank,
-                vector_rank: rrf_score.vector_rank,
-                chunk: rrf_score.chunk,
-            })
+        let vector: Vec<_> = vector_results.iter()
+            .map(|r| (r.chunk_id, r.score, r.chunk.clone()))
             .collect();
-
-        // Sort by RRF score (descending)
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        results
+        reciprocal_rank_fusion_core(&vector, bm25_results, k, self.config.vector_weight, self.config.bm25_weight)
     }
 
     /// Search using only vector similarity
@@ -281,66 +225,77 @@ impl HybridSearch {
         vector_results: Vec<SearchResult>,
         k: f32,
     ) -> Vec<SearchResult> {
-        let mut scores: HashMap<ChunkId, RrfScore> = HashMap::new();
-
-        // Process BM25 results
-        for (rank, result) in bm25_results.iter().enumerate() {
-            let rrf_score = 1.0 / (k + (rank + 1) as f32);
-            let entry = scores.entry(result.chunk_id).or_insert_with(|| RrfScore {
-                chunk_id: result.chunk_id,
-                rrf_score: 0.0,
-                vector_score: None,
-                vector_rank: None,
-                bm25_score: None,
-                bm25_rank: None,
-                chunk: result.chunk.clone(),
-            });
-
-            entry.rrf_score += rrf_score * 0.5; // Default weight
-            entry.bm25_score = result.bm25_score.or(Some(result.score));
-            entry.bm25_rank = Some(rank + 1);
-        }
-
-        // Process vector results
-        for (rank, result) in vector_results.iter().enumerate() {
-            let rrf_score = 1.0 / (k + (rank + 1) as f32);
-            let entry = scores.entry(result.chunk_id).or_insert_with(|| RrfScore {
-                chunk_id: result.chunk_id,
-                rrf_score: 0.0,
-                vector_score: None,
-                vector_rank: None,
-                bm25_score: None,
-                bm25_rank: None,
-                chunk: result.chunk.clone(),
-            });
-
-            entry.rrf_score += rrf_score * 0.5; // Default weight
-            entry.vector_score = result.vector_score.or(Some(result.score));
-            entry.vector_rank = Some(rank + 1);
-        }
-
-        // Convert to SearchResult and sort
-        let mut results: Vec<SearchResult> = scores
-            .into_values()
-            .map(|rrf_score| SearchResult {
-                chunk_id: rrf_score.chunk_id,
-                score: rrf_score.rrf_score,
-                bm25_score: rrf_score.bm25_score,
-                vector_score: rrf_score.vector_score,
-                bm25_rank: rrf_score.bm25_rank,
-                vector_rank: rrf_score.vector_rank,
-                chunk: rrf_score.chunk,
-            })
+        let bm25: Vec<_> = bm25_results.into_iter()
+            .map(|r| (r.chunk_id, r.bm25_score.unwrap_or(r.score), r.chunk))
             .collect();
-
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        results
+        let vector: Vec<_> = vector_results.into_iter()
+            .map(|r| (r.chunk_id, r.vector_score.unwrap_or(r.score), r.chunk))
+            .collect();
+        reciprocal_rank_fusion_core(&vector, &bm25, k, 0.5, 0.5)
     }
+}
+
+/// Core Reciprocal Rank Fusion algorithm
+///
+/// Fuses two ranked result lists using the RRF formula `1/(k + rank)`.
+/// Each entry is `(ChunkId, raw_score, CodeChunk)`; the two lists are
+/// processed independently and their weighted contributions are summed.
+fn reciprocal_rank_fusion_core(
+    vector_results: &[(ChunkId, f32, CodeChunk)],
+    bm25_results: &[(ChunkId, f32, CodeChunk)],
+    k: f32,
+    vector_weight: f32,
+    bm25_weight: f32,
+) -> Vec<SearchResult> {
+    let mut scores: HashMap<ChunkId, RrfScore> = HashMap::new();
+
+    for (rank, (chunk_id, score, chunk)) in vector_results.iter().enumerate() {
+        let rrf_score = 1.0 / (k + (rank + 1) as f32);
+        let entry = scores.entry(*chunk_id).or_insert_with(|| RrfScore {
+            chunk_id: *chunk_id,
+            rrf_score: 0.0,
+            vector_score: None,
+            vector_rank: None,
+            bm25_score: None,
+            bm25_rank: None,
+            chunk: chunk.clone(),
+        });
+        entry.rrf_score += rrf_score * vector_weight;
+        entry.vector_score = Some(*score);
+        entry.vector_rank = Some(rank + 1);
+    }
+
+    for (rank, (chunk_id, score, chunk)) in bm25_results.iter().enumerate() {
+        let rrf_score = 1.0 / (k + (rank + 1) as f32);
+        let entry = scores.entry(*chunk_id).or_insert_with(|| RrfScore {
+            chunk_id: *chunk_id,
+            rrf_score: 0.0,
+            vector_score: None,
+            vector_rank: None,
+            bm25_score: None,
+            bm25_rank: None,
+            chunk: chunk.clone(),
+        });
+        entry.rrf_score += rrf_score * bm25_weight;
+        entry.bm25_score = Some(*score);
+        entry.bm25_rank = Some(rank + 1);
+    }
+
+    let mut results: Vec<SearchResult> = scores
+        .into_values()
+        .map(|s| SearchResult {
+            chunk_id: s.chunk_id,
+            score: s.rrf_score,
+            bm25_score: s.bm25_score,
+            vector_score: s.vector_score,
+            bm25_rank: s.bm25_rank,
+            vector_rank: s.vector_rank,
+            chunk: s.chunk,
+        })
+        .collect();
+
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results
 }
 
 /// Internal structure for RRF score calculation
