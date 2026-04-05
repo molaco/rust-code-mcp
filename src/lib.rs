@@ -2,6 +2,8 @@
 //!
 //! Library modules for the MCP server
 
+#![warn(unreachable_pub, dead_code)]
+
 pub mod chunker;
 pub mod config;
 pub mod embeddings;

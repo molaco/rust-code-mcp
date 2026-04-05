@@ -50,60 +50,6 @@ impl SemanticService {
         Ok(())
     }
 
-    /// Goto definition at position
-    pub fn goto_definition(
-        &mut self,
-        project_path: &Path,
-        file_path: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Location>> {
-        self.get_or_load(project_path)?;
-
-        let canonical = project_path.canonicalize()?;
-        let ctx = self.projects.get(&canonical)
-            .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
-
-        position::goto_definition(&ctx.host, &ctx.vfs, file_path, line, column)
-    }
-
-    /// Find all references at position
-    pub fn find_references(
-        &mut self,
-        project_path: &Path,
-        file_path: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Location>> {
-        self.get_or_load(project_path)?;
-
-        let canonical = project_path.canonicalize()?;
-        let ctx = self.projects.get(&canonical)
-            .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
-
-        position::find_references(&ctx.host, &ctx.vfs, file_path, line, column)
-    }
-
-    /// Reload project (call when files change significantly)
-    pub fn reload(&mut self, project_path: &Path) -> Result<()> {
-        let canonical = project_path.canonicalize()?;
-
-        tracing::info!("Reloading IDE for project: {}", canonical.display());
-        let (host, vfs) = loader::load_project(&canonical)?;
-
-        self.projects.insert(canonical, ProjectContext { host, vfs });
-        tracing::info!("IDE reloaded successfully");
-
-        Ok(())
-    }
-
-    /// Invalidate cached project
-    pub fn invalidate(&mut self, project_path: &Path) {
-        if let Ok(canonical) = project_path.canonicalize() {
-            self.projects.remove(&canonical);
-        }
-    }
-
     /// Search for symbols by name (for find_definition)
     pub fn symbol_search(
         &mut self,

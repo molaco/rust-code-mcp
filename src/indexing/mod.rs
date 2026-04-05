@@ -1,7 +1,10 @@
 //! Indexing module - Unified pipeline for both Tantivy and vector store
 
 pub mod consistency;
+pub(crate) mod embedding_batcher;
+pub mod error;
 pub mod errors;
+pub(crate) mod file_processor;
 pub mod incremental;
 pub mod indexer_core;
 pub mod merkle;
@@ -10,6 +13,7 @@ pub mod tantivy_adapter;
 pub mod unified;
 
 pub use consistency::{ConsistencyChecker, ConsistencyReport};
+pub use error::IndexingError;
 pub use errors::{ErrorCategory, ErrorCollector, ErrorDetail};
 pub use incremental::{get_snapshot_path, IncrementalIndexer};
 pub use indexer_core::{IndexerCore, ProcessedFile};

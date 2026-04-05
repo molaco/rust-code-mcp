@@ -1,5 +1,6 @@
 //! Quick GPU benchmark - run with: cargo run --release --bin quick_bench
 
+use file_search_mcp::embeddings::EMBEDDING_DIM;
 use file_search_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -28,9 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut indexer = IncrementalIndexer::new(
         &cache_path,
         &tantivy_path,
-        "http://localhost:6333",
         &collection_name,
-        384,
+        EMBEDDING_DIM,
         None,
     )
     .await?;

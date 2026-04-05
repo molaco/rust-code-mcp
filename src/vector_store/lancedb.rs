@@ -81,6 +81,8 @@ impl LanceDbBackend {
             ),
             Field::new("chunk_json", DataType::Utf8, false),
             Field::new("file_path", DataType::Utf8, false),
+            Field::new("symbol_kind", DataType::Utf8, false),
+            Field::new("module_path", DataType::Utf8, false),
         ])
     }
 
@@ -107,6 +109,8 @@ impl LanceDbBackend {
             let vector_array = self.create_empty_vector_array();
             let chunk_json_array = StringArray::from(Vec::<String>::new());
             let file_path_array = StringArray::from(Vec::<String>::new());
+            let symbol_kind_array = StringArray::from(Vec::<String>::new());
+            let module_path_array = StringArray::from(Vec::<String>::new());
 
             let batch = RecordBatch::try_new(
                 schema.clone(),
@@ -115,6 +119,8 @@ impl LanceDbBackend {
                     Arc::new(vector_array),
                     Arc::new(chunk_json_array),
                     Arc::new(file_path_array),
+                    Arc::new(symbol_kind_array),
+                    Arc::new(module_path_array),
                 ],
             )
             .map_err(|e| VectorStoreError::backend(format!("Failed to create batch: {}", e)))?;
@@ -129,7 +135,7 @@ impl LanceDbBackend {
 
             tracing::info!("Created LanceDB table: {}", self.table_name);
 
-            // Create BTree index on id column for fast merge_insert lookups
+            // Create BTree indices for fast lookups
             table
                 .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
                 .execute()
@@ -137,8 +143,22 @@ impl LanceDbBackend {
                 .map_err(|e| {
                     VectorStoreError::backend(format!("Failed to create id index: {}", e))
                 })?;
+            table
+                .create_index(&["file_path"], Index::BTree(BTreeIndexBuilder::default()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    VectorStoreError::backend(format!("Failed to create file_path index: {}", e))
+                })?;
+            table
+                .create_index(&["symbol_kind"], Index::BTree(BTreeIndexBuilder::default()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    VectorStoreError::backend(format!("Failed to create symbol_kind index: {}", e))
+                })?;
 
-            tracing::info!("Created BTree index on 'id' column for fast upserts");
+            tracing::info!("Created BTree indices on id, file_path, symbol_kind columns");
         }
 
         Ok(())
@@ -169,6 +189,8 @@ impl LanceDbBackend {
         let mut flat_vectors = Vec::with_capacity(n * self.vector_dim);
         let mut chunk_jsons = Vec::with_capacity(n);
         let mut file_paths = Vec::with_capacity(n);
+        let mut symbol_kinds = Vec::with_capacity(n);
+        let mut module_paths = Vec::with_capacity(n);
 
         // Single pass over all chunks
         for (id, embedding, chunk) in chunks {
@@ -180,6 +202,8 @@ impl LanceDbBackend {
                 })?,
             );
             file_paths.push(chunk.context.file_path.display().to_string());
+            symbol_kinds.push(chunk.context.symbol_kind.clone());
+            module_paths.push(chunk.context.module_path.join("::"));
         }
 
         // Build Arrow arrays from pre-allocated vectors
@@ -193,6 +217,8 @@ impl LanceDbBackend {
                 })?;
         let chunk_json_array = StringArray::from(chunk_jsons);
         let file_path_array = StringArray::from(file_paths);
+        let symbol_kind_array = StringArray::from(symbol_kinds);
+        let module_path_array = StringArray::from(module_paths);
 
         RecordBatch::try_new(
             schema,
@@ -201,6 +227,8 @@ impl LanceDbBackend {
                 Arc::new(vector_array),
                 Arc::new(chunk_json_array),
                 Arc::new(file_path_array),
+                Arc::new(symbol_kind_array),
+                Arc::new(module_path_array),
             ],
         )
         .map_err(|e| VectorStoreError::backend(format!("Failed to create batch: {}", e)))

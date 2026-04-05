@@ -3,7 +3,7 @@
 //! Chunks code by symbols (functions, structs, etc.) and adds rich context
 //! for better embedding and retrieval quality.
 
-use crate::parser::{CallGraph, Import, ParseResult, Symbol, SymbolKind};
+use crate::parser::{ParseResult, Symbol};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;

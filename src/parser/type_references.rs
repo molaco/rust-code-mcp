@@ -42,183 +42,167 @@ pub enum TypeUsageContext {
     GenericArgument,
 }
 
-/// Type reference tracker
-#[derive(Debug, Default)]
-pub struct TypeReferenceTracker {
-    /// All type references found
-    references: Vec<TypeReference>,
+/// Build type references from source code (convenience wrapper that parses internally)
+pub(crate) fn build_type_references(source: &str) -> Vec<TypeReference> {
+    build_type_references_with_edition(source, Edition::Edition2021)
 }
 
-impl TypeReferenceTracker {
-    /// Create a new empty tracker
-    pub fn new() -> Self {
-        Self {
-            references: Vec::new(),
-        }
-    }
+/// Build type references from source code with a specific Rust edition
+pub(crate) fn build_type_references_with_edition(source: &str, edition: Edition) -> Vec<TypeReference> {
+    let parse = SourceFile::parse(source, edition);
+    let file = parse.tree();
+    build_type_references_from_ast(&file, source)
+}
 
-    /// Build type references from source code (convenience wrapper that parses internally)
-    pub fn build(source: &str) -> Vec<TypeReference> {
-        Self::build_with_edition(source, Edition::Edition2021)
-    }
+/// Build type references from a pre-parsed AST (avoids re-parsing)
+/// Requires source string for line number calculation
+pub(crate) fn build_type_references_from_ast(file: &SourceFile, source: &str) -> Vec<TypeReference> {
+    let mut refs = Vec::new();
 
-    /// Build type references from source code with a specific Rust edition
-    pub fn build_with_edition(source: &str, edition: Edition) -> Vec<TypeReference> {
-        let parse = SourceFile::parse(source, edition);
-        let file = parse.tree();
-        Self::build_from_ast(&file, source)
-    }
+    for item in file.items() {
+        match &item {
+            ast::Item::Fn(f) => {
+                let fn_name = f
+                    .name()
+                    .map(|n| n.text().to_string())
+                    .unwrap_or_default();
 
-    /// Build type references from a pre-parsed AST (avoids re-parsing)
-    /// Requires source string for line number calculation
-    pub fn build_from_ast(file: &SourceFile, source: &str) -> Vec<TypeReference> {
-        let mut refs = Vec::new();
-
-        for item in file.items() {
-            match &item {
-                ast::Item::Fn(f) => {
-                    let fn_name = f
-                        .name()
-                        .map(|n| n.text().to_string())
-                        .unwrap_or_default();
-
-                    // Parameters
-                    if let Some(params) = f.param_list() {
-                        for param in params.params() {
-                            if let Some(ty) = param.ty() {
-                                extract_types_from_type(
-                                    &ty,
-                                    source,
-                                    &mut refs,
-                                    TypeUsageContext::FunctionParameter {
-                                        function_name: fn_name.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-
-                    // Return type
-                    if let Some(ret) = f.ret_type() {
-                        if let Some(ty) = ret.ty() {
+                // Parameters
+                if let Some(params) = f.param_list() {
+                    for param in params.params() {
+                        if let Some(ty) = param.ty() {
                             extract_types_from_type(
                                 &ty,
                                 source,
                                 &mut refs,
-                                TypeUsageContext::FunctionReturn {
+                                TypeUsageContext::FunctionParameter {
                                     function_name: fn_name.clone(),
                                 },
                             );
                         }
                     }
                 }
-                ast::Item::Struct(s) => {
-                    let struct_name = s
-                        .name()
-                        .map(|n| n.text().to_string())
-                        .unwrap_or_default();
 
-                    if let Some(field_list) = s.field_list() {
-                        match field_list {
-                            ast::FieldList::RecordFieldList(record) => {
-                                for field in record.fields() {
-                                    let field_name = field
-                                        .name()
-                                        .map(|n| n.text().to_string())
-                                        .unwrap_or_default();
-                                    if let Some(ty) = field.ty() {
-                                        extract_types_from_type(
-                                            &ty,
-                                            source,
-                                            &mut refs,
-                                            TypeUsageContext::StructField {
-                                                struct_name: struct_name.clone(),
-                                                field_name,
-                                            },
-                                        );
-                                    }
+                // Return type
+                if let Some(ret) = f.ret_type() {
+                    if let Some(ty) = ret.ty() {
+                        extract_types_from_type(
+                            &ty,
+                            source,
+                            &mut refs,
+                            TypeUsageContext::FunctionReturn {
+                                function_name: fn_name.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+            ast::Item::Struct(s) => {
+                let struct_name = s
+                    .name()
+                    .map(|n| n.text().to_string())
+                    .unwrap_or_default();
+
+                if let Some(field_list) = s.field_list() {
+                    match field_list {
+                        ast::FieldList::RecordFieldList(record) => {
+                            for field in record.fields() {
+                                let field_name = field
+                                    .name()
+                                    .map(|n| n.text().to_string())
+                                    .unwrap_or_default();
+                                if let Some(ty) = field.ty() {
+                                    extract_types_from_type(
+                                        &ty,
+                                        source,
+                                        &mut refs,
+                                        TypeUsageContext::StructField {
+                                            struct_name: struct_name.clone(),
+                                            field_name,
+                                        },
+                                    );
                                 }
                             }
-                            ast::FieldList::TupleFieldList(tuple) => {
-                                for (i, field) in tuple.fields().enumerate() {
-                                    if let Some(ty) = field.ty() {
-                                        extract_types_from_type(
-                                            &ty,
-                                            source,
-                                            &mut refs,
-                                            TypeUsageContext::StructField {
-                                                struct_name: struct_name.clone(),
-                                                field_name: format!("{}", i),
-                                            },
-                                        );
-                                    }
+                        }
+                        ast::FieldList::TupleFieldList(tuple) => {
+                            for (i, field) in tuple.fields().enumerate() {
+                                if let Some(ty) = field.ty() {
+                                    extract_types_from_type(
+                                        &ty,
+                                        source,
+                                        &mut refs,
+                                        TypeUsageContext::StructField {
+                                            struct_name: struct_name.clone(),
+                                            field_name: format!("{}", i),
+                                        },
+                                    );
                                 }
                             }
                         }
                     }
                 }
-                ast::Item::Impl(i) => {
-                    let type_name = i.self_ty().map(|t| t.syntax().text().to_string());
-                    let trait_name = i.trait_().map(|t| t.syntax().text().to_string());
+            }
+            ast::Item::Impl(i) => {
+                let type_name = i.self_ty().map(|t| t.syntax().text().to_string());
+                let trait_name = i.trait_().map(|t| t.syntax().text().to_string());
 
-                    if let Some(ref tn) = type_name {
-                        refs.push(TypeReference {
-                            type_name: tn.clone(),
-                            usage_context: TypeUsageContext::ImplBlock {
-                                trait_name: trait_name.clone(),
-                            },
-                            line: line_of_offset(source, i.syntax().text_range().start().into()),
-                        });
-                    }
+                if let Some(ref tn) = type_name {
+                    refs.push(TypeReference {
+                        type_name: tn.clone(),
+                        usage_context: TypeUsageContext::ImplBlock {
+                            trait_name: trait_name.clone(),
+                        },
+                        line: line_of_offset(source, i.syntax().text_range().start().into()),
+                    });
+                }
 
-                    // Process functions inside impl block
-                    if let Some(assoc_items) = i.assoc_item_list() {
-                        for assoc in assoc_items.assoc_items() {
-                            if let ast::AssocItem::Fn(f) = assoc {
-                                let fn_name = f
-                                    .name()
-                                    .map(|n| n.text().to_string())
-                                    .unwrap_or_default();
+                // Process functions inside impl block
+                if let Some(assoc_items) = i.assoc_item_list() {
+                    for assoc in assoc_items.assoc_items() {
+                        if let ast::AssocItem::Fn(f) = assoc {
+                            let fn_name = f
+                                .name()
+                                .map(|n| n.text().to_string())
+                                .unwrap_or_default();
 
-                                // Parameters
-                                if let Some(params) = f.param_list() {
-                                    for param in params.params() {
-                                        if let Some(ty) = param.ty() {
-                                            extract_types_from_type(
-                                                &ty,
-                                                source,
-                                                &mut refs,
-                                                TypeUsageContext::FunctionParameter {
-                                                    function_name: fn_name.clone(),
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-
-                                // Return type
-                                if let Some(ret) = f.ret_type() {
-                                    if let Some(ty) = ret.ty() {
+                            // Parameters
+                            if let Some(params) = f.param_list() {
+                                for param in params.params() {
+                                    if let Some(ty) = param.ty() {
                                         extract_types_from_type(
                                             &ty,
                                             source,
                                             &mut refs,
-                                            TypeUsageContext::FunctionReturn {
+                                            TypeUsageContext::FunctionParameter {
                                                 function_name: fn_name.clone(),
                                             },
                                         );
                                     }
                                 }
                             }
+
+                            // Return type
+                            if let Some(ret) = f.ret_type() {
+                                if let Some(ty) = ret.ty() {
+                                    extract_types_from_type(
+                                        &ty,
+                                        source,
+                                        &mut refs,
+                                        TypeUsageContext::FunctionReturn {
+                                            function_name: fn_name.clone(),
+                                        },
+                                    );
+                                }
+                            }
                         }
                     }
                 }
-                _ => {}
             }
+            _ => {}
         }
-
-        refs
     }
+
+    refs
 }
 
 /// Calculate line number (1-indexed) from byte offset
@@ -307,7 +291,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         assert_eq!(parser_refs.len(), 1);
@@ -325,7 +309,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         assert_eq!(parser_refs.len(), 1);
@@ -344,7 +328,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         assert_eq!(parser_refs.len(), 1);
@@ -368,7 +352,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         assert_eq!(parser_refs.len(), 1);
@@ -386,7 +370,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         assert!(!parser_refs.is_empty());
@@ -406,7 +390,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         assert!(!parser_refs.is_empty());
@@ -436,7 +420,7 @@ mod tests {
             }
         "#;
 
-        let refs = TypeReferenceTracker::build(source);
+        let refs = build_type_references(source);
 
         let parser_refs = find_type_references(&refs, "RustParser");
         // Should find: struct field, parameter in new(), return type in get_parser()

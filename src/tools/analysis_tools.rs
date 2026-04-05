@@ -92,24 +92,6 @@ use crate::parser::RustParser;
 
 use crate::semantic::SEMANTIC;
 
-/// Helper function to recursively visit Rust files
-fn visit_rust_files<F>(dir: &Path, visitor: &mut F) -> Result<(), String>
-where
-    F: FnMut(&Path) -> Result<(), String>,
-{
-    for entry in fs::read_dir(dir).map_err(|e| format!("Directory read error: {}", e))? {
-        let entry = entry.map_err(|e| format!("Entry read error: {}", e))?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            visit_rust_files(&path, visitor)?;
-        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            visitor(&path)?;
-        }
-    }
-    Ok(())
-}
-
 /// Find the definition of a symbol by name
 pub async fn find_definition(
     symbol_name: &str,

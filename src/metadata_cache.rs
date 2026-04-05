@@ -25,6 +25,27 @@ pub struct FileMetadata {
     pub indexed_at: u64,
 }
 
+/// Lightweight stat info for fast change detection (avoids reading file content)
+#[derive(Debug, Clone)]
+pub struct FileStat {
+    pub last_modified: u64,
+    pub size: u64,
+}
+
+impl FileStat {
+    /// Read stat info from filesystem (cheap: no file content read)
+    pub fn from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let metadata = std::fs::metadata(path)?;
+        Ok(Self {
+            last_modified: metadata
+                .modified()?
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+            size: metadata.len(),
+        })
+    }
+}
+
 impl FileMetadata {
     /// Create new metadata from file content
     pub fn from_content(content: &str, last_modified: u64, size: u64) -> Self {
@@ -85,6 +106,18 @@ impl MetadataCache {
     pub fn remove(&self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.db.remove(file_path)?;
         Ok(())
+    }
+
+    /// Fast check if a file has likely changed using only stat info (mtime + size).
+    ///
+    /// This avoids reading file content entirely. Returns:
+    /// - `true` if file is not cached or stat differs (may need content hash to confirm)
+    /// - `false` if stat matches (file almost certainly unchanged)
+    pub fn has_stat_changed(&self, file_path: &str, stat: &FileStat) -> Result<bool, Box<dyn std::error::Error>> {
+        match self.get(file_path)? {
+            Some(cached) => Ok(cached.last_modified != stat.last_modified || cached.size != stat.size),
+            None => Ok(true), // Not in cache = needs indexing
+        }
     }
 
     /// Check if a file has changed since last indexing

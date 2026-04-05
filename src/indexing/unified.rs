@@ -114,13 +114,19 @@ impl UnifiedIndexer {
             return Ok(IndexFileResult::Skipped);
         }
 
-        // Read file content
+        // Fast stat-based change detection (avoids reading file content)
+        if !self.core.has_stat_changed(file_path)? {
+            tracing::debug!("File unchanged (stat): {}", file_path.display());
+            return Ok(IndexFileResult::Unchanged);
+        }
+
+        // Read file content (only if stat suggests change)
         let content = std::fs::read_to_string(file_path)
             .context(format!("Failed to read file: {}", file_path.display()))?;
 
-        // Check if file changed
+        // Content hash check (confirms stat-based detection)
         if !self.core.has_file_changed(file_path, &content)? {
-            tracing::debug!("File unchanged: {}", file_path.display());
+            tracing::debug!("File unchanged (hash): {}", file_path.display());
             return Ok(IndexFileResult::Unchanged);
         }
 

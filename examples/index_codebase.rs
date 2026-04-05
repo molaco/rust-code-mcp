@@ -1,5 +1,6 @@
 //! Index rust-code-mcp codebase with GPU
 
+use file_search_mcp::embeddings::EMBEDDING_DIM;
 use file_search_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -24,9 +25,8 @@ async fn main() {
     let mut indexer = IncrementalIndexer::new(
         &cache,
         &tantivy,
-        "http://localhost:6333",
         &format!("rust_code_bench_{}", uuid::Uuid::new_v4()),
-        384,
+        EMBEDDING_DIM,
         None,
     )
     .await
