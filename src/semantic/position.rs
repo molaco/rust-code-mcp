@@ -88,7 +88,9 @@ pub fn goto_definition(
     let offset = to_offset(&analysis, file_id, line, column)?;
 
     let position = FilePosition { file_id, offset };
-    let config = ra_ap_ide::GotoDefinitionConfig { minicore: Default::default() };
+    let config = ra_ap_ide::GotoDefinitionConfig {
+        ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
+    };
 
     let result = analysis.goto_definition(position, &config)
         .context("goto_definition query failed")?;
@@ -118,8 +120,10 @@ pub fn find_references(
 
     let position = FilePosition { file_id, offset };
     let config = ra_ap_ide::FindAllRefsConfig {
-        minicore: Default::default(),
+        ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
         search_scope: None,
+        exclude_imports: false,
+        exclude_tests: false,
     };
 
     let results = analysis.find_all_refs(position, &config)
@@ -208,8 +212,10 @@ pub fn find_references_by_name(
         let position = FilePosition { file_id, offset };
 
         let config = ra_ap_ide::FindAllRefsConfig {
-            minicore: Default::default(),
+            ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
             search_scope: None,
+            exclude_imports: false,
+            exclude_tests: false,
         };
 
         if let Some(search_results) = analysis.find_all_refs(position, &config)

@@ -1,19 +1,27 @@
 //! Workspace loader for the hypergraph layer.
 //!
-//! Loads a Cargo workspace through rust-analyzer with `no_deps = true` and
-//! returns the `RootDatabase`, `Vfs`, and the filtered set of *local* crates
-//! (workspace members only — not deps, not sysroot, not path-deps that happen
-//! to live outside the workspace).
+//! Loads a Cargo workspace through rust-analyzer and returns the
+//! `RootDatabase`, `Vfs`, and the filtered set of *local* crates (workspace
+//! members only, identified via `CrateOrigin::is_local`).
+//!
+//! ### Cross-crate resolution
+//!
+//! `no_deps: false` + `sysroot: Some(Discover)` give RA the full cargo
+//! resolve graph (workspace-internal dep edges + sysroot crates). With those
+//! edges, `use burn_tensor::Tensor` in `burn_core` resolves to the canonical
+//! `StructId` and our binding pass picks it up via burn_core's `ItemScope`,
+//! enabling cross-crate `who_imports`. RA ≥ 0.0.328 uses
+//! `CARGO_RESOLVER_LOCKFILE_PATH` env var instead of `--lockfile-path` to
+//! avoid mutating Cargo.lock (older versions used the flag, which broke on
+//! cargo versions where metadata didn't accept it).
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ra_ap_hir::Crate;
 use ra_ap_ide_db::RootDatabase;
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace};
-use ra_ap_paths::AbsPathBuf;
-use ra_ap_project_model::{CargoConfig, ProjectManifest, ProjectWorkspace};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_project_model::{CargoConfig, CargoFeatures, RustLibSource};
 use ra_ap_vfs::Vfs;
 
 pub struct LoadedWorkspace {
@@ -27,32 +35,30 @@ pub fn load(directory: &Path) -> Result<LoadedWorkspace> {
     let canonical = directory
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", directory.display()))?;
-    let root = AbsPathBuf::assert_utf8(canonical);
-    let manifest = ProjectManifest::discover_single(&root)
-        .with_context(|| format!("failed to discover Cargo project from {}", directory.display()))?;
+    let workspace_root = canonical.clone();
 
     let cargo_config = CargoConfig {
-        sysroot: None,
-        no_deps: true,
+        sysroot: Some(RustLibSource::Discover),
+        no_deps: false,
+        features: CargoFeatures::All,
+        all_targets: true,
+        set_test: true,
         ..Default::default()
     };
-
-    let workspace = ProjectWorkspace::load(manifest, &cargo_config, &|_| {})
-        .context("failed to load Cargo workspace")?;
-    let workspace_root: PathBuf = workspace.workspace_root().to_path_buf().into();
-
-    let member_roots: HashSet<PathBuf> = collect_member_roots(&workspace);
 
     let load_config = LoadCargoConfig {
         load_out_dirs_from_check: false,
         with_proc_macro_server: ProcMacroServerChoice::None,
-        prefill_caches: true,
+        prefill_caches: false,
+        num_worker_threads: num_cpus::get_physical(),
+        proc_macro_processes: 1,
     };
 
-    let (db, vfs, _proc_macro) = load_workspace(workspace, &Default::default(), &load_config)
-        .context("failed to load rust-analyzer workspace")?;
+    let (db, vfs, _proc_macro) =
+        load_workspace_at(&canonical, &cargo_config, &load_config, &|_| {})
+            .with_context(|| format!("failed to load workspace at {}", canonical.display()))?;
 
-    let local_crates = filter_local_crates(&db, &vfs, &member_roots);
+    let local_crates = filter_local_crates(&db);
 
     Ok(LoadedWorkspace {
         workspace_root,
@@ -62,40 +68,15 @@ pub fn load(directory: &Path) -> Result<LoadedWorkspace> {
     })
 }
 
-fn collect_member_roots(workspace: &ProjectWorkspace) -> HashSet<PathBuf> {
-    let mut out = HashSet::new();
-    if let ra_ap_project_model::ProjectWorkspaceKind::Cargo { cargo, .. } = &workspace.kind {
-        for package_id in cargo.packages() {
-            let package = &cargo[package_id];
-            if !package.is_member {
-                continue;
-            }
-            for &target_id in &package.targets {
-                let target = &cargo[target_id];
-                let path: PathBuf = target.root.clone().into();
-                out.insert(path);
-            }
-        }
-    }
-    out
-}
-
-fn filter_local_crates(db: &RootDatabase, vfs: &Vfs, member_roots: &HashSet<PathBuf>) -> Vec<Crate> {
-    let mut out = Vec::new();
-    for krate in Crate::all(db) {
-        if krate.is_builtin(db) {
-            continue;
-        }
-        let root_file = krate.root_file(db);
-        let Some(path) = vfs.file_path(root_file).as_path() else {
-            continue;
-        };
-        let path_buf: PathBuf = path.to_path_buf().into();
-        if member_roots.contains(&path_buf) {
-            out.push(krate);
-        }
-    }
-    out
+/// Keep only crates RA tagged as workspace members (`CrateOrigin::Local`).
+/// This is the same filter rust-analyzer's own `view_crate_graph` uses for
+/// its workspace-only mode — it correctly excludes crates.io deps, the
+/// sysroot, the rustc workspace, and proc-macro-host crates.
+fn filter_local_crates(db: &RootDatabase) -> Vec<Crate> {
+    Crate::all(db)
+        .into_iter()
+        .filter(|krate| krate.origin(db).is_local())
+        .collect()
 }
 
 #[cfg(test)]
