@@ -21,5 +21,7 @@ pub mod vector_store;
 
 pub mod semantic;
 
+pub mod graph;
+
 // Will be added in later steps:
 // pub mod watcher;
