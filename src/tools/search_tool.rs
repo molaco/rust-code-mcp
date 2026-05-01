@@ -75,6 +75,50 @@ pub struct GetSimilarCodeParams {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BuildHypergraphParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Force a rebuild even if a snapshot for the current fingerprint already exists")]
+    pub force_rebuild: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GraphImportsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Module qualified name, e.g. `my_crate::sub::module`")]
+    pub module: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GraphExportsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Module to enumerate exports from (qualified name)")]
+    pub module: String,
+    #[schemars(description = "Consumer module from whose viewpoint visibility is checked (qualified name)")]
+    pub consumer: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GraphReexportsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Module to enumerate re-exports from (qualified name)")]
+    pub module: String,
+    #[schemars(description = "Consumer module from whose viewpoint visibility is checked (qualified name)")]
+    pub consumer: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WhoImportsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the symbol whose importers you want")]
+    pub target: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
