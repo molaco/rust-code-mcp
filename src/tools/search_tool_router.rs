@@ -225,6 +225,48 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::clear_cache_tool::clear_cache(params).await
     }
+
+    // ----- Hypergraph tools (Layer 7) -----
+
+    #[tool(description = "Build or reuse a persisted workspace hypergraph snapshot (HIR-driven, no_deps=true)")]
+    async fn build_hypergraph(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::BuildHypergraphParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::build_hypergraph(params).await
+    }
+
+    #[tool(description = "List `use`/extern-crate imports in a module from the persisted hypergraph")]
+    async fn get_imports(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::GraphImportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::get_imports(params).await
+    }
+
+    #[tool(description = "List items declared in or re-exported from a module that are visible from a given consumer module")]
+    async fn get_exports(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::GraphExportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::get_exports(params).await
+    }
+
+    #[tool(description = "List re-exports (the subset of get_exports that came via `pub use`) visible from a given consumer module")]
+    async fn get_reexports(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::GraphReexportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::get_reexports(params).await
+    }
+
+    #[tool(description = "Find every workspace module that imports the given symbol (matched by qualified name)")]
+    async fn who_imports(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::WhoImportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::who_imports(params).await
+    }
 }
 
 #[tool_handler]
@@ -239,7 +281,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files to fix MetadataCache errors"
+                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol"
                     .into(),
             ),
         }

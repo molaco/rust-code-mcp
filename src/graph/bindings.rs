@@ -1,0 +1,434 @@
+//! Layer 3 — bindings pass.
+//!
+//! Enumerates every entry in every local module's `ItemScope` and produces:
+//!   * Item nodes (for declared local items, lazily on first encounter)
+//!   * ExternalSymbol stubs (for non-local targets)
+//!   * Binding records carrying provenance + structured visibility
+//!   * Contains edges (for the declared-item case)
+
+use std::collections::HashMap;
+
+use ra_ap_hir::Crate;
+use ra_ap_hir_def::HasModule;
+use ra_ap_hir_def::item_scope::{ImportOrExternCrate, ImportOrGlob};
+use ra_ap_hir_def::nameres::{DefMap, crate_def_map};
+use ra_ap_hir_def::per_ns::Item;
+use ra_ap_hir_def::visibility::Visibility as HirVisibility;
+use ra_ap_hir_def::{AdtId, ModuleDefId, ModuleId};
+use ra_ap_ide::RootDatabase;
+
+use super::ids::NodeId;
+use super::model::{
+    Binding, BindingKind, BindingVisibility, ExtractionModel, ItemKind, Namespace, Node, NodeKind,
+};
+
+pub fn extract_bindings(
+    model: &mut ExtractionModel,
+    db: &RootDatabase,
+    local_crates: &[Crate],
+    crate_node_for: &HashMap<Crate, NodeId>,
+    crate_name_for: &HashMap<Crate, String>,
+    module_node_for: &HashMap<ModuleId, NodeId>,
+) {
+    let mut def_to_node: HashMap<ModuleDefId, NodeId> = HashMap::new();
+
+    // Seed the def→node map with all local modules so module-target imports resolve.
+    for (&module_id, &node_id) in module_node_for {
+        def_to_node.insert(ModuleDefId::ModuleId(module_id), node_id);
+    }
+
+    for &krate in local_crates {
+        let def_map = crate_def_map(db, krate.base());
+        let crate_name = crate_name_for.get(&krate).cloned().unwrap_or_default();
+        let crate_node_id = match crate_node_for.get(&krate).copied() {
+            Some(id) => id,
+            None => continue,
+        };
+
+        for (module_id, _) in def_map.modules() {
+            if module_id.is_block_module(db) {
+                continue;
+            }
+            let module_node_id = match module_node_for.get(&module_id).copied() {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let item_scope = &def_map[module_id].scope;
+
+            for (name, type_item) in item_scope.types() {
+                let Item { def, vis, import } = type_item;
+                process_entry(
+                    model,
+                    db,
+                    def_map,
+                    &mut def_to_node,
+                    module_node_for,
+                    module_node_id,
+                    crate_node_id,
+                    &crate_name,
+                    name.as_str(),
+                    Namespace::Type,
+                    def,
+                    vis,
+                    classify_type_provenance(import),
+                );
+            }
+
+            for (name, value_item) in item_scope.values() {
+                let Item { def, vis, import } = value_item;
+                process_entry(
+                    model,
+                    db,
+                    def_map,
+                    &mut def_to_node,
+                    module_node_for,
+                    module_node_id,
+                    crate_node_id,
+                    &crate_name,
+                    name.as_str(),
+                    Namespace::Value,
+                    def,
+                    vis,
+                    classify_value_provenance(import),
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_entry(
+    model: &mut ExtractionModel,
+    db: &RootDatabase,
+    def_map: &DefMap,
+    def_to_node: &mut HashMap<ModuleDefId, NodeId>,
+    module_node_for: &HashMap<ModuleId, NodeId>,
+    from_module: NodeId,
+    from_crate: NodeId,
+    from_crate_name: &str,
+    visible_name: &str,
+    namespace: Namespace,
+    def_id: ModuleDefId,
+    vis: HirVisibility,
+    binding_kind: BindingKind,
+) {
+    // v1 exclusions: macros, builtins, enum variants in scope.
+    if matches!(
+        def_id,
+        ModuleDefId::MacroId(_)
+            | ModuleDefId::BuiltinType(_)
+            | ModuleDefId::EnumVariantId(_)
+    ) {
+        return;
+    }
+
+    let target_node_id = match resolve_or_create_target(
+        model,
+        db,
+        def_to_node,
+        module_node_for,
+        def_id,
+        from_crate_name,
+        visible_name,
+    ) {
+        Some(id) => id,
+        None => return,
+    };
+
+    // Contains edge for declared local items (only on first declaration encounter).
+    if binding_kind == BindingKind::Declared
+        && matches!(model.nodes.get(&target_node_id).map(|n| n.kind), Some(NodeKind::Item))
+        && model.nodes.get(&target_node_id).and_then(|n| n.parent_id) == Some(from_module)
+    {
+        // Skip the contains edge if it would duplicate one already added by this same call.
+        // (Re-encounter via a glob import will hit the early `def_to_node` cache and never get here.)
+        let already = model
+            .contains
+            .iter()
+            .any(|&(p, c)| p == from_module && c == target_node_id);
+        if !already {
+            model.insert_contains(from_module, target_node_id);
+        }
+    }
+
+    let visibility = encode_visibility(model, db, def_map, vis, from_crate, module_node_for);
+
+    model.bindings.push(Binding {
+        from_module,
+        namespace,
+        visible_name: visible_name.to_string(),
+        target: target_node_id,
+        kind: binding_kind,
+        visibility,
+    });
+}
+
+fn resolve_or_create_target(
+    model: &mut ExtractionModel,
+    db: &RootDatabase,
+    def_to_node: &mut HashMap<ModuleDefId, NodeId>,
+    module_node_for: &HashMap<ModuleId, NodeId>,
+    def_id: ModuleDefId,
+    from_crate_name: &str,
+    visible_name: &str,
+) -> Option<NodeId> {
+    if let Some(id) = def_to_node.get(&def_id).copied() {
+        return Some(id);
+    }
+
+    let owner_module_id = module_def_owner_module(db, def_id)?;
+
+    if let Some(&local_module_node_id) = module_node_for.get(&owner_module_id) {
+        // Local item: create an Item node now.
+        let crate_name = owner_crate_name(db, owner_module_id);
+        let node_id = create_local_item_node(
+            model,
+            db,
+            def_id,
+            local_module_node_id,
+            &crate_name,
+            visible_name,
+        )?;
+        def_to_node.insert(def_id, node_id);
+        Some(node_id)
+    } else {
+        // Non-local item: stub.
+        let stub_qualified = stub_qualified_name(db, def_id, from_crate_name, visible_name);
+        let node_id = NodeId::from_components(&[
+            model.workspace_hash.as_str(),
+            "external_symbol",
+            stub_qualified.as_str(),
+        ]);
+        if !model.nodes.contains_key(&node_id) {
+            let display = stub_qualified
+                .rsplit("::")
+                .next()
+                .unwrap_or(stub_qualified.as_str())
+                .to_string();
+            model.insert_node(Node {
+                id: node_id,
+                kind: NodeKind::ExternalSymbol,
+                display_name: display,
+                qualified_name: stub_qualified,
+                crate_id: None,
+                parent_id: None,
+                item_kind: None,
+                file: None,
+                span: None,
+                visibility: None,
+            });
+        }
+        def_to_node.insert(def_id, node_id);
+        Some(node_id)
+    }
+}
+
+fn create_local_item_node(
+    model: &mut ExtractionModel,
+    db: &RootDatabase,
+    def_id: ModuleDefId,
+    module_node_id: NodeId,
+    from_crate_name: &str,
+    fallback_name: &str,
+) -> Option<NodeId> {
+    let item_kind = item_kind_for_def(def_id)?;
+    let name = name_for_def(db, def_id).unwrap_or_else(|| fallback_name.to_string());
+
+    let module_qual = model
+        .nodes
+        .get(&module_node_id)
+        .map(|n| n.qualified_name.clone())
+        .unwrap_or_else(|| from_crate_name.to_string());
+
+    let qualified = format!("{module_qual}::{name}");
+
+    let node_id = NodeId::from_components(&[
+        model.workspace_hash.as_str(),
+        "item",
+        from_crate_name,
+        module_qual.as_str(),
+        item_kind_label(item_kind),
+        name.as_str(),
+    ]);
+
+    let crate_id = model.nodes.get(&module_node_id).and_then(|n| n.crate_id);
+
+    model.insert_node(Node {
+        id: node_id,
+        kind: NodeKind::Item,
+        display_name: name,
+        qualified_name: qualified,
+        crate_id,
+        parent_id: Some(module_node_id),
+        item_kind: Some(item_kind),
+        file: None,
+        span: None,
+        visibility: None,
+    });
+
+    Some(node_id)
+}
+
+fn item_kind_for_def(def_id: ModuleDefId) -> Option<ItemKind> {
+    Some(match def_id {
+        ModuleDefId::FunctionId(_) => ItemKind::Function,
+        ModuleDefId::AdtId(AdtId::StructId(_)) => ItemKind::Struct,
+        ModuleDefId::AdtId(AdtId::EnumId(_)) => ItemKind::Enum,
+        ModuleDefId::AdtId(AdtId::UnionId(_)) => ItemKind::Union,
+        ModuleDefId::TraitId(_) => ItemKind::Trait,
+        ModuleDefId::TypeAliasId(_) => ItemKind::TypeAlias,
+        ModuleDefId::ConstId(_) => ItemKind::Const,
+        ModuleDefId::StaticId(_) => ItemKind::Static,
+        _ => return None,
+    })
+}
+
+fn item_kind_label(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Function => "function",
+        ItemKind::Struct => "struct",
+        ItemKind::Enum => "enum",
+        ItemKind::Union => "union",
+        ItemKind::Trait => "trait",
+        ItemKind::TypeAlias => "type_alias",
+        ItemKind::Const => "const",
+        ItemKind::Static => "static",
+        ItemKind::AssocFunction => "assoc_function",
+        ItemKind::AssocConst => "assoc_const",
+        ItemKind::AssocType => "assoc_type",
+    }
+}
+
+fn name_for_def(db: &RootDatabase, def_id: ModuleDefId) -> Option<String> {
+    use ra_ap_hir::{Const, Enum, Function, Static, Struct, Trait, TypeAlias, Union};
+    Some(match def_id {
+        ModuleDefId::FunctionId(id) => Function::from(id).name(db).as_str().to_string(),
+        ModuleDefId::AdtId(AdtId::StructId(id)) => Struct::from(id).name(db).as_str().to_string(),
+        ModuleDefId::AdtId(AdtId::EnumId(id)) => Enum::from(id).name(db).as_str().to_string(),
+        ModuleDefId::AdtId(AdtId::UnionId(id)) => Union::from(id).name(db).as_str().to_string(),
+        ModuleDefId::TraitId(id) => Trait::from(id).name(db).as_str().to_string(),
+        ModuleDefId::TypeAliasId(id) => TypeAlias::from(id).name(db).as_str().to_string(),
+        ModuleDefId::ConstId(id) => Const::from(id).name(db)?.as_str().to_string(),
+        ModuleDefId::StaticId(id) => Static::from(id).name(db).as_str().to_string(),
+        _ => return None,
+    })
+}
+
+fn module_def_owner_module(db: &RootDatabase, def_id: ModuleDefId) -> Option<ModuleId> {
+    Some(match def_id {
+        ModuleDefId::ModuleId(id) => id,
+        ModuleDefId::FunctionId(id) => id.module(db),
+        ModuleDefId::AdtId(AdtId::StructId(id)) => id.module(db),
+        ModuleDefId::AdtId(AdtId::EnumId(id)) => id.module(db),
+        ModuleDefId::AdtId(AdtId::UnionId(id)) => id.module(db),
+        ModuleDefId::TraitId(id) => id.module(db),
+        ModuleDefId::TypeAliasId(id) => id.module(db),
+        ModuleDefId::ConstId(id) => id.module(db),
+        ModuleDefId::StaticId(id) => id.module(db),
+        _ => return None,
+    })
+}
+
+fn owner_crate_name(db: &RootDatabase, module_id: ModuleId) -> String {
+    let krate = module_id.krate(db);
+    krate
+        .extra_data(db)
+        .display_name
+        .as_ref()
+        .map(|n| n.canonical_name().as_str().to_string())
+        .unwrap_or_else(|| "unknown_crate".to_string())
+}
+
+fn module_qualified_path(db: &RootDatabase, module_id: ModuleId) -> String {
+    let crate_name = owner_crate_name(db, module_id);
+    let def_map = module_id.def_map(db);
+    let mut segs: Vec<String> = Vec::new();
+    let mut cur = Some(module_id);
+    while let Some(m) = cur {
+        if let Some(name) = m.name(db) {
+            segs.push(name.as_str().to_string());
+            cur = def_map.containing_module(m);
+        } else {
+            break;
+        }
+    }
+    segs.reverse();
+    if segs.is_empty() {
+        crate_name
+    } else {
+        format!("{crate_name}::{}", segs.join("::"))
+    }
+}
+
+fn stub_qualified_name(
+    db: &RootDatabase,
+    def_id: ModuleDefId,
+    from_crate_name: &str,
+    visible_name: &str,
+) -> String {
+    if let Some(owner) = module_def_owner_module(db, def_id) {
+        let qual = module_qualified_path(db, owner);
+        if let Some(n) = name_for_def(db, def_id) {
+            return format!("{qual}::{n}");
+        }
+        return format!("{qual}::{visible_name}");
+    }
+    format!("extern::{from_crate_name}::{visible_name}")
+}
+
+fn classify_type_provenance(p: Option<ImportOrExternCrate>) -> BindingKind {
+    match p {
+        None => BindingKind::Declared,
+        Some(ImportOrExternCrate::Import(_)) => BindingKind::NamedImport,
+        Some(ImportOrExternCrate::Glob(_)) => BindingKind::GlobImport,
+        Some(ImportOrExternCrate::ExternCrate(_)) => BindingKind::ExternCrateImport,
+    }
+}
+
+fn classify_value_provenance(p: Option<ImportOrGlob>) -> BindingKind {
+    match p {
+        None => BindingKind::Declared,
+        Some(ImportOrGlob::Import(_)) => BindingKind::NamedImport,
+        Some(ImportOrGlob::Glob(_)) => BindingKind::GlobImport,
+    }
+}
+
+fn encode_visibility(
+    model: &ExtractionModel,
+    db: &RootDatabase,
+    _def_map: &DefMap,
+    vis: HirVisibility,
+    from_crate: NodeId,
+    module_node_for: &HashMap<ModuleId, NodeId>,
+) -> BindingVisibility {
+    match vis {
+        HirVisibility::Public => BindingVisibility::Public,
+        HirVisibility::PubCrate(crate_id) => {
+            let crate_name = ra_ap_hir::Crate::from(crate_id)
+                .display_name(db)
+                .map(|n| n.canonical_name().as_str().to_string())
+                .unwrap_or_default();
+            let crate_node_id = NodeId::from_components(&[
+                model.workspace_hash.as_str(),
+                "crate",
+                crate_name.as_str(),
+            ]);
+            if model.nodes.contains_key(&crate_node_id) {
+                BindingVisibility::Crate(crate_node_id)
+            } else if from_crate == crate_node_id {
+                BindingVisibility::Crate(from_crate)
+            } else {
+                BindingVisibility::Private
+            }
+        }
+        HirVisibility::Module(restrict_module_id, _explicitness) => {
+            // Restricted to a specific module subtree.
+            if let Some(&node_id) = module_node_for.get(&restrict_module_id) {
+                BindingVisibility::RestrictedTo(node_id)
+            } else {
+                BindingVisibility::Private
+            }
+        }
+    }
+}

@@ -1,0 +1,442 @@
+//! Snapshot lifecycle: staging → write → publish.
+//!
+//! `build_and_persist` is the high-level entry point: it loads, extracts,
+//! computes a fingerprint, opens a new heed env in a staging dir, writes the
+//! whole model in one transaction, writes manifest.json, then atomically swaps
+//! the workspace's `CURRENT` pointer.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, bail};
+use heed::{Env, RoTxn, RwTxn, WithoutTls};
+type GraphRoTxn<'e> = RoTxn<'e, WithoutTls>;
+type GraphRwTxn<'e> = RwTxn<'e>;
+
+use super::extract;
+use super::ids::{BindingId, NodeId};
+use super::loader::{self, LoadedWorkspace};
+use super::model::{Binding, ExtractionModel, Namespace};
+use super::storage::{
+    CURRENT_POINTER_FILENAME, GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths,
+    SCHEMA_VERSION, compute_fingerprint, graph_id_for, read_manifest, write_manifest,
+};
+
+#[derive(Debug, Clone)]
+pub struct BuildOptions {
+    pub force_rebuild: bool,
+    pub data_dir_override: Option<PathBuf>,
+    pub env: GraphEnvOptions,
+}
+
+impl Default for BuildOptions {
+    fn default() -> Self {
+        Self {
+            force_rebuild: false,
+            data_dir_override: None,
+            env: GraphEnvOptions::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildResult {
+    pub graph_id: String,
+    pub workspace_root: PathBuf,
+    pub fingerprint: String,
+    pub node_count: u64,
+    pub binding_count: u64,
+    pub reused: bool,
+    pub snapshot_path: PathBuf,
+}
+
+pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<BuildResult> {
+    let loaded = loader::load(directory)?;
+    let paths = match &options.data_dir_override {
+        Some(base) => GraphPaths::for_workspace_in(base, &loaded.workspace_root),
+        None => GraphPaths::for_workspace(&loaded.workspace_root),
+    };
+    paths.ensure_dirs()?;
+
+    let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
+    let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
+    let snapshot_dir = paths.snapshot_dir(&graph_id);
+    let manifest_path = paths.manifest_path(&graph_id);
+
+    if !options.force_rebuild && manifest_path.exists() {
+        let manifest = read_manifest(&manifest_path)?;
+        return Ok(BuildResult {
+            graph_id: manifest.graph_id,
+            workspace_root: loaded.workspace_root,
+            fingerprint: manifest.fingerprint,
+            node_count: manifest.node_count,
+            binding_count: manifest.binding_count,
+            reused: true,
+            snapshot_path: snapshot_dir,
+        });
+    }
+
+    if snapshot_dir.exists() {
+        fs::remove_dir_all(&snapshot_dir)
+            .with_context(|| format!("failed to clear stale {}", snapshot_dir.display()))?;
+    }
+    fs::create_dir_all(&snapshot_dir)?;
+
+    let env = unsafe {
+        options
+            .env
+            .to_open_options()
+            .open(&snapshot_dir)
+            .with_context(|| format!("open heed env at {}", snapshot_dir.display()))?
+    };
+
+    let model = extract::extract(&loaded);
+    let (node_count, binding_count) =
+        write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
+
+    let manifest = GraphManifest {
+        graph_id: graph_id.clone(),
+        workspace_root: loaded.workspace_root.display().to_string(),
+        workspace_hash: paths.workspace_hash.clone(),
+        fingerprint: fingerprint.clone(),
+        schema_version: SCHEMA_VERSION,
+        created_at_unix: now_unix()?,
+        node_count,
+        binding_count,
+    };
+    write_manifest(&manifest_path, &manifest)?;
+
+    publish_current(&paths, &graph_id)?;
+
+    Ok(BuildResult {
+        graph_id,
+        workspace_root: loaded.workspace_root,
+        fingerprint,
+        node_count,
+        binding_count,
+        reused: false,
+        snapshot_path: snapshot_dir,
+    })
+}
+
+/// Lower-level entry for tests that already have a `LoadedWorkspace` in hand.
+pub fn persist_loaded(
+    loaded: &LoadedWorkspace,
+    options: &BuildOptions,
+) -> Result<BuildResult> {
+    let paths = match &options.data_dir_override {
+        Some(base) => GraphPaths::for_workspace_in(base, &loaded.workspace_root),
+        None => GraphPaths::for_workspace(&loaded.workspace_root),
+    };
+    paths.ensure_dirs()?;
+    let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
+    let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
+    let snapshot_dir = paths.snapshot_dir(&graph_id);
+    let manifest_path = paths.manifest_path(&graph_id);
+
+    if snapshot_dir.exists() {
+        fs::remove_dir_all(&snapshot_dir)?;
+    }
+    fs::create_dir_all(&snapshot_dir)?;
+    let env = unsafe { options.env.to_open_options().open(&snapshot_dir)? };
+
+    let model = extract::extract(loaded);
+    let (node_count, binding_count) =
+        write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
+    let manifest = GraphManifest {
+        graph_id: graph_id.clone(),
+        workspace_root: loaded.workspace_root.display().to_string(),
+        workspace_hash: paths.workspace_hash.clone(),
+        fingerprint: fingerprint.clone(),
+        schema_version: SCHEMA_VERSION,
+        created_at_unix: now_unix()?,
+        node_count,
+        binding_count,
+    };
+    write_manifest(&manifest_path, &manifest)?;
+    publish_current(&paths, &graph_id)?;
+
+    Ok(BuildResult {
+        graph_id,
+        workspace_root: loaded.workspace_root.clone(),
+        fingerprint,
+        node_count,
+        binding_count,
+        reused: false,
+        snapshot_path: snapshot_dir,
+    })
+}
+
+fn write_model(
+    env: &Env<WithoutTls>,
+    _env_opts: GraphEnvOptions,
+    model: &ExtractionModel,
+    workspace_hash: &str,
+    fingerprint: &str,
+    graph_id: &str,
+) -> Result<(u64, u64)> {
+    let mut wtxn = env.write_txn().context("open write txn")?;
+    let dbs = GraphDatabases::create(env, &mut wtxn)?;
+
+    // 1. Nodes
+    for node in model.nodes.values() {
+        dbs.nodes_by_id
+            .put(&mut wtxn, node.id.as_bytes(), node)
+            .context("put node")?;
+    }
+    let node_count = model.nodes.len() as u64;
+
+    // 2. Bindings + per-target/per-from-module indexes
+    let mut binding_count: u64 = 0;
+    for binding in &model.bindings {
+        let bid = binding_id_for(binding);
+        // primary record
+        dbs.bindings_by_id
+            .put(&mut wtxn, bid.as_bytes(), binding)
+            .context("put binding")?;
+        // index from_module → bid
+        dbs.bindings_by_from_module
+            .put(&mut wtxn, binding.from_module.as_bytes(), bid.as_bytes())?;
+        // index target → bid
+        dbs.bindings_by_target
+            .put(&mut wtxn, binding.target.as_bytes(), bid.as_bytes())?;
+        binding_count += 1;
+    }
+
+    // 3. Contains hierarchy
+    for &(parent, child) in &model.contains {
+        dbs.children_by_parent
+            .put(&mut wtxn, parent.as_bytes(), child.as_bytes())?;
+    }
+
+    // 4. Meta
+    dbs.meta_by_key
+        .put(&mut wtxn, "workspace_hash", workspace_hash.as_bytes())?;
+    dbs.meta_by_key
+        .put(&mut wtxn, "fingerprint", fingerprint.as_bytes())?;
+    dbs.meta_by_key
+        .put(&mut wtxn, "graph_id", graph_id.as_bytes())?;
+    dbs.meta_by_key
+        .put(&mut wtxn, "schema_version", &SCHEMA_VERSION.to_le_bytes())?;
+    dbs.meta_by_key
+        .put(&mut wtxn, "node_count", &node_count.to_le_bytes())?;
+    dbs.meta_by_key
+        .put(&mut wtxn, "binding_count", &binding_count.to_le_bytes())?;
+
+    wtxn.commit().context("commit graph write txn")?;
+    Ok((node_count, binding_count))
+}
+
+pub fn binding_id_for(binding: &Binding) -> BindingId {
+    let ns = match binding.namespace {
+        Namespace::Type => "T",
+        Namespace::Value => "V",
+    };
+    BindingId::from_components(&[
+        binding.from_module.to_hex().as_str(),
+        ns,
+        binding.visible_name.as_str(),
+        binding.target.to_hex().as_str(),
+    ])
+}
+
+fn publish_current(paths: &GraphPaths, graph_id: &str) -> Result<()> {
+    // Atomic on POSIX: write to a temp file, then rename.
+    let tmp = paths.root_dir.join(format!("{CURRENT_POINTER_FILENAME}.tmp"));
+    fs::write(&tmp, graph_id.as_bytes())
+        .with_context(|| format!("write tmp pointer {}", tmp.display()))?;
+    fs::rename(&tmp, &paths.current_pointer_path).with_context(|| {
+        format!(
+            "rename {} → {}",
+            tmp.display(),
+            paths.current_pointer_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn now_unix() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_secs())
+}
+
+/// A read handle to a published snapshot.
+pub struct OpenedSnapshot {
+    pub manifest: GraphManifest,
+    pub snapshot_dir: PathBuf,
+    pub env: Env<WithoutTls>,
+    pub dbs: GraphDatabases,
+}
+
+impl OpenedSnapshot {
+    pub fn read_txn(&self) -> Result<GraphRoTxn<'_>> {
+        Ok(self.env.read_txn()?)
+    }
+
+    pub fn write_txn(&self) -> Result<GraphRwTxn<'_>> {
+        Ok(self.env.write_txn()?)
+    }
+
+    /// Look up a node record by id.
+    pub fn node(&self, txn: &GraphRoTxn<'_>, id: NodeId) -> Result<Option<super::model::Node>> {
+        Ok(self.dbs.nodes_by_id.get(txn, id.as_bytes())?)
+    }
+}
+
+pub fn open_current(paths: &GraphPaths, env: GraphEnvOptions) -> Result<Option<OpenedSnapshot>> {
+    if !paths.current_pointer_path.exists() {
+        return Ok(None);
+    }
+    let graph_id = fs::read_to_string(&paths.current_pointer_path)
+        .with_context(|| format!("read {}", paths.current_pointer_path.display()))?;
+    let graph_id = graph_id.trim().to_string();
+    if graph_id.is_empty() {
+        return Ok(None);
+    }
+    open_specific(paths, &graph_id, env)
+}
+
+pub fn open_specific(
+    paths: &GraphPaths,
+    graph_id: &str,
+    env_opts: GraphEnvOptions,
+) -> Result<Option<OpenedSnapshot>> {
+    let snapshot_dir = paths.snapshot_dir(graph_id);
+    let manifest_path = paths.manifest_path(graph_id);
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let manifest = read_manifest(&manifest_path)?;
+    if !snapshot_dir.join("data.mdb").exists() {
+        bail!("snapshot manifest exists but data.mdb missing at {}", snapshot_dir.display());
+    }
+    let env = unsafe {
+        env_opts
+            .to_open_options()
+            .open(&snapshot_dir)
+            .with_context(|| format!("open heed env at {}", snapshot_dir.display()))?
+    };
+    // Open dbs in a txn that we then COMMIT (not drop) — committing registers
+    // the dbi handles back to the env so later txns can use them. Dropping
+    // leaves the handles in a half-open state and later iter() returns EINVAL.
+    let rtxn = env.read_txn()?;
+    let dbs = GraphDatabases::open(&env, &rtxn)?
+        .context("snapshot exists but databases not initialized")?;
+    rtxn.commit()?;
+    Ok(Some(OpenedSnapshot {
+        manifest,
+        snapshot_dir,
+        env,
+        dbs,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::model::{BindingKind, NodeKind};
+    use std::path::Path;
+
+    #[test]
+    fn build_and_open_self_workspace() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let tempdir = tempfile::tempdir().unwrap();
+        let opts = BuildOptions {
+            data_dir_override: Some(tempdir.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        let result = build_and_persist(Path::new(manifest_dir), opts.clone()).unwrap();
+        assert!(!result.reused, "first build should not be reused");
+        assert!(result.node_count > 0);
+        assert!(result.binding_count > 0);
+        assert!(result.snapshot_path.join("data.mdb").exists());
+
+        // Reuse path: second call should return reused=true with no rebuild.
+        let result2 = build_and_persist(Path::new(manifest_dir), opts.clone()).unwrap();
+        assert!(result2.reused);
+        assert_eq!(result.graph_id, result2.graph_id);
+        assert_eq!(result.node_count, result2.node_count);
+
+        // Open and read back.
+        let paths = GraphPaths::for_workspace_in(tempdir.path(), &result.workspace_root);
+        let opened = open_current(&paths, GraphEnvOptions::default())
+            .unwrap()
+            .expect("snapshot opens via CURRENT pointer");
+
+        let rtxn = opened.read_txn().unwrap();
+
+        // Find the loader::load function NodeId by scanning nodes_by_id.
+        let mut load_fn_id: Option<NodeId> = None;
+        for entry in opened.dbs.nodes_by_id.iter(&rtxn).unwrap() {
+            let (key, node) = entry.unwrap();
+            if node.kind == NodeKind::Item
+                && node.qualified_name == "file_search_mcp::graph::loader::load"
+            {
+                let mut id = [0u8; 32];
+                id.copy_from_slice(key);
+                load_fn_id = Some(NodeId(id));
+                break;
+            }
+        }
+        let load_fn_id = load_fn_id.expect("load fn node persisted");
+
+        // bindings_by_target should yield at least one BindingId for it
+        // (the `pub use loader::load` in graph/mod.rs).
+        let mut hits = 0;
+        for entry in opened
+            .dbs
+            .bindings_by_target
+            .iter(&rtxn)
+            .unwrap()
+            .take(1_000_000)
+        {
+            let (k, _v) = entry.unwrap();
+            if k == load_fn_id.as_bytes() {
+                hits += 1;
+            }
+        }
+        assert!(hits > 0, "expected at least one binding targeting load fn");
+
+        // children_by_parent: workspace node should have at least the crate as child.
+        let workspace_id = opened
+            .dbs
+            .nodes_by_id
+            .iter(&rtxn)
+            .unwrap()
+            .find_map(|e| {
+                let (k, n) = e.unwrap();
+                if n.kind == NodeKind::Workspace {
+                    let mut id = [0u8; 32];
+                    id.copy_from_slice(k);
+                    Some(NodeId(id))
+                } else {
+                    None
+                }
+            })
+            .expect("workspace node");
+        let mut workspace_children = 0;
+        for entry in opened.dbs.children_by_parent.iter(&rtxn).unwrap() {
+            let (k, _v) = entry.unwrap();
+            if k == workspace_id.as_bytes() {
+                workspace_children += 1;
+            }
+        }
+        assert!(workspace_children >= 1, "workspace should contain ≥1 crate");
+
+        // Visit at least one Declared binding via bindings_by_id.
+        let mut declared = 0;
+        for entry in opened.dbs.bindings_by_id.iter(&rtxn).unwrap() {
+            let (_k, b) = entry.unwrap();
+            if b.kind == BindingKind::Declared {
+                declared += 1;
+                if declared > 5 {
+                    break;
+                }
+            }
+        }
+        assert!(declared > 0, "should have ≥1 declared binding persisted");
+    }
+}
