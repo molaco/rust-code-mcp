@@ -51,6 +51,11 @@ ra_ap_project_model = "0.0.313"
 ra_ap_vfs = "0.0.313"
 ra_ap_paths = "0.0.313"
 ra_ap_hir = "0.0.313"
+ra_ap_hir_def = "0.0.313"
+ra_ap_base_db = "0.0.313"
+
+# Persisted hypergraph store
+heed = "0.22.1"
 
 # Phase 3: Semantic Code Chunking
 text-splitter = "0.13"  # Semantic text chunking
