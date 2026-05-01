@@ -164,16 +164,28 @@ fn resolve_required_node(
                 None,
             )
         })?;
-    if node.kind != expect_kind {
-        return Err(McpError::invalid_params(
-            format!(
-                "`{qualified_name}` is a {:?}, expected {expect_kind:?}",
-                node.kind
-            ),
-            None,
-        ));
+    if node.kind == expect_kind {
+        return Ok(id);
     }
-    Ok(id)
+    // Transparent crate→root-module fallback: every Crate has a root Module
+    // sharing its qualified_name, so when callers pass a crate name where a
+    // module is expected (e.g., `consumer: "file_search_mcp"`), promote the
+    // lookup to that root module instead of failing.
+    if expect_kind == NodeKind::Module && node.kind == NodeKind::Crate {
+        if let Some(root_module_id) = snap
+            .find_root_module_of(id)
+            .map_err(internal_error("find_root_module_of"))?
+        {
+            return Ok(root_module_id);
+        }
+    }
+    Err(McpError::invalid_params(
+        format!(
+            "`{qualified_name}` is a {:?}, expected {expect_kind:?}",
+            node.kind
+        ),
+        None,
+    ))
 }
 
 fn enrich_bindings(snap: &OpenedSnapshot, bindings: Vec<Binding>) -> Vec<EnrichedBinding> {
@@ -305,14 +317,24 @@ fn _path_marker(_: &Path) {}
 mod tests {
     use super::*;
     use crate::tools::search_tool::{
-        BuildHypergraphParams, GraphImportsParams, WhoImportsParams,
+        BuildHypergraphParams, GraphExportsParams, GraphImportsParams, WhoImportsParams,
     };
+    use std::sync::Mutex;
+
+    // Both tests in this module open the same default data-dir snapshot
+    // (`~/.local/share/search/graphs/...`). heed forbids opening the same env
+    // twice in the same process, so we serialize them with a shared mutex
+    // rather than relying on `--test-threads=1`.
+    static DEFAULT_SNAPSHOT_LOCK: Mutex<()> = Mutex::new(());
 
     /// Round-trip: build_hypergraph → get_imports / who_imports against this
     /// crate. Uses the default data dir so the snapshot lifecycle exercised
     /// here mirrors what an MCP client would see.
     #[tokio::test]
     async fn mcp_round_trip_against_self() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
 
         let build = build_hypergraph(BuildHypergraphParams {
@@ -348,6 +370,50 @@ mod tests {
         assert!(
             body.contains("file_search_mcp::graph"),
             "expected graph mod among importers of loader::load: {body}"
+        );
+    }
+
+    /// Regression: passing a Crate qualified name (e.g. `file_search_mcp`)
+    /// where a Module is expected (`get_exports`'s `consumer`) should be
+    /// transparent — the resolver should fall through to the crate's root
+    /// module rather than erroring with "is a Crate, expected Module".
+    #[tokio::test]
+    async fn get_exports_accepts_crate_name_as_consumer() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        // Ensure a snapshot exists for the workspace.
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        let exports = get_exports(GraphExportsParams {
+            directory: manifest_dir.to_string(),
+            // `file_search_mcp::graph` re-exports `load` (from loader),
+            // visible from anywhere inside the crate.
+            module: "file_search_mcp::graph".to_string(),
+            // Crate name, NOT a module path — must be transparently
+            // promoted to the crate's root module.
+            consumer: "file_search_mcp".to_string(),
+        })
+        .await
+        .expect("get_exports should accept a crate name as consumer");
+
+        let body = first_text(&exports);
+        assert!(
+            body.contains("\"bindings\""),
+            "expected a bindings array in response: {body}"
+        );
+        // The visible re-export of `load` from graph mod is one expected entry,
+        // but the precise minimum is just "at least one binding".
+        assert!(
+            body.contains("\"visible_name\""),
+            "expected at least one binding entry in response: {body}"
         );
     }
 
