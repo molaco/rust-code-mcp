@@ -111,6 +111,14 @@ path = "examples/ide_functional_test.rs"
 name = "graph_burn"
 path = "examples/graph_burn.rs"
 
+[[example]]
+name = "debug_burn_loader"
+path = "examples/debug_burn_loader.rs"
+
+[[example]]
+name = "debug_burn_target"
+path = "examples/debug_burn_target.rs"
+
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests
 walkdir = "2"          # For test file discovery
