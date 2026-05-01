@@ -22,6 +22,8 @@ pub fn load_project(path: &Path) -> Result<(AnalysisHost, Vfs)> {
         load_out_dirs_from_check: false,
         with_proc_macro_server: ProcMacroServerChoice::None,
         prefill_caches: true,
+        num_worker_threads: num_cpus::get_physical(),
+        proc_macro_processes: 1,
     };
 
     let (db, vfs, _) = load_workspace_at(path, &cargo_config, &load_config, &|_| {})
