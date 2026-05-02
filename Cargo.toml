@@ -131,6 +131,14 @@ path = "examples/debug_itemscope.rs"
 name = "probe_workspace"
 path = "examples/probe_workspace.rs"
 
+[[example]]
+name = "spike_usages"
+path = "examples/spike_usages.rs"
+
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests
 walkdir = "2"          # For test file discovery
+
+[[example]]
+name = "count_items"
+path = "examples/count_items.rs"
