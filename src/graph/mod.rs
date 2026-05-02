@@ -20,6 +20,7 @@ pub use model::{
     Binding, BindingKind, BindingVisibility, ExtractionModel, ItemKind, Namespace, Node, NodeKind,
     Usage, UsageCategory,
 };
+pub use queries::DeadPubFinding;
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
 };

@@ -18,13 +18,14 @@ use rmcp::{
 use serde::Serialize;
 
 use crate::graph::{
-    Binding, BindingKind, BindingVisibility, GraphEnvOptions, GraphPaths, Namespace, Node,
-    NodeId, NodeKind, OpenedSnapshot, build_and_persist, open_current,
+    Binding, BindingKind, BindingVisibility, DeadPubFinding, GraphEnvOptions, GraphPaths, ItemKind,
+    Namespace, Node, NodeId, NodeKind, OpenedSnapshot, Usage, UsageCategory, build_and_persist,
+    open_current,
     snapshot::BuildOptions,
 };
 use crate::tools::search_tool::{
-    BuildHypergraphParams, GraphExportsParams, GraphImportsParams, GraphReexportsParams,
-    WhoImportsParams,
+    BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
+    GraphReexportsParams, WhoImportsParams, WhoUsesParams,
 };
 
 pub async fn build_hypergraph(
@@ -50,6 +51,7 @@ pub async fn build_hypergraph(
         fingerprint: result.fingerprint,
         node_count: result.node_count,
         binding_count: result.binding_count,
+        usage_count: result.usage_count,
         reused: result.reused,
         snapshot_path: result.snapshot_path.display().to_string(),
     })
@@ -129,6 +131,77 @@ pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, Mcp
         consumer: None,
         target: Some(target_node.qualified_name),
         bindings: enrich_bindings(&snap, bindings),
+    })
+}
+
+pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let usages = snap
+        .usages_of(target_id)
+        .map_err(internal_error("usages_of"))?;
+
+    json_result(&UsagesListResponse {
+        target: target_node.qualified_name,
+        usages: enrich_usages(&snap, usages),
+    })
+}
+
+pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+
+    // Caller may pass a crate name (e.g. `my_crate`) or a crate root module name —
+    // both resolve via `lookup_by_qualified_name`. Promote module → owning crate
+    // if a Module came back so the rest of the function only handles Crate.
+    let (id, node) = snap
+        .lookup_by_qualified_name(&params.krate)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.krate),
+                None,
+            )
+        })?;
+    let crate_id = match node.kind {
+        NodeKind::Crate => id,
+        NodeKind::Module => node
+            .crate_id
+            .or(node.parent_id)
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("`{}` resolves to a Module with no crate_id", params.krate),
+                    None,
+                )
+            })?,
+        other => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "`{}` is a {other:?}, expected a crate or its root module",
+                    params.krate
+                ),
+                None,
+            ));
+        }
+    };
+
+    let findings = snap
+        .dead_pub_in_crate(crate_id)
+        .map_err(internal_error("dead_pub_in_crate"))?;
+
+    json_result(&DeadPubResponse {
+        krate: params.krate,
+        findings: findings
+            .into_iter()
+            .map(|f| enrich_dead_pub(&snap, f))
+            .collect(),
     })
 }
 
@@ -213,6 +286,39 @@ fn enrich_bindings(snap: &OpenedSnapshot, bindings: Vec<Binding>) -> Vec<Enriche
         .collect()
 }
 
+fn enrich_usages(snap: &OpenedSnapshot, usages: Vec<Usage>) -> Vec<EnrichedUsage> {
+    let rtxn = match snap.read_txn() {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    usages
+        .into_iter()
+        .map(|u| {
+            let consumer_node = snap.node_by_id(&rtxn, u.consumer_module).ok().flatten();
+            EnrichedUsage {
+                file: u.file,
+                start: u.start,
+                end: u.end,
+                category: usage_category_label(u.category),
+                consumer_module: consumer_node.as_ref().map(|n| n.qualified_name.clone()),
+            }
+        })
+        .collect()
+}
+
+fn enrich_dead_pub(snap: &OpenedSnapshot, f: DeadPubFinding) -> EnrichedDeadPub {
+    let rtxn = snap.read_txn().ok();
+    let visibility = match &rtxn {
+        Some(t) => visibility_label(snap, t, &f.declared_visibility),
+        None => "?".to_string(),
+    };
+    EnrichedDeadPub {
+        qualified_name: f.qualified_name,
+        item_kind: item_kind_label(f.item_kind),
+        declared_visibility: visibility,
+    }
+}
+
 fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
@@ -227,6 +333,31 @@ fn namespace_label(ns: Namespace) -> &'static str {
     match ns {
         Namespace::Type => "Type",
         Namespace::Value => "Value",
+    }
+}
+
+fn usage_category_label(c: UsageCategory) -> &'static str {
+    match c {
+        UsageCategory::Read => "Read",
+        UsageCategory::Write => "Write",
+        UsageCategory::Test => "Test",
+        UsageCategory::Other => "Other",
+    }
+}
+
+fn item_kind_label(k: ItemKind) -> &'static str {
+    match k {
+        ItemKind::Function => "Function",
+        ItemKind::Struct => "Struct",
+        ItemKind::Enum => "Enum",
+        ItemKind::Union => "Union",
+        ItemKind::Trait => "Trait",
+        ItemKind::TypeAlias => "TypeAlias",
+        ItemKind::Const => "Const",
+        ItemKind::Static => "Static",
+        ItemKind::AssocFunction => "AssocFunction",
+        ItemKind::AssocConst => "AssocConst",
+        ItemKind::AssocType => "AssocType",
     }
 }
 
@@ -280,6 +411,7 @@ struct BuildHypergraphResponse {
     fingerprint: String,
     node_count: u64,
     binding_count: u64,
+    usage_count: u64,
     reused: bool,
     snapshot_path: String,
 }
@@ -309,6 +441,36 @@ struct EnrichedBinding {
     target_kind: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct UsagesListResponse {
+    target: String,
+    usages: Vec<EnrichedUsage>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedUsage {
+    file: String,
+    start: u32,
+    end: u32,
+    category: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumer_module: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeadPubResponse {
+    #[serde(rename = "crate")]
+    krate: String,
+    findings: Vec<EnrichedDeadPub>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedDeadPub {
+    qualified_name: String,
+    item_kind: &'static str,
+    declared_visibility: String,
+}
+
 // Path import suppress dead-code on Path when unused.
 #[allow(dead_code)]
 fn _path_marker(_: &Path) {}
@@ -317,7 +479,8 @@ fn _path_marker(_: &Path) {}
 mod tests {
     use super::*;
     use crate::tools::search_tool::{
-        BuildHypergraphParams, GraphExportsParams, GraphImportsParams, WhoImportsParams,
+        BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
+        WhoImportsParams, WhoUsesParams,
     };
     use std::sync::Mutex;
 
@@ -414,6 +577,55 @@ mod tests {
         assert!(
             body.contains("\"visible_name\""),
             "expected at least one binding entry in response: {body}"
+        );
+    }
+
+    /// MCP shape of who_uses + dead_pub_in_crate. Reuses the snapshot
+    /// produced by other tests in this module via the shared lock.
+    #[tokio::test]
+    async fn who_uses_and_dead_pub_round_trip() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        // who_uses against a fn we know is referenced inside the lib.
+        let users = who_uses(WhoUsesParams {
+            directory: manifest_dir.to_string(),
+            target: "file_search_mcp::graph::loader::load".to_string(),
+        })
+        .await
+        .expect("who_uses");
+        let body = first_text(&users);
+        assert!(
+            body.contains("\"usages\""),
+            "expected a usages array in response: {body}"
+        );
+        assert!(
+            body.contains("\"file\""),
+            "expected at least one usage entry with file path: {body}"
+        );
+
+        // dead_pub_in_crate against this very crate. We don't pin a specific
+        // qualified_name (the dead-pub set drifts with refactors); just smoke-
+        // test that the tool returns a structured findings array.
+        let dead = dead_pub_in_crate(DeadPubParams {
+            directory: manifest_dir.to_string(),
+            krate: "file_search_mcp".to_string(),
+        })
+        .await
+        .expect("dead_pub_in_crate");
+        let body = first_text(&dead);
+        assert!(
+            body.contains("\"findings\""),
+            "expected a findings array in response: {body}"
         );
     }
 
