@@ -6,8 +6,18 @@ use tracing_subscriber::{self, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Default to WARN for everything, INFO for our own crate. Users who want
+    // RA's internal debug logs can set `RUST_LOG=ra_ap_hir=debug,...`.
+    //
+    // Why this matters: RA emits millions of `tracing::debug!` events during
+    // name resolution. With Level::DEBUG enabled globally, the formatter +
+    // socket-stderr write pipeline becomes the bottleneck — `build_hypergraph`
+    // on a multi-crate workspace went from ~7s to 7+ minutes purely from log
+    // formatting overhead. Keep this at WARN unless explicitly overridden.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("warn,file_search_mcp=info"));
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::DEBUG.into()))
+        .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
