@@ -283,6 +283,14 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph_tools::dead_pub_in_crate(params).await
     }
+
+    #[tool(description = "Run dead_pub_in_crate over every local crate in the workspace and return a single aggregated report. Each finding includes file path + byte span so callers can navigate directly to the declaration.")]
+    async fn dead_pub_report(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::DeadPubReportParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::dead_pub_report(params).await
+    }
 }
 
 #[tool_handler]
@@ -297,7 +305,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade)"
+                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding"
                     .into(),
             ),
         }

@@ -18,14 +18,14 @@ use rmcp::{
 use serde::Serialize;
 
 use crate::graph::{
-    Binding, BindingKind, BindingVisibility, DeadPubFinding, GraphEnvOptions, GraphPaths, ItemKind,
-    Namespace, Node, NodeId, NodeKind, OpenedSnapshot, Usage, UsageCategory, build_and_persist,
-    open_current,
+    Binding, BindingKind, BindingVisibility, CrateDeadPub, DeadPubFinding, GraphEnvOptions,
+    GraphPaths, ItemKind, Namespace, Node, NodeId, NodeKind, OpenedSnapshot, Usage, UsageCategory,
+    build_and_persist, open_current,
     snapshot::BuildOptions,
 };
 use crate::tools::search_tool::{
-    BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
-    GraphReexportsParams, WhoImportsParams, WhoUsesParams,
+    BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
+    GraphImportsParams, GraphReexportsParams, WhoImportsParams, WhoUsesParams,
 };
 
 pub async fn build_hypergraph(
@@ -205,6 +205,24 @@ pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, 
     })
 }
 
+pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let report = snap
+        .dead_pub_report()
+        .map_err(internal_error("dead_pub_report"))?;
+
+    let crates: Vec<EnrichedCrateDeadPub> = report
+        .into_iter()
+        .map(|c| enrich_crate_dead_pub(&snap, c))
+        .collect();
+    let total: usize = crates.iter().map(|c| c.findings.len()).sum();
+    json_result(&DeadPubReportResponse {
+        workspace: params.directory,
+        total_findings: total,
+        crates,
+    })
+}
+
 // ----- helpers -----
 
 fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {
@@ -312,10 +330,31 @@ fn enrich_dead_pub(snap: &OpenedSnapshot, f: DeadPubFinding) -> EnrichedDeadPub 
         Some(t) => visibility_label(snap, t, &f.declared_visibility),
         None => "?".to_string(),
     };
+    // Look up file/span for navigability — these live on the Item Node.
+    let (file, span) = match &rtxn {
+        Some(t) => match snap.node_by_id(t, f.target).ok().flatten() {
+            Some(node) => (node.file, node.span),
+            None => (None, None),
+        },
+        None => (None, None),
+    };
     EnrichedDeadPub {
         qualified_name: f.qualified_name,
         item_kind: item_kind_label(f.item_kind),
         declared_visibility: visibility,
+        file,
+        span,
+    }
+}
+
+fn enrich_crate_dead_pub(snap: &OpenedSnapshot, c: CrateDeadPub) -> EnrichedCrateDeadPub {
+    EnrichedCrateDeadPub {
+        krate: c.crate_qualified_name,
+        findings: c
+            .findings
+            .into_iter()
+            .map(|f| enrich_dead_pub(snap, f))
+            .collect(),
     }
 }
 
@@ -469,6 +508,24 @@ struct EnrichedDeadPub {
     qualified_name: String,
     item_kind: &'static str,
     declared_visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeadPubReportResponse {
+    workspace: String,
+    total_findings: usize,
+    crates: Vec<EnrichedCrateDeadPub>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedCrateDeadPub {
+    #[serde(rename = "crate")]
+    krate: String,
+    findings: Vec<EnrichedDeadPub>,
 }
 
 // Path import suppress dead-code on Path when unused.
@@ -479,8 +536,8 @@ fn _path_marker(_: &Path) {}
 mod tests {
     use super::*;
     use crate::tools::search_tool::{
-        BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
-        WhoImportsParams, WhoUsesParams,
+        BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
+        GraphImportsParams, WhoImportsParams, WhoUsesParams,
     };
     use std::sync::Mutex;
 
@@ -626,6 +683,24 @@ mod tests {
         assert!(
             body.contains("\"findings\""),
             "expected a findings array in response: {body}"
+        );
+
+        // dead_pub_report aggregates the same query across all local crates and
+        // stamps a `total_findings` count. file_search_mcp has at least one
+        // local crate (itself), so `crates` is non-empty.
+        let report = dead_pub_report(DeadPubReportParams {
+            directory: manifest_dir.to_string(),
+        })
+        .await
+        .expect("dead_pub_report");
+        let body = first_text(&report);
+        assert!(
+            body.contains("\"total_findings\""),
+            "expected total_findings in response: {body}"
+        );
+        assert!(
+            body.contains("\"crates\""),
+            "expected crates array in response: {body}"
         );
     }
 

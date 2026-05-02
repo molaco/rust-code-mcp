@@ -29,6 +29,17 @@ pub struct DeadPubFinding {
     pub declared_visibility: BindingVisibility,
 }
 
+/// Per-crate aggregate emitted by `dead_pub_report`: every `pub`-but-unused
+/// item in a single local crate, sorted by qualified name. Crates with no
+/// findings are still included (caller often wants to render zero-result
+/// rows for completeness).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrateDeadPub {
+    pub crate_id: NodeId,
+    pub crate_qualified_name: String,
+    pub findings: Vec<DeadPubFinding>,
+}
+
 /// Maximum re-export facade hops to follow before giving up. Bounds recursion
 /// in the (pathological) case of a binding chain or a self-referential cycle.
 const MAX_REEXPORT_HOPS: usize = 8;
@@ -333,7 +344,40 @@ impl OpenedSnapshot {
                 declared_visibility: declared.visibility,
             });
         }
+        // Deterministic order — easier to diff across runs.
+        out.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         Ok(out)
+    }
+
+    /// Workspace-wide `dead_pub` aggregate: one entry per local crate, with
+    /// findings sorted by qualified name. Crates are returned sorted by name.
+    pub fn dead_pub_report(&self) -> Result<Vec<CrateDeadPub>> {
+        // Gather crate ids first so the per-crate query iterators don't
+        // overlap with the outer scan over nodes_by_id.
+        let mut crates: Vec<(NodeId, String)> = Vec::new();
+        {
+            let rtxn = self.env.read_txn()?;
+            for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+                let (key, node) = entry?;
+                if node.kind == NodeKind::Crate {
+                    let mut id = [0u8; 32];
+                    id.copy_from_slice(key);
+                    crates.push((NodeId(id), node.qualified_name));
+                }
+            }
+        }
+        crates.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let mut report = Vec::with_capacity(crates.len());
+        for (crate_id, crate_qualified_name) in crates {
+            let findings = self.dead_pub_in_crate(crate_id)?;
+            report.push(CrateDeadPub {
+                crate_id,
+                crate_qualified_name,
+                findings,
+            });
+        }
+        Ok(report)
     }
 
     // ----- helpers -----

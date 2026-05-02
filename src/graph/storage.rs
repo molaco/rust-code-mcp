@@ -31,10 +31,15 @@ use super::ids::{BindingId, NodeId};
 use super::model::{Binding, Node, Usage};
 
 // v2 (2026-05): added usages_by_id / usages_by_target / usages_by_consumer
-// sub-databases and `usage_count` to the manifest. v1 graph_ids and v2 graph_ids
-// are disjoint (graph_id_for hashes SCHEMA_VERSION), so old snapshots simply
-// stop being reused; they remain on disk until a manual cleanup.
-pub const SCHEMA_VERSION: u32 = 2;
+// sub-databases and `usage_count` to the manifest.
+// v3 (2026-05): extraction now populates `Node.file` / `Node.span` for local
+// Items via `Definition::try_to_nav`, making `dead_pub_report` findings
+// navigable. Schema layout is unchanged — only the extracted data is denser —
+// but bumping invalidates v2 snapshots so users see the new fields without
+// remembering to `--force`. v1/v2/v3 graph_ids are disjoint (graph_id_for
+// hashes SCHEMA_VERSION), so old snapshots stop being reused; they remain on
+// disk until a manual cleanup.
+pub const SCHEMA_VERSION: u32 = 3;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";

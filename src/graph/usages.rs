@@ -20,6 +20,7 @@ use std::path::Path;
 
 use ra_ap_hir::{ModuleDef, Semantics, attach_db};
 use ra_ap_hir_def::{ModuleDefId, ModuleId};
+use ra_ap_ide::TryToNav;
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_ide_db::defs::Definition;
 use ra_ap_ide_db::search::ReferenceCategory;
@@ -63,6 +64,24 @@ pub fn extract_usages(
                 ModuleDef::Static(s) => Definition::Static(s),
                 _ => continue,
             };
+
+            // Backfill the Item Node's file/span from the canonical declaration
+            // site. Cheap (single call), and makes dead_pub_report findings
+            // navigable. Errors/macro-only definitions silently fall through.
+            if let Some(nav) = def.try_to_nav(&sema) {
+                let target = nav.call_site;
+                if let Some(rel) =
+                    resolve_workspace_relative(vfs, target.file_id, &workspace_root)
+                {
+                    if let Some(node) = model.nodes.get_mut(&target_node_id) {
+                        node.file = Some(rel);
+                        node.span = Some((
+                            u32::from(target.full_range.start()),
+                            u32::from(target.full_range.end()),
+                        ));
+                    }
+                }
+            }
 
             let results = def.usages(&sema).all();
             for (ed_file_id, refs) in &results.references {
