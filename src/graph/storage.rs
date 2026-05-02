@@ -28,9 +28,13 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use super::ids::{BindingId, NodeId};
-use super::model::{Binding, Node};
+use super::model::{Binding, Node, Usage};
 
-pub const SCHEMA_VERSION: u32 = 1;
+// v2 (2026-05): added usages_by_id / usages_by_target / usages_by_consumer
+// sub-databases and `usage_count` to the manifest. v1 graph_ids and v2 graph_ids
+// are disjoint (graph_id_for hashes SCHEMA_VERSION), so old snapshots simply
+// stop being reused; they remain on disk until a manual cleanup.
+pub const SCHEMA_VERSION: u32 = 2;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";
@@ -197,6 +201,9 @@ pub struct GraphDatabases {
     pub bindings_by_from_module: Database<Bytes, Bytes>, // NodeId → BindingId, DUP_SORT
     pub bindings_by_target: Database<Bytes, Bytes>,      // NodeId → BindingId, DUP_SORT
     pub children_by_parent: Database<Bytes, Bytes>,      // NodeId → NodeId, DUP_SORT
+    pub usages_by_id: Database<Bytes, SerdeBincode<Usage>>,
+    pub usages_by_target: Database<Bytes, Bytes>,        // NodeId → UsageId, DUP_SORT
+    pub usages_by_consumer: Database<Bytes, Bytes>,      // NodeId → UsageId, DUP_SORT
 }
 
 impl GraphDatabases {
@@ -223,6 +230,14 @@ impl GraphDatabases {
                 "children_by_parent",
                 true,
             )?,
+            usages_by_id: open_or_create_bytes_bincode(env, wtxn, "usages_by_id", false)?,
+            usages_by_target: open_or_create_bytes_bytes(env, wtxn, "usages_by_target", true)?,
+            usages_by_consumer: open_or_create_bytes_bytes(
+                env,
+                wtxn,
+                "usages_by_consumer",
+                true,
+            )?,
         })
     }
 
@@ -247,6 +262,15 @@ impl GraphDatabases {
             children_by_parent: env
                 .open_database(rtxn, Some("children_by_parent"))?
                 .context("children_by_parent missing")?,
+            usages_by_id: env
+                .open_database(rtxn, Some("usages_by_id"))?
+                .context("usages_by_id missing")?,
+            usages_by_target: env
+                .open_database(rtxn, Some("usages_by_target"))?
+                .context("usages_by_target missing")?,
+            usages_by_consumer: env
+                .open_database(rtxn, Some("usages_by_consumer"))?
+                .context("usages_by_consumer missing")?,
         }))
     }
 }
@@ -306,6 +330,8 @@ pub struct GraphManifest {
     pub created_at_unix: u64,
     pub node_count: u64,
     pub binding_count: u64,
+    #[serde(default)]
+    pub usage_count: u64,
 }
 
 pub fn write_manifest(path: &Path, manifest: &GraphManifest) -> Result<()> {

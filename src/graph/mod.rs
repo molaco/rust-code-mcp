@@ -13,10 +13,11 @@ pub mod snapshot;
 pub mod storage;
 
 pub use extract::extract;
-pub use ids::{BindingId, NodeId, workspace_hash};
+pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
 pub use loader::{LoadedWorkspace, load};
 pub use model::{
     Binding, BindingKind, BindingVisibility, ExtractionModel, ItemKind, Namespace, Node, NodeKind,
+    Usage, UsageCategory,
 };
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
