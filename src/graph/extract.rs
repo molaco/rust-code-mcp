@@ -26,6 +26,7 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         workspace_id,
         nodes: Default::default(),
         bindings: Vec::new(),
+        usages: Vec::new(),
         contains: Vec::new(),
     };
 

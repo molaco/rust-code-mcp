@@ -46,6 +46,39 @@ impl std::fmt::Debug for BindingId {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct UsageId(#[serde(with = "serde_bytes_32")] pub [u8; 32]);
+
+impl UsageId {
+    pub fn from_components(parts: &[&str]) -> Self {
+        let mut hasher = Sha256::new();
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                hasher.update(&[0u8]);
+            }
+            hasher.update(part.as_bytes());
+        }
+        let digest = hasher.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        Self(out)
+    }
+
+    pub fn to_hex(&self) -> String {
+        hex_encode(&self.0)
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for UsageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UsageId({}…)", &self.to_hex()[..12])
+    }
+}
+
 impl NodeId {
     pub fn from_components(parts: &[&str]) -> Self {
         let mut hasher = Sha256::new();

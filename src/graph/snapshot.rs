@@ -15,9 +15,9 @@ type GraphRoTxn<'e> = RoTxn<'e, WithoutTls>;
 type GraphRwTxn<'e> = RwTxn<'e>;
 
 use super::extract;
-use super::ids::{BindingId, NodeId};
+use super::ids::{BindingId, NodeId, UsageId};
 use super::loader::{self, LoadedWorkspace};
-use super::model::{Binding, ExtractionModel, Namespace};
+use super::model::{Binding, ExtractionModel, Namespace, Usage};
 use super::storage::{
     CURRENT_POINTER_FILENAME, GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths,
     SCHEMA_VERSION, compute_fingerprint, graph_id_for, read_manifest, write_manifest,
@@ -47,6 +47,7 @@ pub struct BuildResult {
     pub fingerprint: String,
     pub node_count: u64,
     pub binding_count: u64,
+    pub usage_count: u64,
     pub reused: bool,
     pub snapshot_path: PathBuf,
 }
@@ -72,6 +73,7 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
             fingerprint: manifest.fingerprint,
             node_count: manifest.node_count,
             binding_count: manifest.binding_count,
+            usage_count: manifest.usage_count,
             reused: true,
             snapshot_path: snapshot_dir,
         });
@@ -92,7 +94,7 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
     };
 
     let model = extract::extract(&loaded);
-    let (node_count, binding_count) =
+    let (node_count, binding_count, usage_count) =
         write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
 
     let manifest = GraphManifest {
@@ -104,6 +106,7 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
         created_at_unix: now_unix()?,
         node_count,
         binding_count,
+        usage_count,
     };
     write_manifest(&manifest_path, &manifest)?;
 
@@ -115,6 +118,7 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
         fingerprint,
         node_count,
         binding_count,
+        usage_count,
         reused: false,
         snapshot_path: snapshot_dir,
     })
@@ -142,7 +146,7 @@ pub fn persist_loaded(
     let env = unsafe { options.env.to_open_options().open(&snapshot_dir)? };
 
     let model = extract::extract(loaded);
-    let (node_count, binding_count) =
+    let (node_count, binding_count, usage_count) =
         write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
     let manifest = GraphManifest {
         graph_id: graph_id.clone(),
@@ -153,6 +157,7 @@ pub fn persist_loaded(
         created_at_unix: now_unix()?,
         node_count,
         binding_count,
+        usage_count,
     };
     write_manifest(&manifest_path, &manifest)?;
     publish_current(&paths, &graph_id)?;
@@ -163,6 +168,7 @@ pub fn persist_loaded(
         fingerprint,
         node_count,
         binding_count,
+        usage_count,
         reused: false,
         snapshot_path: snapshot_dir,
     })
@@ -175,7 +181,7 @@ fn write_model(
     workspace_hash: &str,
     fingerprint: &str,
     graph_id: &str,
-) -> Result<(u64, u64)> {
+) -> Result<(u64, u64, u64)> {
     let mut wtxn = env.write_txn().context("open write txn")?;
     let dbs = GraphDatabases::create(env, &mut wtxn)?;
 
@@ -210,7 +216,21 @@ fn write_model(
             .put(&mut wtxn, parent.as_bytes(), child.as_bytes())?;
     }
 
-    // 4. Meta
+    // 4. Usages + per-target/per-consumer indexes
+    let mut usage_count: u64 = 0;
+    for usage in &model.usages {
+        let uid = usage_id_for(usage);
+        dbs.usages_by_id
+            .put(&mut wtxn, uid.as_bytes(), usage)
+            .context("put usage")?;
+        dbs.usages_by_target
+            .put(&mut wtxn, usage.target.as_bytes(), uid.as_bytes())?;
+        dbs.usages_by_consumer
+            .put(&mut wtxn, usage.consumer_module.as_bytes(), uid.as_bytes())?;
+        usage_count += 1;
+    }
+
+    // 5. Meta
     dbs.meta_by_key
         .put(&mut wtxn, "workspace_hash", workspace_hash.as_bytes())?;
     dbs.meta_by_key
@@ -223,9 +243,11 @@ fn write_model(
         .put(&mut wtxn, "node_count", &node_count.to_le_bytes())?;
     dbs.meta_by_key
         .put(&mut wtxn, "binding_count", &binding_count.to_le_bytes())?;
+    dbs.meta_by_key
+        .put(&mut wtxn, "usage_count", &usage_count.to_le_bytes())?;
 
     wtxn.commit().context("commit graph write txn")?;
-    Ok((node_count, binding_count))
+    Ok((node_count, binding_count, usage_count))
 }
 
 pub fn binding_id_for(binding: &Binding) -> BindingId {
@@ -238,6 +260,23 @@ pub fn binding_id_for(binding: &Binding) -> BindingId {
         ns,
         binding.visible_name.as_str(),
         binding.target.to_hex().as_str(),
+    ])
+}
+
+pub fn usage_id_for(u: &Usage) -> UsageId {
+    let cat = match u.category {
+        crate::graph::model::UsageCategory::Read => "R",
+        crate::graph::model::UsageCategory::Write => "W",
+        crate::graph::model::UsageCategory::Test => "T",
+        crate::graph::model::UsageCategory::Other => "O",
+    };
+    UsageId::from_components(&[
+        u.target.to_hex().as_str(),
+        u.consumer_module.to_hex().as_str(),
+        u.file.as_str(),
+        u.start.to_string().as_str(),
+        u.end.to_string().as_str(),
+        cat,
     ])
 }
 

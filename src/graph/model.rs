@@ -85,6 +85,31 @@ pub struct Binding {
     pub visibility: BindingVisibility,
 }
 
+/// Reference category for a `Usage`. Mirrors `ra_ap_ide_db::search::ReferenceCategory`,
+/// reduced to the cases we care about; `Import` references are filtered out at
+/// extraction time (they're already modeled as `Binding`s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UsageCategory {
+    Read,
+    Write,
+    Test,
+    Other,
+}
+
+/// A non-import reference to an Item. One record per concrete reference site,
+/// so `who_uses(target)` can return file:range tuples and so `dead_pub` can
+/// distinguish a never-referenced item from one only referenced inside its
+/// own crate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub target: NodeId,
+    pub consumer_module: NodeId,
+    pub file: String, // workspace-relative
+    pub start: u32,   // byte offset
+    pub end: u32,
+    pub category: UsageCategory,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExtractionModel {
     pub workspace_root: PathBuf,
@@ -92,6 +117,7 @@ pub struct ExtractionModel {
     pub workspace_id: NodeId,
     pub nodes: BTreeMap<NodeId, Node>,
     pub bindings: Vec<Binding>,
+    pub usages: Vec<Usage>,
     /// (parent, child) — workspace→crate, crate→root_module, module→child_module, module→item.
     pub contains: Vec<(NodeId, NodeId)>,
 }
