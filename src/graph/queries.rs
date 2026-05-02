@@ -9,14 +9,14 @@
 //! Plus a `lookup_by_qualified_name` helper for resolving user-supplied strings
 //! to NodeIds (linear scan; sub-millisecond at burn scale, see notes in mod.rs).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use heed::RoTxn;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{BindingId, NodeId};
-use super::model::{Binding, BindingKind, BindingVisibility, ItemKind, Node, NodeKind, Usage};
+use super::model::{Binding, BindingKind, BindingVisibility, ItemKind, Node, NodeKind, Usage, UsageCategory};
 use super::snapshot::OpenedSnapshot;
 
 /// One result of `dead_pub_in_crate`: a `pub` item with no cross-crate
@@ -38,6 +38,122 @@ pub struct CrateDeadPub {
     pub crate_id: NodeId,
     pub crate_qualified_name: String,
     pub findings: Vec<DeadPubFinding>,
+}
+
+/// One row of `crate_edges`: every cross-crate consumer→producer edge with the
+/// concrete symbols carrying it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrateEdge {
+    pub consumer_crate: String,
+    pub producer_crate: String,
+    pub unique_symbols: usize,
+    pub total_refs_via_imports: usize,
+    pub total_refs_via_usages: usize,
+    pub symbols: Vec<EdgeSymbol>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdgeSymbol {
+    pub target_qualified: String,
+    pub target_kind: String,
+    pub binding_kind: Option<String>,
+    pub import_count: usize,
+    pub usage_count: usize,
+}
+
+/// Result of `overlaps`: name collisions, module shadows, and within-crate
+/// duplicates that often signal accidental complexity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverlapsReport {
+    pub cross_crate_type_collisions: Vec<TypeCollision>,
+    pub module_shadows: Vec<ModuleShadow>,
+    pub within_crate_type_duplicates: Vec<WithinCrateDuplicate>,
+    pub common_fn_names: Vec<CommonFnName>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeCollision {
+    pub name: String,
+    pub locations: Vec<TypeLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeLocation {
+    pub crate_name: String,
+    pub qualified_name: String,
+    pub item_kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleShadow {
+    pub crate_name: String,
+    pub module_qualified: String,
+    pub shadowed_crate: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WithinCrateDuplicate {
+    pub crate_name: String,
+    pub name: String,
+    pub qualified_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommonFnName {
+    pub name: String,
+    pub crates: Vec<String>,
+}
+
+/// One row of `who_uses_summary`: aggregation of `usages_of(target)` results,
+/// grouped by `(consumer_module, target)`. Each row carries a per-category
+/// breakdown so callers can see whether the consumer reads / writes / tests
+/// the target. Sorted by `total_count` desc.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageSummaryRow {
+    pub consumer_module: NodeId,
+    pub consumer_qualified_name: String,
+    pub consumer_crate: Option<String>,
+    pub total_count: usize,
+    pub category_breakdown: BTreeMap<String, usize>,
+}
+
+/// Recursive node tree returned by `module_tree`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleTreeNode {
+    pub qualified_name: String,
+    pub display_name: String,
+    pub kind: String,
+    pub item_kind: Option<String>,
+    pub visibility: Option<String>,
+    pub children: Vec<ModuleTreeNode>,
+}
+
+/// Result of `workspace_stats`: counters across the whole snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceStats {
+    pub nodes: NodeKindCounts,
+    pub items_by_kind: BTreeMap<String, usize>,
+    pub bindings_by_kind: BTreeMap<String, usize>,
+    pub visibility: VisibilityCounts,
+    pub encapsulation_ratio: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NodeKindCounts {
+    pub workspace: usize,
+    pub crate_: usize,
+    pub module: usize,
+    pub item: usize,
+    pub external_symbol: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct VisibilityCounts {
+    pub pub_: usize,
+    pub pub_crate: usize,
+    pub pub_self: usize,
+    pub restricted_to: usize,
+    pub private: usize,
 }
 
 /// Maximum re-export facade hops to follow before giving up. Bounds recursion
@@ -195,6 +311,23 @@ impl OpenedSnapshot {
         Ok(out)
     }
 
+    /// Every binding in `module` whose source `use` is explicitly marked `pub`
+    /// (or `pub(crate)` / `pub(in path)` / `pub(super)`). Unlike `reexports_of`,
+    /// this is not filtered by visibility from a particular consumer — it
+    /// returns all syntactic re-export declarations, useful for "audit every
+    /// `pub use` in this module" workflows.
+    pub fn declared_reexports_of(&self, module: NodeId) -> Result<Vec<Binding>> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for entry in self.bindings_for_from_module(&rtxn, module)? {
+            let binding = entry?;
+            if binding.kind != BindingKind::Declared && binding.is_explicit_pub_use {
+                out.push(binding);
+            }
+        }
+        Ok(out)
+    }
+
     /// All bindings in the workspace whose target is `target` (and that aren't
     /// the target's own declaration). Useful for "who imports symbol X".
     pub fn who_imports(&self, target: NodeId) -> Result<Vec<Binding>> {
@@ -229,6 +362,67 @@ impl OpenedSnapshot {
             out.push(entry?);
         }
         Ok(out)
+    }
+
+    /// Aggregation rollup of `usages_of(target)` grouped by `consumer_module`.
+    /// Each row carries a total count and a per-category breakdown
+    /// (Read/Write/Test/Other → count). Same Layer 4 caveat as `usages_of`:
+    /// cross-crate **method calls** and **trait method dispatch** are NOT
+    /// included — Layer 4 doesn't extract impl-block items as Item nodes.
+    /// Sorted by `total_count` desc, ties broken by `consumer_qualified_name`.
+    pub fn who_uses_summary(&self, target: NodeId) -> Result<Vec<UsageSummaryRow>> {
+        let rtxn = self.env.read_txn()?;
+
+        // Group by consumer_module: total + per-category breakdown.
+        let mut totals: HashMap<NodeId, usize> = HashMap::new();
+        let mut breakdown: HashMap<NodeId, BTreeMap<String, usize>> = HashMap::new();
+        for entry in self.usages_for_target(&rtxn, target)? {
+            let usage = entry?;
+            *totals.entry(usage.consumer_module).or_insert(0) += 1;
+            let cat = usage_category_label(usage.category).to_string();
+            *breakdown
+                .entry(usage.consumer_module)
+                .or_default()
+                .entry(cat)
+                .or_insert(0) += 1;
+        }
+
+        // Resolve display names. We need the consumer module's qualified_name
+        // and (separately) its crate's qualified_name for downstream display.
+        let mut rows: Vec<UsageSummaryRow> = Vec::with_capacity(totals.len());
+        for (consumer_module, total_count) in totals {
+            let (qualified_name, crate_qualified) = match self
+                .dbs
+                .nodes_by_id
+                .get(&rtxn, consumer_module.as_bytes())?
+            {
+                Some(node) => {
+                    let crate_qual = match node.crate_id {
+                        Some(cid) => self
+                            .dbs
+                            .nodes_by_id
+                            .get(&rtxn, cid.as_bytes())?
+                            .map(|n| n.qualified_name),
+                        None => None,
+                    };
+                    (node.qualified_name, crate_qual)
+                }
+                None => (String::new(), None),
+            };
+            rows.push(UsageSummaryRow {
+                consumer_module,
+                consumer_qualified_name: qualified_name,
+                consumer_crate: crate_qualified,
+                total_count,
+                category_breakdown: breakdown.remove(&consumer_module).unwrap_or_default(),
+            });
+        }
+        rows.sort_by(|a, b| {
+            b.total_count
+                .cmp(&a.total_count)
+                .then_with(|| a.consumer_qualified_name.cmp(&b.consumer_qualified_name))
+        });
+        Ok(rows)
     }
 
     /// Items in `crate_id` declared `pub` whose only consumers — both as imports
@@ -380,6 +574,447 @@ impl OpenedSnapshot {
         Ok(report)
     }
 
+    /// All cross-crate consumer→producer edges, decorated with the symbols
+    /// carrying each edge. Cost is O(N_nodes + N_bindings + N_usages) — a
+    /// single read transaction with three sequential scans.
+    ///
+    /// Note: cross-crate **method calls** and **trait method dispatch** are
+    /// NOT captured in `total_refs_via_usages` — Layer 4 doesn't extract
+    /// impl-block items as Item nodes, so usage counts only reflect
+    /// references to module-level items.
+    pub fn crate_edges(&self) -> Result<Vec<CrateEdge>> {
+        let rtxn = self.env.read_txn()?;
+
+        // Build crate index: every node → its crate id; every crate id → name.
+        let mut node_to_crate: HashMap<NodeId, NodeId> = HashMap::new();
+        let mut crate_name: HashMap<NodeId, String> = HashMap::new();
+        let mut node_qual: HashMap<NodeId, String> = HashMap::new();
+        let mut node_kind_label_map: HashMap<NodeId, String> = HashMap::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            let nid = NodeId(id);
+            if node.kind == NodeKind::Crate {
+                crate_name.insert(nid, node.qualified_name.clone());
+            }
+            if let Some(cid) = node.crate_id {
+                node_to_crate.insert(nid, cid);
+            }
+            node_qual.insert(nid, node.qualified_name.clone());
+            node_kind_label_map.insert(nid, label_node_kind(&node));
+        }
+
+        // (consumer_crate, producer_crate, target, binding_kind) → import_count
+        let mut import_acc: HashMap<(NodeId, NodeId, NodeId, BindingKind), usize> = HashMap::new();
+        for entry in self.dbs.bindings_by_id.iter(&rtxn)? {
+            let (_k, binding) = entry?;
+            if binding.kind == BindingKind::Declared {
+                continue;
+            }
+            let Some(consumer_crate) = node_to_crate.get(&binding.from_module).copied() else {
+                continue;
+            };
+            let Some(producer_crate) = node_to_crate.get(&binding.target).copied() else {
+                continue;
+            };
+            if consumer_crate == producer_crate {
+                continue;
+            }
+            *import_acc
+                .entry((consumer_crate, producer_crate, binding.target, binding.kind))
+                .or_insert(0) += 1;
+        }
+
+        // (consumer_crate, producer_crate, target) → usage_count
+        let mut usage_acc: HashMap<(NodeId, NodeId, NodeId), usize> = HashMap::new();
+        for entry in self.dbs.usages_by_id.iter(&rtxn)? {
+            let (_k, usage) = entry?;
+            let Some(consumer_crate) = node_to_crate.get(&usage.consumer_module).copied() else {
+                continue;
+            };
+            let Some(producer_crate) = node_to_crate.get(&usage.target).copied() else {
+                continue;
+            };
+            if consumer_crate == producer_crate {
+                continue;
+            }
+            *usage_acc
+                .entry((consumer_crate, producer_crate, usage.target))
+                .or_insert(0) += 1;
+        }
+
+        // Merge into per-edge per-symbol records.
+        // Key: (consumer, producer) → Map<(target, binding_kind_label), (import_count, usage_count)>
+        let mut per_edge: HashMap<(NodeId, NodeId), HashMap<(NodeId, Option<String>), (usize, usize)>> =
+            HashMap::new();
+
+        for ((c, p, t, bk), n) in import_acc {
+            let entry = per_edge
+                .entry((c, p))
+                .or_default()
+                .entry((t, Some(label_binding_kind(bk).to_string())))
+                .or_insert((0, 0));
+            entry.0 += n;
+        }
+        for ((c, p, t), n) in usage_acc {
+            let entry = per_edge
+                .entry((c, p))
+                .or_default()
+                // No binding_kind on a pure usage edge.
+                .entry((t, None))
+                .or_insert((0, 0));
+            entry.1 += n;
+        }
+
+        let mut edges: Vec<CrateEdge> = Vec::new();
+        for ((c, p), per_symbol) in per_edge {
+            let consumer_crate = crate_name.get(&c).cloned().unwrap_or_default();
+            let producer_crate = crate_name.get(&p).cloned().unwrap_or_default();
+
+            // Collapse two rows for the same target (one with binding_kind,
+            // one without) into one symbol row when possible. We keep the
+            // binding_kind label if any binding exists for that target.
+            let mut by_target: BTreeMap<NodeId, EdgeSymbol> = BTreeMap::new();
+            for ((t, bk), (ic, uc)) in per_symbol {
+                let target_qualified = node_qual.get(&t).cloned().unwrap_or_default();
+                let target_kind = node_kind_label_map.get(&t).cloned().unwrap_or_default();
+                let sym = by_target.entry(t).or_insert_with(|| EdgeSymbol {
+                    target_qualified,
+                    target_kind,
+                    binding_kind: None,
+                    import_count: 0,
+                    usage_count: 0,
+                });
+                sym.import_count += ic;
+                sym.usage_count += uc;
+                if bk.is_some() && sym.binding_kind.is_none() {
+                    sym.binding_kind = bk;
+                }
+            }
+
+            let mut symbols: Vec<EdgeSymbol> = by_target.into_values().collect();
+            symbols.sort_by(|a, b| {
+                let ta = a.import_count + a.usage_count;
+                let tb = b.import_count + b.usage_count;
+                tb.cmp(&ta).then_with(|| a.target_qualified.cmp(&b.target_qualified))
+            });
+
+            let unique_symbols = symbols.len();
+            let total_refs_via_imports = symbols.iter().map(|s| s.import_count).sum();
+            let total_refs_via_usages = symbols.iter().map(|s| s.usage_count).sum();
+
+            edges.push(CrateEdge {
+                consumer_crate,
+                producer_crate,
+                unique_symbols,
+                total_refs_via_imports,
+                total_refs_via_usages,
+                symbols,
+            });
+        }
+        edges.sort_by(|a, b| {
+            a.consumer_crate
+                .cmp(&b.consumer_crate)
+                .then_with(|| a.producer_crate.cmp(&b.producer_crate))
+        });
+        Ok(edges)
+    }
+
+    /// Single-pass over `nodes_by_id`. Detects cross-crate type collisions,
+    /// module shadowing of crate names, within-crate type duplicates, and
+    /// fn names that appear in 4+ crates.
+    pub fn overlaps(&self) -> Result<OverlapsReport> {
+        let rtxn = self.env.read_txn()?;
+
+        let mut crate_name_for: HashMap<NodeId, String> = HashMap::new();
+        let mut crate_names: HashSet<String> = HashSet::new();
+
+        // First pass: build crate-id → display_name index.
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if node.kind == NodeKind::Crate {
+                let mut id = [0u8; 32];
+                id.copy_from_slice(key);
+                crate_name_for.insert(NodeId(id), node.display_name.clone());
+                crate_names.insert(node.display_name.clone());
+            }
+        }
+
+        // Group containers we'll fill on the second pass.
+        let mut type_groups: HashMap<String, Vec<(NodeId, Node, NodeId)>> = HashMap::new();
+        let mut shadows: Vec<ModuleShadow> = Vec::new();
+        let mut within_crate_types: HashMap<(NodeId, String), Vec<Node>> = HashMap::new();
+        let mut fn_spread: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            let nid = NodeId(id);
+
+            if node.kind == NodeKind::Module {
+                if let Some(crate_id) = node.crate_id {
+                    let owning_crate = crate_name_for.get(&crate_id).cloned().unwrap_or_default();
+                    if crate_names.contains(&node.display_name)
+                        && node.display_name != owning_crate
+                    {
+                        shadows.push(ModuleShadow {
+                            crate_name: owning_crate,
+                            module_qualified: node.qualified_name.clone(),
+                            shadowed_crate: node.display_name.clone(),
+                        });
+                    }
+                }
+            }
+
+            if node.kind != NodeKind::Item {
+                continue;
+            }
+            let Some(item_kind) = node.item_kind else {
+                continue;
+            };
+            let Some(crate_id) = node.crate_id else {
+                continue;
+            };
+
+            // Type-kind items participate in collision and within-crate dup checks.
+            if matches!(
+                item_kind,
+                ItemKind::Struct | ItemKind::Enum | ItemKind::Trait | ItemKind::TypeAlias
+            ) {
+                type_groups
+                    .entry(node.display_name.clone())
+                    .or_default()
+                    .push((nid, node.clone(), crate_id));
+                within_crate_types
+                    .entry((crate_id, node.display_name.clone()))
+                    .or_default()
+                    .push(node.clone());
+            }
+
+            // Fn-spread check.
+            if item_kind == ItemKind::Function {
+                if let Some(crate_dn) = crate_name_for.get(&crate_id) {
+                    fn_spread
+                        .entry(node.display_name.clone())
+                        .or_default()
+                        .insert(crate_dn.clone());
+                }
+            }
+        }
+
+        // Cross-crate type collisions: name appears in ≥2 distinct crates.
+        let mut cross_crate_type_collisions: Vec<TypeCollision> = type_groups
+            .into_iter()
+            .filter_map(|(name, group)| {
+                let distinct: HashSet<NodeId> = group.iter().map(|(_, _, c)| *c).collect();
+                if distinct.len() < 2 {
+                    return None;
+                }
+                let mut locations: Vec<TypeLocation> = group
+                    .into_iter()
+                    .map(|(_, n, cid)| TypeLocation {
+                        crate_name: crate_name_for.get(&cid).cloned().unwrap_or_default(),
+                        qualified_name: n.qualified_name,
+                        item_kind: n.item_kind.map(label_item_kind).unwrap_or("?").to_string(),
+                    })
+                    .collect();
+                locations.sort_by(|a, b| {
+                    a.crate_name
+                        .cmp(&b.crate_name)
+                        .then_with(|| a.qualified_name.cmp(&b.qualified_name))
+                });
+                Some(TypeCollision { name, locations })
+            })
+            .collect();
+        cross_crate_type_collisions.sort_by(|a, b| a.name.cmp(&b.name));
+
+        // Within-crate duplicates: ≥2 entries under the same (crate, name).
+        let mut within_crate_type_duplicates: Vec<WithinCrateDuplicate> = within_crate_types
+            .into_iter()
+            .filter_map(|((cid, name), nodes)| {
+                if nodes.len() < 2 {
+                    return None;
+                }
+                let mut qualified_names: Vec<String> =
+                    nodes.into_iter().map(|n| n.qualified_name).collect();
+                qualified_names.sort();
+                Some(WithinCrateDuplicate {
+                    crate_name: crate_name_for.get(&cid).cloned().unwrap_or_default(),
+                    name,
+                    qualified_names,
+                })
+            })
+            .collect();
+        within_crate_type_duplicates.sort_by(|a, b| {
+            a.crate_name
+                .cmp(&b.crate_name)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        let mut common_fn_names: Vec<CommonFnName> = fn_spread
+            .into_iter()
+            .filter(|(_, set)| set.len() >= 4)
+            .map(|(name, set)| CommonFnName {
+                name,
+                crates: set.into_iter().collect(),
+            })
+            .collect();
+        common_fn_names.sort_by(|a, b| {
+            b.crates.len().cmp(&a.crates.len()).then_with(|| a.name.cmp(&b.name))
+        });
+
+        shadows.sort_by(|a, b| {
+            a.crate_name
+                .cmp(&b.crate_name)
+                .then_with(|| a.module_qualified.cmp(&b.module_qualified))
+        });
+
+        Ok(OverlapsReport {
+            cross_crate_type_collisions,
+            module_shadows: shadows,
+            within_crate_type_duplicates,
+            common_fn_names,
+        })
+    }
+
+    /// Recursive module/item tree rooted at the crate node whose
+    /// `qualified_name` matches `crate_name`. `depth` of `Some(n)` limits
+    /// recursion to n levels below the root (root itself is depth 0).
+    pub fn module_tree(&self, crate_name: &str, depth: Option<usize>) -> Result<ModuleTreeNode> {
+        let rtxn = self.env.read_txn()?;
+        let mut crate_id: Option<NodeId> = None;
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if node.kind == NodeKind::Crate && node.qualified_name == crate_name {
+                let mut id = [0u8; 32];
+                id.copy_from_slice(key);
+                crate_id = Some(NodeId(id));
+                break;
+            }
+        }
+        let crate_id = crate_id
+            .with_context(|| format!("no Crate node with qualified_name `{crate_name}`"))?;
+
+        self.build_module_tree(&rtxn, crate_id, depth, 0)
+    }
+
+    fn build_module_tree(
+        &self,
+        rtxn: &RoTxn<'_, heed::WithoutTls>,
+        node_id: NodeId,
+        depth_limit: Option<usize>,
+        cur_depth: usize,
+    ) -> Result<ModuleTreeNode> {
+        let node = self
+            .dbs
+            .nodes_by_id
+            .get(rtxn, node_id.as_bytes())?
+            .with_context(|| "dangling NodeId in module_tree walk")?;
+
+        let mut children_nodes: Vec<ModuleTreeNode> = Vec::new();
+        let stop_recursion = depth_limit.map(|d| cur_depth >= d).unwrap_or(false);
+
+        if !stop_recursion {
+            // Collect child ids first so the iterator's borrow on rtxn drops
+            // before we recurse.
+            let mut child_ids: Vec<NodeId> = Vec::new();
+            if let Some(iter) = self
+                .dbs
+                .children_by_parent
+                .get_duplicates(rtxn, node_id.as_bytes())?
+            {
+                for entry in iter {
+                    let (_k, child_bytes) = entry?;
+                    let mut id = [0u8; 32];
+                    id.copy_from_slice(child_bytes);
+                    child_ids.push(NodeId(id));
+                }
+            }
+            for child_id in child_ids {
+                children_nodes.push(self.build_module_tree(
+                    rtxn,
+                    child_id,
+                    depth_limit,
+                    cur_depth + 1,
+                )?);
+            }
+            children_nodes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        }
+
+        Ok(ModuleTreeNode {
+            qualified_name: node.qualified_name.clone(),
+            display_name: node.display_name.clone(),
+            kind: label_node_kind(&node),
+            item_kind: node.item_kind.map(|k| label_item_kind(k).to_string()),
+            visibility: node.visibility.clone(),
+            children: children_nodes,
+        })
+    }
+
+    /// Two-pass aggregate: counts of nodes (by kind), items (by ItemKind),
+    /// bindings (by BindingKind), and Binding-level visibility.
+    pub fn workspace_stats(&self) -> Result<WorkspaceStats> {
+        let rtxn = self.env.read_txn()?;
+        let mut nodes = NodeKindCounts::default();
+        let mut items_by_kind: BTreeMap<String, usize> = BTreeMap::new();
+
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (_k, node) = entry?;
+            match node.kind {
+                NodeKind::Workspace => nodes.workspace += 1,
+                NodeKind::Crate => nodes.crate_ += 1,
+                NodeKind::Module => nodes.module += 1,
+                NodeKind::Item => {
+                    nodes.item += 1;
+                    if let Some(ik) = node.item_kind {
+                        *items_by_kind
+                            .entry(label_item_kind(ik).to_string())
+                            .or_insert(0) += 1;
+                    }
+                }
+                NodeKind::ExternalSymbol => nodes.external_symbol += 1,
+            }
+        }
+
+        let mut bindings_by_kind: BTreeMap<String, usize> = BTreeMap::new();
+        let mut visibility = VisibilityCounts::default();
+
+        for entry in self.dbs.bindings_by_id.iter(&rtxn)? {
+            let (_k, binding) = entry?;
+            *bindings_by_kind
+                .entry(label_binding_kind(binding.kind).to_string())
+                .or_insert(0) += 1;
+            // Visibility counts are only meaningful for Declared bindings
+            // (the ones that carry the item's source visibility). Counting
+            // all bindings would over-count re-exports. Filter to Declared.
+            if binding.kind == BindingKind::Declared {
+                match binding.visibility {
+                    BindingVisibility::Public => visibility.pub_ += 1,
+                    BindingVisibility::Crate(_) => visibility.pub_crate += 1,
+                    BindingVisibility::RestrictedTo(_) => visibility.restricted_to += 1,
+                    BindingVisibility::Private => visibility.private += 1,
+                }
+            }
+        }
+        // pub_self = items declared without any pub keyword. The Binding model
+        // collapses that into Private. Mirror it explicitly for consumers that
+        // expect the name to be present.
+        visibility.pub_self = visibility.private;
+
+        let total_items = nodes.item.max(1);
+        let encapsulation_ratio = visibility.pub_crate as f64 / total_items as f64;
+
+        Ok(WorkspaceStats {
+            nodes,
+            items_by_kind,
+            bindings_by_kind,
+            visibility,
+            encapsulation_ratio,
+        })
+    }
+
     // ----- helpers -----
 
     fn bindings_for_from_module<'txn>(
@@ -501,6 +1136,53 @@ impl OpenedSnapshot {
                 .and_then(|n| n.parent_id);
         }
         Ok(seen)
+    }
+}
+
+fn label_node_kind(node: &Node) -> String {
+    match node.kind {
+        NodeKind::Workspace => "Workspace".to_string(),
+        NodeKind::Crate => "Crate".to_string(),
+        NodeKind::Module => "Module".to_string(),
+        NodeKind::Item => match node.item_kind {
+            Some(k) => format!("Item.{}", label_item_kind(k)),
+            None => "Item".to_string(),
+        },
+        NodeKind::ExternalSymbol => "ExternalSymbol".to_string(),
+    }
+}
+
+fn label_item_kind(k: ItemKind) -> &'static str {
+    match k {
+        ItemKind::Function => "Fn",
+        ItemKind::Struct => "Struct",
+        ItemKind::Enum => "Enum",
+        ItemKind::Union => "Union",
+        ItemKind::Trait => "Trait",
+        ItemKind::TypeAlias => "TypeAlias",
+        ItemKind::Const => "Const",
+        ItemKind::Static => "Static",
+        ItemKind::AssocFunction => "AssocFn",
+        ItemKind::AssocConst => "AssocConst",
+        ItemKind::AssocType => "AssocType",
+    }
+}
+
+fn label_binding_kind(k: BindingKind) -> &'static str {
+    match k {
+        BindingKind::Declared => "Declared",
+        BindingKind::NamedImport => "NamedImport",
+        BindingKind::GlobImport => "GlobImport",
+        BindingKind::ExternCrateImport => "ExternCrateImport",
+    }
+}
+
+fn usage_category_label(c: UsageCategory) -> &'static str {
+    match c {
+        UsageCategory::Read => "Read",
+        UsageCategory::Write => "Write",
+        UsageCategory::Test => "Test",
+        UsageCategory::Other => "Other",
     }
 }
 
@@ -772,5 +1454,178 @@ mod tests {
             assert_eq!(node.kind, NodeKind::Item);
             assert_eq!(node.qualified_name, f.qualified_name);
         }
+    }
+
+    #[test]
+    fn crate_edges_returns_at_least_one_edge() {
+        let snap = shared_snapshot();
+        let edges = snap.crate_edges().unwrap();
+        // The lib uses several external crates (heed, anyhow, serde, ra-ap-*),
+        // and a self-only workspace might still have at least one
+        // external→file_search_mcp edge. We only assert non-empty here.
+        assert!(
+            !edges.is_empty(),
+            "expected at least one cross-crate edge in the workspace"
+        );
+        for e in &edges {
+            assert!(!e.consumer_crate.is_empty());
+            assert!(!e.producer_crate.is_empty());
+            assert_ne!(e.consumer_crate, e.producer_crate, "same-crate edges must be filtered out");
+            assert_eq!(e.unique_symbols, e.symbols.len());
+        }
+    }
+
+    #[test]
+    fn overlaps_returns_well_formed_report() {
+        let snap = shared_snapshot();
+        let report = snap.overlaps().unwrap();
+        // Don't assert specific collisions — the workspace may not have any.
+        // Just exercise the code path and verify the struct shape.
+        for c in &report.cross_crate_type_collisions {
+            assert!(!c.name.is_empty());
+            assert!(c.locations.len() >= 2);
+        }
+        for d in &report.within_crate_type_duplicates {
+            assert!(d.qualified_names.len() >= 2);
+        }
+        for f in &report.common_fn_names {
+            assert!(f.crates.len() >= 4);
+        }
+    }
+
+    #[test]
+    fn module_tree_roots_at_requested_crate() {
+        let snap = shared_snapshot();
+        let tree = snap.module_tree("file_search_mcp", None).unwrap();
+        assert_eq!(tree.qualified_name, "file_search_mcp");
+        assert_eq!(tree.kind, "Crate");
+        assert!(
+            !tree.children.is_empty(),
+            "crate root should have at least one child (the root Module)"
+        );
+    }
+
+    #[test]
+    fn module_tree_respects_depth_limit() {
+        let snap = shared_snapshot();
+        let tree = snap.module_tree("file_search_mcp", Some(0)).unwrap();
+        // Depth 0 => no children walked.
+        assert!(tree.children.is_empty(), "depth=0 must not recurse");
+    }
+
+    #[test]
+    fn declared_reexports_of_lists_all_pub_uses() {
+        // `file_search_mcp::graph` has `pub use loader::load;` (and other
+        // `pub use`s). declared_reexports_of(graph_mod_id) must include `load`
+        // and every binding in the result must satisfy is_explicit_pub_use.
+        let snap = shared_snapshot();
+        let (graph_mod_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph")
+            .unwrap()
+            .unwrap();
+        let reexports = snap.declared_reexports_of(graph_mod_id).unwrap();
+        assert!(
+            !reexports.is_empty(),
+            "expected at least one declared `pub use` in graph mod"
+        );
+        for b in &reexports {
+            assert!(
+                b.is_explicit_pub_use,
+                "declared_reexports_of must only return is_explicit_pub_use=true, got false for {}",
+                b.visible_name
+            );
+            assert_ne!(b.kind, BindingKind::Declared);
+        }
+        assert!(
+            reexports.iter().any(|b| b.visible_name == "load"),
+            "expected `load` among declared re-exports of graph mod"
+        );
+    }
+
+    #[test]
+    fn explicit_pub_use_is_marked_on_pub_use_bindings() {
+        // `file_search_mcp::graph::mod` carries `pub use loader::load;`. The
+        // resulting binding must have `is_explicit_pub_use == true`. The
+        // declared binding for `loader` (sibling module declaration with no
+        // `pub use`) must have `is_explicit_pub_use == false`.
+        let snap = shared_snapshot();
+        let (graph_mod_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph")
+            .unwrap()
+            .unwrap();
+        let imports = snap.imports_of(graph_mod_id).unwrap();
+        let load_bind = imports
+            .iter()
+            .find(|b| b.visible_name == "load")
+            .expect("expected `load` re-export binding in graph mod");
+        assert!(
+            load_bind.is_explicit_pub_use,
+            "`pub use loader::load` should be marked explicit_pub_use=true, got false"
+        );
+
+        // A non-pub `use` should land with is_explicit_pub_use == false.
+        // `file_search_mcp::graph::queries` has plenty of private `use` lines.
+        let (queries_mod_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::queries")
+            .unwrap()
+            .unwrap();
+        let queries_imports = snap.imports_of(queries_mod_id).unwrap();
+        let private_imports: Vec<&Binding> = queries_imports
+            .iter()
+            .filter(|b| !b.is_explicit_pub_use)
+            .collect();
+        assert!(
+            !private_imports.is_empty(),
+            "expected at least one private (non-pub) `use` in graph::queries"
+        );
+    }
+
+    #[test]
+    fn who_uses_summary_aggregates_by_consumer() {
+        let snap = shared_snapshot();
+        let (load_fn_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .unwrap()
+            .unwrap();
+        let summary = snap.who_uses_summary(load_fn_id).unwrap();
+        let raw = snap.usages_of(load_fn_id).unwrap();
+        assert!(
+            !summary.is_empty(),
+            "expected at least one summary row for loader::load"
+        );
+        // Aggregate invariant: sum of per-row total_count == total raw usages.
+        let summed: usize = summary.iter().map(|r| r.total_count).sum();
+        assert_eq!(
+            summed,
+            raw.len(),
+            "summary totals must equal the raw usage count"
+        );
+        for row in &summary {
+            assert!(row.total_count >= 1);
+            assert!(
+                !row.category_breakdown.is_empty(),
+                "category_breakdown must be non-empty when total_count >= 1"
+            );
+            let breakdown_sum: usize = row.category_breakdown.values().copied().sum();
+            assert_eq!(
+                breakdown_sum, row.total_count,
+                "per-row category sum must equal total_count"
+            );
+        }
+        // Sorted by total_count desc.
+        for w in summary.windows(2) {
+            assert!(w[0].total_count >= w[1].total_count);
+        }
+    }
+
+    #[test]
+    fn workspace_stats_has_basic_counts() {
+        let snap = shared_snapshot();
+        let stats = snap.workspace_stats().unwrap();
+        assert!(stats.nodes.crate_ >= 1, "expected at least one crate");
+        assert!(!stats.items_by_kind.is_empty(), "items_by_kind must be non-empty");
+        assert!(!stats.bindings_by_kind.is_empty(), "bindings_by_kind must be non-empty");
+        assert!(stats.encapsulation_ratio.is_finite());
+        assert!(stats.encapsulation_ratio >= 0.0);
     }
 }

@@ -39,7 +39,14 @@ use super::model::{Binding, Node, Usage};
 // remembering to `--force`. v1/v2/v3 graph_ids are disjoint (graph_id_for
 // hashes SCHEMA_VERSION), so old snapshots stop being reused; they remain on
 // disk until a manual cleanup.
-pub const SCHEMA_VERSION: u32 = 3;
+// v4 (2026-05): Binding gains `is_explicit_pub_use` — true iff the source
+// `use` statement carries an explicit `pub`/`pub(crate)`/`pub(in path)`
+// visibility token. Backs the `declared_reexports_of` query. Bincode reads
+// of v3 records would reject the new field as unexpected EOF, so the bump
+// is required even though `#[serde(default)]` would otherwise tolerate
+// missing fields under serde_json. v3/v4 graph_ids are disjoint (graph_id_for
+// hashes SCHEMA_VERSION).
+pub const SCHEMA_VERSION: u32 = 4;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";

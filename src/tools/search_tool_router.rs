@@ -260,6 +260,14 @@ impl SearchToolRouter {
         crate::tools::graph_tools::get_reexports(params).await
     }
 
+    #[tool(description = "List every explicit `pub use` (or `pub(crate)` / `pub(in path)` / `pub(super)`) declared in a module, regardless of whether it's reachable from any specific consumer. Use this to audit a module's declared re-export surface; for visibility-filtered re-exports use get_reexports instead.")]
+    async fn get_declared_reexports(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::GraphDeclaredReexportsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::get_declared_reexports(params).await
+    }
+
     #[tool(description = "Find every workspace module that imports the given symbol (matched by qualified name)")]
     async fn who_imports(
         &self,
@@ -274,6 +282,14 @@ impl SearchToolRouter {
         Parameters(params): Parameters<crate::tools::search_tool::WhoUsesParams>,
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph_tools::who_uses(params).await
+    }
+
+    #[tool(description = "Aggregation rollup of who_uses: every non-import reference to the given symbol, grouped by consumer module, with total count + per-category breakdown (Read/Write/Test/Other). Same caveat as who_uses: cross-crate method calls and trait dispatch are NOT included (Layer 4 limitation).")]
+    async fn who_uses_summary(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::WhoUsesSummaryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::who_uses_summary(params).await
     }
 
     #[tool(description = "Scan a local crate for `pub` items with no cross-crate importer or reference — candidates for downgrading to `pub(crate)`. Conservative: may miss items used only through public type signatures.")]
@@ -291,6 +307,38 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph_tools::dead_pub_report(params).await
     }
+
+    #[tool(description = "All cross-crate consumer→producer edges in the workspace, with the symbols carrying each edge (sorted by total ref count desc). NOTE: cross-crate method calls and trait method dispatch are NOT captured in usage counts — Layer 4 doesn't extract impl-block items as Item nodes, so usage_count reflects only references to module-level items.")]
+    async fn crate_edges(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::CrateEdgesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::crate_edges(params).await
+    }
+
+    #[tool(description = "Workspace-wide name-collision report: cross-crate type collisions, module names that shadow another crate, within-crate type duplicates, and fn names that appear in 4+ crates.")]
+    async fn overlaps(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::OverlapsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::overlaps(params).await
+    }
+
+    #[tool(description = "Recursive module/item tree dump rooted at the specified crate. `depth` limits recursion below the root.")]
+    async fn module_tree(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::ModuleTreeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::module_tree(params).await
+    }
+
+    #[tool(description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio.")]
+    async fn workspace_stats(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::WorkspaceStatsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::workspace_stats(params).await
+    }
 }
 
 #[tool_handler]
@@ -305,7 +353,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding"
+                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding, 20) crate_edges - cross-crate consumer→producer edges with symbols (note: method calls / trait dispatch are NOT in usage counts), 21) overlaps - workspace-wide name collision / shadow / duplicate report, 22) module_tree - recursive module/item tree dump for a crate, 23) workspace_stats - workspace counters (nodes / items / bindings / visibility)"
                     .into(),
             ),
         }

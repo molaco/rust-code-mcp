@@ -83,6 +83,14 @@ pub struct Binding {
     pub target: NodeId,
     pub kind: BindingKind,
     pub visibility: BindingVisibility,
+    /// True iff the source `use` statement carries an explicit `pub` (or
+    /// `pub(...)`) visibility modifier in syntax. Distinct from
+    /// `visibility`, which is the *resolved* effective visibility (HIR
+    /// inherits / normalizes parent-visibility for non-pub `use`s). Used by
+    /// `declared_reexports_of` to find every "pub use" the module declares
+    /// regardless of whether it's reachable from any specific consumer.
+    #[serde(default)]
+    pub is_explicit_pub_use: bool,
 }
 
 /// Reference category for a `Usage`. Mirrors `ra_ap_ide_db::search::ReferenceCategory`,
