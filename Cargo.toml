@@ -135,6 +135,10 @@ path = "examples/probe_workspace.rs"
 name = "spike_usages"
 path = "examples/spike_usages.rs"
 
+[[example]]
+name = "dead_pub_report"
+path = "examples/dead_pub_report.rs"
+
 [dev-dependencies]
 tempfile = "3"         # Temporary directories for tests
 walkdir = "2"          # For test file discovery

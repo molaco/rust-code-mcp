@@ -135,6 +135,12 @@ pub struct DeadPubParams {
     pub krate: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeadPubReportParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml). Runs dead_pub_in_crate over every local crate and returns aggregated findings per crate.")]
+    pub directory: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
