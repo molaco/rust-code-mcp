@@ -13,3 +13,4 @@
 !docs/HYPERGRAPH_SCHEMA.md
 .claude
 .codex
+.test/
