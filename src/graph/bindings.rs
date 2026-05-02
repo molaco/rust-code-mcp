@@ -6,7 +6,7 @@
 //!   * Binding records carrying provenance + structured visibility
 //!   * Contains edges (for the declared-item case)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ra_ap_hir::Crate;
 use ra_ap_hir_def::HasModule;
@@ -95,6 +95,19 @@ pub fn extract_bindings(
             }
         }
     }
+
+    // Post-hoc dedup. ADTs (especially unit/tuple structs and unit variants)
+    // appear in BOTH the type and value namespaces with the same target — the
+    // two walks above emit one Binding each. We dedup on
+    // (from_module, visible_name, target, kind), keeping the first occurrence
+    // (the type-walk row). Records still survive when they genuinely diverge:
+    // if classify_type_provenance and classify_value_provenance produce
+    // different BindingKinds for the same import, both rows are retained.
+    let mut seen: HashSet<(NodeId, String, NodeId, BindingKind)> =
+        HashSet::with_capacity(model.bindings.len());
+    model
+        .bindings
+        .retain(|b| seen.insert((b.from_module, b.visible_name.clone(), b.target, b.kind)));
 }
 
 #[allow(clippy::too_many_arguments)]

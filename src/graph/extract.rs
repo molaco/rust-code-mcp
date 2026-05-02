@@ -207,12 +207,24 @@ mod tests {
     use crate::graph::loader;
     use crate::graph::model::{BindingKind, NodeKind};
     use std::path::Path;
+    use std::sync::OnceLock;
+
+    // Load + extract this workspace once and share across all tests in this
+    // module. Loading dominates the runtime (~3s release / ~25s debug); the
+    // tests below are read-only assertions over the resulting model.
+    // We cache only ExtractionModel (Send+Sync); LoadedWorkspace is dropped
+    // because RootDatabase is !Sync.
+    fn shared_model() -> &'static ExtractionModel {
+        static CACHE: OnceLock<ExtractionModel> = OnceLock::new();
+        CACHE.get_or_init(|| {
+            let loaded = loader::load(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+            extract(&loaded)
+        })
+    }
 
     #[test]
     fn extracts_workspace_crate_modules_for_self() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let loaded = loader::load(Path::new(manifest_dir)).unwrap();
-        let model = extract(&loaded);
+        let model = shared_model();
 
         assert!(model.nodes.contains_key(&model.workspace_id));
 
@@ -251,9 +263,7 @@ mod tests {
 
     #[test]
     fn extracts_items_and_bindings_for_self() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let loaded = loader::load(Path::new(manifest_dir)).unwrap();
-        let model = extract(&loaded);
+        let model = shared_model();
 
         // Item: the `load` function we defined in src/graph/loader.rs.
         let load_fn = model.nodes.values().find(|n| {
