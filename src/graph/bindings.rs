@@ -14,8 +14,9 @@ use ra_ap_hir_def::item_scope::{ImportOrExternCrate, ImportOrGlob};
 use ra_ap_hir_def::nameres::{DefMap, crate_def_map};
 use ra_ap_hir_def::per_ns::Item;
 use ra_ap_hir_def::visibility::Visibility as HirVisibility;
-use ra_ap_hir_def::{AdtId, ModuleDefId, ModuleId};
+use ra_ap_hir_def::{AdtId, Lookup, ModuleDefId, ModuleId, UseId};
 use ra_ap_ide::RootDatabase;
+use ra_ap_syntax::ast::HasVisibility as _;
 
 use super::ids::NodeId;
 use super::model::{
@@ -60,6 +61,7 @@ pub fn extract_bindings(
 
             for (name, type_item) in item_scope.types() {
                 let Item { def, vis, import } = type_item;
+                let (binding_kind, use_id) = classify_type_provenance(import);
                 process_entry(
                     model,
                     db,
@@ -73,12 +75,14 @@ pub fn extract_bindings(
                     Namespace::Type,
                     def,
                     vis,
-                    classify_type_provenance(import),
+                    binding_kind,
+                    use_id,
                 );
             }
 
             for (name, value_item) in item_scope.values() {
                 let Item { def, vis, import } = value_item;
+                let (binding_kind, use_id) = classify_value_provenance(import);
                 process_entry(
                     model,
                     db,
@@ -92,7 +96,8 @@ pub fn extract_bindings(
                     Namespace::Value,
                     def,
                     vis,
-                    classify_value_provenance(import),
+                    binding_kind,
+                    use_id,
                 );
             }
         }
@@ -129,6 +134,7 @@ fn process_entry(
     def_id: ModuleDefId,
     vis: HirVisibility,
     binding_kind: BindingKind,
+    use_id: Option<UseId>,
 ) {
     // v1 exclusions: macros, builtins, enum variants in scope.
     if matches!(
@@ -170,6 +176,10 @@ fn process_entry(
     }
 
     let visibility = encode_visibility(model, db, def_map, vis, from_crate, module_node_for);
+    let is_explicit_pub_use = match use_id {
+        Some(uid) => use_has_explicit_visibility(db, uid),
+        None => false,
+    };
 
     model.bindings.push(Binding {
         from_module,
@@ -178,6 +188,7 @@ fn process_entry(
         target: target_node_id,
         kind: binding_kind,
         visibility,
+        is_explicit_pub_use,
     });
 }
 
@@ -394,21 +405,35 @@ fn stub_qualified_name(
     format!("extern::{from_crate_name}::{visible_name}")
 }
 
-fn classify_type_provenance(p: Option<ImportOrExternCrate>) -> BindingKind {
+fn classify_type_provenance(p: Option<ImportOrExternCrate>) -> (BindingKind, Option<UseId>) {
     match p {
-        None => BindingKind::Declared,
-        Some(ImportOrExternCrate::Import(_)) => BindingKind::NamedImport,
-        Some(ImportOrExternCrate::Glob(_)) => BindingKind::GlobImport,
-        Some(ImportOrExternCrate::ExternCrate(_)) => BindingKind::ExternCrateImport,
+        None => (BindingKind::Declared, None),
+        Some(ImportOrExternCrate::Import(id)) => (BindingKind::NamedImport, Some(id.use_)),
+        Some(ImportOrExternCrate::Glob(id)) => (BindingKind::GlobImport, Some(id.use_)),
+        // ExternCrate doesn't carry a UseId. We don't try to recover its
+        // syntactic visibility; downstream filters treat extern-crate
+        // bindings as never explicitly `pub`-marked.
+        Some(ImportOrExternCrate::ExternCrate(_)) => (BindingKind::ExternCrateImport, None),
     }
 }
 
-fn classify_value_provenance(p: Option<ImportOrGlob>) -> BindingKind {
+fn classify_value_provenance(p: Option<ImportOrGlob>) -> (BindingKind, Option<UseId>) {
     match p {
-        None => BindingKind::Declared,
-        Some(ImportOrGlob::Import(_)) => BindingKind::NamedImport,
-        Some(ImportOrGlob::Glob(_)) => BindingKind::GlobImport,
+        None => (BindingKind::Declared, None),
+        Some(ImportOrGlob::Import(id)) => (BindingKind::NamedImport, Some(id.use_)),
+        Some(ImportOrGlob::Glob(id)) => (BindingKind::GlobImport, Some(id.use_)),
     }
+}
+
+/// True iff the `use` declaration at `use_id` carries an explicit visibility
+/// modifier (`pub`, `pub(crate)`, `pub(in path)`, or `pub(super)`) in syntax.
+/// HIR normalizes inherited visibilities, so consulting the post-resolution
+/// `Visibility` would conflate "explicitly inherited from a `pub` module" with
+/// "explicitly marked `pub`". We instead read the source AST directly.
+fn use_has_explicit_visibility(db: &RootDatabase, use_id: UseId) -> bool {
+    let loc = use_id.lookup(db);
+    let use_node = loc.id.to_node(db);
+    use_node.visibility().is_some()
 }
 
 fn encode_visibility(

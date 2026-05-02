@@ -143,3 +143,259 @@ fn resolve_workspace_relative(vfs: &Vfs, file_id: FileId, workspace_root: &Path)
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    //! Phase A1 fixture tests: verify that the five reference patterns we
+    //! advertise (method call, trait dispatch, generic bound, const read,
+    //! macro expansion) are actually captured by `extract_usages` via
+    //! rust-analyzer's `Definition::usages` API.
+    //!
+    //! Strategy: Option B — one synthetic tempdir crate exercising all five
+    //! patterns, persisted once and shared across tests via a `OnceLock`
+    //! (mirrors `queries.rs::tests::shared_snapshot()`).
+    //!
+    //! These tests load a *real* cargo workspace through rust-analyzer, so
+    //! they pay the full RA load cost on first call (~3-5s release).
+    //! Subsequent tests reuse the cached snapshot.
+    use crate::graph::model::{NodeKind, Usage};
+    use crate::graph::snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
+    use crate::graph::storage::{GraphEnvOptions, GraphPaths};
+    use std::sync::OnceLock;
+
+    /// Source of the synthetic fixture crate. Each `pub fn` below exercises
+    /// exactly one of the five reference patterns; the targets they refer to
+    /// (`Foo::bar`, `Trait::method`, `Bound`, `K`, `FOO`) are all declared in
+    /// this same file so the workspace is self-contained.
+    const FIXTURE_LIB_RS: &str = r#"
+pub struct Foo;
+impl Foo {
+    pub fn bar() {}
+}
+
+pub trait Trait {
+    fn method(&self);
+}
+
+pub struct WithTrait;
+impl Trait for WithTrait {
+    fn method(&self) {}
+}
+
+pub trait Bound {}
+
+pub const K: u32 = 42;
+pub const FOO: u32 = 99;
+
+pub fn use_method_call() {
+    Foo::bar();
+}
+
+pub fn use_trait_dispatch<T: Trait>(x: T) {
+    x.method();
+}
+
+pub fn use_generic_bound<U: Bound + Default>() -> U {
+    U::default()
+}
+
+pub fn read_const() -> u32 {
+    K
+}
+
+pub fn macro_use() {
+    println!("{}", FOO);
+}
+"#;
+
+    const FIXTURE_CARGO_TOML: &str = r#"
+[package]
+name = "synthetic_crate"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"#;
+
+    struct SharedSnap {
+        _workspace_td: tempfile::TempDir,
+        _data_td: tempfile::TempDir,
+        snap: OpenedSnapshot,
+    }
+
+    /// Build the synthetic fixture crate, run `build_and_persist`, open the
+    /// snapshot. Cached across all tests in this module.
+    fn shared_snapshot() -> &'static OpenedSnapshot {
+        static CACHE: OnceLock<SharedSnap> = OnceLock::new();
+        &CACHE
+            .get_or_init(|| {
+                // 1. Materialize the synthetic crate in a tempdir.
+                let workspace_td = tempfile::tempdir().expect("create workspace tempdir");
+                let workspace_path = workspace_td.path();
+                std::fs::write(
+                    workspace_path.join("Cargo.toml"),
+                    FIXTURE_CARGO_TOML.trim_start(),
+                )
+                .expect("write Cargo.toml");
+                std::fs::create_dir_all(workspace_path.join("src")).expect("create src dir");
+                std::fs::write(
+                    workspace_path.join("src").join("lib.rs"),
+                    FIXTURE_LIB_RS.trim_start(),
+                )
+                .expect("write lib.rs");
+
+                // 2. Build & persist into a separate data dir.
+                let data_td = tempfile::tempdir().expect("create data tempdir");
+                let opts = BuildOptions {
+                    data_dir_override: Some(data_td.path().to_path_buf()),
+                    ..Default::default()
+                };
+                let result = build_and_persist(workspace_path, opts)
+                    .expect("build_and_persist on synthetic fixture");
+
+                let paths = GraphPaths::for_workspace_in(data_td.path(), &result.workspace_root);
+                let snap = open_current(&paths, GraphEnvOptions::default())
+                    .expect("open_current succeeds")
+                    .expect("snapshot exists after build_and_persist");
+
+                SharedSnap {
+                    _workspace_td: workspace_td,
+                    _data_td: data_td,
+                    snap,
+                }
+            })
+            .snap
+    }
+
+    /// Helper: look up a target by qualified name and return all of its
+    /// recorded usages. Panics if the name doesn't resolve (a missing target
+    /// is a fixture bug, not an interesting test result).
+    fn usages_for(snap: &OpenedSnapshot, qualified_name: &str) -> Vec<Usage> {
+        let (id, node) = snap
+            .lookup_by_qualified_name(qualified_name)
+            .expect("lookup_by_qualified_name failed")
+            .unwrap_or_else(|| panic!("fixture target `{qualified_name}` not in graph"));
+        assert_eq!(
+            node.kind,
+            NodeKind::Item,
+            "target `{qualified_name}` should be an Item, got {:?}",
+            node.kind
+        );
+        snap.usages_of(id).expect("usages_of failed")
+    }
+
+    /// Pattern 1 — method call: `Foo::bar()` referencing an inherent method.
+    ///
+    /// **NOT CAPTURED at the assoc-fn level.** The bindings pass
+    /// (`bindings.rs::extract_bindings`) only iterates `ItemScope` entries at
+    /// module level. Associated functions inside `impl` blocks never appear
+    /// in any module's `ItemScope`, so they are never registered in
+    /// `def_to_node` and thus `extract_usages` never asks RA for their
+    /// references. The Item node `synthetic_crate::Foo::bar` simply doesn't
+    /// exist in the graph.
+    ///
+    /// What we *do* see is a usage of the parent `Foo` struct (the receiver
+    /// type), since `Foo` is a module-level ADT. We assert that as the
+    /// available proxy signal — the call site `Foo::bar()` references `Foo`
+    /// in path position, and that should land as a Usage of `Foo`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn pattern1_method_call_NOT_CAPTURED_at_assoc_fn() {
+        let snap = shared_snapshot();
+        // Direct lookup confirms the assoc-fn isn't in the graph.
+        let direct = snap
+            .lookup_by_qualified_name("synthetic_crate::Foo::bar")
+            .expect("lookup ok");
+        assert!(
+            direct.is_none(),
+            "GAP: assoc fns are not emitted as Item nodes by the bindings pass — \
+             so usages_of(Foo::bar) cannot be answered. If this assertion ever \
+             starts failing, the extraction model has been extended and this \
+             test should be promoted to a real `_captured` test."
+        );
+
+        // Proxy: the receiver type `Foo` IS in the graph and the path-position
+        // reference at the call site should still register as a usage.
+        let receiver_usages = usages_for(snap, "synthetic_crate::Foo");
+        assert!(
+            !receiver_usages.is_empty(),
+            "expected ≥1 usage of receiver type `Foo` (path position at call site)"
+        );
+    }
+
+    /// Pattern 2 — trait dispatch: `x.method()` where `x: T, T: Trait`.
+    ///
+    /// **NOT CAPTURED at the trait-method level**, for the same reason as
+    /// pattern 1: `Trait::method` is an associated function and never enters
+    /// `ItemScope`, so no Item node is created. As a proxy we can see the
+    /// trait `Trait` itself referenced (in the bound `T: Trait` and in the
+    /// `impl Trait for WithTrait` block).
+    #[test]
+    #[allow(non_snake_case)]
+    fn pattern2_trait_dispatch_NOT_CAPTURED_at_assoc_fn() {
+        let snap = shared_snapshot();
+        let direct = snap
+            .lookup_by_qualified_name("synthetic_crate::Trait::method")
+            .expect("lookup ok");
+        assert!(
+            direct.is_none(),
+            "GAP: trait methods are not emitted as Item nodes either."
+        );
+
+        // Proxy: the trait itself IS captured. References to `Trait` from the
+        // generic bound `T: Trait` and the `impl Trait for WithTrait` block
+        // should appear.
+        let trait_usages = usages_for(snap, "synthetic_crate::Trait");
+        assert!(
+            !trait_usages.is_empty(),
+            "expected ≥1 usage of trait `Trait` (bound/impl positions)"
+        );
+    }
+
+    /// Pattern 3 — generic bound: `fn f<U: Bound>()` referencing a trait
+    /// in a where clause / bound position.
+    #[test]
+    fn pattern3_generic_bound_captured() {
+        let snap = shared_snapshot();
+        let usages = usages_for(snap, "synthetic_crate::Bound");
+        assert!(
+            !usages.is_empty(),
+            "expected ≥1 usage of trait `Bound` from `use_generic_bound` bound, got 0"
+        );
+        for u in &usages {
+            assert!(u.file.contains("lib.rs"), "usage file should be lib.rs, got {}", u.file);
+        }
+    }
+
+    /// Pattern 4 — const read: `fn read_const() -> u32 { K }` — bare const
+    /// reference in a function body. Should be classified as `Read`.
+    #[test]
+    fn pattern4_const_read_captured() {
+        let snap = shared_snapshot();
+        let usages = usages_for(snap, "synthetic_crate::K");
+        assert!(
+            !usages.is_empty(),
+            "expected ≥1 usage of const `K` from `read_const`, got 0"
+        );
+        for u in &usages {
+            assert!(u.file.contains("lib.rs"), "usage file should be lib.rs, got {}", u.file);
+        }
+    }
+
+    /// Pattern 5 — macro expansion: `println!("{}", FOO);` — the const `FOO`
+    /// is named inside a macro call. Whether RA's `Definition::usages`
+    /// surfaces references inside macro inputs is the key question.
+    #[test]
+    fn pattern5_macro_expansion_captured() {
+        let snap = shared_snapshot();
+        let usages = usages_for(snap, "synthetic_crate::FOO");
+        assert!(
+            !usages.is_empty(),
+            "expected ≥1 usage of const `FOO` from `macro_use` (println! arg), got 0"
+        );
+        for u in &usages {
+            assert!(u.file.contains("lib.rs"), "usage file should be lib.rs, got {}", u.file);
+        }
+    }
+}

@@ -18,14 +18,17 @@ use rmcp::{
 use serde::Serialize;
 
 use crate::graph::{
-    Binding, BindingKind, BindingVisibility, CrateDeadPub, DeadPubFinding, GraphEnvOptions,
-    GraphPaths, ItemKind, Namespace, Node, NodeId, NodeKind, OpenedSnapshot, Usage, UsageCategory,
+    Binding, BindingKind, BindingVisibility, CrateDeadPub, CrateEdge, DeadPubFinding,
+    GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
+    OpenedSnapshot, OverlapsReport, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
     build_and_persist, open_current,
     snapshot::BuildOptions,
 };
 use crate::tools::search_tool::{
-    BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
-    GraphImportsParams, GraphReexportsParams, WhoImportsParams, WhoUsesParams,
+    BuildHypergraphParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
+    GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams, GraphReexportsParams,
+    ModuleTreeParams, OverlapsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams,
+    WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -110,6 +113,23 @@ pub async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResul
     })
 }
 
+pub async fn get_declared_reexports(
+    params: GraphDeclaredReexportsParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
+    let bindings = snap
+        .declared_reexports_of(module_id)
+        .map_err(internal_error("declared_reexports_of"))?;
+
+    json_result(&BindingsListResponse {
+        module: Some(params.module),
+        consumer: None,
+        target: None,
+        bindings: enrich_bindings(&snap, bindings),
+    })
+}
+
 pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     // The target may be any node kind (Item, Module, ExternalSymbol).
@@ -152,6 +172,29 @@ pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError>
     json_result(&UsagesListResponse {
         target: target_node.qualified_name,
         usages: enrich_usages(&snap, usages),
+    })
+}
+
+pub async fn who_uses_summary(
+    params: WhoUsesSummaryParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let rows = snap
+        .who_uses_summary(target_id)
+        .map_err(internal_error("who_uses_summary"))?;
+
+    json_result(&UsageSummaryResponse {
+        target: target_node.qualified_name,
+        rows,
     })
 }
 
@@ -221,6 +264,36 @@ pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResu
         total_findings: total,
         crates,
     })
+}
+
+pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let edges: Vec<CrateEdge> = snap
+        .crate_edges()
+        .map_err(internal_error("crate_edges"))?;
+    json_result(&CrateEdgesResponse { edges })
+}
+
+pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let report: OverlapsReport = snap.overlaps().map_err(internal_error("overlaps"))?;
+    json_result(&report)
+}
+
+pub async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let tree: ModuleTreeNode = snap
+        .module_tree(&params.krate, params.depth)
+        .map_err(internal_error("module_tree"))?;
+    json_result(&ModuleTreeResponse { tree })
+}
+
+pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let stats: WorkspaceStats = snap
+        .workspace_stats()
+        .map_err(internal_error("workspace_stats"))?;
+    json_result(&stats)
 }
 
 // ----- helpers -----
@@ -526,6 +599,22 @@ struct EnrichedCrateDeadPub {
     #[serde(rename = "crate")]
     krate: String,
     findings: Vec<EnrichedDeadPub>,
+}
+
+#[derive(Debug, Serialize)]
+struct CrateEdgesResponse {
+    edges: Vec<CrateEdge>,
+}
+
+#[derive(Debug, Serialize)]
+struct UsageSummaryResponse {
+    target: String,
+    rows: Vec<UsageSummaryRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModuleTreeResponse {
+    tree: ModuleTreeNode,
 }
 
 // Path import suppress dead-code on Path when unused.

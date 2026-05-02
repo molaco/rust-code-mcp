@@ -112,6 +112,14 @@ pub struct GraphReexportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GraphDeclaredReexportsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Module to enumerate explicit `pub use` declarations from (qualified name)")]
+    pub module: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WhoImportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
@@ -128,6 +136,14 @@ pub struct WhoUsesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WhoUsesSummaryParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the symbol whose non-import references you want, aggregated per consumer module with per-category counts")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeadPubParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
@@ -138,6 +154,34 @@ pub struct DeadPubParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeadPubReportParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml). Runs dead_pub_in_crate over every local crate and returns aggregated findings per crate.")]
+    pub directory: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CrateEdgesParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct OverlapsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ModuleTreeParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Crate qualified name (e.g. `my_crate`)")]
+    pub krate: String,
+    #[schemars(description = "Optional max depth below the crate root (None walks the full tree)")]
+    pub depth: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceStatsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
 }
 

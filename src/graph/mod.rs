@@ -20,7 +20,11 @@ pub use model::{
     Binding, BindingKind, BindingVisibility, ExtractionModel, ItemKind, Namespace, Node, NodeKind,
     Usage, UsageCategory,
 };
-pub use queries::{CrateDeadPub, DeadPubFinding};
+pub use queries::{
+    CommonFnName, CrateDeadPub, CrateEdge, DeadPubFinding, EdgeSymbol, ModuleShadow,
+    ModuleTreeNode, NodeKindCounts, OverlapsReport, TypeCollision, TypeLocation, UsageSummaryRow,
+    VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
+};
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
 };
