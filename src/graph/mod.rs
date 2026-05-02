@@ -6,6 +6,7 @@
 pub mod bindings;
 pub mod extract;
 pub mod ids;
+pub mod impls;
 pub mod loader;
 pub mod model;
 pub mod queries;

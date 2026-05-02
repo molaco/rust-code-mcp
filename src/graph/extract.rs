@@ -13,6 +13,7 @@ use ra_ap_ide::RootDatabase;
 
 use super::bindings::extract_bindings;
 use super::ids::{NodeId, workspace_hash};
+use super::impls::extract_impl_items;
 use super::loader::LoadedWorkspace;
 use super::model::{ExtractionModel, Node, NodeKind};
 use super::usages::extract_usages;
@@ -67,13 +68,28 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         );
     }
 
-    let def_to_node = extract_bindings(
+    let mut def_to_node = extract_bindings(
         &mut model,
         &loaded.db,
         &loaded.local_crates,
         &crate_node_for,
         &crate_name_for,
         &module_node_for,
+    );
+
+    // Layer 4: extend def_to_node with methods, assoc consts, assoc types from
+    // inherent impls and trait declarations BEFORE running the usages pass —
+    // extract_usages iterates def_to_node and queries `Definition::usages`
+    // for each Item, so adding the new defs here makes who_uses(Foo::bar)
+    // and who_uses(Trait::method) work for free.
+    extract_impl_items(
+        &mut model,
+        &loaded.db,
+        &loaded.vfs,
+        &loaded.local_crates,
+        &crate_node_for,
+        &crate_name_for,
+        &mut def_to_node,
     );
 
     extract_usages(
@@ -269,6 +285,48 @@ mod tests {
             .contains
             .iter()
             .any(|&(p, c)| p == crate_node.id && c == root_module.id));
+    }
+
+    #[test]
+    fn extracts_impl_items_for_self() {
+        use crate::graph::model::ItemKind;
+
+        let model = shared_model();
+
+        // The host type — `OpenedSnapshot` lives in `graph::snapshot`.
+        let host = model
+            .nodes
+            .values()
+            .find(|n| {
+                n.kind == NodeKind::Item
+                    && matches!(n.item_kind, Some(ItemKind::Struct))
+                    && n.qualified_name == "file_search_mcp::graph::snapshot::OpenedSnapshot"
+            })
+            .expect("OpenedSnapshot struct Item node");
+
+        // Layer 4 should have emitted a Method Item for `usages_of` whose
+        // parent is the host struct's Item NodeId. `usages_of` is declared in
+        // the inherent `impl OpenedSnapshot { ... }` block in queries.rs.
+        let method = model
+            .nodes
+            .values()
+            .find(|n| {
+                n.kind == NodeKind::Item
+                    && matches!(n.item_kind, Some(ItemKind::Method))
+                    && n.display_name == "usages_of"
+                    && n.parent_id == Some(host.id)
+            })
+            .expect(
+                "expected Method Item node for OpenedSnapshot::usages_of with \
+                 parent_id pointing at the host struct's Item",
+            );
+        assert_eq!(
+            method.qualified_name,
+            "file_search_mcp::graph::snapshot::OpenedSnapshot::usages_of"
+        );
+        // Layer 4 backfills file/span via try_to_nav.
+        assert!(method.file.is_some(), "method Item should have a file path");
+        assert!(method.span.is_some(), "method Item should have a span");
     }
 
     #[test]

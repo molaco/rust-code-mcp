@@ -287,70 +287,43 @@ path = "src/lib.rs"
 
     /// Pattern 1 — method call: `Foo::bar()` referencing an inherent method.
     ///
-    /// **NOT CAPTURED at the assoc-fn level.** The bindings pass
-    /// (`bindings.rs::extract_bindings`) only iterates `ItemScope` entries at
-    /// module level. Associated functions inside `impl` blocks never appear
-    /// in any module's `ItemScope`, so they are never registered in
-    /// `def_to_node` and thus `extract_usages` never asks RA for their
-    /// references. The Item node `synthetic_crate::Foo::bar` simply doesn't
-    /// exist in the graph.
-    ///
-    /// What we *do* see is a usage of the parent `Foo` struct (the receiver
-    /// type), since `Foo` is a module-level ADT. We assert that as the
-    /// available proxy signal — the call site `Foo::bar()` references `Foo`
-    /// in path position, and that should land as a Usage of `Foo`.
+    /// **CAPTURED as of Layer 4.** `extract_impl_items` walks every inherent
+    /// `impl Foo { ... }` block and emits an Item node per assoc fn / const /
+    /// type, registering it in `def_to_node` so the usages pass picks it up.
+    /// The path-position reference at the call site `Foo::bar()` lands as a
+    /// Usage of `Foo::bar` directly (RA's `Definition::usages` routes the
+    /// reference to the assoc-fn def, not the parent struct).
     #[test]
-    #[allow(non_snake_case)]
-    fn pattern1_method_call_NOT_CAPTURED_at_assoc_fn() {
+    fn pattern1_method_call_captured() {
         let snap = shared_snapshot();
-        // Direct lookup confirms the assoc-fn isn't in the graph.
-        let direct = snap
-            .lookup_by_qualified_name("synthetic_crate::Foo::bar")
-            .expect("lookup ok");
+        let usages = usages_for(snap, "synthetic_crate::Foo::bar");
         assert!(
-            direct.is_none(),
-            "GAP: assoc fns are not emitted as Item nodes by the bindings pass — \
-             so usages_of(Foo::bar) cannot be answered. If this assertion ever \
-             starts failing, the extraction model has been extended and this \
-             test should be promoted to a real `_captured` test."
+            !usages.is_empty(),
+            "expected >=1 usage of `Foo::bar` from `use_method_call`, got 0"
         );
-
-        // Proxy: the receiver type `Foo` IS in the graph and the path-position
-        // reference at the call site should still register as a usage.
-        let receiver_usages = usages_for(snap, "synthetic_crate::Foo");
-        assert!(
-            !receiver_usages.is_empty(),
-            "expected ≥1 usage of receiver type `Foo` (path position at call site)"
-        );
+        for u in &usages {
+            assert!(u.file.contains("lib.rs"), "usage file should be lib.rs, got {}", u.file);
+        }
     }
 
     /// Pattern 2 — trait dispatch: `x.method()` where `x: T, T: Trait`.
     ///
-    /// **NOT CAPTURED at the trait-method level**, for the same reason as
-    /// pattern 1: `Trait::method` is an associated function and never enters
-    /// `ItemScope`, so no Item node is created. As a proxy we can see the
-    /// trait `Trait` itself referenced (in the bound `T: Trait` and in the
-    /// `impl Trait for WithTrait` block).
+    /// **CAPTURED as of Layer 4.** `extract_impl_items` emits Item nodes for
+    /// trait declaration items (`trait Trait { fn method(&self); }`). RA's
+    /// `Definition::usages` resolves both `x.method()` dispatch and direct
+    /// `Trait::method` calls back to the trait declaration's def, so that
+    /// single Item covers both forms.
     #[test]
-    #[allow(non_snake_case)]
-    fn pattern2_trait_dispatch_NOT_CAPTURED_at_assoc_fn() {
+    fn pattern2_trait_dispatch_captured() {
         let snap = shared_snapshot();
-        let direct = snap
-            .lookup_by_qualified_name("synthetic_crate::Trait::method")
-            .expect("lookup ok");
+        let usages = usages_for(snap, "synthetic_crate::Trait::method");
         assert!(
-            direct.is_none(),
-            "GAP: trait methods are not emitted as Item nodes either."
+            !usages.is_empty(),
+            "expected >=1 usage of `Trait::method` from `use_trait_dispatch`, got 0"
         );
-
-        // Proxy: the trait itself IS captured. References to `Trait` from the
-        // generic bound `T: Trait` and the `impl Trait for WithTrait` block
-        // should appear.
-        let trait_usages = usages_for(snap, "synthetic_crate::Trait");
-        assert!(
-            !trait_usages.is_empty(),
-            "expected ≥1 usage of trait `Trait` (bound/impl positions)"
-        );
+        for u in &usages {
+            assert!(u.file.contains("lib.rs"), "usage file should be lib.rs, got {}", u.file);
+        }
     }
 
     /// Pattern 3 — generic bound: `fn f<U: Bound>()` referencing a trait

@@ -325,6 +325,7 @@ fn item_kind_label(kind: ItemKind) -> &'static str {
         ItemKind::AssocFunction => "assoc_function",
         ItemKind::AssocConst => "assoc_const",
         ItemKind::AssocType => "assoc_type",
+        ItemKind::Method => "method",
     }
 }
 
