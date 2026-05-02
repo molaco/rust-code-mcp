@@ -22,6 +22,8 @@ use super::model::{
     Binding, BindingKind, BindingVisibility, ExtractionModel, ItemKind, Namespace, Node, NodeKind,
 };
 
+/// Returns `def_to_node` so the usage-extraction pass can map ModuleDefIds
+/// back to local Item NodeIds without re-running the bindings walk.
 pub fn extract_bindings(
     model: &mut ExtractionModel,
     db: &RootDatabase,
@@ -29,7 +31,7 @@ pub fn extract_bindings(
     crate_node_for: &HashMap<Crate, NodeId>,
     crate_name_for: &HashMap<Crate, String>,
     module_node_for: &HashMap<ModuleId, NodeId>,
-) {
+) -> HashMap<ModuleDefId, NodeId> {
     let mut def_to_node: HashMap<ModuleDefId, NodeId> = HashMap::new();
 
     // Seed the def→node map with all local modules so module-target imports resolve.
@@ -108,6 +110,8 @@ pub fn extract_bindings(
     model
         .bindings
         .retain(|b| seen.insert((b.from_module, b.visible_name.clone(), b.target, b.kind)));
+
+    def_to_node
 }
 
 #[allow(clippy::too_many_arguments)]
