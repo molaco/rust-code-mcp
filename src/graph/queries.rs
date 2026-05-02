@@ -281,29 +281,42 @@ fn is_visible_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::loader::load;
     use crate::graph::snapshot::{BuildOptions, build_and_persist, open_current};
     use crate::graph::storage::{GraphEnvOptions, GraphPaths};
     use std::path::Path;
+    use std::sync::OnceLock;
 
-    fn open_self_snapshot() -> (OpenedSnapshot, tempfile::TempDir) {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let tempdir = tempfile::tempdir().unwrap();
-        let opts = BuildOptions {
-            data_dir_override: Some(tempdir.path().to_path_buf()),
-            ..Default::default()
-        };
-        let result = build_and_persist(Path::new(manifest_dir), opts).unwrap();
-        let paths = GraphPaths::for_workspace_in(tempdir.path(), &result.workspace_root);
-        let opened = open_current(&paths, GraphEnvOptions::default())
-            .unwrap()
-            .unwrap();
-        (opened, tempdir)
+    // Build the snapshot once and share across all tests in this module.
+    // Saves ~3s/test in release (~25s in debug). The TempDir is held inside
+    // the static so the heed env stays valid for the process lifetime.
+    struct SharedSnap {
+        _td: tempfile::TempDir,
+        snap: OpenedSnapshot,
+    }
+
+    fn shared_snapshot() -> &'static OpenedSnapshot {
+        static CACHE: OnceLock<SharedSnap> = OnceLock::new();
+        &CACHE
+            .get_or_init(|| {
+                let td = tempfile::tempdir().unwrap();
+                let opts = BuildOptions {
+                    data_dir_override: Some(td.path().to_path_buf()),
+                    ..Default::default()
+                };
+                let result =
+                    build_and_persist(Path::new(env!("CARGO_MANIFEST_DIR")), opts).unwrap();
+                let paths = GraphPaths::for_workspace_in(td.path(), &result.workspace_root);
+                let snap = open_current(&paths, GraphEnvOptions::default())
+                    .unwrap()
+                    .unwrap();
+                SharedSnap { _td: td, snap }
+            })
+            .snap
     }
 
     #[test]
     fn lookup_by_qualified_name_resolves_known_modules() {
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (_id, node) = snap
             .lookup_by_qualified_name("file_search_mcp::graph::loader")
             .unwrap()
@@ -313,7 +326,7 @@ mod tests {
 
     #[test]
     fn imports_of_graph_mod_includes_loader_load() {
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (graph_mod_id, _) = snap
             .lookup_by_qualified_name("file_search_mcp::graph")
             .unwrap()
@@ -327,7 +340,7 @@ mod tests {
 
     #[test]
     fn who_imports_finds_target() {
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (load_fn_id, _) = snap
             .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
             .unwrap()
@@ -351,7 +364,7 @@ mod tests {
 
     #[test]
     fn exports_of_loader_visible_from_graph_mod() {
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (loader_mod_id, _) = snap
             .lookup_by_qualified_name("file_search_mcp::graph::loader")
             .unwrap()
@@ -373,7 +386,7 @@ mod tests {
         // in src/graph/mod.rs. The canonical declaration lives at
         // `file_search_mcp::graph::loader::load`. The fallback should follow the
         // re-export and return the canonical Item node.
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (_id, node) = snap
             .lookup_by_qualified_name("file_search_mcp::graph::load")
             .unwrap()
@@ -389,7 +402,7 @@ mod tests {
     fn lookup_by_qualified_name_canonical_still_works() {
         // Regression check: the canonical-name path remains the primary lookup
         // and is not affected by the re-export fallback.
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (_id, node) = snap
             .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
             .unwrap()
@@ -403,7 +416,7 @@ mod tests {
         // No node carries this name and no facade points at it. The recursive
         // fallback must terminate (bounded by MAX_REEXPORT_HOPS) and return None
         // rather than spinning.
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let result = snap
             .lookup_by_qualified_name("file_search_mcp::nonexistent::thing")
             .unwrap();
@@ -418,7 +431,7 @@ mod tests {
         // file_search_mcp::graph::extract has private helpers like `crate_display_name`.
         // From outside the loader/extract sibling (e.g., file_search_mcp root module),
         // those should NOT be exported.
-        let (snap, _td) = open_self_snapshot();
+        let snap = shared_snapshot();
         let (extract_id, _) = snap
             .lookup_by_qualified_name("file_search_mcp::graph::extract")
             .unwrap()

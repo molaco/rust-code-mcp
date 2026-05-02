@@ -49,7 +49,10 @@ pub fn load(directory: &Path) -> Result<LoadedWorkspace> {
     let load_config = LoadCargoConfig {
         load_out_dirs_from_check: false,
         with_proc_macro_server: ProcMacroServerChoice::None,
-        prefill_caches: false,
+        // Build every workspace crate's DefMap in parallel during load. Without
+        // this, DefMaps are constructed lazily on first access during the
+        // serial extraction walk — measured ~30× slower on burn.
+        prefill_caches: true,
         num_worker_threads: num_cpus::get_physical(),
         proc_macro_processes: 1,
     };
