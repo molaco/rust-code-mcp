@@ -391,6 +391,10 @@ mod tests {
         assert!(!result.reused, "first build should not be reused");
         assert!(result.node_count > 0);
         assert!(result.binding_count > 0);
+        assert!(
+            result.usage_count > 0,
+            "Phase 2 must populate at least one usage"
+        );
         assert!(result.snapshot_path.join("data.mdb").exists());
 
         // Reuse path: second call should return reused=true with no rebuild.
@@ -438,6 +442,39 @@ mod tests {
             }
         }
         assert!(hits > 0, "expected at least one binding targeting load fn");
+
+        // usages_by_target: load fn is referenced from at least one local module
+        // (the build_and_persist call inside this very test, plus the lib API
+        // surface). Just assert ≥1 usage.
+        let mut usage_hits = 0;
+        for entry in opened.dbs.usages_by_target.iter(&rtxn).unwrap() {
+            let (k, _v) = entry.unwrap();
+            if k == load_fn_id.as_bytes() {
+                usage_hits += 1;
+            }
+        }
+        assert!(
+            usage_hits > 0,
+            "expected at least one usage targeting load fn"
+        );
+
+        // usages_by_id: at least one record round-trips with sane fields.
+        let sample = opened
+            .dbs
+            .usages_by_id
+            .iter(&rtxn)
+            .unwrap()
+            .next()
+            .expect("at least one usage persisted")
+            .unwrap();
+        let (_uid, usage) = sample;
+        assert!(usage.start <= usage.end, "usage range must be ordered");
+        assert!(!usage.file.is_empty(), "usage file path must be non-empty");
+        assert!(
+            !usage.file.starts_with('/'),
+            "usage file must be workspace-relative, got {}",
+            usage.file
+        );
 
         // children_by_parent: workspace node should have at least the crate as child.
         let workspace_id = opened
