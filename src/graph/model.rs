@@ -33,6 +33,11 @@ pub enum ItemKind {
     AssocFunction,
     AssocConst,
     AssocType,
+    /// Layer 4: a fn declared inside an inherent `impl T { ... }` block, OR a
+    /// fn declared in a `trait T { fn m(); }`. Both share this variant — the
+    /// distinction is encoded by `parent_id` pointing at a struct/enum/union
+    /// Item vs a trait Item.
+    Method,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -68,6 +73,13 @@ pub struct Node {
     pub display_name: String,
     pub qualified_name: String,
     pub crate_id: Option<NodeId>,
+    /// The containing scope of this node. For Workspace = None; for Crate = the
+    /// Workspace; for Module = parent Module or Crate; for top-level Items = the
+    /// owning Module. As of Layer 4, methods / associated consts / associated
+    /// types declared inside an inherent `impl Foo { ... }` block or a
+    /// `trait Foo { ... }` declaration carry `parent_id` pointing at the host
+    /// type's or trait's Item NodeId — i.e. an Item-typed parent is now valid
+    /// for the Method/AssocConst/AssocType item kinds.
     pub parent_id: Option<NodeId>,
     pub item_kind: Option<ItemKind>,
     pub file: Option<String>, // workspace-relative

@@ -46,7 +46,13 @@ use super::model::{Binding, Node, Usage};
 // is required even though `#[serde(default)]` would otherwise tolerate
 // missing fields under serde_json. v3/v4 graph_ids are disjoint (graph_id_for
 // hashes SCHEMA_VERSION).
-pub const SCHEMA_VERSION: u32 = 4;
+// v5 (2026-05): Layer 4 — methods, associated consts/types, and trait
+// declaration items are emitted as Item nodes with `parent_id` set to the
+// host type / trait Item. Adds `ItemKind::Method` (shared by inherent-impl
+// fns and trait-declaration fns); `AssocConst` and `AssocType` now also
+// surface via the new `extract_impl_items` pass. Old snapshots auto-rebuild
+// because `graph_id_for` mixes `SCHEMA_VERSION`.
+pub const SCHEMA_VERSION: u32 = 5;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";
