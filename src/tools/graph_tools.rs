@@ -488,10 +488,30 @@ fn node_kind_label(node: &Node) -> String {
         NodeKind::Crate => "Crate".to_string(),
         NodeKind::Module => "Module".to_string(),
         NodeKind::Item => match node.item_kind {
-            Some(k) => format!("Item.{k:?}"),
+            Some(k) => format!("Item.{}", short_item_kind_label(k)),
             None => "Item".to_string(),
         },
         NodeKind::ExternalSymbol => "ExternalSymbol".to_string(),
+    }
+}
+
+/// Short variant labels matching the form used by `queries::label_item_kind`
+/// (e.g. `Function -> "Fn"`, `AssocFunction -> "AssocFn"`). Pair with
+/// `node_kind_label` so a Function Item serializes as `"Item.Fn"` rather than
+/// `"Item.Function"`. Keep in sync with `queries::label_item_kind`.
+fn short_item_kind_label(k: ItemKind) -> &'static str {
+    match k {
+        ItemKind::Function => "Fn",
+        ItemKind::Struct => "Struct",
+        ItemKind::Enum => "Enum",
+        ItemKind::Union => "Union",
+        ItemKind::Trait => "Trait",
+        ItemKind::TypeAlias => "TypeAlias",
+        ItemKind::Const => "Const",
+        ItemKind::Static => "Static",
+        ItemKind::AssocFunction => "AssocFn",
+        ItemKind::AssocConst => "AssocConst",
+        ItemKind::AssocType => "AssocType",
     }
 }
 

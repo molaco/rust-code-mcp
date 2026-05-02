@@ -110,7 +110,6 @@ pub struct CommonFnName {
 /// the target. Sorted by `total_count` desc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageSummaryRow {
-    pub consumer_module: NodeId,
     pub consumer_qualified_name: String,
     pub consumer_crate: Option<String>,
     pub total_count: usize,
@@ -135,7 +134,12 @@ pub struct WorkspaceStats {
     pub items_by_kind: BTreeMap<String, usize>,
     pub bindings_by_kind: BTreeMap<String, usize>,
     pub visibility: VisibilityCounts,
-    pub encapsulation_ratio: f64,
+    /// Of the items the author actively made non-private, what fraction is
+    /// crate-scoped? Computed as `pub_crate / (pub_ + pub_crate)`. Returns
+    /// `0.0` when both counts are zero (degenerate workspace with no
+    /// non-private items). Higher values indicate tighter encapsulation:
+    /// the author preferred `pub(crate)` over `pub` where possible.
+    pub pub_crate_share: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -410,7 +414,6 @@ impl OpenedSnapshot {
                 None => (String::new(), None),
             };
             rows.push(UsageSummaryRow {
-                consumer_module,
                 consumer_qualified_name: qualified_name,
                 consumer_crate: crate_qualified,
                 total_count,
@@ -897,7 +900,67 @@ impl OpenedSnapshot {
         let crate_id = crate_id
             .with_context(|| format!("no Crate node with qualified_name `{crate_name}`"))?;
 
-        self.build_module_tree(&rtxn, crate_id, depth, 0)
+        // Pre-build a target -> formatted-visibility map for every Item in this
+        // crate. The model stores visibility on the declaring `Binding`, not
+        // on the Item Node, so without this lookup `module_tree` would emit
+        // `null` for every item. One linear pass over `bindings_by_id` filtered
+        // by the item's owning crate keeps build_module_tree's per-item lookup
+        // O(1).
+        let mut item_visibility: HashMap<NodeId, String> = HashMap::new();
+        // First, collect the set of Item NodeIds in this crate.
+        let mut crate_items: HashSet<NodeId> = HashSet::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if node.kind == NodeKind::Item && node.crate_id == Some(crate_id) {
+                let mut id = [0u8; 32];
+                id.copy_from_slice(key);
+                crate_items.insert(NodeId(id));
+            }
+        }
+        // Second, walk bindings_by_id and pick up Declared bindings whose
+        // target is one of those items. If an item somehow has multiple
+        // Declared bindings (defensively — shouldn't happen in well-formed
+        // extraction), prefer one whose `from_module` matches the item's
+        // parent module; otherwise keep the first.
+        let mut item_parents: HashMap<NodeId, NodeId> = HashMap::new();
+        for item_id in &crate_items {
+            if let Some(node) = self.dbs.nodes_by_id.get(&rtxn, item_id.as_bytes())? {
+                if let Some(parent) = node.parent_id {
+                    item_parents.insert(*item_id, parent);
+                }
+            }
+        }
+        let mut item_vis_picks: HashMap<NodeId, (BindingVisibility, bool)> = HashMap::new();
+        for entry in self.dbs.bindings_by_id.iter(&rtxn)? {
+            let (_k, binding) = entry?;
+            if binding.kind != BindingKind::Declared {
+                continue;
+            }
+            if !crate_items.contains(&binding.target) {
+                continue;
+            }
+            let parent_match = item_parents
+                .get(&binding.target)
+                .map(|p| *p == binding.from_module)
+                .unwrap_or(false);
+            match item_vis_picks.get(&binding.target) {
+                None => {
+                    item_vis_picks.insert(binding.target, (binding.visibility, parent_match));
+                }
+                Some((_, existing_parent_match)) => {
+                    // Upgrade only if we previously had a non-parent-matching
+                    // pick and the new one matches the parent module.
+                    if !existing_parent_match && parent_match {
+                        item_vis_picks.insert(binding.target, (binding.visibility, parent_match));
+                    }
+                }
+            }
+        }
+        for (id, (vis, _)) in item_vis_picks {
+            item_visibility.insert(id, format_binding_visibility(&rtxn, self, vis));
+        }
+
+        self.build_module_tree(&rtxn, crate_id, depth, 0, &item_visibility)
     }
 
     fn build_module_tree(
@@ -906,6 +969,7 @@ impl OpenedSnapshot {
         node_id: NodeId,
         depth_limit: Option<usize>,
         cur_depth: usize,
+        item_visibility: &HashMap<NodeId, String>,
     ) -> Result<ModuleTreeNode> {
         let node = self
             .dbs
@@ -938,17 +1002,26 @@ impl OpenedSnapshot {
                     child_id,
                     depth_limit,
                     cur_depth + 1,
+                    item_visibility,
                 )?);
             }
             children_nodes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
         }
 
+        let item_kind_label = node
+            .item_kind
+            .map(|k| format!("Item.{}", label_item_kind(k)));
+        let visibility = if node.kind == NodeKind::Item {
+            item_visibility.get(&node_id).cloned()
+        } else {
+            node.visibility.clone()
+        };
         Ok(ModuleTreeNode {
             qualified_name: node.qualified_name.clone(),
             display_name: node.display_name.clone(),
             kind: label_node_kind(&node),
-            item_kind: node.item_kind.map(|k| label_item_kind(k).to_string()),
-            visibility: node.visibility.clone(),
+            item_kind: item_kind_label,
+            visibility,
             children: children_nodes,
         })
     }
@@ -1003,15 +1076,22 @@ impl OpenedSnapshot {
         // expect the name to be present.
         visibility.pub_self = visibility.private;
 
-        let total_items = nodes.item.max(1);
-        let encapsulation_ratio = visibility.pub_crate as f64 / total_items as f64;
+        // `pub_crate / (pub_ + pub_crate)` — of the items the author actively
+        // made non-private, what fraction is crate-scoped? Avoid NaN on a
+        // degenerate workspace with zero non-private items.
+        let non_private = visibility.pub_ + visibility.pub_crate;
+        let pub_crate_share = if non_private == 0 {
+            0.0
+        } else {
+            visibility.pub_crate as f64 / non_private as f64
+        };
 
         Ok(WorkspaceStats {
             nodes,
             items_by_kind,
             bindings_by_kind,
             visibility,
-            encapsulation_ratio,
+            pub_crate_share,
         })
     }
 
@@ -1183,6 +1263,27 @@ fn usage_category_label(c: UsageCategory) -> &'static str {
         UsageCategory::Write => "Write",
         UsageCategory::Test => "Test",
         UsageCategory::Other => "Other",
+    }
+}
+
+/// Render a `BindingVisibility` as the human-readable string we emit on
+/// `ModuleTreeNode.visibility` for Items: `"pub"`, `"pub(crate)"`,
+/// `"pub(in path::to::mod)"`, or `"pub(self)"` for the implicit-private case.
+fn format_binding_visibility(
+    rtxn: &RoTxn<'_, heed::WithoutTls>,
+    snap: &OpenedSnapshot,
+    vis: BindingVisibility,
+) -> String {
+    match vis {
+        BindingVisibility::Public => "pub".to_string(),
+        BindingVisibility::Private => "pub(self)".to_string(),
+        BindingVisibility::Crate(_) => "pub(crate)".to_string(),
+        BindingVisibility::RestrictedTo(id) => {
+            match snap.dbs.nodes_by_id.get(rtxn, id.as_bytes()).ok().flatten() {
+                Some(node) => format!("pub(in {})", node.qualified_name),
+                None => "pub(in ?)".to_string(),
+            }
+        }
     }
 }
 
@@ -1625,7 +1726,8 @@ mod tests {
         assert!(stats.nodes.crate_ >= 1, "expected at least one crate");
         assert!(!stats.items_by_kind.is_empty(), "items_by_kind must be non-empty");
         assert!(!stats.bindings_by_kind.is_empty(), "bindings_by_kind must be non-empty");
-        assert!(stats.encapsulation_ratio.is_finite());
-        assert!(stats.encapsulation_ratio >= 0.0);
+        assert!(stats.pub_crate_share.is_finite());
+        assert!(stats.pub_crate_share >= 0.0);
+        assert!(stats.pub_crate_share <= 1.0);
     }
 }
