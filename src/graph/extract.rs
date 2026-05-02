@@ -15,6 +15,7 @@ use super::bindings::extract_bindings;
 use super::ids::{NodeId, workspace_hash};
 use super::loader::LoadedWorkspace;
 use super::model::{ExtractionModel, Node, NodeKind};
+use super::usages::extract_usages;
 
 pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
     let workspace_hash = workspace_hash(&loaded.workspace_root);
@@ -66,12 +67,20 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         );
     }
 
-    extract_bindings(
+    let def_to_node = extract_bindings(
         &mut model,
         &loaded.db,
         &loaded.local_crates,
         &crate_node_for,
         &crate_name_for,
+        &module_node_for,
+    );
+
+    extract_usages(
+        &mut model,
+        &loaded.db,
+        &loaded.vfs,
+        &def_to_node,
         &module_node_for,
     );
 

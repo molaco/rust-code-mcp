@@ -11,6 +11,7 @@ pub mod model;
 pub mod queries;
 pub mod snapshot;
 pub mod storage;
+pub mod usages;
 
 pub use extract::extract;
 pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
