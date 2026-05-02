@@ -8,14 +8,18 @@
   - Free-text search. search(query) → keyword/BM25 across files. Catches comments, docstrings, log messages, anything in source. Useful when you remember a string but not a symbol.
   - Goto-definition by name. find_definition(name) → file:line for symbols matching the name. RA-driven, no qualified path required.
   - Semantic similarity. get_similar_code(query) → vector-store search by description ("function that parses JSON"). Returns candidate sites you can drill into.
-  - Browse hierarchy. module_tree(crate) → discover symbols by walking the tree.
+  - Browse hierarchy. module_tree(crate) → discover symbols by walking the tree. Often the most direct route once you know the crate.
   - Read raw source. read_file_content(path) → just the file contents, when you have a path but no symbol yet.
 
   Common bridge pattern: search("HybridSearch") → find_definition to confirm location → derive qualified name from path/structure → who_uses("file_search_mcp::search::HybridSearch") for the structural answer.
 
+  Hypergraph vs RA tools: for aggregate / workspace-wide answers, hypergraph tools (module_tree, crate_edges, who_uses, who_uses_summary) are faster and more precise than find_definition / find_references. Use the RA-driven tools for IDE-like single-symbol browsing, not for "where in the workspace is X?" questions.
+
   1. Workspace-level overview ("what is this codebase?")
 
   - Crate inventory + counts. workspace_stats → nodes by kind (workspace/crate/module/item/external_symbol), items by kind (Struct/Enum/Fn/Method/etc.), bindings by kind, visibility breakdown, pub_crate_share ratio.
+  - Encapsulation discipline as a comparative metric. workspace_stats.pub_crate_share is a between-codebase comparison signal. We measured 0.07 on one workspace and 0.58 on its successor — same crate count, very different team discipline. A high ratio means most non-private items are crate-scoped (good); a low ratio means lots of items leaked as bare pub.
+  - Canonical list of all crates. dead_pub_report.crates[].crate is the most reliable enumeration of every workspace crate, including those with zero findings. Other tools (workspace_stats, crate_edges) require deriving names indirectly.
   - Method extraction signal. workspace_stats.items_by_kind.Method — Layer 4 produces this. Compare to Fn count for a sense of how much logic is method-bound vs free-functional.
   - Cross-crate edge matrix. crate_edges → every consumer→producer edge with unique symbols + total refs (split via_imports vs via_usages).
   - Hygiene snapshot. overlaps → cross-crate type collisions, module-name shadows of workspace crates, within-crate duplicates, fn names appearing in 4+ crates.
@@ -38,8 +42,8 @@
   3. Crate-level audit ("dissect crate X")
 
   - Full structural dump. module_tree(crate=X) — recursive: modules → submodules → items → methods (Layer 4). Shows visibility for each declared item.
-  - Limit depth. module_tree(crate=X, depth=N).
-  - Public surface. get_declared_reexports(module=X) — every pub use declared at the crate root regardless of who can reach it.
+  - Depth advice. With Layer 4 nesting methods under their host types, full-depth trees can be huge (a 15-submodule crate produced 72KB at depth=3). Default to depth=2 for "what submodules and root-level items exist?", depth=3 for "expand items inside each submodule," and full-depth only when you need methods. The pub(in <crate>) visibility for crate-internal helpers shows up in module_tree — useful as an internal-API discipline signal.
+  - Public surface. get_declared_reexports(module=X) — every pub use declared at the crate root regardless of who can reach it. An empty result is informative: it means X has no facade and exposes everything at canonical paths.
   - Effective surface from a viewpoint. get_exports(module=X, consumer=other_crate).
   - Re-export facade subset. get_reexports(module=X, consumer=Y) — pub use reachable from Y.
   - Dead pub items. dead_pub_in_crate(crate=X) — candidates for pub(crate) downgrade.
@@ -106,14 +110,19 @@
   - "Verify a refactor didn't widen the API." → snapshot get_declared_reexports + dead_pub_report before, refactor, snapshot after, diff JSON.
   - "Find duplicate logic worth extracting." → get_similar_code(fn_body) for each function; cluster semantically similar fns; for each cluster, run who_uses_summary to see if a shared helper would benefit them all.
   - "Which complex functions have the highest blast radius?" → analyze_complexity to find gnarly fns; who_uses(complex_fn) to see fan-in; prioritize high-complexity × high-fan-in.
+  - "Find dead facade re-exports." (high-leverage recipe) → intersect get_declared_reexports(module=crate_root) with dead_pub_in_crate(crate). Items that appear in BOTH are dead facade branches: re-exported at the crate root but nothing imports either path. Drop the `pub use` line, demote source to `pub(crate)`. Spotted on tui in coding-agent-bad: RunState, InvalidTransition, RunnerWakeError were all re-exported AND dead.
+  - "Detect half-finished migrations." (high-leverage recipe) → from overlaps.cross_crate_type_collisions, find collisions where the same consumer module uses BOTH versions. who_uses_summary on each side, then look for consumer_qualified_name overlap between the two row sets. If a consumer is in both, it's converting between the two types — usually a half-finished refactor where the type was duplicated rather than moved. Spotted on coding-agent-bad: AgentConfig in agent::config and config crates, both used by coding-agent::compose.
 
   9. Code quality / hygiene audits
 
   - Cross-crate type collisions. overlaps.cross_crate_type_collisions.
   - Module shadowing. overlaps.module_shadows — mod X matching a workspace crate name. Inside that crate, X::... resolves locally instead of to the workspace crate.
+  - Module shadow diagnostic (real bug vs footgun). A shadow alone isn't a bug — it's only dangerous if the shadowing crate also depends on the workspace crate of the same name. To check: filter crate_edges for (consumer_crate=shadowing_crate, producer_crate=shadowed_crate). If the dep exists, it's a real bug — references inside the shadowing crate may resolve to the local module unexpectedly. If no dep, it's a footgun (anyone trying to add `use Y::...` later gets the local module silently). Either way, rename the local module to remove the trap.
   - Within-crate type duplicates. overlaps.within_crate_type_duplicates.
-  - Common fn names. overlaps.common_fn_names — fn names in 4+ crates.
+  - Test-fixture heuristic. Most within-crate duplicates are test fixtures replicated across test modules. Names like Mock*, Fake*, Stub*, Recording*, *EventSender located in modules ending in tests, test, fixtures, common are almost always test-fixture dupes. Mechanical refactor: factor into <crate>::tests::common::*.
+  - Common fn names. overlaps.common_fn_names — fn names in 4+ crates. Empty is common (and good — no init/run proliferation). Hits to investigate: anything other than `main` (expected for binaries) or core idioms (`new`, `default`).
   - Dead pub items. dead_pub_report workspace-wide; dead_pub_in_crate per crate.
+  - Vendored-library caveat. Vendored or library-style crates have inflated dead-pub counts because their pub surface is "designed for general use" but consumed narrowly in this workspace. We measured 47 dead pubs in plurimus (a vendored UI lib) on coding-agent-bad — that's expected, not a problem. Filter or de-prioritize known external/vendored crates before reading dead_pub_report.
   - Cyclomatic complexity hotspots. analyze_complexity(file) for each crate's main files; sort outputs.
   - Cognitive complexity vs blast radius. analyze_complexity × who_uses to find the fns most worth refactoring.
 
@@ -128,7 +137,12 @@
   11. Method-aware workflows (Layer 4 specific)
 
   - Type's full API surface. module_tree(crate=X) walked into a type → type plus all methods + assoc consts/types as children.
-  - Method-by-method fan-in. Iterate module_tree(Type) children, run who_uses_summary on each. Surfaces "12 methods, only 3 actually called."
+  - Method-by-method fan-in (literal recipe).
+    1. module_tree(directory, krate=X) at sufficient depth → find the type's children (methods, assoc consts, assoc types).
+    2. For each child, call who_uses_summary(target=X::Type::method) — best run in parallel since they're independent reads.
+    3. Sort results by total_count desc.
+    4. Empty who_uses = dead method (Layer 4 finally surfaces these). All-Test rows = test-only helper. All-Other = critical path.
+    Pre-Layer-4 these queries errored because methods weren't graph nodes; post-Layer-4 they return real results.
   - Dead method API. Same pattern — methods with empty who_uses are dead.
   - Inherent vs trait method distinction. module_tree shows both as children; parent_id differs (trait Item vs struct/enum Item).
   - Method-naming consistency check. Scan module_tree outputs for naming patterns across types (every type has new, every error type has from_io, etc.).
@@ -141,6 +155,7 @@
   - Canonical vs facade path traffic. who_imports(target=symbol) lists every importer through both paths (re-exports resolve to canonical NodeId).
   - Spot accidentally-exposed internals. Items in get_declared_reexports that the team intended to be pub(crate).
   - Find pub items behind a facade that don't need to be pub. If pub use chain can become pub(crate) use, original can be pub(crate). dead_pub_in_crate finds these.
+  - Empty results as signals (not errors). get_declared_reexports([]) means the crate has no facade — everything is at canonical paths. We saw this on permissions in coding-agent-bad: zero declared re-exports, an intentional design choice. Same with overlaps.common_fn_names — empty is the good sign (no init/run proliferation).
 
   13. Semantic similarity-driven analysis
 
@@ -193,11 +208,27 @@
   19. Index / cache management
 
   - Build/refresh hypergraph. build_hypergraph(directory, force_rebuild?).
+  - Schema-bump auto-invalidation. SCHEMA_VERSION is mixed into graph_id. After a schema bump (e.g. Layer 4 was v4→v5), calling build_hypergraph(force_rebuild=false) on existing snapshots returns reused=false and cold-rebuilds correctly. You don't need force_rebuild=true after schema changes.
   - Build/refresh vector index. index_codebase(directory) — needed for search (BM25) and get_similar_code.
   - Clear corruption. clear_cache(directory?).
   - Verify infrastructure. health_check — confirms indexes exist, snapshot is current.
+  - Parallelism. All read tools (everything except build_hypergraph, index_codebase, clear_cache) are independent — call them in parallel when a workflow needs several. We routinely batch 5-10 calls per round (build_hypergraph in parallel against two workspaces, who_uses_summary on 10 collision targets, etc.) without issue.
 
-  20. Tool index — cheat sheet
+  20. Output handling and post-processing
+
+  Some MCP outputs are large enough that the standard Read pipeline can't fully load them — e.g. crate_edges on a 17-crate workspace is ~67KB, module_tree at depth=3 on a 15-submodule crate is ~72KB. The MCP server persists oversized outputs to a tool-results JSON file and returns a preview. Post-process those with Bash + Python or jq.
+
+  - Detect a persisted output. The tool result includes a `<persisted-output>` block naming a path under ~/.claude/projects/.../tool-results/. Parse that file rather than relying on the inline preview.
+  - Common reductions on crate_edges. The full edge matrix is verbose; the load-bearing summaries are usually:
+    1. Per-producer fan-in (who depends on this crate, with totals).
+    2. Per-consumer fan-out (what this crate depends on, with totals).
+    3. Top-N edges sorted by total_refs_via_imports + total_refs_via_usages.
+    4. Symbol breakdowns within a single edge (filter to one (consumer, producer) pair).
+    A small Python script reads the persisted JSON, applies these reductions, and prints a table. Reuse the same script across workspaces — only the JSON path changes.
+  - Module_tree depth as the first lever. Reach for depth=2 before Bash post-processing. The full tree is rarely worth the bytes.
+  - Filter crate_edges client-side. The MCP returns the full matrix; per-crate analysis requires filtering client-side by consumer_crate or producer_crate. Same for overlaps' four buckets.
+
+  21. Tool index — cheat sheet
 
   ┌────────────────────────┬────────────────┬─────────────────────────────┬───────────────────────────────────────────┐
   │          Tool          │     Layer      │           Returns           │                 Best for                  │
@@ -253,7 +284,7 @@
   │ health_check           │ infrastructure │ status                      │ verify ready                              │
   └────────────────────────┴────────────────┴─────────────────────────────┴───────────────────────────────────────────┘
 
-  21. Combining old + new — frequent patterns
+  22. Combining old + new — frequent patterns
 
   - "I have a string, I want structured analysis." search(string) → find_definition(name) → derive qualified name → hypergraph queries.
   - "I have a file, I want module analysis." read_file_content(file) for headers → infer module path → get_imports(module) + get_exports(module, consumer).
@@ -265,7 +296,7 @@
   - "I want similar fns that are also widely used." get_similar_code(target) → who_uses_summary each candidate → rank by total_count.
   - "I want gnarly + frequently-edited code." analyze_complexity + git log --since=... + who_uses for blast radius.
 
-  22. What you can't do today
+  23. What you can't do today
 
   - Function-to-function call graph workspace-wide. who_uses is module-level; get_call_graph is file-level. There's no "fn → fn across the workspace" tool.
   - Trait impl enumeration. "Every concrete impl of Trait" requires Layer 4c (deferred). who_imports(Trait) is the workaround.
