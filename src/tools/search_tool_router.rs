@@ -267,6 +267,22 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph_tools::who_imports(params).await
     }
+
+    #[tool(description = "List every non-import reference to the given symbol (file path + byte range + read/write/test category). Complements who_imports, which only enumerates `use` edges.")]
+    async fn who_uses(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::WhoUsesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::who_uses(params).await
+    }
+
+    #[tool(description = "Scan a local crate for `pub` items with no cross-crate importer or reference — candidates for downgrading to `pub(crate)`. Conservative: may miss items used only through public type signatures.")]
+    async fn dead_pub_in_crate(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::DeadPubParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::dead_pub_in_crate(params).await
+    }
 }
 
 #[tool_handler]
@@ -281,7 +297,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol"
+                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade)"
                     .into(),
             ),
         }

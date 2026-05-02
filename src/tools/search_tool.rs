@@ -119,6 +119,22 @@ pub struct WhoImportsParams {
     pub target: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WhoUsesParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the symbol whose non-import references you want (file:byte-range hits)")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeadPubParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the local crate to scan (e.g. `my_crate`). Items declared `pub` with no cross-crate consumers are returned as candidates for downgrading to `pub(crate)`.")]
+    pub krate: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
