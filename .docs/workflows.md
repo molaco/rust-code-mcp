@@ -296,7 +296,52 @@
   - "I want similar fns that are also widely used." get_similar_code(target) → who_uses_summary each candidate → rank by total_count.
   - "I want gnarly + frequently-edited code." analyze_complexity + git log --since=... + who_uses for blast radius.
 
-  23. What you can't do today
+  23. Workflows mapped to Rust guidelines (today's tools)
+
+  Mapping each checkable Rust guideline to existing MCP tools. Useful as a CI / review checklist starting point — every entry here is implementable as a script using only the tools already in the cheat sheet (§21). Section numbers reference rust-guidelines-final.md.
+
+  §4 — Function size & complexity
+  - Cyclomatic complexity ≥ 10/15 thresholds → analyze_complexity(file) per crate, sort by score, cross-reference with who_uses for blast radius. (Already covered in §1.)
+  - Refactor-priority ranking → analyze_complexity × who_uses_summary(target=fn) — "complex AND widely used" surfaces top candidates.
+
+  §7 — Types & invariants
+  - Migration-debt detection → overlaps.cross_crate_type_collisions + who_uses_summary on each side, find shared consumer = half-finished migration. (Recipe in §8.)
+
+  §8 — Traits & generics ("skip a trait when there's one implementation")
+  - Single-implementation trait audit → for each pub trait from module_tree, run who_imports(target=Trait). If importer count is 1 and the trait isn't a Send/Debug/etc. supertrait, it's a candidate for inlining.
+  - Trait method ROI → for each trait method, who_uses_summary(target=Trait::method). Methods with empty who_uses are dead trait API (Layer 4 unlocks this).
+
+  §10 — Modules, crates, visibility
+  - pub_crate_share discipline benchmark → workspace_stats.pub_crate_share for between-codebase comparison.
+  - Module nesting depth → walk module_tree(crate) recursively, track max depth. Anything > 3-4 levels deep is a smell.
+  - Re-export facade audit → get_declared_reexports ∩ dead_pub = dead facade. (Recipe in §8.)
+  - Module name shadows → overlaps.module_shadows + the diagnostic in §9 (filter crate_edges for actual dep).
+  - Visibility distribution → workspace_stats.visibility shows pub vs pub_crate vs restricted_to vs private. Surprising ratios = hygiene smell.
+
+  §11 — Architecture
+  - DAG enforcement → walk crate_edges in code, detect cycles. Pure script using existing data.
+  - "Domain crates free of framework deps" → for any crate matching domain|core|model|kernel, filter crate_edges for consumer_crate=X and check producer set against a forbidden list (tokio, bevy, serde_json, hyper, etc.). Pure rule check on existing data.
+  - "Translate external formats at the boundary" → if a domain crate has cross-crate edges to provider/store/http crates, that's a leak.
+  - Heaviest cross-crate edges → crate_edges sorted by total_refs. The top edges define the architecture; if they're surprising, the architecture is.
+  - No-cycle check between layered crates (e.g., core ↛ ui ↛ core) → DAG walk on crate_edges.
+
+  §12 — Async as a boundary
+  - "Domain crate importing tokio" → filter crate_edges for (consumer=domain_crate, producer=tokio). Same pattern works for bevy/futures/etc.
+  - Note: the narrower "no .await in domain logic" is parser-territory — outside graph scope.
+
+  §17 — Testing
+  - Test-only constructor audit → who_uses_summary(Type::new) showing 100% Test = fixture builder. (Recipe in §10.)
+  - Read vs Write category split for invariant checking. (Recipe in §10.)
+
+  §23 — Review checklist
+  Most checklist items are graph-checkable today:
+  - "Is the dependency graph a DAG?" → crate_edges cycle check.
+  - "Are traits marking real substitution boundaries?" → trait justification audit above.
+  - "Did the change add public API surface?" → diff get_declared_reexports before/after.
+  - "Are domain concepts represented by explicit types?" → indirectly: workspace_stats.items_by_kind shows Struct/Enum/TypeAlias counts; few of these relative to Fn means primitive-heavy APIs.
+  Note: some checklist items (typed errors, state machine explicitness, source-error-chain preservation) need parser hooks or new tools — see §24.
+
+  24. What you can't do today
 
   - Function-to-function call graph workspace-wide. who_uses is module-level; get_call_graph is file-level. There's no "fn → fn across the workspace" tool.
   - Trait impl enumeration. "Every concrete impl of Trait" requires Layer 4c (deferred). who_imports(Trait) is the workaround.
