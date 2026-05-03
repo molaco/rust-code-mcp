@@ -61,6 +61,39 @@ pub struct EdgeSymbol {
     pub usage_count: usize,
 }
 
+/// One architectural rule for `forbidden_dependency_check`. Patterns in
+/// `consumer`, `producer`, and `except` are glob-style with `*` wildcards
+/// (matched against the crate's qualified name, which for crates is just the
+/// crate name). `severity` and `message` are passed through unchanged for
+/// caller-side rendering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForbiddenDependencyRule {
+    pub consumer: String,
+    pub producer: String,
+    #[serde(default)]
+    pub except: Option<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// One row of `forbidden_dependency_check`: a cross-crate edge that matched
+/// a `ForbiddenDependencyRule`. `sample_symbol` is the highest-ref-count
+/// symbol carrying the offending edge (rendered as a qualified name) — handy
+/// for caller-side "click to navigate" UX.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForbiddenDependencyViolation {
+    pub rule_index: usize,
+    pub consumer_crate: String,
+    pub producer_crate: String,
+    pub severity: Option<String>,
+    pub message: Option<String>,
+    pub sample_symbol: Option<String>,
+    pub unique_symbols: usize,
+    pub total_refs: usize,
+}
+
 /// Result of `overlaps`: name collisions, module shadows, and within-crate
 /// duplicates that often signal accidental complexity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,9 +239,89 @@ pub struct VisibilityCounts {
     pub private: usize,
 }
 
+/// One row of `items_with_attribute(crate, pattern)`: every Item in the
+/// requested crate whose `attributes` list has at least one entry that
+/// substring-matches the supplied pattern. `matched_attribute` is the first
+/// matching entry on the Item — useful for caller-side rendering even when
+/// the Item carries multiple attributes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWithAttribute {
+    pub target: NodeId,
+    pub qualified_name: String,
+    pub item_kind: Option<ItemKind>,
+    pub matched_attribute: String,
+    pub file: Option<String>,
+    pub span: Option<(u32, u32)>,
+}
+
+/// One row of `pub_use_pub_type_audit(crate)`: a `pub type` alias whose
+/// owning module also declares a `pub use ... as <alias_name>` (or a
+/// `pub use ::<alias_name>` re-export). Indicates the alias may be acting
+/// as a bare re-export rather than a true type abbreviation.
+///
+/// **Heuristic**: this query does NOT verify that the alias's RHS resolves
+/// to the same target as the matching `pub use`'s binding (the model
+/// doesn't carry a TypeAlias's target). Treat results as candidates for
+/// human review — confirm with `find_definition` before acting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTypeAliasMasqueradingAsReexport {
+    pub alias_qualified_name: String,
+    pub alias_node_id: NodeId,
+    pub file: Option<String>,
+    pub span: Option<(u32, u32)>,
+    pub suspicious_pub_use_target_node_id: NodeId,
+    pub suspicious_pub_use_visible_name: String,
+}
+
+/// One link in the chain returned by `re_export_chain(target)`. Each link
+/// names the module hosting a `pub use` binding that re-exports the target
+/// (or, transitively, an upstream re-export of the target). `depth` starts
+/// at 1 for direct re-exports of `canonical` and increases as the walk
+/// follows successive re-exports through downstream modules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReExportLink {
+    pub from_module: NodeId,
+    pub from_module_qualified_name: String,
+    pub visible_name: String,
+    pub depth: u8,
+}
+
+/// Result of `re_export_chain(target)`: a flattened list of every
+/// reachable `pub use` re-export of `target`, walked breadth-first up to
+/// `MAX_REEXPORT_HOPS` hops with cycle detection on
+/// `(from_module, visible_name)` pairs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReExportChain {
+    pub canonical: NodeId,
+    pub canonical_qualified_name: String,
+    pub links: Vec<ReExportLink>,
+}
+
+/// One row of `crate_dependency_metric()`: per-local-crate Robert Martin
+/// instability metric plus an abstractness ratio. Both metrics are
+/// NaN-guarded — degenerate counts return 0.0.
+///
+/// * `efferent` (Ce): distinct producer crates this crate depends on.
+/// * `afferent` (Ca): distinct consumer crates that depend on this crate.
+/// * `instability = Ce / (Ce + Ca)` — 0.0 = max stable, 1.0 = max unstable.
+/// * `abstractness = (traits + pub_type_aliases) / total_items` — share
+///   of items in this crate that are abstract surface.
+/// * `item_count`: total `NodeKind::Item` nodes whose `crate_id` is this
+///   crate. Includes private items, methods, variants, etc.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrateMetric {
+    pub crate_id: NodeId,
+    pub crate_name: String,
+    pub efferent: u32,
+    pub afferent: u32,
+    pub instability: f64,
+    pub abstractness: f64,
+    pub item_count: u32,
+}
+
 /// Maximum re-export facade hops to follow before giving up. Bounds recursion
 /// in the (pathological) case of a binding chain or a self-referential cycle.
-const MAX_REEXPORT_HOPS: usize = 8;
+pub(crate) const MAX_REEXPORT_HOPS: usize = 8;
 
 impl OpenedSnapshot {
     /// Resolve a `::`-qualified name to a `(NodeId, Node)`.
@@ -791,6 +904,327 @@ impl OpenedSnapshot {
         Ok(rows)
     }
 
+    /// v7: enumerate the variants of an enum. `enum_id` must be the NodeId of
+    /// an `ItemKind::Enum` Item; non-enum inputs return an empty Vec rather
+    /// than erroring (so callers can probe arbitrary Items without
+    /// pre-validating). Walks `children_by_parent` and filters to
+    /// `item_kind == ItemKind::EnumVariant` — explicit filter even though
+    /// today an enum's only children are its variants, so future model
+    /// extensions don't silently leak through.
+    pub fn enum_variants(&self, enum_id: NodeId) -> Result<Vec<Node>> {
+        let rtxn = self.env.read_txn()?;
+        let mut child_ids: Vec<NodeId> = Vec::new();
+        if let Some(iter) = self
+            .dbs
+            .children_by_parent
+            .get_duplicates(&rtxn, enum_id.as_bytes())?
+        {
+            for entry in iter {
+                let (_k, child_bytes) = entry?;
+                let mut id = [0u8; 32];
+                id.copy_from_slice(child_bytes);
+                child_ids.push(NodeId(id));
+            }
+        }
+        let mut out = Vec::with_capacity(child_ids.len());
+        for child_id in child_ids {
+            let Some(node) = self.dbs.nodes_by_id.get(&rtxn, child_id.as_bytes())? else {
+                continue;
+            };
+            if node.item_kind == Some(ItemKind::EnumVariant) {
+                out.push(node);
+            }
+        }
+        // Sort by qualified name for deterministic order across runs.
+        out.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Ok(out)
+    }
+
+    /// v8: return the outer attributes and doc-comment lines (one entry per
+    /// line) recorded for the Item at `target`. Empty Vec when the target
+    /// has no attributes, isn't an Item, or doesn't exist. Order matches
+    /// source order.
+    pub fn item_attributes(&self, target: NodeId) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn()?;
+        let Some(node) = self.dbs.nodes_by_id.get(&rtxn, target.as_bytes())? else {
+            return Ok(Vec::new());
+        };
+        Ok(node.attributes)
+    }
+
+    /// v8: every Item in `crate_id` whose attribute list has at least one
+    /// entry containing `attr_pattern` as a substring. The pattern is matched
+    /// case-sensitively against each attribute's string form
+    /// (`"#[derive(Debug, Clone)]"`, `"#[must_use]"`, `"/// SAFETY: ..."`,
+    /// etc.) — callers wanting `#[must_use]` should pass `"#[must_use]"` (or
+    /// `"must_use"` for a looser match). Returns enriched rows with file +
+    /// span so callers can navigate. Sorted by qualified name.
+    pub fn items_with_attribute(
+        &self,
+        crate_id: NodeId,
+        attr_pattern: &str,
+    ) -> Result<Vec<ItemWithAttribute>> {
+        let rtxn = self.env.read_txn()?;
+        let mut out: Vec<ItemWithAttribute> = Vec::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if node.kind != NodeKind::Item {
+                continue;
+            }
+            if node.crate_id != Some(crate_id) {
+                continue;
+            }
+            let Some(matched) = node
+                .attributes
+                .iter()
+                .find(|a| a.contains(attr_pattern))
+                .cloned()
+            else {
+                continue;
+            };
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            out.push(ItemWithAttribute {
+                target: NodeId(id),
+                qualified_name: node.qualified_name,
+                item_kind: node.item_kind,
+                matched_attribute: matched,
+                file: node.file,
+                span: node.span,
+            });
+        }
+        out.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Ok(out)
+    }
+
+    /// Phase 4a (heuristic): every `Item.TypeAlias` in `crate_id` whose
+    /// owning module also carries a `pub use ... as <alias_name>` (or
+    /// `pub use ::<alias_name>`) binding. Such an alias is a candidate
+    /// for being a re-export disguised as a `pub type` declaration.
+    ///
+    /// Limitation: the model does not record what an alias's RHS resolves
+    /// to, so this query cannot confirm the `pub use` and the `pub type`
+    /// point at the same target. Treat results as candidates and verify
+    /// with `find_definition` / source review before acting.
+    pub fn pub_use_pub_type_audit(
+        &self,
+        crate_id: NodeId,
+    ) -> Result<Vec<PubTypeAliasMasqueradingAsReexport>> {
+        let rtxn = self.env.read_txn()?;
+        // Collect all type-aliases in the crate first so the iterator
+        // borrow on rtxn is released before we walk per-alias bindings.
+        let mut aliases: Vec<(NodeId, Node)> = Vec::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if node.kind != NodeKind::Item {
+                continue;
+            }
+            if node.crate_id != Some(crate_id) {
+                continue;
+            }
+            if node.item_kind != Some(ItemKind::TypeAlias) {
+                continue;
+            }
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            aliases.push((NodeId(id), node));
+        }
+
+        let mut out: Vec<PubTypeAliasMasqueradingAsReexport> = Vec::new();
+        for (alias_id, alias) in aliases {
+            let Some(owner) = alias.parent_id else {
+                continue;
+            };
+            for entry in self.bindings_for_from_module(&rtxn, owner)? {
+                let binding = entry?;
+                if !binding.is_explicit_pub_use {
+                    continue;
+                }
+                if binding.visible_name != alias.display_name {
+                    continue;
+                }
+                if binding.target == alias_id {
+                    continue; // a binding to the alias itself isn't suspicious
+                }
+                out.push(PubTypeAliasMasqueradingAsReexport {
+                    alias_qualified_name: alias.qualified_name.clone(),
+                    alias_node_id: alias_id,
+                    file: alias.file.clone(),
+                    span: alias.span,
+                    suspicious_pub_use_target_node_id: binding.target,
+                    suspicious_pub_use_visible_name: binding.visible_name,
+                });
+            }
+        }
+        out.sort_by(|a, b| a.alias_qualified_name.cmp(&b.alias_qualified_name));
+        Ok(out)
+    }
+
+    /// Phase 4b: walk every `pub use` re-export of `target` (and every
+    /// re-export of those re-exports) up to `MAX_REEXPORT_HOPS` hops.
+    /// Returns one `ReExportLink` per visited binding, breadth-first.
+    /// Cycle detection keys on `(from_module, visible_name)` pairs so a
+    /// module re-exporting two distinct items under the same name still
+    /// surfaces both, while a self-referential cycle terminates.
+    pub fn re_export_chain(&self, target: NodeId) -> Result<ReExportChain> {
+        let rtxn = self.env.read_txn()?;
+        let canonical_node = self
+            .dbs
+            .nodes_by_id
+            .get(&rtxn, target.as_bytes())?
+            .map(|n| n.qualified_name)
+            .unwrap_or_default();
+
+        let mut links: Vec<ReExportLink> = Vec::new();
+        let mut visited: HashSet<(NodeId, String)> = HashSet::new();
+        // Frontier: (target_to_search_for, depth_to_assign)
+        let mut frontier: Vec<(NodeId, u8)> = vec![(target, 1)];
+        while let Some((current_target, depth)) = frontier.pop() {
+            if depth as usize > MAX_REEXPORT_HOPS {
+                continue;
+            }
+            // Collect bindings first to release the iterator borrow
+            // before per-binding `nodes_by_id.get` lookups.
+            let mut bindings_for_current: Vec<Binding> = Vec::new();
+            for entry in self.bindings_for_target(&rtxn, current_target)? {
+                bindings_for_current.push(entry?);
+            }
+            for binding in bindings_for_current {
+                if !binding.is_explicit_pub_use {
+                    continue;
+                }
+                let key = (binding.from_module, binding.visible_name.clone());
+                if !visited.insert(key) {
+                    continue;
+                }
+                let from_module_qualified = self
+                    .dbs
+                    .nodes_by_id
+                    .get(&rtxn, binding.from_module.as_bytes())?
+                    .map(|n| n.qualified_name)
+                    .unwrap_or_default();
+                links.push(ReExportLink {
+                    from_module: binding.from_module,
+                    from_module_qualified_name: from_module_qualified,
+                    visible_name: binding.visible_name.clone(),
+                    depth,
+                });
+                // Recurse: the re-exporting module is itself a "target"
+                // for downstream re-exports. Bindings whose target is the
+                // module ID don't generally exist, so this naturally
+                // terminates when no further hops are found.
+                if (depth as usize) < MAX_REEXPORT_HOPS {
+                    frontier.push((binding.from_module, depth + 1));
+                }
+            }
+        }
+        // Stable order: by depth, then module qualified name, then visible name.
+        links.sort_by(|a, b| {
+            a.depth
+                .cmp(&b.depth)
+                .then_with(|| a.from_module_qualified_name.cmp(&b.from_module_qualified_name))
+                .then_with(|| a.visible_name.cmp(&b.visible_name))
+        });
+        Ok(ReExportChain {
+            canonical: target,
+            canonical_qualified_name: canonical_node,
+            links,
+        })
+    }
+
+    /// Phase 4c: per-local-crate Robert Martin instability +
+    /// abstractness metrics. Both metrics are NaN-guarded; degenerate
+    /// counts (zero edges or zero items) return 0.0.
+    pub fn crate_dependency_metric(&self) -> Result<Vec<CrateMetric>> {
+        let edges = self.crate_edges()?;
+        let rtxn = self.env.read_txn()?;
+
+        // Collect every local crate: (crate_id, crate_name).
+        let mut crates: Vec<(NodeId, String)> = Vec::new();
+        // Per-crate item counters: (total_items, traits, pub_type_aliases).
+        let mut item_counts: HashMap<NodeId, (u32, u32, u32)> = HashMap::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            let nid = NodeId(id);
+            if node.kind == NodeKind::Crate {
+                crates.push((nid, node.qualified_name.clone()));
+            } else if node.kind == NodeKind::Item {
+                if let Some(crate_id) = node.crate_id {
+                    let counts = item_counts.entry(crate_id).or_insert((0, 0, 0));
+                    counts.0 += 1;
+                    match node.item_kind {
+                        Some(ItemKind::Trait) => counts.1 += 1,
+                        Some(ItemKind::TypeAlias) => {
+                            // Only count pub type aliases for the abstractness ratio.
+                            if node.visibility.as_deref() == Some("pub") {
+                                counts.2 += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Build distinct producer/consumer sets per local crate name.
+        // crate_edges keys by qualified name string, so we map names → ids.
+        let name_to_id: HashMap<String, NodeId> =
+            crates.iter().map(|(id, n)| (n.clone(), *id)).collect();
+        let mut efferent_set: HashMap<NodeId, BTreeSet<String>> = HashMap::new();
+        let mut afferent_set: HashMap<NodeId, BTreeSet<String>> = HashMap::new();
+        for edge in &edges {
+            if let Some(consumer_id) = name_to_id.get(&edge.consumer_crate) {
+                efferent_set
+                    .entry(*consumer_id)
+                    .or_default()
+                    .insert(edge.producer_crate.clone());
+            }
+            if let Some(producer_id) = name_to_id.get(&edge.producer_crate) {
+                afferent_set
+                    .entry(*producer_id)
+                    .or_default()
+                    .insert(edge.consumer_crate.clone());
+            }
+        }
+
+        let mut out: Vec<CrateMetric> = Vec::with_capacity(crates.len());
+        for (crate_id, crate_name) in crates {
+            let efferent = efferent_set
+                .get(&crate_id)
+                .map(|s| s.len())
+                .unwrap_or(0) as u32;
+            let afferent = afferent_set
+                .get(&crate_id)
+                .map(|s| s.len())
+                .unwrap_or(0) as u32;
+            let instability = if efferent + afferent == 0 {
+                0.0
+            } else {
+                efferent as f64 / (efferent + afferent) as f64
+            };
+            let (total_items, trait_count, pub_alias_count) =
+                item_counts.get(&crate_id).copied().unwrap_or((0, 0, 0));
+            let abstractness = if total_items == 0 {
+                0.0
+            } else {
+                (trait_count + pub_alias_count) as f64 / total_items as f64
+            };
+            out.push(CrateMetric {
+                crate_id,
+                crate_name,
+                efferent,
+                afferent,
+                instability,
+                abstractness,
+                item_count: total_items,
+            });
+        }
+        out.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
+        Ok(out)
+    }
+
     /// Items in `crate_id` declared `pub` whose only consumers — both as imports
     /// and as references — live inside the same crate. Such items are candidates
     /// for downgrading to `pub(crate)`.
@@ -1085,6 +1519,59 @@ impl OpenedSnapshot {
                 .then_with(|| a.producer_crate.cmp(&b.producer_crate))
         });
         Ok(edges)
+    }
+
+    /// Pure filter over `crate_edges`. For every (consumer, producer) edge,
+    /// test each rule; emit a violation when the consumer matches
+    /// `rule.consumer`, the producer matches `rule.producer`, and (if `except`
+    /// is set) the consumer does NOT match `rule.except`.
+    ///
+    /// Patterns are glob-style with `*` wildcards. Match is on the crate's
+    /// qualified name (for crates, that's just the crate name). Severity and
+    /// message pass through to violations unchanged for caller-side rendering.
+    pub fn forbidden_dependency_check(
+        &self,
+        rules: &[ForbiddenDependencyRule],
+    ) -> Result<Vec<ForbiddenDependencyViolation>> {
+        let edges = self.crate_edges()?;
+        let mut violations: Vec<ForbiddenDependencyViolation> = Vec::new();
+        for edge in &edges {
+            for (idx, rule) in rules.iter().enumerate() {
+                if !glob_match(&rule.consumer, &edge.consumer_crate) {
+                    continue;
+                }
+                if !glob_match(&rule.producer, &edge.producer_crate) {
+                    continue;
+                }
+                if let Some(except) = rule.except.as_ref() {
+                    if glob_match(except, &edge.consumer_crate) {
+                        continue;
+                    }
+                }
+                let total_refs = edge.total_refs_via_imports + edge.total_refs_via_usages;
+                let sample_symbol = edge
+                    .symbols
+                    .first()
+                    .map(|s| s.target_qualified.clone());
+                violations.push(ForbiddenDependencyViolation {
+                    rule_index: idx,
+                    consumer_crate: edge.consumer_crate.clone(),
+                    producer_crate: edge.producer_crate.clone(),
+                    severity: rule.severity.clone(),
+                    message: rule.message.clone(),
+                    sample_symbol,
+                    unique_symbols: edge.unique_symbols,
+                    total_refs,
+                });
+            }
+        }
+        violations.sort_by(|a, b| {
+            a.rule_index
+                .cmp(&b.rule_index)
+                .then_with(|| a.consumer_crate.cmp(&b.consumer_crate))
+                .then_with(|| a.producer_crate.cmp(&b.producer_crate))
+        });
+        Ok(violations)
     }
 
     /// Single-pass over `nodes_by_id`. Detects cross-crate type collisions,
@@ -1633,6 +2120,7 @@ fn label_item_kind(k: ItemKind) -> &'static str {
         ItemKind::AssocConst => "AssocConst",
         ItemKind::AssocType => "AssocType",
         ItemKind::Method => "Method",
+        ItemKind::EnumVariant => "EnumVariant",
     }
 }
 
@@ -1643,6 +2131,45 @@ fn label_binding_kind(k: BindingKind) -> &'static str {
         BindingKind::GlobImport => "GlobImport",
         BindingKind::ExternCrateImport => "ExternCrateImport",
     }
+}
+
+/// Glob matcher with `*` wildcards (matches any run of chars, including
+/// empty). No other metacharacters; pattern segments are matched as literal
+/// substrings between wildcards. Greedy / linear in `text.len() *
+/// pattern.len()`. Used by `forbidden_dependency_check`.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == text;
+    }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let mut cursor: usize = 0;
+    let last = parts.len() - 1;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            // `*` at the boundary — anchors the next match anywhere from cursor.
+            if i == last {
+                return true;
+            }
+            continue;
+        }
+        if i == 0 {
+            // No leading `*`: the first segment must anchor at start.
+            if !text[cursor..].starts_with(part) {
+                return false;
+            }
+            cursor += part.len();
+        } else if i == last {
+            // No trailing `*`: the last segment must anchor at end.
+            return text[cursor..].ends_with(part)
+                && text.len() - cursor >= part.len();
+        } else {
+            match text[cursor..].find(part) {
+                Some(pos) => cursor += pos + part.len(),
+                None => return false,
+            }
+        }
+    }
+    true
 }
 
 fn usage_category_label(c: UsageCategory) -> &'static str {
@@ -1691,7 +2218,7 @@ fn is_visible_from(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::graph::snapshot::{BuildOptions, build_and_persist, open_current};
     use crate::graph::storage::{GraphEnvOptions, GraphPaths};
@@ -1706,7 +2233,7 @@ mod tests {
         snap: OpenedSnapshot,
     }
 
-    fn shared_snapshot() -> &'static OpenedSnapshot {
+    pub(crate) fn shared_snapshot() -> &'static OpenedSnapshot {
         static CACHE: OnceLock<SharedSnap> = OnceLock::new();
         &CACHE
             .get_or_init(|| {
@@ -1962,6 +2489,114 @@ mod tests {
             assert_ne!(e.consumer_crate, e.producer_crate, "same-crate edges must be filtered out");
             assert_eq!(e.unique_symbols, e.symbols.len());
         }
+    }
+
+    /// Pick a (consumer, producer) pair from the real edges and assert that a
+    /// rule targeting exactly that pair fires.
+    #[test]
+    fn forbidden_dependency_check_simple_match() {
+        let snap = shared_snapshot();
+        let edges = snap.crate_edges().unwrap();
+        let edge = edges.first().expect("workspace has at least one edge");
+        let rules = vec![ForbiddenDependencyRule {
+            consumer: edge.consumer_crate.clone(),
+            producer: edge.producer_crate.clone(),
+            except: None,
+            severity: Some("error".into()),
+            message: Some("test rule".into()),
+        }];
+        let violations = snap.forbidden_dependency_check(&rules).unwrap();
+        assert!(
+            violations.iter().any(|v| {
+                v.consumer_crate == edge.consumer_crate
+                    && v.producer_crate == edge.producer_crate
+                    && v.rule_index == 0
+            }),
+            "expected exact-pair rule to fire on edge {} -> {}",
+            edge.consumer_crate,
+            edge.producer_crate,
+        );
+        for v in &violations {
+            assert_eq!(v.severity.as_deref(), Some("error"));
+            assert_eq!(v.message.as_deref(), Some("test rule"));
+        }
+    }
+
+    /// `consumer = "*"` must match every edge in the workspace; `producer =
+    /// "*"` does the same on the other side.
+    #[test]
+    fn forbidden_dependency_check_glob_wildcard_matches_all() {
+        let snap = shared_snapshot();
+        let edges = snap.crate_edges().unwrap();
+        let rules = vec![ForbiddenDependencyRule {
+            consumer: "*".into(),
+            producer: "*".into(),
+            except: None,
+            severity: None,
+            message: None,
+        }];
+        let violations = snap.forbidden_dependency_check(&rules).unwrap();
+        assert_eq!(
+            violations.len(),
+            edges.len(),
+            "wildcard consumer+producer rule must produce one violation per edge"
+        );
+    }
+
+    /// Rule fires on a real (consumer, producer) edge — then add an `except`
+    /// glob covering the consumer and verify it suppresses the violation.
+    #[test]
+    fn forbidden_dependency_check_except_overrides_match() {
+        let snap = shared_snapshot();
+        let edges = snap.crate_edges().unwrap();
+        let edge = edges.first().expect("workspace has at least one edge");
+
+        // Baseline: rule fires.
+        let base_rules = vec![ForbiddenDependencyRule {
+            consumer: "*".into(),
+            producer: edge.producer_crate.clone(),
+            except: None,
+            severity: None,
+            message: None,
+        }];
+        let base = snap.forbidden_dependency_check(&base_rules).unwrap();
+        assert!(
+            base.iter().any(|v| v.consumer_crate == edge.consumer_crate
+                && v.producer_crate == edge.producer_crate),
+            "baseline rule should match the picked edge"
+        );
+
+        // With `except = consumer_crate`, the picked edge must be suppressed.
+        let exempted = vec![ForbiddenDependencyRule {
+            consumer: "*".into(),
+            producer: edge.producer_crate.clone(),
+            except: Some(edge.consumer_crate.clone()),
+            severity: None,
+            message: None,
+        }];
+        let after = snap.forbidden_dependency_check(&exempted).unwrap();
+        assert!(
+            !after.iter().any(|v| v.consumer_crate == edge.consumer_crate
+                && v.producer_crate == edge.producer_crate),
+            "`except` must suppress the matched edge"
+        );
+    }
+
+    /// Sanity for the hand-rolled glob matcher.
+    #[test]
+    fn forbidden_glob_match_smoke() {
+        assert!(super::glob_match("tokio", "tokio"));
+        assert!(!super::glob_match("tokio", "tokio_util"));
+        assert!(super::glob_match("*", ""));
+        assert!(super::glob_match("*", "anything"));
+        assert!(super::glob_match("domain*", "domain_core"));
+        assert!(super::glob_match("domain*", "domain"));
+        assert!(!super::glob_match("domain*", "core_domain"));
+        assert!(super::glob_match("*core", "domain_core"));
+        assert!(!super::glob_match("*core", "domain_core_v2"));
+        assert!(super::glob_match("foo*bar", "foobar"));
+        assert!(super::glob_match("foo*bar", "foo_x_bar"));
+        assert!(!super::glob_match("foo*bar", "foo"));
     }
 
     #[test]
@@ -2242,6 +2877,238 @@ mod tests {
             .callers_in_crate(target_id, "definitely_not_a_real_crate_xyz")
             .expect("callers_in_crate failed");
         assert!(empty.is_empty(), "bogus crate filter must return zero");
+    }
+
+    /// v7: `enum_variants` enumerates the variants of an enum. Pick
+    /// `BindingKind` (defined in src/graph/model.rs) — it has exactly
+    /// 4 variants: `Declared`, `NamedImport`, `GlobImport`,
+    /// `ExternCrateImport`.
+    #[test]
+    fn enum_variants_returns_expected_set() {
+        let snap = shared_snapshot();
+        let (enum_id, enum_node) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::model::BindingKind")
+            .unwrap()
+            .expect("BindingKind enum not in graph");
+        assert_eq!(enum_node.kind, NodeKind::Item);
+        assert_eq!(enum_node.item_kind, Some(ItemKind::Enum));
+
+        let variants = snap.enum_variants(enum_id).expect("enum_variants failed");
+        let mut names: Vec<String> = variants.iter().map(|n| n.display_name.clone()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "Declared".to_string(),
+                "ExternCrateImport".to_string(),
+                "GlobImport".to_string(),
+                "NamedImport".to_string(),
+            ],
+            "expected exactly the 4 BindingKind variants, got {names:?}"
+        );
+
+        // Each variant Node must point its parent at the enum and carry
+        // the right ItemKind / qualified_name shape.
+        for v in &variants {
+            assert_eq!(v.kind, NodeKind::Item);
+            assert_eq!(v.item_kind, Some(ItemKind::EnumVariant));
+            assert_eq!(v.parent_id, Some(enum_id));
+            assert_eq!(
+                v.qualified_name,
+                format!("file_search_mcp::graph::model::BindingKind::{}", v.display_name)
+            );
+            assert!(v.file.is_some(), "variant should have a file path");
+            assert!(v.span.is_some(), "variant should have a span");
+            assert!(v.visibility.is_none(), "variant visibility inherits from parent");
+        }
+    }
+
+    /// v8: `item_attributes(target)` returns the outer attributes recorded
+    /// on the Item Node. Pick `Node` struct (model.rs) — it carries a stable
+    /// `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]`.
+    #[test]
+    fn item_attributes_of_node_struct_includes_derive() {
+        let snap = shared_snapshot();
+        let (id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::model::Node")
+            .unwrap()
+            .expect("Node struct not in snapshot");
+        let attrs = snap.item_attributes(id).expect("item_attributes failed");
+        let derive = attrs
+            .iter()
+            .find(|s| s.starts_with("#[derive("))
+            .unwrap_or_else(|| panic!("no derive attr on Node, got {attrs:?}"));
+        for trait_name in ["Debug", "Clone", "Serialize", "Deserialize"] {
+            assert!(
+                derive.contains(trait_name),
+                "Node derive should mention `{trait_name}`, got `{derive}`"
+            );
+        }
+    }
+
+    /// v8: `items_with_attribute(crate, pattern)` substring-matches the
+    /// attribute strings on every Item in the crate. Searching for `derive`
+    /// across `file_search_mcp` should find at least the `Node` and
+    /// `ItemKind` types.
+    #[test]
+    fn items_with_attribute_finds_derive_users() {
+        let snap = shared_snapshot();
+        // Resolve the crate node — `file_search_mcp` resolves to the crate
+        // root MODULE; promote to the actual Crate node via parent_id.
+        let (root_id, root_node) = snap
+            .lookup_by_qualified_name("file_search_mcp")
+            .unwrap()
+            .unwrap();
+        let crate_id = if root_node.kind == NodeKind::Crate {
+            root_id
+        } else {
+            root_node.parent_id.expect("module should have parent")
+        };
+        let hits = snap
+            .items_with_attribute(crate_id, "derive")
+            .expect("items_with_attribute failed");
+        assert!(
+            !hits.is_empty(),
+            "expected at least one derive-bearing item in file_search_mcp"
+        );
+        let qnames: Vec<String> = hits.iter().map(|h| h.qualified_name.clone()).collect();
+        assert!(
+            qnames
+                .iter()
+                .any(|q| q == "file_search_mcp::graph::model::Node"),
+            "expected Node among derive-bearing items, got {qnames:?}"
+        );
+        assert!(
+            qnames
+                .iter()
+                .any(|q| q == "file_search_mcp::graph::model::ItemKind"),
+            "expected ItemKind among derive-bearing items, got {qnames:?}"
+        );
+        // Every hit must carry a derive in its matched_attribute (substring
+        // match guarantees this; explicit assertion for clarity).
+        for h in &hits {
+            assert!(
+                h.matched_attribute.contains("derive"),
+                "matched_attribute should contain `derive`, got `{}`",
+                h.matched_attribute
+            );
+        }
+    }
+
+    /// Phase 4a smoke: `pub_use_pub_type_audit` returns without error
+    /// against the `file_search_mcp` workspace. Result set may be empty
+    /// (this codebase doesn't necessarily contain the antipattern); when
+    /// non-empty, every entry must carry a non-empty qualified name and
+    /// distinct alias / pub_use_target NodeIds.
+    #[test]
+    fn pub_use_pub_type_audit_smoke() {
+        let snap = shared_snapshot();
+        let (root_id, root_node) = snap
+            .lookup_by_qualified_name("file_search_mcp")
+            .unwrap()
+            .unwrap();
+        let crate_id = if root_node.kind == NodeKind::Crate {
+            root_id
+        } else {
+            root_node.parent_id.expect("root module has parent")
+        };
+        let findings = snap
+            .pub_use_pub_type_audit(crate_id)
+            .expect("pub_use_pub_type_audit failed");
+        for f in &findings {
+            assert!(
+                !f.alias_qualified_name.is_empty(),
+                "alias_qualified_name must be non-empty"
+            );
+            assert!(
+                !f.suspicious_pub_use_visible_name.is_empty(),
+                "suspicious_pub_use_visible_name must be non-empty"
+            );
+            // Alias and the matching pub_use's target are different by
+            // construction (the alias wouldn't be flagged otherwise).
+            assert_ne!(
+                f.alias_node_id, f.suspicious_pub_use_target_node_id,
+                "alias and pub_use target should differ"
+            );
+        }
+    }
+
+    /// Phase 4b smoke: re_export_chain on `ForbiddenDependencyRule`,
+    /// which `src/graph/mod.rs` re-exports from `queries`. Walking from
+    /// the canonical declaration must surface at least one link (the
+    /// `pub use` in `graph/mod.rs`).
+    #[test]
+    fn re_export_chain_finds_known_facade() {
+        let snap = shared_snapshot();
+        let (target_id, _) = snap
+            .lookup_by_qualified_name(
+                "file_search_mcp::graph::queries::ForbiddenDependencyRule",
+            )
+            .unwrap()
+            .expect("ForbiddenDependencyRule canonical decl not in snapshot");
+        let chain = snap
+            .re_export_chain(target_id)
+            .expect("re_export_chain failed");
+        assert_eq!(chain.canonical, target_id);
+        assert!(
+            !chain.links.is_empty(),
+            "expected at least one re-export link for ForbiddenDependencyRule, got 0"
+        );
+        // Sanity: every link must carry the same visible_name (the type
+        // is re-exported under its own name) and a sane depth.
+        for link in &chain.links {
+            assert_eq!(link.visible_name, "ForbiddenDependencyRule");
+            assert!(link.depth >= 1, "depth must be >= 1");
+            assert!(
+                (link.depth as usize) <= MAX_REEXPORT_HOPS,
+                "depth must be <= MAX_REEXPORT_HOPS"
+            );
+            assert!(
+                !link.from_module_qualified_name.is_empty(),
+                "from_module_qualified_name must resolve"
+            );
+        }
+    }
+
+    /// Phase 4c smoke: `crate_dependency_metric` returns one entry per
+    /// local crate and every metric is well-formed (counts non-negative,
+    /// instability + (1 - instability) ≈ 1, abstractness in [0, 1]).
+    #[test]
+    fn crate_dependency_metric_smoke() {
+        let snap = shared_snapshot();
+        let metrics = snap
+            .crate_dependency_metric()
+            .expect("crate_dependency_metric failed");
+        assert!(
+            !metrics.is_empty(),
+            "expected at least one local crate (this workspace itself)"
+        );
+        for m in &metrics {
+            assert!(!m.crate_name.is_empty(), "crate_name must be non-empty");
+            // u32 fields are non-negative by construction.
+            let _ = m.efferent;
+            let _ = m.afferent;
+            let _ = m.item_count;
+            // Instability sanity.
+            assert!(
+                (0.0..=1.0).contains(&m.instability),
+                "instability must be in [0, 1], got {} for {}",
+                m.instability,
+                m.crate_name
+            );
+            assert!(
+                ((m.instability + (1.0 - m.instability)) - 1.0).abs() < 1e-9,
+                "instability sanity sum failed for {}",
+                m.crate_name
+            );
+            // Abstractness sanity.
+            assert!(
+                (0.0..=1.0).contains(&m.abstractness),
+                "abstractness must be in [0, 1], got {} for {}",
+                m.abstractness,
+                m.crate_name
+            );
+        }
     }
 
     #[test]

@@ -356,6 +356,62 @@ impl SearchToolRouter {
         crate::tools::graph_tools::crate_edges(params).await
     }
 
+    #[tool(description = "Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards), plus optional `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: cross-crate method calls / trait dispatch are NOT counted.")]
+    async fn forbidden_dependency_check(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::ForbiddenDependencyCheckParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::forbidden_dependency_check(params).await
+    }
+
+    #[tool(description = "Enumerate the variants of an enum: returns one row per variant with display_name, qualified_name, and (file, byte span) so callers can navigate to the declaration. `target` is the enum's qualified name (e.g. `my_crate::ErrorKind`). Use this with who_uses(MyEnum::SomeVariant) to investigate per-variant fan-in.")]
+    async fn enum_variants(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::EnumVariantsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::enum_variants(params).await
+    }
+
+    #[tool(description = "Outer attributes and doc-comment lines recorded for the Item at `target`. Returns the trimmed source text of each `#[...]` attribute (e.g. `#[derive(Debug, Clone)]`, `#[must_use]`, `#[non_exhaustive]`, `#[inline]`) and each doc-comment line as `/// ...` (one entry per line). Source order preserved. Empty list when the item has no attributes or its AST source can't be resolved.")]
+    async fn item_attributes(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::ItemAttributesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::item_attributes(params).await
+    }
+
+    #[tool(description = "Find every Item in the named crate whose attribute list has at least one entry containing `attribute_pattern` as a substring. Useful for `#[must_use]` / `#[non_exhaustive]` / `#[inline]` audits, finding items missing a required derive, or scanning doc-comment text. Substring match is case-sensitive against attribute strings (`#[derive(Debug, Clone)]`, `/// SAFETY: ...`).")]
+    async fn items_with_attribute(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::ItemsWithAttributeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::items_with_attribute(params).await
+    }
+
+    #[tool(description = "Heuristic audit: every `pub type` alias in the named crate whose owning module also carries a `pub use ... as <alias_name>` (or `pub use ::<alias_name>`) binding. Indicates the alias may be acting as a re-export disguised as a `pub type` declaration. The model does NOT record what an alias's RHS resolves to, so this query cannot confirm the `pub use` and `pub type` point at the same target — verify with `find_definition` before acting.")]
+    async fn pub_use_pub_type_audit(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::PubUsePubTypeAuditParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::pub_use_pub_type_audit(params).await
+    }
+
+    #[tool(description = "Walk every `pub use` re-export of `target` (and every re-export of those re-exports) up to 8 hops with cycle detection. Returns one link per visited binding, breadth-first, with the from-module qualified name, visible_name, and depth. Useful for auditing the public surface of a type — i.e. \"every place `Token` is re-exported and the canonical declaration\".")]
+    async fn re_export_chain(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::ReExportChainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::re_export_chain(params).await
+    }
+
+    #[tool(description = "Per-local-crate Robert Martin instability metric plus an abstractness ratio. `efferent` (Ce) = distinct outgoing producer crates; `afferent` (Ca) = distinct incoming consumer crates; `instability = Ce / (Ce + Ca)` (0 = max stable, 1 = max unstable). `abstractness = (traits + pub_type_aliases) / total_items`. Both metrics are NaN-guarded — degenerate counts return 0.0. Single-number health metric for refactor decisions.")]
+    async fn crate_dependency_metric(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::CrateDependencyMetricParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::crate_dependency_metric(params).await
+    }
+
     #[tool(description = "Workspace-wide name-collision report: cross-crate type collisions, module names that shadow another crate, within-crate type duplicates, and fn names that appear in 4+ crates.")]
     async fn overlaps(
         &self,

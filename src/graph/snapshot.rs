@@ -53,20 +53,41 @@ pub struct BuildResult {
 }
 
 pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<BuildResult> {
+    let timing = std::env::var_os("EXTRACT_TIMING").is_some();
+
+    let t = std::time::Instant::now();
     let loaded = loader::load(directory)?;
+    if timing {
+        eprintln!(
+            "build:   loader::load                 {:>9.2?}  ({} local crates)",
+            t.elapsed(),
+            loaded.local_crates.len()
+        );
+    }
+
     let paths = match &options.data_dir_override {
         Some(base) => GraphPaths::for_workspace_in(base, &loaded.workspace_root),
         None => GraphPaths::for_workspace(&loaded.workspace_root),
     };
     paths.ensure_dirs()?;
 
+    let t = std::time::Instant::now();
     let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
+    if timing {
+        eprintln!(
+            "build:   compute_fingerprint          {:>9.2?}",
+            t.elapsed()
+        );
+    }
     let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
     let snapshot_dir = paths.snapshot_dir(&graph_id);
     let manifest_path = paths.manifest_path(&graph_id);
 
     if !options.force_rebuild && manifest_path.exists() {
         let manifest = read_manifest(&manifest_path)?;
+        if timing {
+            eprintln!("build:   reused existing snapshot");
+        }
         return Ok(BuildResult {
             graph_id: manifest.graph_id,
             workspace_root: loaded.workspace_root,
@@ -94,8 +115,19 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
     };
 
     let model = extract::extract(&loaded);
+
+    let t = std::time::Instant::now();
     let (node_count, binding_count, usage_count) =
         write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
+    if timing {
+        eprintln!(
+            "build:   write_model (LMDB)           {:>9.2?}  ({} nodes, {} bindings, {} usages)",
+            t.elapsed(),
+            node_count,
+            binding_count,
+            usage_count
+        );
+    }
 
     let manifest = GraphManifest {
         graph_id: graph_id.clone(),

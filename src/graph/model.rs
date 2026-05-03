@@ -38,6 +38,11 @@ pub enum ItemKind {
     /// distinction is encoded by `parent_id` pointing at a struct/enum/union
     /// Item vs a trait Item.
     Method,
+    /// A variant of an enum (`enum E { A, B(u32), C { x: i32 } }` → three
+    /// EnumVariant items). `parent_id` points at the enum's Item NodeId, NOT
+    /// the enclosing module. Visibility is inherited from the enum (always
+    /// `None` here — same shape as `Method`).
+    EnumVariant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,6 +90,18 @@ pub struct Node {
     pub file: Option<String>, // workspace-relative
     pub span: Option<(u32, u32)>,
     pub visibility: Option<String>,
+    /// v8: outer attributes and doc-comment lines attached to this item, in
+    /// source order. Each element is the trimmed source text of one attribute
+    /// (e.g. `"#[derive(Debug, Clone)]"`, `"#[must_use]"`,
+    /// `"#[non_exhaustive]"`) or one doc-comment line formatted as
+    /// `"/// doc text"` (one entry per line — multi-line doc-comments are
+    /// surfaced as multiple entries so substring queries can match a single
+    /// line). Inner attributes (`#![...]`) are not collected — they apply to
+    /// the enclosing module/file, not the item itself. Empty for items with
+    /// no attributes, or for items whose AST source could not be resolved
+    /// (e.g. macro-generated impls).
+    #[serde(default)]
+    pub attributes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

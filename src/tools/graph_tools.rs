@@ -18,18 +18,22 @@ use rmcp::{
 use serde::Serialize;
 
 use crate::graph::{
-    Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge,
-    DeadPubFinding, EnrichedCallSite, GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode,
-    Namespace, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport, RecursiveCallersCount,
-    Usage, UsageCategory, UsageSummaryRow, WorkspaceStats, build_and_persist, open_current,
-    snapshot::BuildOptions,
+    Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
+    DeadPubFinding, EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation,
+    GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
+    OpenedSnapshot, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
+    RecursiveCallersCount, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
+    build_and_persist, open_current, snapshot::BuildOptions,
 };
+use crate::graph::queries::ItemWithAttribute;
 use crate::tools::search_tool::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
-    CrateEdgesParams, DeadPubParams, DeadPubReportParams, GraphDeclaredReexportsParams,
-    GraphExportsParams, GraphImportsParams, GraphReexportsParams, ModuleTreeParams,
-    OverlapsParams, RecursiveCallersCountParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
-    WhoUsesSummaryParams, WorkspaceStatsParams,
+    CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
+    EnumVariantsParams, ForbiddenDependencyCheckParams, GraphDeclaredReexportsParams,
+    GraphExportsParams, GraphImportsParams, GraphReexportsParams, ItemAttributesParams,
+    ItemsWithAttributeParams, ModuleTreeParams, OverlapsParams, PubUsePubTypeAuditParams,
+    ReExportChainParams, RecursiveCallersCountParams, WhoCallsParams, WhoImportsParams,
+    WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -386,6 +390,262 @@ pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, Mcp
     json_result(&CrateEdgesResponse { edges })
 }
 
+pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (enum_id, enum_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    if enum_node.item_kind != Some(ItemKind::Enum) {
+        return Err(McpError::invalid_params(
+            format!(
+                "`{}` is not an Enum (got {:?}); enum_variants only enumerates enum variants",
+                params.target, enum_node.item_kind
+            ),
+            None,
+        ));
+    }
+    let variants: Vec<Node> = snap
+        .enum_variants(enum_id)
+        .map_err(internal_error("enum_variants"))?;
+
+    let enriched: Vec<EnrichedEnumVariant> = variants
+        .into_iter()
+        .map(|n| EnrichedEnumVariant {
+            display_name: n.display_name,
+            qualified_name: n.qualified_name,
+            file: n.file,
+            span: n.span,
+        })
+        .collect();
+    json_result(&EnumVariantsResponse {
+        enum_qualified_name: enum_node.qualified_name,
+        variant_count: enriched.len(),
+        variants: enriched,
+    })
+}
+
+pub async fn item_attributes(
+    params: ItemAttributesParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let attrs = snap
+        .item_attributes(target_id)
+        .map_err(internal_error("item_attributes"))?;
+    json_result(&ItemAttributesResponse {
+        target: target_node.qualified_name,
+        item_kind: target_node.item_kind.map(item_kind_label),
+        file: target_node.file,
+        span: target_node.span,
+        attribute_count: attrs.len(),
+        attributes: attrs,
+    })
+}
+
+pub async fn items_with_attribute(
+    params: ItemsWithAttributeParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (id, node) = snap
+        .lookup_by_qualified_name(&params.crate_name)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.crate_name),
+                None,
+            )
+        })?;
+    let crate_id = match node.kind {
+        NodeKind::Crate => id,
+        NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+            McpError::invalid_params(
+                format!(
+                    "`{}` resolves to a Module with no crate_id",
+                    params.crate_name
+                ),
+                None,
+            )
+        })?,
+        other => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "`{}` is a {other:?}, expected a crate or its root module",
+                    params.crate_name
+                ),
+                None,
+            ));
+        }
+    };
+    let hits: Vec<ItemWithAttribute> = snap
+        .items_with_attribute(crate_id, &params.attribute_pattern)
+        .map_err(internal_error("items_with_attribute"))?;
+    let enriched: Vec<EnrichedItemWithAttribute> = hits
+        .into_iter()
+        .map(|h| EnrichedItemWithAttribute {
+            qualified_name: h.qualified_name,
+            item_kind: h.item_kind.map(item_kind_label),
+            matched_attribute: h.matched_attribute,
+            file: h.file,
+            span: h.span,
+        })
+        .collect();
+    json_result(&ItemsWithAttributeResponse {
+        krate: params.crate_name,
+        attribute_pattern: params.attribute_pattern,
+        match_count: enriched.len(),
+        items: enriched,
+    })
+}
+
+pub async fn forbidden_dependency_check(
+    params: ForbiddenDependencyCheckParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let rules: Vec<ForbiddenDependencyRule> = params
+        .rules
+        .into_iter()
+        .map(|r| ForbiddenDependencyRule {
+            consumer: r.consumer,
+            producer: r.producer,
+            except: r.except,
+            severity: r.severity,
+            message: r.message,
+        })
+        .collect();
+    let violations: Vec<ForbiddenDependencyViolation> = snap
+        .forbidden_dependency_check(&rules)
+        .map_err(internal_error("forbidden_dependency_check"))?;
+    json_result(&ForbiddenDependencyCheckResponse {
+        rule_count: rules.len(),
+        violation_count: violations.len(),
+        violations,
+    })
+}
+
+pub async fn pub_use_pub_type_audit(
+    params: PubUsePubTypeAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (id, node) = snap
+        .lookup_by_qualified_name(&params.crate_name)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.crate_name),
+                None,
+            )
+        })?;
+    let crate_id = match node.kind {
+        NodeKind::Crate => id,
+        NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+            McpError::invalid_params(
+                format!(
+                    "`{}` resolves to a Module with no crate_id",
+                    params.crate_name
+                ),
+                None,
+            )
+        })?,
+        other => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "`{}` is a {other:?}, expected a crate or its root module",
+                    params.crate_name
+                ),
+                None,
+            ));
+        }
+    };
+    let findings: Vec<PubTypeAliasMasqueradingAsReexport> = snap
+        .pub_use_pub_type_audit(crate_id)
+        .map_err(internal_error("pub_use_pub_type_audit"))?;
+    let enriched: Vec<EnrichedPubTypeAuditFinding> = {
+        let rtxn = snap.read_txn().ok();
+        findings
+            .into_iter()
+            .map(|f| {
+                let pub_use_target_qualified = rtxn.as_ref().and_then(|t| {
+                    snap.node_by_id(t, f.suspicious_pub_use_target_node_id)
+                        .ok()
+                        .flatten()
+                        .map(|n| n.qualified_name)
+                });
+                EnrichedPubTypeAuditFinding {
+                    alias_qualified_name: f.alias_qualified_name,
+                    file: f.file,
+                    span: f.span,
+                    suspicious_pub_use_visible_name: f.suspicious_pub_use_visible_name,
+                    suspicious_pub_use_target: pub_use_target_qualified,
+                }
+            })
+            .collect()
+    };
+    json_result(&PubUsePubTypeAuditResponse {
+        krate: params.crate_name,
+        finding_count: enriched.len(),
+        findings: enriched,
+    })
+}
+
+pub async fn re_export_chain(
+    params: ReExportChainParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let chain: ReExportChain = snap
+        .re_export_chain(target_id)
+        .map_err(internal_error("re_export_chain"))?;
+    let links: Vec<EnrichedReExportLink> = chain
+        .links
+        .into_iter()
+        .map(|l| EnrichedReExportLink {
+            from_module: l.from_module_qualified_name,
+            visible_name: l.visible_name,
+            depth: l.depth,
+        })
+        .collect();
+    json_result(&ReExportChainResponse {
+        canonical: target_node.qualified_name,
+        link_count: links.len(),
+        links,
+    })
+}
+
+pub async fn crate_dependency_metric(
+    params: CrateDependencyMetricParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let metrics: Vec<CrateMetric> = snap
+        .crate_dependency_metric()
+        .map_err(internal_error("crate_dependency_metric"))?;
+    json_result(&CrateDependencyMetricResponse {
+        crate_count: metrics.len(),
+        metrics,
+    })
+}
+
 pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let report: OverlapsReport = snap.overlaps().map_err(internal_error("overlaps"))?;
@@ -590,6 +850,7 @@ fn item_kind_label(k: ItemKind) -> &'static str {
         ItemKind::AssocConst => "AssocConst",
         ItemKind::AssocType => "AssocType",
         ItemKind::Method => "Method",
+        ItemKind::EnumVariant => "EnumVariant",
     }
 }
 
@@ -621,6 +882,7 @@ fn node_kind_label(node: &Node) -> String {
 /// `"Item.Function"`. Keep in sync with `queries::label_item_kind`.
 fn short_item_kind_label(k: ItemKind) -> &'static str {
     match k {
+        ItemKind::EnumVariant => "EnumVariant",
         ItemKind::Function => "Fn",
         ItemKind::Struct => "Struct",
         ItemKind::Enum => "Enum",
@@ -760,6 +1022,104 @@ struct EnrichedCrateDeadPub {
 #[derive(Debug, Serialize)]
 struct CrateEdgesResponse {
     edges: Vec<CrateEdge>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnumVariantsResponse {
+    enum_qualified_name: String,
+    variant_count: usize,
+    variants: Vec<EnrichedEnumVariant>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedEnumVariant {
+    display_name: String,
+    qualified_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Serialize)]
+struct ForbiddenDependencyCheckResponse {
+    rule_count: usize,
+    violation_count: usize,
+    violations: Vec<ForbiddenDependencyViolation>,
+}
+
+#[derive(Debug, Serialize)]
+struct ItemAttributesResponse {
+    target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<(u32, u32)>,
+    attribute_count: usize,
+    attributes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ItemsWithAttributeResponse {
+    #[serde(rename = "crate")]
+    krate: String,
+    attribute_pattern: String,
+    match_count: usize,
+    items: Vec<EnrichedItemWithAttribute>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedItemWithAttribute {
+    qualified_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_kind: Option<&'static str>,
+    matched_attribute: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Serialize)]
+struct PubUsePubTypeAuditResponse {
+    #[serde(rename = "crate")]
+    krate: String,
+    finding_count: usize,
+    findings: Vec<EnrichedPubTypeAuditFinding>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedPubTypeAuditFinding {
+    alias_qualified_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<(u32, u32)>,
+    suspicious_pub_use_visible_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suspicious_pub_use_target: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReExportChainResponse {
+    canonical: String,
+    link_count: usize,
+    links: Vec<EnrichedReExportLink>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedReExportLink {
+    from_module: String,
+    visible_name: String,
+    depth: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct CrateDependencyMetricResponse {
+    crate_count: usize,
+    metrics: Vec<CrateMetric>,
 }
 
 #[derive(Debug, Serialize)]
