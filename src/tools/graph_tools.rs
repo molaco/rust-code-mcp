@@ -768,6 +768,31 @@ pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolRes
     json_result(&stats)
 }
 
+pub async fn unsafe_audit(
+    params: crate::tools::search_tool::UnsafeAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let canonical = std::path::PathBuf::from(&params.directory)
+        .canonicalize()
+        .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
+    let loaded = crate::graph::loader::load(&canonical)
+        .map_err(internal_error("loader::load"))?;
+    let findings: Vec<crate::graph::unsafe_audit::UnsafeFinding> = snap
+        .unsafe_audit(&loaded)
+        .map_err(internal_error("unsafe_audit"))?;
+    #[derive(serde::Serialize)]
+    struct Resp {
+        directory: String,
+        finding_count: usize,
+        findings: Vec<crate::graph::unsafe_audit::UnsafeFinding>,
+    }
+    json_result(&Resp {
+        directory: params.directory,
+        finding_count: findings.len(),
+        findings,
+    })
+}
+
 // ----- helpers -----
 
 fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {
