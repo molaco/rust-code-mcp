@@ -245,6 +245,7 @@ fn resolve_or_create_target(
                 file: None,
                 span: None,
                 visibility: None,
+                attributes: Vec::new(),
             });
         }
         def_to_node.insert(def_id, node_id);
@@ -293,6 +294,7 @@ fn create_local_item_node(
         file: None,
         span: None,
         visibility: None,
+        attributes: Vec::new(),
     });
 
     Some(node_id)
@@ -326,6 +328,12 @@ fn item_kind_label(kind: ItemKind) -> &'static str {
         ItemKind::AssocConst => "assoc_const",
         ItemKind::AssocType => "assoc_type",
         ItemKind::Method => "method",
+        // EnumVariant is emitted via Layer 4 (impls.rs), which uses its own
+        // NodeId-component label "enum_variant" directly. This branch is
+        // unreachable from `create_local_item_node` (which is the only
+        // caller) because the bindings pass never produces an EnumVariant
+        // ItemKind. Kept for match-exhaustiveness.
+        ItemKind::EnumVariant => "enum_variant",
     }
 }
 

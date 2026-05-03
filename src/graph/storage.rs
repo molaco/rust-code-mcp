@@ -63,7 +63,27 @@ use super::model::{Binding, Node, Usage};
 // extra field as unexpected EOF, so the bump is required even with
 // `#[serde(default)]`. v5/v6 graph_ids are disjoint via `graph_id_for`
 // hashing `SCHEMA_VERSION`.
-pub const SCHEMA_VERSION: u32 = 6;
+// v7 (2026-05): enum variants are now extracted as Item nodes parented to
+// their enum's Item (so `who_uses(MyEnum::SomeVariant)` works and
+// `enum_variants(enum_id)` can enumerate them). Adds `ItemKind::EnumVariant`.
+// No new sub-DB; variants flow through the existing `nodes_by_id` /
+// `children_by_parent` / `bindings_by_*` machinery. Schema layout is
+// unchanged but the v6 enum-bearing serialized records are missing the new
+// variant kind, so the bump is precautionary; old snapshots auto-rebuild
+// because `graph_id_for` hashes `SCHEMA_VERSION`.
+// v8 (2026-05): Layer 4 — item attributes (derives, doc comments,
+// `#[must_use]`, etc.). `Node` gains `attributes: Vec<String>` populated by
+// the new `extract_attributes` pass which walks each local Item's AST source
+// via `HasSource::source(db)` and collects outer attrs (`#[...]`) and doc
+// comments (`/// ...` / `//! ...`). Each attribute is stored as one trimmed
+// source-text entry; multi-line doc comments produce one entry per line so
+// substring queries match a single line. Inner attributes on items aren't
+// collected (they apply to the enclosing module). The new field is
+// `#[serde(default)]` for forward compat with older serialized records, but
+// existing snapshots still need to rebuild because `graph_id_for` hashes
+// `SCHEMA_VERSION`. Backs the new `item_attributes` and
+// `items_with_attribute` queries.
+pub const SCHEMA_VERSION: u32 = 8;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";

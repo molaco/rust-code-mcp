@@ -215,6 +215,78 @@ pub struct OverlapsParams {
     pub directory: String,
 }
 
+/// One architectural rule for `forbidden_dependency_check`. Patterns in
+/// `consumer`, `producer`, and `except` are glob-style with `*` wildcards.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ForbiddenDependencyRuleParam {
+    #[schemars(description = "Glob pattern matched against the consumer crate name (e.g. `domain*`)")]
+    pub consumer: String,
+    #[schemars(description = "Glob pattern matched against the producer crate name (e.g. `tokio`)")]
+    pub producer: String,
+    #[schemars(description = "Optional consumer-side glob exception: edges whose consumer matches this pattern are NOT flagged, even if `consumer`/`producer` match")]
+    pub except: Option<String>,
+    #[schemars(description = "Optional severity tag passed through to violations (e.g. `error` / `warn`)")]
+    pub severity: Option<String>,
+    #[schemars(description = "Optional human-readable rationale, passed through unchanged")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ForbiddenDependencyCheckParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Architectural rules to enforce against the workspace's cross-crate edges")]
+    pub rules: Vec<ForbiddenDependencyRuleParam>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct EnumVariantsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the enum whose variants you want (e.g. `my_crate::module::MyEnum`)")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ItemAttributesParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the item whose outer attributes (and doc-comment lines) you want, e.g. `my_crate::Foo`")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ItemsWithAttributeParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
+    pub crate_name: String,
+    #[schemars(description = "Substring to match against each item's attribute strings, e.g. `#[must_use]`, `must_use`, `derive(Debug`, or `/// SAFETY:`")]
+    pub attribute_pattern: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PubUsePubTypeAuditParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
+    pub crate_name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ReExportChainParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the canonical declaration whose re-export chain you want to walk (e.g. `my_crate::module::Token`)")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CrateDependencyMetricParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ModuleTreeParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]

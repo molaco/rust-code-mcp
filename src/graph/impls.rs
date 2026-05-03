@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ra_ap_hir::{AssocItem, Crate, HasCrate, Impl, Semantics, Trait, attach_db};
+use ra_ap_hir::{AssocItem, Crate, Enum, EnumVariant, HasCrate, Impl, Semantics, Trait, attach_db};
 use ra_ap_hir_def::{AdtId, ModuleDefId, TraitId};
 use ra_ap_ide::TryToNav;
 use ra_ap_ide_db::RootDatabase;
@@ -117,6 +117,33 @@ pub fn extract_impl_items(
                         &crate_name,
                         trait_node_id,
                         assoc,
+                    );
+                }
+            }
+
+            // v7: enum-variant items. Variants don't appear in module
+            // ItemScope by default (only when brought in via `use Foo::*`),
+            // so the bindings pass would miss them — walk every local
+            // enum's variants directly here.
+            for (&adt_id, &enum_node_id) in &adt_node_for {
+                let AdtId::EnumId(enum_id) = adt_id else {
+                    continue;
+                };
+                let enum_: Enum = enum_id.into();
+                if enum_.krate(db) != krate {
+                    continue;
+                }
+                for variant in enum_.variants(db) {
+                    emit_enum_variant(
+                        model,
+                        &sema,
+                        vfs,
+                        &workspace_root,
+                        def_to_node,
+                        crate_node_id,
+                        &crate_name,
+                        enum_node_id,
+                        variant,
                     );
                 }
             }
@@ -233,6 +260,7 @@ fn emit_assoc_item(
             file: Some(rel_path),
             span: Some((start, end)),
             visibility: None,
+            attributes: Vec::new(),
         });
         model.insert_contains(parent_node_id, node_id);
     }
@@ -241,6 +269,82 @@ fn emit_assoc_item(
     // canonical mapping already exists (e.g. trait fn referenced from outside
     // before trait extraction).
     def_to_node.entry(def_id).or_insert(node_id);
+}
+
+/// v7: emit an Item node for one enum variant, parented to the host enum's
+/// Item NodeId. NodeId scheme mirrors `emit_assoc_item`'s
+/// `[workspace_hash, "enum_variant", crate, file, byte_offset, name]` so two
+/// enums in the same module declaring same-named variants don't collide.
+/// Visibility is `None` (variants inherit from the parent enum, just like
+/// Method/AssocConst/AssocType).
+#[allow(clippy::too_many_arguments)]
+fn emit_enum_variant(
+    model: &mut ExtractionModel,
+    sema: &Semantics<'_, RootDatabase>,
+    vfs: &Vfs,
+    workspace_root: &Path,
+    def_to_node: &mut HashMap<ModuleDefId, NodeId>,
+    crate_node_id: NodeId,
+    crate_name: &str,
+    enum_node_id: NodeId,
+    variant: EnumVariant,
+) {
+    let db = sema.db;
+    let name = variant.name(db).as_str().to_string();
+
+    let nav = match Definition::EnumVariant(variant).try_to_nav(sema) {
+        Some(n) => n.call_site,
+        None => return, // synthetic / macro-only — skip.
+    };
+    let rel_path = match resolve_workspace_relative(vfs, nav.file_id, workspace_root) {
+        Some(p) => p,
+        None => return, // declaration not under the workspace root.
+    };
+    let start: u32 = u32::from(nav.full_range.start());
+    let end: u32 = u32::from(nav.full_range.end());
+
+    let parent_qual = model
+        .nodes
+        .get(&enum_node_id)
+        .map(|n| n.qualified_name.clone())
+        .unwrap_or_default();
+    let qualified = if parent_qual.is_empty() {
+        name.clone()
+    } else {
+        format!("{parent_qual}::{name}")
+    };
+
+    let byte_offset = start.to_string();
+    let node_id = NodeId::from_components(&[
+        model.workspace_hash.as_str(),
+        "enum_variant",
+        crate_name,
+        rel_path.as_str(),
+        byte_offset.as_str(),
+        name.as_str(),
+    ]);
+
+    if !model.nodes.contains_key(&node_id) {
+        model.insert_node(Node {
+            id: node_id,
+            kind: NodeKind::Item,
+            display_name: name,
+            qualified_name: qualified,
+            crate_id: Some(crate_node_id),
+            parent_id: Some(enum_node_id),
+            item_kind: Some(ItemKind::EnumVariant),
+            file: Some(rel_path),
+            span: Some((start, end)),
+            visibility: None,
+            attributes: Vec::new(),
+        });
+        model.insert_contains(enum_node_id, node_id);
+    }
+
+    let variant_id: ra_ap_hir_def::EnumVariantId = variant.into();
+    def_to_node
+        .entry(ModuleDefId::EnumVariantId(variant_id))
+        .or_insert(node_id);
 }
 
 fn resolve_workspace_relative(

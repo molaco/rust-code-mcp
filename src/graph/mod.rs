@@ -3,6 +3,7 @@
 //! Layered as: loader → extraction model → extraction passes → persistence
 //! → read path → MCP tools. Each layer is built and tested in isolation.
 
+pub mod attributes;
 pub mod bindings;
 pub mod extract;
 pub mod ids;
@@ -22,10 +23,11 @@ pub use model::{
     Usage, UsageCategory,
 };
 pub use queries::{
-    CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, DeadPubFinding, EdgeSymbol,
-    EnrichedCallSite, ModuleShadow, ModuleTreeNode, NodeKindCounts, OverlapsReport,
-    RecursiveCallersCount, TypeCollision, TypeLocation, UsageSummaryRow, VisibilityCounts,
-    WithinCrateDuplicate, WorkspaceStats,
+    CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
+    EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, ModuleShadow,
+    ModuleTreeNode, NodeKindCounts, OverlapsReport, PubTypeAliasMasqueradingAsReexport,
+    ReExportChain, ReExportLink, RecursiveCallersCount, TypeCollision, TypeLocation,
+    UsageSummaryRow, VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
 };
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
