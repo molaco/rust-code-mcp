@@ -318,6 +318,12 @@ pub struct UnsafeAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MutStaticAuditParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FunctionsWithFilterParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,

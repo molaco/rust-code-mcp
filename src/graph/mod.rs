@@ -13,6 +13,7 @@ pub mod model;
 pub mod queries;
 pub mod signatures;
 pub mod snapshot;
+pub mod statics;
 pub mod storage;
 pub mod unsafe_audit;
 pub mod usages;
@@ -22,15 +23,15 @@ pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
 pub use loader::{LoadedWorkspace, load};
 pub use model::{
     Binding, BindingKind, BindingVisibility, ExtractionModel, FunctionSignature, GenericBound,
-    ItemKind, Namespace, Node, NodeKind, Param, SelfKind, Usage, UsageCategory,
+    ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage, UsageCategory,
 };
 pub use queries::{
     CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
     EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
-    FunctionWithSignature, ModuleShadow, ModuleTreeNode, NodeKindCounts, OverlapsReport,
-    PubTypeAliasMasqueradingAsReexport, ReExportChain, ReExportLink, RecursiveCallersCount,
-    SelfKindFilter, TypeCollision, TypeLocation, UsageSummaryRow, VisibilityCounts,
-    WithinCrateDuplicate, WorkspaceStats,
+    FunctionWithSignature, ModuleShadow, ModuleTreeNode, MutStaticFinding, NodeKindCounts,
+    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, ReExportLink,
+    RecursiveCallersCount, SelfKindFilter, TypeCollision, TypeLocation, UsageSummaryRow,
+    VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
 };
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,

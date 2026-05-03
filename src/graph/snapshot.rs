@@ -278,6 +278,15 @@ fn write_model(
             .context("put signature")?;
     }
 
+    // 4c. Static metadata (v10): one bincode-encoded StaticMetadata per
+    // local `static` NodeId. No DUP_SORT — one entry per static. Lookups
+    // are direct via `static_metadata_by_target.get(node_id)`.
+    for (target, meta) in &model.statics {
+        dbs.static_metadata_by_target
+            .put(&mut wtxn, target.as_bytes(), meta)
+            .context("put static metadata")?;
+    }
+
     // 5. Meta
     dbs.meta_by_key
         .put(&mut wtxn, "workspace_hash", workspace_hash.as_bytes())?;
