@@ -14,6 +14,7 @@ pub mod queries;
 pub mod signatures;
 pub mod snapshot;
 pub mod storage;
+pub mod unsafe_audit;
 pub mod usages;
 
 pub use extract::extract;
@@ -34,6 +35,7 @@ pub use queries::{
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
 };
+pub use unsafe_audit::UnsafeFinding;
 pub use storage::{
     GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths, SCHEMA_VERSION,
     compute_fingerprint,

@@ -1654,6 +1654,17 @@ impl OpenedSnapshot {
         Ok(violations)
     }
 
+    /// Phase 6: query-time audit of `unsafe { ... }` blocks across the
+    /// workspace. Live computation (no cache); requires a `LoadedWorkspace`
+    /// supplied by the caller. Implementation lives in
+    /// `crate::graph::unsafe_audit`.
+    pub fn unsafe_audit(
+        &self,
+        loaded: &super::loader::LoadedWorkspace,
+    ) -> Result<Vec<super::unsafe_audit::UnsafeFinding>> {
+        super::unsafe_audit::unsafe_audit_impl(loaded, self)
+    }
+
     /// Single-pass over `nodes_by_id`. Detects cross-crate type collisions,
     /// module shadowing of crate names, within-crate type duplicates, and
     /// fn names that appear in 4+ crates.
