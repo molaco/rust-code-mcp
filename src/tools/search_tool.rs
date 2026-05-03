@@ -144,6 +144,22 @@ pub struct WhoUsesSummaryParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WhoCallsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the target function whose callers you want (Layer 10 call graph)")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CallsFromParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the caller function whose outgoing references you want (Layer 10 call graph)")]
+    pub caller: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeadPubParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,

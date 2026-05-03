@@ -466,10 +466,37 @@ Of the eight Layer 7 tools, four are pure read queries that exercise the full st
 - Inherent impls of types declared in dep crates are skipped — the host ADT isn't in our local `def_to_node` map, so we can't attach the impl items anywhere meaningful in the graph.
 - Anonymous consts (`impl Foo { const _: () = ...; }`) are skipped because they have no name to address them by.
 
+## Layer 10 — Call graph (`src/graph/usages.rs`, `queries.rs`, `tools/graph_tools.rs`)
+
+**Goal.** Function-level attribution on every Usage record, so queries can answer "which fn inside which module made this reference?" instead of just "which module?". Without this layer, `usages_in` and `who_uses` give a module-level view; users still need to grep inside the module to find the actual call site's enclosing function.
+
+**Algorithm.** One extra `SemanticsScope::containing_function()` call per reference site, keyed back through `def_to_node`:
+
+1. After computing `consumer_module` for a reference (existing Layer 8 logic), pick a syntax node *at* the reference offset — `syntax.token_at_offset(r.range.start()).parent()` — and pass that to a second `sema.scope_at_offset(...)` call. `scope_at_offset` walks the given node's ancestors via `find_container`, so the file-root scope used for module attribution always returns a module-level resolver where `containing_function` is `None`. The deeper node lets `find_container` reach `DefWithBodyId` (the enclosing fn) and the resolver then carries an `ExprScope`.
+2. Call `scope.containing_function()`. RA returns `Option<Function>`; convert to `FunctionId` via `ra_ap_hir_def::FunctionId::try_from(f)` (skipping `BuiltinDeriveImplMethod` cases) and look up `def_to_node[ModuleDefId::FunctionId(id)]` to get the caller fn's `NodeId`.
+3. Emit on the `Usage` record. `None` is preserved verbatim — no fallback to `expression_store_owner()` in v1.
+
+**Data.** `Usage` gains `consumer_function: Option<NodeId>` (carries `#[serde(default)]` so future schema rolls don't need to touch every record). New `usages_by_consumer_function` sub-DB (DUP_SORT, `NodeId → UsageId`) mirrors `usages_by_consumer` and powers `calls_from`. Schema bumped to **v6** — bincode reads of v5 records reject the missing field as unexpected EOF, so the bump is required even with `#[serde(default)]`. v5/v6 graph_ids are disjoint via `graph_id_for` mixing `SCHEMA_VERSION`.
+
+**Query layer.** Two new methods on `OpenedSnapshot`, both returning `Vec<EnrichedCallSite>` (`{caller_qualified_name, callee_qualified_name, file, start, end, category}`):
+
+- `who_calls(target_fn)` — scans `usages_by_target`, filters to rows where `consumer_function.is_some()`, resolves caller names. References from non-fn scopes (const initializers, type alias bounds, enum variant discriminants) are excluded — see `who_uses` for those.
+- `calls_from(caller_fn)` — scans the new `usages_by_consumer_function` sub-DB keyed by the caller fn, dereferences each `UsageId` from `usages_by_id`, resolves callee names.
+
+**MCP tools.** `who_calls(directory, target)` and `calls_from(directory, caller)` ship via the same router shape as `who_uses`. Tool docstrings note both the non-fn-scope exclusion and the closures-attribute-to-parent-fn rule.
+
+**Cost.** ~+5–10% on the usages pass — one extra `scope_at_offset` per reference plus a `try_from` and a hashmap lookup. On a `coding-agent`-sized snapshot the LMDB env grows by roughly +0.5 MB (the `usages_by_consumer_function` sub-DB is sparse: only refs inside fn bodies populate it). No measurable cold-rebuild regression beyond the schema-bump invalidation.
+
+**Limitations.**
+
+- **Const initializers / trait bounds / enum variant discriminants** give `consumer_function = None`. We don't fall back to `expression_store_owner()` to attribute these to the enclosing const/static/etc. in v1 — a follow-up could surface them as a `ConsumerOwner` enum but it'd touch every existing query.
+- **Closures** attribute to the parent fn — RA's default for `SemanticsScope::containing_function`. Users expecting a separate "closure call site" entry will see the call attributed to the outer function instead.
+- **No recursive `call_graph` tool yet** — this layer only ships the two direct queries. Recursive BFS callers (`call_graph(target, depth)`), within-crate filtering (`callers_in_crate`), and `recursive_callers_count` are deferred to a follow-up; they're additive on top of the new `usages_by_consumer_function` index.
+
 ## What's not done (deliberately, v1 scope)
 
 - Trait impl method bodies (`impl T for Foo { fn m() {...} }`) as first-class `Item` nodes (Layer 4c). Adds duplicates for the trait-decl Item and was deferred in v1.
-- Call graph — `usages_in` says which module references a target, not which function within the module.
+- Recursive call-graph tools — `call_graph(target, depth)` (BFS callers), `callers_in_crate(target, crate)`, `recursive_callers_count(target)`. The Layer 10 `usages_by_consumer_function` index already supports them; only the query/tool surface is missing.
 - `ItemId` parity with `BindingId` (currently Items are addressed only via `NodeId`, and there's no separate per-item identity for use-cases like cross-snapshot diffing).
 - Pagination on large query results (`who_imports`, `who_uses` on a hot symbol can return thousands of rows).
 - Macros, block-local `use`, proc-macro / build-script expansion.

@@ -99,6 +99,10 @@ pub fn extract_usages(
                     if r.category.contains(ReferenceCategory::IMPORT) {
                         continue;
                     }
+                    // Consumer-module attribution stays on the file-root scope
+                    // path — pre-Layer-10 behaviour. This keeps refs surfaced
+                    // through macro expansion (where the token's parent may
+                    // not be a useful ancestor) intact.
                     let Some(scope) = sema.scope_at_offset(syntax, r.range.start()) else {
                         continue;
                     };
@@ -106,6 +110,31 @@ pub fn extract_usages(
                     let Some(&consumer_node_id) = module_node_for.get(&consumer_module) else {
                         continue;
                     };
+                    // Layer 10 — call-graph attribution. `scope_at_offset`
+                    // walks ancestors of the given node to find the
+                    // containing definition; the file-root scope above gives
+                    // a *module*-level resolver where `containing_function`
+                    // is always `None`. Re-do the lookup with the token's
+                    // parent so the resolver drills into the enclosing body.
+                    // Closures attribute to their parent fn; refs in const
+                    // initializers / trait bounds / enum discriminants give
+                    // `None` (no enclosing fn).
+                    let body_scope_node: Option<ra_ap_syntax::SyntaxNode> =
+                        match syntax.token_at_offset(r.range.start()) {
+                            ra_ap_syntax::TokenAtOffset::None => None,
+                            ra_ap_syntax::TokenAtOffset::Single(t) => t.parent(),
+                            ra_ap_syntax::TokenAtOffset::Between(a, b) => {
+                                b.parent().or_else(|| a.parent())
+                            }
+                        };
+                    let consumer_function = body_scope_node
+                        .as_ref()
+                        .and_then(|n| sema.scope_at_offset(n, r.range.start()))
+                        .and_then(|s| s.containing_function())
+                        .and_then(|f| {
+                            let id = ra_ap_hir_def::FunctionId::try_from(f).ok()?;
+                            def_to_node.get(&ModuleDefId::FunctionId(id)).copied()
+                        });
                     model.usages.push(Usage {
                         target: target_node_id,
                         consumer_module: consumer_node_id,
@@ -113,6 +142,7 @@ pub fn extract_usages(
                         start: u32::from(r.range.start()),
                         end: u32::from(r.range.end()),
                         category: classify_category(r.category),
+                        consumer_function,
                     });
                 }
             }
@@ -205,6 +235,19 @@ pub fn read_const() -> u32 {
 
 pub fn macro_use() {
     println!("{}", FOO);
+}
+
+pub fn compute() -> u32 { 1 }
+pub const K2: u32 = compute();
+
+pub fn outer_with_closure() {
+    let _f = || Foo::bar();
+    _f();
+}
+
+pub fn caller() {
+    Foo::bar();
+    let _ = read_const();
 }
 "#;
 
@@ -370,5 +413,62 @@ path = "src/lib.rs"
         for u in &usages {
             assert!(u.file.contains("lib.rs"), "usage file should be lib.rs, got {}", u.file);
         }
+    }
+
+    /// Pattern 6 — Layer 10 call-graph: every method call site inside a fn
+    /// body should land with `consumer_function` set to the enclosing fn's
+    /// NodeId. `Foo::bar()` is invoked from `use_method_call`,
+    /// `outer_with_closure`, and `caller` — at least one should satisfy
+    /// `consumer_function.is_some()`.
+    #[test]
+    fn pattern6_function_attribution_works() {
+        let snap = shared_snapshot();
+        let usages = usages_for(snap, "synthetic_crate::Foo::bar");
+        let with_fn: Vec<_> = usages
+            .iter()
+            .filter(|u| u.consumer_function.is_some())
+            .collect();
+        assert!(
+            !with_fn.is_empty(),
+            "expected >=1 call site with consumer_function set, got 0"
+        );
+    }
+
+    /// Pattern 7 — closures attribute to the parent fn (RA's default for
+    /// `SemanticsScope::containing_function`). The closure body
+    /// `|| Foo::bar()` inside `outer_with_closure` should yield a Usage of
+    /// `Foo::bar` whose `consumer_function == NodeId(outer_with_closure)`.
+    #[test]
+    fn pattern7_closure_attributes_to_parent_fn() {
+        let snap = shared_snapshot();
+        let (outer_id, _) = snap
+            .lookup_by_qualified_name("synthetic_crate::outer_with_closure")
+            .unwrap()
+            .expect("outer_with_closure not in graph");
+        let bar_usages = usages_for(snap, "synthetic_crate::Foo::bar");
+        assert!(
+            bar_usages
+                .iter()
+                .any(|u| u.consumer_function == Some(outer_id)),
+            "expected >=1 Foo::bar usage attributed to outer_with_closure (closure-as-parent-fn rule), got 0"
+        );
+    }
+
+    /// Pattern 8 — references in const initializers (and other non-fn
+    /// scopes) should leave `consumer_function = None`. `compute()` is
+    /// referenced from `pub const K2: u32 = compute();`, which lives at
+    /// const-scope, so the resulting Usage row must carry None.
+    #[test]
+    fn pattern8_const_initializer_has_no_caller_fn() {
+        let snap = shared_snapshot();
+        let usages = usages_for(snap, "synthetic_crate::compute");
+        let from_const_init: Vec<_> = usages
+            .iter()
+            .filter(|u| u.consumer_function.is_none())
+            .collect();
+        assert!(
+            !from_const_init.is_empty(),
+            "expected >=1 compute() usage with consumer_function=None (the const K2 initializer), got 0"
+        );
     }
 }
