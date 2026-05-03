@@ -22,9 +22,10 @@ pub use model::{
     Usage, UsageCategory,
 };
 pub use queries::{
-    CommonFnName, CrateDeadPub, CrateEdge, DeadPubFinding, EdgeSymbol, EnrichedCallSite,
-    ModuleShadow, ModuleTreeNode, NodeKindCounts, OverlapsReport, TypeCollision, TypeLocation,
-    UsageSummaryRow, VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
+    CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, DeadPubFinding, EdgeSymbol,
+    EnrichedCallSite, ModuleShadow, ModuleTreeNode, NodeKindCounts, OverlapsReport,
+    RecursiveCallersCount, TypeCollision, TypeLocation, UsageSummaryRow, VisibilityCounts,
+    WithinCrateDuplicate, WorkspaceStats,
 };
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
