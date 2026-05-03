@@ -210,6 +210,22 @@ pub struct GenericBound {
     pub bounds: Vec<String>,
 }
 
+/// v10 (Phase 7 Path B) — per-Static metadata.
+///
+/// One `StaticMetadata` per local `static` item. `type_string` is RA's
+/// `HirDisplay` of the static's declared type, rendered against the static's
+/// owning crate as `DisplayTarget`. `is_mut` is `true` iff the source uses
+/// `static mut FOO: ...` (carries `StaticFlags::MUTABLE`). Stored on
+/// `ExtractionModel.statics` and persisted into the
+/// `static_metadata_by_target` LMDB sub-DB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaticMetadata {
+    #[serde(default)]
+    pub type_string: String,
+    #[serde(default)]
+    pub is_mut: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExtractionModel {
     pub workspace_root: PathBuf,
@@ -224,6 +240,10 @@ pub struct ExtractionModel {
     /// (free fns, inherent assoc fns, trait declaration fns; not impl-trait
     /// method bodies). Persisted to `signatures_by_target`.
     pub signatures: Vec<(NodeId, FunctionSignature)>,
+    /// v10 (Phase 7 Path B): one entry per local `static` item with the HIR
+    /// type stringified via `HirDisplay` and the `mut` flag. Persisted to
+    /// `static_metadata_by_target`.
+    pub statics: Vec<(NodeId, StaticMetadata)>,
 }
 
 impl ExtractionModel {

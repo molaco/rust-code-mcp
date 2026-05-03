@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use super::ids::{BindingId, NodeId};
-use super::model::{Binding, FunctionSignature, Node, Usage};
+use super::model::{Binding, FunctionSignature, Node, StaticMetadata, Usage};
 
 // v2 (2026-05): added usages_by_id / usages_by_target / usages_by_consumer
 // sub-databases and `usage_count` to the manifest.
@@ -99,7 +99,20 @@ use super::model::{Binding, FunctionSignature, Node, Usage};
 // Backs the new `function_signature` and `functions_with_filter` queries.
 // `GraphManifest` is unchanged (no `signature_count` field). Old snapshots
 // auto-rebuild because `graph_id_for` hashes `SCHEMA_VERSION`.
-pub const SCHEMA_VERSION: u32 = 9;
+// v10 (2026-05): Phase 7 Path B — type-aware static-item metadata. New
+// `extract_statics` pass walks every local `static` item (ModuleDefId::StaticId
+// in `def_to_node`) and emits a `StaticMetadata` record carrying:
+//   * `type_string`: the static's declared type rendered via `HirDisplay`
+//     against the static's owning crate as `DisplayTarget` (anonymous
+//     lifetimes suppressed).
+//   * `is_mut`: `true` iff the source uses `static mut FOO` (carries
+//     `StaticFlags::MUTABLE`).
+// Adds a new `static_metadata_by_target` sub-DB (NodeId → StaticMetadata) —
+// NOT DUP_SORT, one record per `static`. Backs the new `static_metadata`
+// (single-target lookup) and `mut_static_audit` (workspace-wide pattern
+// classifier) queries. `GraphManifest` is unchanged. Old snapshots
+// auto-rebuild because `graph_id_for` hashes `SCHEMA_VERSION`.
+pub const SCHEMA_VERSION: u32 = 10;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";
@@ -273,6 +286,9 @@ pub struct GraphDatabases {
     /// v9: NodeId (target fn) → FunctionSignature. NOT DUP_SORT — one
     /// signature per local function.
     pub signatures_by_target: Database<Bytes, SerdeBincode<FunctionSignature>>,
+    /// v10: NodeId (target static) → StaticMetadata. NOT DUP_SORT — one
+    /// record per local `static` item.
+    pub static_metadata_by_target: Database<Bytes, SerdeBincode<StaticMetadata>>,
 }
 
 impl GraphDatabases {
@@ -319,6 +335,12 @@ impl GraphDatabases {
                 "signatures_by_target",
                 false,
             )?,
+            static_metadata_by_target: open_or_create_bytes_bincode(
+                env,
+                wtxn,
+                "static_metadata_by_target",
+                false,
+            )?,
         })
     }
 
@@ -358,6 +380,9 @@ impl GraphDatabases {
             signatures_by_target: env
                 .open_database(rtxn, Some("signatures_by_target"))?
                 .context("signatures_by_target missing")?,
+            static_metadata_by_target: env
+                .open_database(rtxn, Some("static_metadata_by_target"))?
+                .context("static_metadata_by_target missing")?,
         }))
     }
 }

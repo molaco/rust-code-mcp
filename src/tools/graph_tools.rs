@@ -793,6 +793,26 @@ pub async fn unsafe_audit(
     })
 }
 
+pub async fn mut_static_audit(
+    params: crate::tools::search_tool::MutStaticAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let findings = snap
+        .mut_static_audit()
+        .map_err(internal_error("mut_static_audit"))?;
+    #[derive(serde::Serialize)]
+    struct Resp {
+        directory: String,
+        finding_count: usize,
+        findings: Vec<crate::graph::queries::MutStaticFinding>,
+    }
+    json_result(&Resp {
+        directory: params.directory,
+        finding_count: findings.len(),
+        findings,
+    })
+}
+
 // ----- helpers -----
 
 fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {

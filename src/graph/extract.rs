@@ -18,6 +18,7 @@ use super::impls::extract_impl_items;
 use super::loader::LoadedWorkspace;
 use super::model::{ExtractionModel, Node, NodeKind};
 use super::signatures::extract_signatures;
+use super::statics::extract_statics;
 use super::usages::extract_usages;
 
 pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
@@ -36,6 +37,7 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         usages: Vec::new(),
         contains: Vec::new(),
         signatures: Vec::new(),
+        statics: Vec::new(),
     };
 
     let workspace_display = loaded
@@ -162,6 +164,19 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
             "extract: extract_signatures           {:>9.2?}  ({} signatures)",
             t.elapsed(),
             model.signatures.len()
+        );
+    }
+
+    // v10 (Phase 7 Path B): per-Static metadata extraction. Runs after
+    // signatures and before usages (independent passes — order is purely
+    // for the timing breakdown).
+    let t = std::time::Instant::now();
+    extract_statics(&mut model, &loaded.db, &loaded.vfs, &def_to_node);
+    if timing {
+        eprintln!(
+            "extract: extract_statics              {:>9.2?}  ({} statics)",
+            t.elapsed(),
+            model.statics.len()
         );
     }
 
