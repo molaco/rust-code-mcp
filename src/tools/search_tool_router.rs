@@ -308,6 +308,30 @@ impl SearchToolRouter {
         crate::tools::graph_tools::calls_from(params).await
     }
 
+    #[tool(description = "Bounded recursive descent over outgoing call edges from `root`. Returns a tree of CallGraphNode { fn_qualified_name, crate_name, callees, truncated_at_cycle, truncated_at_depth }. `depth` defaults to 3 and is capped at 8 (deeper trees rarely fit usefully in a single response and may explode). `truncated_at_cycle = true` means the fn was already expanded earlier in the traversal — its callees are visible elsewhere in the tree. `truncated_at_depth = true` means depth ran out at this node and there were unvisited callees.")]
+    async fn call_graph(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::CallGraphParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::call_graph(params).await
+    }
+
+    #[tool(description = "`who_calls(target)` filtered to call sites whose *caller fn* lives in the named crate. Note: this filters by the caller's crate, not the target's. Useful for asking 'which fns inside crate X call Y?' regardless of which crate Y lives in.")]
+    async fn callers_in_crate(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::CallersInCrateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::callers_in_crate(params).await
+    }
+
+    #[tool(description = "Reverse BFS from `target`: counts distinct caller fns reachable backward up to `depth` hops. Returns { direct_callers, transitive_callers, depth_reached, truncated_at_depth }. Counts *fns*, not call sites — a fn that calls target 5 times counts as 1 caller. `depth` defaults to 3 and is capped at 8. depth=0 returns zeros; depth=1 is just the direct caller count.")]
+    async fn recursive_callers_count(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::RecursiveCallersCountParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::recursive_callers_count(params).await
+    }
+
     #[tool(description = "Scan a local crate for `pub` items with no cross-crate importer or reference — candidates for downgrading to `pub(crate)`. Conservative: may miss items used only through public type signatures.")]
     async fn dead_pub_in_crate(
         &self,
@@ -369,7 +393,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding, 20) crate_edges - cross-crate consumer→producer edges with symbols (note: method calls / trait dispatch are NOT in usage counts), 21) overlaps - workspace-wide name collision / shadow / duplicate report, 22) module_tree - recursive module/item tree dump for a crate, 23) workspace_stats - workspace counters (nodes / items / bindings / visibility), 24) who_calls - Layer 10 call graph: every fn-body reference to a target fn (caller-attributed), 25) calls_from - Layer 10 call graph: every outgoing reference made from a caller fn's body"
+                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding, 20) crate_edges - cross-crate consumer→producer edges with symbols (note: method calls / trait dispatch are NOT in usage counts), 21) overlaps - workspace-wide name collision / shadow / duplicate report, 22) module_tree - recursive module/item tree dump for a crate, 23) workspace_stats - workspace counters (nodes / items / bindings / visibility), 24) who_calls - Layer 10 call graph: every fn-body reference to a target fn (caller-attributed), 25) calls_from - Layer 10 call graph: every outgoing reference made from a caller fn's body, 26) call_graph - bounded recursive descent over outgoing call edges from a root fn (default depth=3, max=8), 27) callers_in_crate - who_calls filtered by the caller's crate, 28) recursive_callers_count - reverse BFS counting distinct transitive caller fns up to a depth (default 3, max 8)"
                     .into(),
             ),
         }

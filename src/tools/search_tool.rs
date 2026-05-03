@@ -160,6 +160,36 @@ pub struct CallsFromParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CallGraphParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the root function to descend from")]
+    pub root: String,
+    #[schemars(description = "Optional max recursion depth (default 3, capped at 8)")]
+    pub depth: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CallersInCrateParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the target function whose callers you want")]
+    pub target: String,
+    #[schemars(description = "Qualified name of the crate to filter callers by (matches the *caller's* crate, not the target's)")]
+    pub krate: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RecursiveCallersCountParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the target function whose transitive callers you want to count")]
+    pub target: String,
+    #[schemars(description = "Optional max BFS depth in caller hops (default 3, capped at 8)")]
+    pub depth: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeadPubParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,

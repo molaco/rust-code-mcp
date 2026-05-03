@@ -18,16 +18,17 @@ use rmcp::{
 use serde::Serialize;
 
 use crate::graph::{
-    Binding, BindingKind, BindingVisibility, CrateDeadPub, CrateEdge, DeadPubFinding,
-    EnrichedCallSite, GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node,
-    NodeId, NodeKind, OpenedSnapshot, OverlapsReport, Usage, UsageCategory, UsageSummaryRow,
-    WorkspaceStats, build_and_persist, open_current,
+    Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge,
+    DeadPubFinding, EnrichedCallSite, GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode,
+    Namespace, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport, RecursiveCallersCount,
+    Usage, UsageCategory, UsageSummaryRow, WorkspaceStats, build_and_persist, open_current,
     snapshot::BuildOptions,
 };
 use crate::tools::search_tool::{
-    BuildHypergraphParams, CallsFromParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
-    GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams, GraphReexportsParams,
-    ModuleTreeParams, OverlapsParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
+    BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
+    CrateEdgesParams, DeadPubParams, DeadPubReportParams, GraphDeclaredReexportsParams,
+    GraphExportsParams, GraphImportsParams, GraphReexportsParams, ModuleTreeParams,
+    OverlapsParams, RecursiveCallersCountParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
     WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
@@ -238,6 +239,75 @@ pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpEr
         caller: Some(caller_node.qualified_name),
         call_sites: sites,
     })
+}
+
+pub async fn call_graph(params: CallGraphParams) -> Result<CallToolResult, McpError> {
+    const DEFAULT_DEPTH: u32 = 3;
+    const MAX_DEPTH: u32 = 8;
+    let depth = params.depth.unwrap_or(DEFAULT_DEPTH).min(MAX_DEPTH);
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (root_id, root_node) = snap
+        .lookup_by_qualified_name(&params.root)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.root),
+                None,
+            )
+        })?;
+    let tree: CallGraphNode = snap
+        .call_graph(root_id, depth)
+        .map_err(internal_error("call_graph"))?;
+    json_result(&CallGraphResponse {
+        root: root_node.qualified_name,
+        depth,
+        tree,
+    })
+}
+
+pub async fn callers_in_crate(
+    params: CallersInCrateParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let sites = snap
+        .callers_in_crate(target_id, &params.krate)
+        .map_err(internal_error("callers_in_crate"))?;
+    json_result(&CallersInCrateResponse {
+        target: target_node.qualified_name,
+        krate: params.krate,
+        call_sites: sites,
+    })
+}
+
+pub async fn recursive_callers_count(
+    params: RecursiveCallersCountParams,
+) -> Result<CallToolResult, McpError> {
+    const DEFAULT_DEPTH: u32 = 3;
+    const MAX_DEPTH: u32 = 8;
+    let depth = params.depth.unwrap_or(DEFAULT_DEPTH).min(MAX_DEPTH);
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, _target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let count: RecursiveCallersCount = snap
+        .recursive_callers_count(target_id, depth)
+        .map_err(internal_error("recursive_callers_count"))?;
+    json_result(&count)
 }
 
 pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, McpError> {
@@ -696,6 +766,21 @@ struct CrateEdgesResponse {
 struct UsageSummaryResponse {
     target: String,
     rows: Vec<UsageSummaryRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallGraphResponse {
+    root: String,
+    depth: u32,
+    tree: CallGraphNode,
+}
+
+#[derive(Debug, Serialize)]
+struct CallersInCrateResponse {
+    target: String,
+    #[serde(rename = "crate")]
+    krate: String,
+    call_sites: Vec<EnrichedCallSite>,
 }
 
 #[derive(Debug, Serialize)]

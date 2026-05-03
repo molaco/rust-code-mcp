@@ -121,6 +121,35 @@ pub struct EnrichedCallSite {
     pub category: String, // "Read" | "Write" | "Test" | "Other"
 }
 
+/// Result of `call_graph(root_fn, depth)` — bounded recursive descent through
+/// outgoing fn-body references. `callees` is empty at leaves, depth-limit, or
+/// cycle-truncated branches; the two boolean flags disambiguate which.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallGraphNode {
+    pub fn_qualified_name: String,
+    pub crate_name: Option<String>,
+    pub callees: Vec<CallGraphNode>,
+    /// `true` if this fn was already expanded earlier in the traversal — its
+    /// callees are visible elsewhere in the graph and were skipped here to
+    /// avoid infinite recursion / redundant subtrees.
+    pub truncated_at_cycle: bool,
+    /// `true` if depth ran out at this node and `calls_from(this)` would
+    /// otherwise have produced callees.
+    pub truncated_at_depth: bool,
+}
+
+/// Result of `recursive_callers_count(target, depth)` — reverse BFS over
+/// fn-level call sites, counting distinct caller fns reachable backward.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecursiveCallersCount {
+    pub target_qualified_name: String,
+    pub depth: u32,
+    pub direct_callers: usize,
+    pub transitive_callers: usize,
+    pub depth_reached: u32,
+    pub truncated_at_depth: bool,
+}
+
 /// One row of `who_uses_summary`: aggregation of `usages_of(target)` results,
 /// grouped by `(consumer_module, target)`. Each row carries a per-category
 /// breakdown so callers can see whether the consumer reads / writes / tests
@@ -463,6 +492,243 @@ impl OpenedSnapshot {
             });
         }
         Ok(out)
+    }
+
+    /// Bounded recursive descent over outgoing fn-body references rooted at
+    /// `root_fn`. At each node, `calls_from(node)` is computed, distinct callee
+    /// NodeIds are recursed into, and `depth` is decremented. A global
+    /// `visited: HashSet<NodeId>` prevents re-expanding the same fn twice
+    /// anywhere in the tree (so cycles and DAG-style fan-in both terminate).
+    ///
+    /// `truncated_at_cycle` flags subtrees pruned because the callee was
+    /// already expanded elsewhere — the same callees would have appeared.
+    /// `truncated_at_depth` flags subtrees pruned because `depth == 0` and
+    /// the node has at least one outgoing edge.
+    pub fn call_graph(&self, root_fn: NodeId, depth: u32) -> Result<CallGraphNode> {
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        self.call_graph_rec(root_fn, depth, &mut visited)
+    }
+
+    fn call_graph_rec(
+        &self,
+        fn_id: NodeId,
+        depth: u32,
+        visited: &mut HashSet<NodeId>,
+    ) -> Result<CallGraphNode> {
+        let rtxn = self.env.read_txn()?;
+        let node = self.dbs.nodes_by_id.get(&rtxn, fn_id.as_bytes())?;
+        let (fn_qualified_name, crate_name) = match node {
+            Some(n) => {
+                let crate_name = match n.crate_id {
+                    Some(cid) => self
+                        .dbs
+                        .nodes_by_id
+                        .get(&rtxn, cid.as_bytes())?
+                        .map(|c| c.qualified_name),
+                    None => None,
+                };
+                (n.qualified_name, crate_name)
+            }
+            None => (String::new(), None),
+        };
+        drop(rtxn);
+
+        // If this fn has been expanded somewhere else already, prune.
+        // The root call (visited empty) always proceeds; subsequent visits to
+        // the same NodeId from anywhere in the tree become cycle-truncated.
+        if !visited.insert(fn_id) {
+            return Ok(CallGraphNode {
+                fn_qualified_name,
+                crate_name,
+                callees: Vec::new(),
+                truncated_at_cycle: true,
+                truncated_at_depth: false,
+            });
+        }
+
+        // Collect distinct callee NodeIds. `usages_for_consumer_function`
+        // returns one row per call site, so the same callee NodeId may appear
+        // multiple times.
+        let rtxn2 = self.env.read_txn()?;
+        let mut distinct_callees: Vec<NodeId> = Vec::new();
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        for entry in self.usages_for_consumer_function(&rtxn2, fn_id)? {
+            let usage = entry?;
+            if seen.insert(usage.target) {
+                distinct_callees.push(usage.target);
+            }
+        }
+        drop(rtxn2);
+
+        // At depth 0, leave callees empty and flag truncation if there were any.
+        if depth == 0 {
+            return Ok(CallGraphNode {
+                fn_qualified_name,
+                crate_name,
+                callees: Vec::new(),
+                truncated_at_cycle: false,
+                truncated_at_depth: !distinct_callees.is_empty(),
+            });
+        }
+
+        let mut callees: Vec<CallGraphNode> = Vec::with_capacity(distinct_callees.len());
+        for callee_id in distinct_callees {
+            let child = self.call_graph_rec(callee_id, depth - 1, visited)?;
+            callees.push(child);
+        }
+
+        Ok(CallGraphNode {
+            fn_qualified_name,
+            crate_name,
+            callees,
+            truncated_at_cycle: false,
+            truncated_at_depth: false,
+        })
+    }
+
+    /// `who_calls(target)` filtered to call sites whose *caller fn* lives in a
+    /// crate whose qualified_name equals `crate_qualified`. Callers in any
+    /// other crate (or with a missing `crate_id`) are dropped. Note: this
+    /// filters by the **caller's** crate, not the target's.
+    pub fn callers_in_crate(
+        &self,
+        target: NodeId,
+        crate_qualified: &str,
+    ) -> Result<Vec<EnrichedCallSite>> {
+        let rtxn = self.env.read_txn()?;
+        let callee_qualified_name = self
+            .dbs
+            .nodes_by_id
+            .get(&rtxn, target.as_bytes())?
+            .map(|n| n.qualified_name)
+            .unwrap_or_default();
+
+        let mut out: Vec<EnrichedCallSite> = Vec::new();
+        for entry in self.usages_for_target(&rtxn, target)? {
+            let usage = entry?;
+            let Some(fn_id) = usage.consumer_function else {
+                continue;
+            };
+            let Some(caller_node) = self.dbs.nodes_by_id.get(&rtxn, fn_id.as_bytes())? else {
+                continue;
+            };
+            let Some(crate_id) = caller_node.crate_id else {
+                continue;
+            };
+            let Some(crate_node) = self.dbs.nodes_by_id.get(&rtxn, crate_id.as_bytes())? else {
+                continue;
+            };
+            if crate_node.qualified_name != crate_qualified {
+                continue;
+            }
+            out.push(EnrichedCallSite {
+                caller_qualified_name: Some(caller_node.qualified_name),
+                callee_qualified_name: callee_qualified_name.clone(),
+                file: usage.file,
+                start: usage.start,
+                end: usage.end,
+                category: usage_category_label(usage.category).to_string(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Reverse BFS from `target`: count distinct caller fns reachable backward
+    /// up to `depth` hops. depth=0 returns zeros. depth=1 returns just the
+    /// direct callers. Higher depths include transitive callers (callers of
+    /// callers, etc.). Counts *fns*, not call sites — a fn that calls target
+    /// 5 times counts as 1 caller.
+    pub fn recursive_callers_count(
+        &self,
+        target: NodeId,
+        depth: u32,
+    ) -> Result<RecursiveCallersCount> {
+        let rtxn = self.env.read_txn()?;
+        let target_qualified_name = self
+            .dbs
+            .nodes_by_id
+            .get(&rtxn, target.as_bytes())?
+            .map(|n| n.qualified_name)
+            .unwrap_or_default();
+        drop(rtxn);
+
+        if depth == 0 {
+            return Ok(RecursiveCallersCount {
+                target_qualified_name,
+                depth: 0,
+                direct_callers: 0,
+                transitive_callers: 0,
+                depth_reached: 0,
+                truncated_at_depth: false,
+            });
+        }
+
+        // Direct callers (hop 1).
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut frontier: Vec<NodeId> = Vec::new();
+        {
+            let rtxn = self.env.read_txn()?;
+            for entry in self.usages_for_target(&rtxn, target)? {
+                let usage = entry?;
+                if let Some(fn_id) = usage.consumer_function {
+                    if visited.insert(fn_id) {
+                        frontier.push(fn_id);
+                    }
+                }
+            }
+        }
+        let direct_callers = visited.len();
+        let mut depth_reached: u32 = if direct_callers > 0 { 1 } else { 0 };
+
+        // Hops 2..=depth.
+        let mut hop: u32 = 1;
+        let mut truncated_at_depth = false;
+        while hop < depth && !frontier.is_empty() {
+            let mut next: Vec<NodeId> = Vec::new();
+            for fn_id in frontier.drain(..) {
+                let rtxn = self.env.read_txn()?;
+                for entry in self.usages_for_target(&rtxn, fn_id)? {
+                    let usage = entry?;
+                    if let Some(caller_id) = usage.consumer_function {
+                        if visited.insert(caller_id) {
+                            next.push(caller_id);
+                        }
+                    }
+                }
+            }
+            if !next.is_empty() {
+                depth_reached = hop + 1;
+            }
+            frontier = next;
+            hop += 1;
+        }
+        // If we exited because we hit depth and the frontier still has
+        // un-visited would-be expansions, flag truncation.
+        if hop == depth && !frontier.is_empty() {
+            // Any node in the frontier that itself has at least one un-visited
+            // caller means the BFS isn't exhausted. Do a single peek pass.
+            'outer: for fn_id in &frontier {
+                let rtxn = self.env.read_txn()?;
+                for entry in self.usages_for_target(&rtxn, *fn_id)? {
+                    let usage = entry?;
+                    if let Some(caller_id) = usage.consumer_function {
+                        if !visited.contains(&caller_id) {
+                            truncated_at_depth = true;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(RecursiveCallersCount {
+            target_qualified_name,
+            depth,
+            direct_callers,
+            transitive_callers: visited.len(),
+            depth_reached,
+            truncated_at_depth,
+        })
     }
 
     /// Aggregation rollup of `usages_of(target)` grouped by `consumer_module`.
@@ -1887,5 +2153,136 @@ mod tests {
         assert!(stats.pub_crate_share.is_finite());
         assert!(stats.pub_crate_share >= 0.0);
         assert!(stats.pub_crate_share <= 1.0);
+    }
+
+    #[test]
+    fn call_graph_returns_root_with_callees() {
+        // `build_and_persist` is a known caller of `loader::load` (and others);
+        // a depth-2 descent must produce a non-empty `callees` vec on the root.
+        let snap = shared_snapshot();
+        let (root_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::snapshot::build_and_persist")
+            .unwrap()
+            .expect("build_and_persist not in graph");
+        let tree = snap
+            .call_graph(root_id, 2)
+            .expect("call_graph failed");
+        assert_eq!(
+            tree.fn_qualified_name,
+            "file_search_mcp::graph::snapshot::build_and_persist"
+        );
+        assert!(
+            !tree.callees.is_empty(),
+            "expected build_and_persist to have at least one callee"
+        );
+        assert!(
+            !tree.truncated_at_depth,
+            "depth=2 should not truncate the root itself"
+        );
+        assert!(
+            !tree.truncated_at_cycle,
+            "root never has truncated_at_cycle"
+        );
+    }
+
+    #[test]
+    fn call_graph_respects_depth_zero() {
+        // depth=0 means: don't expand. Even on a known caller, callees must be
+        // empty and truncated_at_depth must be true (because the fn does have
+        // outgoing edges).
+        let snap = shared_snapshot();
+        let (root_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::snapshot::build_and_persist")
+            .unwrap()
+            .expect("build_and_persist not in graph");
+        let tree = snap
+            .call_graph(root_id, 0)
+            .expect("call_graph failed");
+        assert!(tree.callees.is_empty(), "depth=0 leaves callees empty");
+        assert!(
+            tree.truncated_at_depth,
+            "depth=0 on a fn with outgoing edges must set truncated_at_depth"
+        );
+    }
+
+    #[test]
+    fn callers_in_crate_filters_correctly() {
+        // `loader::load` is referenced from inside `file_search_mcp` itself
+        // (e.g., from `build_and_persist`). Filtering by the workspace's own
+        // crate must return a strict subset of who_calls — equal or smaller.
+        let snap = shared_snapshot();
+        let (target_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .unwrap()
+            .expect("loader::load not in graph");
+        let all = snap.who_calls(target_id).expect("who_calls failed");
+        let filtered = snap
+            .callers_in_crate(target_id, "file_search_mcp")
+            .expect("callers_in_crate failed");
+        assert!(
+            filtered.len() <= all.len(),
+            "filtered set must be subset of who_calls (got {} filtered vs {} total)",
+            filtered.len(),
+            all.len()
+        );
+        // Every filtered row's caller must be set (came from an in-crate fn).
+        for row in &filtered {
+            assert!(
+                row.caller_qualified_name
+                    .as_deref()
+                    .map(|s| s.starts_with("file_search_mcp"))
+                    .unwrap_or(false),
+                "caller {:?} not in file_search_mcp",
+                row.caller_qualified_name
+            );
+        }
+        // Filtering by a bogus crate name must yield zero rows even when
+        // who_calls is non-empty.
+        let empty = snap
+            .callers_in_crate(target_id, "definitely_not_a_real_crate_xyz")
+            .expect("callers_in_crate failed");
+        assert!(empty.is_empty(), "bogus crate filter must return zero");
+    }
+
+    #[test]
+    fn recursive_callers_count_grows_with_depth() {
+        // `loader::load` has at least one direct caller (`build_and_persist`),
+        // which itself has callers somewhere in the codebase. So the depth=3
+        // count must be >= depth=1 count.
+        let snap = shared_snapshot();
+        let (target_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .unwrap()
+            .expect("loader::load not in graph");
+        let depth1 = snap
+            .recursive_callers_count(target_id, 1)
+            .expect("recursive_callers_count failed");
+        let depth3 = snap
+            .recursive_callers_count(target_id, 3)
+            .expect("recursive_callers_count failed");
+        assert_eq!(depth1.depth, 1);
+        assert_eq!(depth3.depth, 3);
+        assert!(
+            depth3.transitive_callers >= depth1.transitive_callers,
+            "transitive_callers must grow monotonically with depth (got d1={} d3={})",
+            depth1.transitive_callers,
+            depth3.transitive_callers
+        );
+        assert_eq!(
+            depth1.direct_callers, depth1.transitive_callers,
+            "depth=1 transitive must equal direct"
+        );
+        assert!(
+            depth1.direct_callers >= 1,
+            "loader::load should have at least one direct caller"
+        );
+        // depth=0 case
+        let depth0 = snap
+            .recursive_callers_count(target_id, 0)
+            .expect("recursive_callers_count failed");
+        assert_eq!(depth0.direct_callers, 0);
+        assert_eq!(depth0.transitive_callers, 0);
+        assert_eq!(depth0.depth_reached, 0);
+        assert!(!depth0.truncated_at_depth);
     }
 }
