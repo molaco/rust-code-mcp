@@ -292,6 +292,22 @@ impl SearchToolRouter {
         crate::tools::graph_tools::who_uses_summary(params).await
     }
 
+    #[tool(description = "Layer 10 call graph: every non-import reference to the target function whose call site sits inside another function body. Returns (caller_qualified_name, file, byte range, category) per call site. References in const initializers, type aliases, and other non-function scopes are excluded — use `who_uses` to see all reference sites including those. Calls from closures attribute to the enclosing fn.")]
+    async fn who_calls(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::WhoCallsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::who_calls(params).await
+    }
+
+    #[tool(description = "Layer 10 call graph: every non-import reference made from the body of the caller function. Returns (callee_qualified_name, file, byte range, category) per outgoing reference. References in const initializers, type aliases, and other non-function scopes are excluded — use `who_uses` to see all reference sites including those. Calls from closures attribute to the enclosing fn.")]
+    async fn calls_from(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::CallsFromParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::calls_from(params).await
+    }
+
     #[tool(description = "Scan a local crate for `pub` items with no cross-crate importer or reference — candidates for downgrading to `pub(crate)`. Conservative: may miss items used only through public type signatures.")]
     async fn dead_pub_in_crate(
         &self,
@@ -353,7 +369,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding, 20) crate_edges - cross-crate consumer→producer edges with symbols (note: method calls / trait dispatch are NOT in usage counts), 21) overlaps - workspace-wide name collision / shadow / duplicate report, 22) module_tree - recursive module/item tree dump for a crate, 23) workspace_stats - workspace counters (nodes / items / bindings / visibility)"
+                "This server provides code search, analysis, and persisted-hypergraph tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files, 12) build_hypergraph - build/reuse a persisted workspace hypergraph (HIR-driven, no_deps=true), 13) get_imports - imports of a module, 14) get_exports - items visible from a consumer module, 15) get_reexports - the `pub use` subset of get_exports, 16) who_imports - reverse lookup: every importer of a symbol, 17) who_uses - every non-import reference to a symbol (file:byte-range hits), 18) dead_pub_in_crate - find `pub` items with no cross-crate consumer (candidates for `pub(crate)` downgrade), 19) dead_pub_report - workspace-wide aggregate of dead_pub_in_crate, with file path + byte span per finding, 20) crate_edges - cross-crate consumer→producer edges with symbols (note: method calls / trait dispatch are NOT in usage counts), 21) overlaps - workspace-wide name collision / shadow / duplicate report, 22) module_tree - recursive module/item tree dump for a crate, 23) workspace_stats - workspace counters (nodes / items / bindings / visibility), 24) who_calls - Layer 10 call graph: every fn-body reference to a target fn (caller-attributed), 25) calls_from - Layer 10 call graph: every outgoing reference made from a caller fn's body"
                     .into(),
             ),
         }

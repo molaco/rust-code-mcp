@@ -227,6 +227,13 @@ fn write_model(
             .put(&mut wtxn, usage.target.as_bytes(), uid.as_bytes())?;
         dbs.usages_by_consumer
             .put(&mut wtxn, usage.consumer_module.as_bytes(), uid.as_bytes())?;
+        if let Some(consumer_fn) = usage.consumer_function {
+            dbs.usages_by_consumer_function.put(
+                &mut wtxn,
+                consumer_fn.as_bytes(),
+                uid.as_bytes(),
+            )?;
+        }
         usage_count += 1;
     }
 

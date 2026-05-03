@@ -52,7 +52,18 @@ use super::model::{Binding, Node, Usage};
 // fns and trait-declaration fns); `AssocConst` and `AssocType` now also
 // surface via the new `extract_impl_items` pass. Old snapshots auto-rebuild
 // because `graph_id_for` mixes `SCHEMA_VERSION`.
-pub const SCHEMA_VERSION: u32 = 5;
+// v6 (2026-05): Layer 10 — call graph. `Usage` gains
+// `consumer_function: Option<NodeId>`, attributing each non-import
+// reference to the enclosing function body when one exists (None for
+// const initializers / type alias bounds / enum variant discriminants;
+// closures attribute to the parent fn per RA's
+// `SemanticsScope::containing_function`). Adds a new
+// `usages_by_consumer_function` DUP_SORT sub-DB (NodeId → UsageId) that
+// powers the `calls_from` query. Bincode reads of v5 records reject the
+// extra field as unexpected EOF, so the bump is required even with
+// `#[serde(default)]`. v5/v6 graph_ids are disjoint via `graph_id_for`
+// hashing `SCHEMA_VERSION`.
+pub const SCHEMA_VERSION: u32 = 6;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";
@@ -222,6 +233,7 @@ pub struct GraphDatabases {
     pub usages_by_id: Database<Bytes, SerdeBincode<Usage>>,
     pub usages_by_target: Database<Bytes, Bytes>,        // NodeId → UsageId, DUP_SORT
     pub usages_by_consumer: Database<Bytes, Bytes>,      // NodeId → UsageId, DUP_SORT
+    pub usages_by_consumer_function: Database<Bytes, Bytes>, // NodeId → UsageId, DUP_SORT
 }
 
 impl GraphDatabases {
@@ -254,6 +266,12 @@ impl GraphDatabases {
                 env,
                 wtxn,
                 "usages_by_consumer",
+                true,
+            )?,
+            usages_by_consumer_function: open_or_create_bytes_bytes(
+                env,
+                wtxn,
+                "usages_by_consumer_function",
                 true,
             )?,
         })
@@ -289,6 +307,9 @@ impl GraphDatabases {
             usages_by_consumer: env
                 .open_database(rtxn, Some("usages_by_consumer"))?
                 .context("usages_by_consumer missing")?,
+            usages_by_consumer_function: env
+                .open_database(rtxn, Some("usages_by_consumer_function"))?
+                .context("usages_by_consumer_function missing")?,
         }))
     }
 }

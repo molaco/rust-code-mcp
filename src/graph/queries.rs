@@ -104,6 +104,23 @@ pub struct CommonFnName {
     pub crates: Vec<String>,
 }
 
+/// One row of `who_calls(target_fn)` or `calls_from(caller_fn)`. Both queries
+/// return the same shape — the only difference is whether the row's "anchor"
+/// is the caller (`who_calls`) or the callee (`calls_from`); each side
+/// carries the *other* end's qualified name plus the file:byte-range hit and
+/// reference category. References from non-fn scopes (const initializers,
+/// trait bounds, enum discriminants) never appear because both queries scan
+/// only `Usage` rows where `consumer_function.is_some()`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrichedCallSite {
+    pub caller_qualified_name: Option<String>,
+    pub callee_qualified_name: String,
+    pub file: String,
+    pub start: u32,
+    pub end: u32,
+    pub category: String, // "Read" | "Write" | "Test" | "Other"
+}
+
 /// One row of `who_uses_summary`: aggregation of `usages_of(target)` results,
 /// grouped by `(consumer_module, target)`. Each row carries a per-category
 /// breakdown so callers can see whether the consumer reads / writes / tests
@@ -364,6 +381,86 @@ impl OpenedSnapshot {
         let mut out = Vec::new();
         for entry in self.usages_for_consumer(&rtxn, consumer_module)? {
             out.push(entry?);
+        }
+        Ok(out)
+    }
+
+    /// Every non-import reference to `target_fn` whose call site is inside
+    /// some function body. Returns the caller's qualified name + file:byte
+    /// range + category. References from non-fn scopes (const initializers,
+    /// trait bounds, enum discriminants) are excluded — see `who_uses` for
+    /// those.
+    pub fn who_calls(&self, target_fn: NodeId) -> Result<Vec<EnrichedCallSite>> {
+        let rtxn = self.env.read_txn()?;
+        let callee_qualified_name = self
+            .dbs
+            .nodes_by_id
+            .get(&rtxn, target_fn.as_bytes())?
+            .map(|n| n.qualified_name)
+            .unwrap_or_default();
+        let mut usages: Vec<Usage> = Vec::new();
+        for entry in self.usages_for_target(&rtxn, target_fn)? {
+            let usage = entry?;
+            if usage.consumer_function.is_some() {
+                usages.push(usage);
+            }
+        }
+
+        let mut out = Vec::with_capacity(usages.len());
+        for usage in usages {
+            let caller_qualified_name = match usage.consumer_function {
+                Some(fn_id) => self
+                    .dbs
+                    .nodes_by_id
+                    .get(&rtxn, fn_id.as_bytes())?
+                    .map(|n| n.qualified_name),
+                None => None,
+            };
+            out.push(EnrichedCallSite {
+                caller_qualified_name,
+                callee_qualified_name: callee_qualified_name.clone(),
+                file: usage.file,
+                start: usage.start,
+                end: usage.end,
+                category: usage_category_label(usage.category).to_string(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Every non-import reference made *from* the body of `caller_fn`. Returns
+    /// the callee's qualified name + file:byte range + category. Closures
+    /// inside `caller_fn` attribute to it (RA's default for
+    /// `SemanticsScope::containing_function`).
+    pub fn calls_from(&self, caller_fn: NodeId) -> Result<Vec<EnrichedCallSite>> {
+        let rtxn = self.env.read_txn()?;
+        let caller_qualified_name = self
+            .dbs
+            .nodes_by_id
+            .get(&rtxn, caller_fn.as_bytes())?
+            .map(|n| n.qualified_name);
+
+        let mut usages: Vec<Usage> = Vec::new();
+        for entry in self.usages_for_consumer_function(&rtxn, caller_fn)? {
+            usages.push(entry?);
+        }
+
+        let mut out = Vec::with_capacity(usages.len());
+        for usage in usages {
+            let callee_qualified_name = self
+                .dbs
+                .nodes_by_id
+                .get(&rtxn, usage.target.as_bytes())?
+                .map(|n| n.qualified_name)
+                .unwrap_or_default();
+            out.push(EnrichedCallSite {
+                caller_qualified_name: caller_qualified_name.clone(),
+                callee_qualified_name,
+                file: usage.file,
+                start: usage.start,
+                end: usage.end,
+                category: usage_category_label(usage.category).to_string(),
+            });
         }
         Ok(out)
     }
@@ -1196,6 +1293,30 @@ impl OpenedSnapshot {
             }))
     }
 
+    fn usages_for_consumer_function<'txn>(
+        &'txn self,
+        rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
+        caller_fn: NodeId,
+    ) -> Result<impl Iterator<Item = Result<Usage>> + 'txn> {
+        Ok(self
+            .dbs
+            .usages_by_consumer_function
+            .get_duplicates(rtxn, caller_fn.as_bytes())?
+            .into_iter()
+            .flatten()
+            .map(move |entry| {
+                let (_k, uid_bytes) = entry?;
+                let mut uid = [0u8; 32];
+                uid.copy_from_slice(uid_bytes);
+                let usage = self
+                    .dbs
+                    .usages_by_id
+                    .get(rtxn, &uid)?
+                    .context("dangling UsageId in usages_by_consumer_function")?;
+                Ok(usage)
+            }))
+    }
+
     /// Walk up `module → parent → ...` and return the set including `module`
     /// itself. Used to answer "is C a descendant of M?".
     fn module_ancestors(
@@ -1717,6 +1838,42 @@ mod tests {
         // Sorted by total_count desc.
         for w in summary.windows(2) {
             assert!(w[0].total_count >= w[1].total_count);
+        }
+    }
+
+    #[test]
+    fn calls_from_returns_callees() {
+        // Layer 10 — call graph: `build_and_persist` is a known caller of
+        // `loader::load`. `calls_from(build_and_persist)` should include the
+        // `loader::load` ref (plus a long tail of other refs from inside the
+        // body — at minimum the loader::load call must be present).
+        let snap = shared_snapshot();
+        let (caller_id, _) = snap
+            .lookup_by_qualified_name("file_search_mcp::graph::snapshot::build_and_persist")
+            .unwrap()
+            .expect("build_and_persist not in graph");
+        let calls = snap
+            .calls_from(caller_id)
+            .expect("calls_from failed");
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.callee_qualified_name.contains("loader::load")),
+            "expected calls_from(build_and_persist) to include loader::load, got {:?}",
+            calls
+                .iter()
+                .map(|c| &c.callee_qualified_name)
+                .collect::<Vec<_>>()
+        );
+        // Every row's caller_qualified_name should resolve to build_and_persist
+        // (call sites attribute to the queried fn — closures fold to parent).
+        for c in &calls {
+            assert_eq!(
+                c.caller_qualified_name.as_deref(),
+                Some("file_search_mcp::graph::snapshot::build_and_persist"),
+                "caller mismatch on {:?}",
+                c
+            );
         }
     }
 

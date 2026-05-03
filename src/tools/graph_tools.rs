@@ -19,16 +19,16 @@ use serde::Serialize;
 
 use crate::graph::{
     Binding, BindingKind, BindingVisibility, CrateDeadPub, CrateEdge, DeadPubFinding,
-    GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
-    OpenedSnapshot, OverlapsReport, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
-    build_and_persist, open_current,
+    EnrichedCallSite, GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node,
+    NodeId, NodeKind, OpenedSnapshot, OverlapsReport, Usage, UsageCategory, UsageSummaryRow,
+    WorkspaceStats, build_and_persist, open_current,
     snapshot::BuildOptions,
 };
 use crate::tools::search_tool::{
-    BuildHypergraphParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
+    BuildHypergraphParams, CallsFromParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
     GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams, GraphReexportsParams,
-    ModuleTreeParams, OverlapsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams,
-    WorkspaceStatsParams,
+    ModuleTreeParams, OverlapsParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
+    WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -195,6 +195,48 @@ pub async fn who_uses_summary(
     json_result(&UsageSummaryResponse {
         target: target_node.qualified_name,
         rows,
+    })
+}
+
+pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let sites = snap
+        .who_calls(target_id)
+        .map_err(internal_error("who_calls"))?;
+    json_result(&CallSitesResponse {
+        target: Some(target_node.qualified_name),
+        caller: None,
+        call_sites: sites,
+    })
+}
+
+pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (caller_id, caller_node) = snap
+        .lookup_by_qualified_name(&params.caller)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.caller),
+                None,
+            )
+        })?;
+    let sites = snap
+        .calls_from(caller_id)
+        .map_err(internal_error("calls_from"))?;
+    json_result(&CallSitesResponse {
+        target: None,
+        caller: Some(caller_node.qualified_name),
+        call_sites: sites,
     })
 }
 
@@ -386,12 +428,19 @@ fn enrich_usages(snap: &OpenedSnapshot, usages: Vec<Usage>) -> Vec<EnrichedUsage
         .into_iter()
         .map(|u| {
             let consumer_node = snap.node_by_id(&rtxn, u.consumer_module).ok().flatten();
+            let consumer_function_name = u.consumer_function.and_then(|fn_id| {
+                snap.node_by_id(&rtxn, fn_id)
+                    .ok()
+                    .flatten()
+                    .map(|n| n.qualified_name)
+            });
             EnrichedUsage {
                 file: u.file,
                 start: u.start,
                 end: u.end,
                 category: usage_category_label(u.category),
                 consumer_module: consumer_node.as_ref().map(|n| n.qualified_name.clone()),
+                consumer_function: consumer_function_name,
             }
         })
         .collect()
@@ -589,6 +638,21 @@ struct EnrichedUsage {
     category: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     consumer_module: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumer_function: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallSitesResponse {
+    /// Set when serving `who_calls(target)`; the resolved callee's qualified
+    /// name. None when serving `calls_from(caller)`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    /// Set when serving `calls_from(caller)`; the resolved caller's qualified
+    /// name. None when serving `who_calls(target)`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller: Option<String>,
+    call_sites: Vec<EnrichedCallSite>,
 }
 
 #[derive(Debug, Serialize)]

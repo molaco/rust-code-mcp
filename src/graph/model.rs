@@ -128,6 +128,12 @@ pub struct Usage {
     pub start: u32,   // byte offset
     pub end: u32,
     pub category: UsageCategory,
+    /// Function-scope attribution. `None` means the reference site is not
+    /// inside any function body — e.g. a const initializer, a type alias
+    /// bound, an enum variant discriminant. Closures attribute to their
+    /// enclosing fn.
+    #[serde(default)]
+    pub consumer_function: Option<NodeId>,
 }
 
 #[derive(Debug, Clone)]
