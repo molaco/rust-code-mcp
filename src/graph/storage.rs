@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use super::ids::{BindingId, NodeId};
-use super::model::{Binding, Node, Usage};
+use super::model::{Binding, FunctionSignature, Node, Usage};
 
 // v2 (2026-05): added usages_by_id / usages_by_target / usages_by_consumer
 // sub-databases and `usage_count` to the manifest.
@@ -83,7 +83,23 @@ use super::model::{Binding, Node, Usage};
 // existing snapshots still need to rebuild because `graph_id_for` hashes
 // `SCHEMA_VERSION`. Backs the new `item_attributes` and
 // `items_with_attribute` queries.
-pub const SCHEMA_VERSION: u32 = 8;
+// v9 (2026-05): Phase 5 — per-function signature extraction. New
+// `extract_signatures` pass walks every local function (free fn, inherent
+// assoc fn, trait declaration fn — NOT impl-trait body fns; mirrors the
+// impls.rs::69 exclusion) and emits a `FunctionSignature` carrying:
+//   * `is_async` flag
+//   * self kind (Owned / Ref / RefMut, or None for free fns)
+//   * non-self params with name, stringified type, by_ref, mutability
+//   * return type as a HirDisplay string
+//   * generic type parameters with their declaration-site trait bounds
+// Type strings come from `HirDisplay::display(db, dt)` with the function's
+// owning crate as `DisplayTarget`; anonymous lifetimes (`'_`) are
+// suppressed by default. Adds a new `signatures_by_target` sub-DB
+// (NodeId → FunctionSignature) — NOT DUP_SORT, one signature per fn.
+// Backs the new `function_signature` and `functions_with_filter` queries.
+// `GraphManifest` is unchanged (no `signature_count` field). Old snapshots
+// auto-rebuild because `graph_id_for` hashes `SCHEMA_VERSION`.
+pub const SCHEMA_VERSION: u32 = 9;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";
@@ -254,6 +270,9 @@ pub struct GraphDatabases {
     pub usages_by_target: Database<Bytes, Bytes>,        // NodeId → UsageId, DUP_SORT
     pub usages_by_consumer: Database<Bytes, Bytes>,      // NodeId → UsageId, DUP_SORT
     pub usages_by_consumer_function: Database<Bytes, Bytes>, // NodeId → UsageId, DUP_SORT
+    /// v9: NodeId (target fn) → FunctionSignature. NOT DUP_SORT — one
+    /// signature per local function.
+    pub signatures_by_target: Database<Bytes, SerdeBincode<FunctionSignature>>,
 }
 
 impl GraphDatabases {
@@ -294,6 +313,12 @@ impl GraphDatabases {
                 "usages_by_consumer_function",
                 true,
             )?,
+            signatures_by_target: open_or_create_bytes_bincode(
+                env,
+                wtxn,
+                "signatures_by_target",
+                false,
+            )?,
         })
     }
 
@@ -330,6 +355,9 @@ impl GraphDatabases {
             usages_by_consumer_function: env
                 .open_database(rtxn, Some("usages_by_consumer_function"))?
                 .context("usages_by_consumer_function missing")?,
+            signatures_by_target: env
+                .open_database(rtxn, Some("signatures_by_target"))?
+                .context("signatures_by_target missing")?,
         }))
     }
 }

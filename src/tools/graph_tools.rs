@@ -20,20 +20,21 @@ use serde::Serialize;
 use crate::graph::{
     Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
     DeadPubFinding, EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation,
-    GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
-    OpenedSnapshot, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
-    RecursiveCallersCount, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
-    build_and_persist, open_current, snapshot::BuildOptions,
+    FunctionFilter, FunctionSignature, FunctionWithSignature, GraphEnvOptions, GraphPaths,
+    ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport,
+    PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursiveCallersCount, SelfKindFilter,
+    Usage, UsageCategory, UsageSummaryRow, WorkspaceStats, build_and_persist, open_current,
+    snapshot::BuildOptions,
 };
 use crate::graph::queries::ItemWithAttribute;
 use crate::tools::search_tool::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
     CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
-    EnumVariantsParams, ForbiddenDependencyCheckParams, GraphDeclaredReexportsParams,
-    GraphExportsParams, GraphImportsParams, GraphReexportsParams, ItemAttributesParams,
-    ItemsWithAttributeParams, ModuleTreeParams, OverlapsParams, PubUsePubTypeAuditParams,
-    ReExportChainParams, RecursiveCallersCountParams, WhoCallsParams, WhoImportsParams,
-    WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
+    EnumVariantsParams, ForbiddenDependencyCheckParams, FunctionSignatureParams,
+    FunctionsWithFilterParams, GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams,
+    GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ModuleTreeParams,
+    OverlapsParams, PubUsePubTypeAuditParams, ReExportChainParams, RecursiveCallersCountParams,
+    WhoCallsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -508,6 +509,105 @@ pub async fn items_with_attribute(
         attribute_pattern: params.attribute_pattern,
         match_count: enriched.len(),
         items: enriched,
+    })
+}
+
+pub async fn function_signature(
+    params: FunctionSignatureParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (target_id, target_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+    let signature = snap
+        .function_signature(target_id)
+        .map_err(internal_error("function_signature"))?;
+    json_result(&FunctionSignatureResponse {
+        target: target_node.qualified_name,
+        signature,
+    })
+}
+
+pub async fn functions_with_filter(
+    params: FunctionsWithFilterParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (id, node) = snap
+        .lookup_by_qualified_name(&params.krate)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.krate),
+                None,
+            )
+        })?;
+    let crate_id = match node.kind {
+        NodeKind::Crate => id,
+        NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+            McpError::invalid_params(
+                format!(
+                    "`{}` resolves to a Module with no crate_id",
+                    params.krate
+                ),
+                None,
+            )
+        })?,
+        other => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "`{}` is a {other:?}, expected a crate or its root module",
+                    params.krate
+                ),
+                None,
+            ));
+        }
+    };
+
+    let self_kind = match params.self_kind.as_deref() {
+        None => None,
+        Some("none") => Some(SelfKindFilter::None),
+        Some("owned") => Some(SelfKindFilter::Owned),
+        Some("ref") => Some(SelfKindFilter::Ref),
+        Some("ref_mut") => Some(SelfKindFilter::RefMut),
+        Some(other) => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "self_kind must be one of `none`, `owned`, `ref`, `ref_mut`; got `{other}`"
+                ),
+                None,
+            ));
+        }
+    };
+    let filter = FunctionFilter {
+        min_param_count: params.min_param_count,
+        has_param_type: params.has_param_type,
+        returns_type_pattern: params.returns_type_pattern,
+        is_async: params.is_async,
+        self_kind,
+    };
+
+    let matches: Vec<FunctionWithSignature> = snap
+        .functions_with_filter(crate_id, &filter)
+        .map_err(internal_error("functions_with_filter"))?;
+
+    let enriched: Vec<EnrichedFunctionWithSignature> = matches
+        .into_iter()
+        .map(|m| EnrichedFunctionWithSignature {
+            target: m.qualified_name.clone(),
+            qualified_name: m.qualified_name,
+            signature: m.signature,
+        })
+        .collect();
+    json_result(&FunctionsWithFilterResponse {
+        krate: params.krate,
+        match_count: enriched.len(),
+        matches: enriched,
     })
 }
 
@@ -1146,6 +1246,30 @@ struct CallersInCrateResponse {
 #[derive(Debug, Serialize)]
 struct ModuleTreeResponse {
     tree: ModuleTreeNode,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionSignatureResponse {
+    target: String,
+    /// `None` when the target is not a function or extraction skipped it.
+    signature: Option<FunctionSignature>,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionsWithFilterResponse {
+    #[serde(rename = "crate")]
+    krate: String,
+    match_count: usize,
+    matches: Vec<EnrichedFunctionWithSignature>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrichedFunctionWithSignature {
+    /// Convenience alias for `qualified_name` so callers that want one
+    /// "navigate-to" string don't have to know which field carries it.
+    target: String,
+    qualified_name: String,
+    signature: FunctionSignature,
 }
 
 // Path import suppress dead-code on Path when unused.

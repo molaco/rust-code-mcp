@@ -303,6 +303,37 @@ pub struct WorkspaceStatsParams {
     pub directory: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FunctionSignatureParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the function (e.g. `crate::module::fn_name` or `crate::Type::method`)")]
+    pub target: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FunctionsWithFilterParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Crate qualified name to scope the search (accepts the crate name or its root module)")]
+    pub krate: String,
+    #[schemars(description = "Optional minimum non-self param count")]
+    #[serde(default)]
+    pub min_param_count: Option<usize>,
+    #[schemars(description = "Optional substring pattern that must appear in at least one param's stringified type")]
+    #[serde(default)]
+    pub has_param_type: Option<String>,
+    #[schemars(description = "Optional substring pattern that must appear in the function's stringified return type")]
+    #[serde(default)]
+    pub returns_type_pattern: Option<String>,
+    #[schemars(description = "Optional async filter — true to require `async fn`, false to require non-async")]
+    #[serde(default)]
+    pub is_async: Option<bool>,
+    #[schemars(description = "Optional self-kind filter: \"none\" | \"owned\" | \"ref\" | \"ref_mut\"")]
+    #[serde(default)]
+    pub self_kind: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
