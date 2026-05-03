@@ -17,6 +17,7 @@ use super::ids::{NodeId, workspace_hash};
 use super::impls::extract_impl_items;
 use super::loader::LoadedWorkspace;
 use super::model::{ExtractionModel, Node, NodeKind};
+use super::signatures::extract_signatures;
 use super::usages::extract_usages;
 
 pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
@@ -34,6 +35,7 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         bindings: Vec::new(),
         usages: Vec::new(),
         contains: Vec::new(),
+        signatures: Vec::new(),
     };
 
     let workspace_display = loaded
@@ -147,6 +149,19 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
             "extract: extract_attributes           {:>9.2?}  ({} items have attrs)",
             t.elapsed(),
             with_attrs
+        );
+    }
+
+    // v9 (Phase 5): per-function signature extraction. Runs after impls /
+    // attributes (so def_to_node already includes inherent/trait assoc fns)
+    // and before usages (purely for ordering — independent passes).
+    let t = std::time::Instant::now();
+    extract_signatures(&mut model, &loaded.db, &loaded.vfs, &def_to_node);
+    if timing {
+        eprintln!(
+            "extract: extract_signatures           {:>9.2?}  ({} signatures)",
+            t.elapsed(),
+            model.signatures.len()
         );
     }
 

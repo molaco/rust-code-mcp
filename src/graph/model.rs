@@ -153,6 +153,63 @@ pub struct Usage {
     pub consumer_function: Option<NodeId>,
 }
 
+/// v9 (Phase 5) — per-function signature record.
+///
+/// One `FunctionSignature` per local function (free fn, inherent assoc fn,
+/// trait declaration fn). Type strings come from RA's `HirDisplay` rendered
+/// against the function's owning crate as `DisplayTarget`; anonymous
+/// lifetimes (`'_`) are suppressed by default — named lifetimes ('a, 'static)
+/// render verbatim. Stored on `ExtractionModel.signatures` and persisted into
+/// the `signatures_by_target` LMDB sub-DB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionSignature {
+    #[serde(default)]
+    pub is_async: bool,
+    #[serde(default)]
+    pub self_param: Option<SelfKind>,
+    #[serde(default)]
+    pub params: Vec<Param>,
+    #[serde(default)]
+    pub return_type: String,
+    #[serde(default)]
+    pub generics: Vec<GenericBound>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SelfKind {
+    Owned,
+    Ref,
+    RefMut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Param {
+    /// Empty string when RA returned no name (RA's `Param.name(db)` is
+    /// `Option<Name>` — falls back to empty here so callers can substitute
+    /// `_` or `arg{idx}` as they see fit).
+    pub name: String,
+    /// `HirDisplay` output for the parameter type, anonymous lifetimes
+    /// suppressed.
+    pub ty: String,
+    /// `true` for `&T` or `&mut T`, `false` for owned types.
+    pub by_ref: bool,
+    /// `true` for `&mut T`. Owned `mut x` (a binding-mode marker) is *not*
+    /// reflected here; this field tracks reference mutability only.
+    pub mutability: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenericBound {
+    /// Type-parameter name as written, e.g. `"T"` or `"K"`.
+    pub name: String,
+    /// Each entry is a Trait name (e.g. `["Send", "Sync"]`).
+    /// NOTE (RA caveat): `TypeParam::trait_bounds` does *not* include
+    /// where-clause bounds added by methods after the parameter is
+    /// introduced — see the FIXME on `TypeParam::trait_bounds` in
+    /// `ra_ap_hir`. Treat the list as a *partial* view of the bounds.
+    pub bounds: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExtractionModel {
     pub workspace_root: PathBuf,
@@ -163,6 +220,10 @@ pub struct ExtractionModel {
     pub usages: Vec<Usage>,
     /// (parent, child) — workspace→crate, crate→root_module, module→child_module, module→item.
     pub contains: Vec<(NodeId, NodeId)>,
+    /// v9: one entry per local function whose signature was extractable
+    /// (free fns, inherent assoc fns, trait declaration fns; not impl-trait
+    /// method bodies). Persisted to `signatures_by_target`.
+    pub signatures: Vec<(NodeId, FunctionSignature)>,
 }
 
 impl ExtractionModel {

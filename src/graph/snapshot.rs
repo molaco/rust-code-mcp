@@ -269,6 +269,15 @@ fn write_model(
         usage_count += 1;
     }
 
+    // 4b. Signatures (v9): one bincode-encoded FunctionSignature per
+    // local function NodeId. No DUP_SORT — one entry per fn. No new
+    // index tables; lookups are direct via `signatures_by_target.get(node_id)`.
+    for (target, sig) in &model.signatures {
+        dbs.signatures_by_target
+            .put(&mut wtxn, target.as_bytes(), sig)
+            .context("put signature")?;
+    }
+
     // 5. Meta
     dbs.meta_by_key
         .put(&mut wtxn, "workspace_hash", workspace_hash.as_bytes())?;
