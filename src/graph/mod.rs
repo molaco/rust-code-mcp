@@ -23,8 +23,9 @@ pub use extract::extract;
 pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
 pub use loader::{LoadedWorkspace, load};
 pub use model::{
-    Binding, BindingKind, BindingVisibility, ExtractionModel, FunctionSignature, GenericBound,
-    ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage, UsageCategory,
+    Binding, BindingKind, BindingVisibility, EmbeddingRecord, ExtractionModel, FunctionSignature,
+    GenericBound, ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage,
+    UsageCategory,
 };
 pub use queries::{
     CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,

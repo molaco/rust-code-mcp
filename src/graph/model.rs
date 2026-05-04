@@ -226,6 +226,28 @@ pub struct StaticMetadata {
     pub is_mut: bool,
 }
 
+/// v11 — per-Item embedding cache record for `semantic_overlaps`.
+///
+/// Persisted into the `embeddings_by_target` sub-DB lazily by the
+/// `semantic_overlaps` MCP tool — `build_hypergraph` does NOT populate it
+/// (this is purely query-time written, not part of `ExtractionModel`).
+///
+/// `content_hash` is `SHA-256(source_bytes)` truncated to 16 bytes; mismatch
+/// invalidates the entry (the item's source changed since the cache was
+/// written). `embedder_version` pins the embedding model + dimension so cache
+/// entries from a different model are detected and refreshed. `vector` length
+/// matches `EMBEDDING_DIM` (currently 384 for fastembed `all-MiniLM-L6-v2`).
+///
+/// `f32` `PartialEq` is intentionally not derived for `Eq` — the vector is
+/// floating-point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingRecord {
+    pub content_hash: [u8; 16],
+    pub vector: Vec<f32>,
+    pub embedder_version: String,
+    pub generated_at_unix: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExtractionModel {
     pub workspace_root: PathBuf,

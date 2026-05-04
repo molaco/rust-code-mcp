@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use super::ids::{BindingId, NodeId};
-use super::model::{Binding, FunctionSignature, Node, StaticMetadata, Usage};
+use super::model::{Binding, EmbeddingRecord, FunctionSignature, Node, StaticMetadata, Usage};
 
 // v2 (2026-05): added usages_by_id / usages_by_target / usages_by_consumer
 // sub-databases and `usage_count` to the manifest.
@@ -112,7 +112,15 @@ use super::model::{Binding, FunctionSignature, Node, StaticMetadata, Usage};
 // (single-target lookup) and `mut_static_audit` (workspace-wide pattern
 // classifier) queries. `GraphManifest` is unchanged. Old snapshots
 // auto-rebuild because `graph_id_for` hashes `SCHEMA_VERSION`.
-pub const SCHEMA_VERSION: u32 = 10;
+// v11 (2026-05): Adds a new `embeddings_by_target` sub-DB
+// (NodeId → EmbeddingRecord) — one entry per Item whose source has been
+// embedded for `semantic_overlaps`. Lazy-populated; `build_hypergraph`
+// leaves it empty. Cache key is `(NodeId, content_hash, embedder_version)`:
+// content_hash is `SHA-256(source_bytes)` truncated to 16 bytes, and
+// `embedder_version` pins the embedding-model identity (so swapping models
+// auto-invalidates entries). Old v10 snapshots auto-rebuild because
+// `graph_id_for` hashes `SCHEMA_VERSION`.
+pub const SCHEMA_VERSION: u32 = 11;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";
@@ -289,6 +297,11 @@ pub struct GraphDatabases {
     /// v10: NodeId (target static) → StaticMetadata. NOT DUP_SORT — one
     /// record per local `static` item.
     pub static_metadata_by_target: Database<Bytes, SerdeBincode<StaticMetadata>>,
+    /// v11: lazy-populated cache for `semantic_overlaps`. NodeId →
+    /// EmbeddingRecord. NOT DUP_SORT — one record per Item. Empty after
+    /// `build_hypergraph`; `semantic_overlaps` writes entries on first use
+    /// and reuses them on subsequent scans of unchanged items.
+    pub embeddings_by_target: Database<Bytes, SerdeBincode<EmbeddingRecord>>,
 }
 
 impl GraphDatabases {
@@ -341,6 +354,12 @@ impl GraphDatabases {
                 "static_metadata_by_target",
                 false,
             )?,
+            embeddings_by_target: open_or_create_bytes_bincode(
+                env,
+                wtxn,
+                "embeddings_by_target",
+                false,
+            )?,
         })
     }
 
@@ -383,6 +402,9 @@ impl GraphDatabases {
             static_metadata_by_target: env
                 .open_database(rtxn, Some("static_metadata_by_target"))?
                 .context("static_metadata_by_target missing")?,
+            embeddings_by_target: env
+                .open_database(rtxn, Some("embeddings_by_target"))?
+                .context("embeddings_by_target missing")?,
         }))
     }
 }
