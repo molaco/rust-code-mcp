@@ -34,7 +34,8 @@ use crate::tools::search_tool::{
     FunctionsWithFilterParams, GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams,
     GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ModuleTreeParams,
     OverlapsParams, PubUsePubTypeAuditParams, ReExportChainParams, RecursiveCallersCountParams,
-    WhoCallsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
+    SimilarToItemParams, WhoCallsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams,
+    WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -538,6 +539,156 @@ pub async fn function_signature(
         target: target_node.qualified_name,
         signature,
     })
+}
+
+/// v0.1 "semantic overlaps": resolve `target` to a hypergraph Item, read its
+/// source bytes from (file, span), and run vector_only_search using those
+/// bytes as the query. Drops the seed's own chunk (file-path-only match — see
+/// limitation note) and applies optional `threshold` / `item_kind` filters.
+///
+/// Limitation: self-match detection is file-path-only. If the seed file
+/// contains other items that match the seed's source semantically, those
+/// will be returned. A finer span-overlap check is left for v0.2.
+pub async fn similar_to_item(
+    params: SimilarToItemParams,
+) -> Result<CallToolResult, McpError> {
+    // 1. Resolve seed Item from the hypergraph snapshot.
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let (_seed_id, seed_node) = snap
+        .lookup_by_qualified_name(&params.target)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{}`", params.target),
+                None,
+            )
+        })?;
+
+    let seed_file = seed_node.file.clone().ok_or_else(|| {
+        McpError::invalid_params(
+            format!(
+                "target item `{}` has no source location (synthetic / macro-generated?)",
+                params.target
+            ),
+            None,
+        )
+    })?;
+    let seed_span = seed_node.span.ok_or_else(|| {
+        McpError::invalid_params(
+            format!(
+                "target item `{}` has no source span (synthetic / macro-generated?)",
+                params.target
+            ),
+            None,
+        )
+    })?;
+
+    // 2. Read seed source bytes from disk.
+    let abs_path = PathBuf::from(&params.directory).join(&seed_file);
+    let content = std::fs::read_to_string(&abs_path).map_err(|e| {
+        McpError::invalid_params(
+            format!("failed to read seed file `{}`: {e}", abs_path.display()),
+            None,
+        )
+    })?;
+    let (start, end) = (seed_span.0 as usize, seed_span.1 as usize);
+    let seed_source = content.get(start..end).ok_or_else(|| {
+        McpError::invalid_params(
+            format!(
+                "seed span {}..{} is out of bounds or splits a UTF-8 character in `{}` (file len = {})",
+                start,
+                end,
+                abs_path.display(),
+                content.len()
+            ),
+            None,
+        )
+    })?.to_string();
+
+    // 3. Run vector-only search.
+    let paths = crate::tools::project_paths::ProjectPaths::from_directory(Path::new(
+        &params.directory,
+    ));
+    let hybrid_search = crate::tools::query_tools::create_hybrid_search(&paths, None).await?;
+
+    let limit = params.limit.unwrap_or(10);
+    let threshold = params.threshold.unwrap_or(0.0);
+    let limit_plus_one = limit.saturating_add(1);
+
+    let results = hybrid_search
+        .vector_only_search(&seed_source, limit_plus_one)
+        .await
+        .map_err(|e| McpError::invalid_params(format!("vector search failed: {e}"), None))?;
+
+    // 4. Filter results.
+    let item_kind_filter = params.item_kind.as_ref().map(|s| s.to_lowercase());
+    // Precompute the seed's line range once for the self-match overlap check.
+    // The seed_file is workspace-relative (e.g. `crates/foo/src/lib.rs`) but
+    // chunk file paths from the vector store are absolute, so we use
+    // `Path::ends_with` for the same-file check (component-aware suffix match,
+    // not byte equality) — this avoids the v0.1 false-negative where the seed
+    // appeared as the top match because the relative-vs-absolute paths never
+    // compared equal as strings.
+    let seed_line_start = content[..start].matches('\n').count() + 1;
+    let seed_line_end = content[..end].matches('\n').count() + 1;
+    let seed_rel_path = Path::new(&seed_file);
+    let mut matches: Vec<SimilarMatch> = Vec::new();
+    for r in results {
+        if r.chunk.context.file_path.ends_with(seed_rel_path) {
+            // Drop only chunks whose line range overlaps the seed's byte span,
+            // not every chunk in the same file.
+            let result_line_start = r.chunk.context.line_start;
+            let result_line_end = r.chunk.context.line_end;
+            let overlaps = result_line_start <= seed_line_end
+                && result_line_end >= seed_line_start;
+            if overlaps {
+                continue;
+            }
+        }
+        if r.score < threshold {
+            continue;
+        }
+        if let Some(ref want) = item_kind_filter {
+            if r.chunk.context.symbol_kind.to_lowercase() != *want {
+                continue;
+            }
+        }
+        let preview = r
+            .chunk
+            .content
+            .lines()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n");
+        matches.push(SimilarMatch {
+            similarity: r.score,
+            symbol_name: r.chunk.context.symbol_name,
+            symbol_kind: r.chunk.context.symbol_kind,
+            file: r.chunk.context.file_path.to_string_lossy().to_string(),
+            line_start: r.chunk.context.line_start,
+            line_end: r.chunk.context.line_end,
+            preview,
+        });
+        if matches.len() >= limit {
+            break;
+        }
+    }
+
+    // 6. Build response.
+    let resp = SimilarToItemResp {
+        seed: SeedItemRef {
+            qualified_name: seed_node.qualified_name,
+            file: seed_file,
+            span: seed_span,
+            item_kind: seed_node.item_kind.map(|k| short_item_kind_label(k).to_string()),
+        },
+        limit,
+        threshold,
+        item_kind_filter: params.item_kind,
+        match_count: matches.len(),
+        matches,
+    };
+    json_result(&resp)
 }
 
 pub async fn functions_with_filter(
@@ -1435,6 +1586,38 @@ struct FunctionSignatureResponse {
     target: String,
     /// `None` when the target is not a function or extraction skipped it.
     signature: Option<FunctionSignature>,
+}
+
+#[derive(Debug, Serialize)]
+struct SimilarToItemResp {
+    seed: SeedItemRef,
+    limit: usize,
+    threshold: f32,
+    item_kind_filter: Option<String>,
+    match_count: usize,
+    matches: Vec<SimilarMatch>,
+}
+
+#[derive(Debug, Serialize)]
+struct SeedItemRef {
+    qualified_name: String,
+    file: String,
+    span: (u32, u32),
+    /// Short label form (e.g. `"Fn"`, `"Struct"`); `None` when the seed Node
+    /// has no `item_kind` (e.g. it's a Module).
+    item_kind: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SimilarMatch {
+    similarity: f32,
+    symbol_name: String,
+    symbol_kind: String,
+    file: String,
+    line_start: usize,
+    line_end: usize,
+    /// First 3 lines of `chunk.content` joined with `\n`.
+    preview: String,
 }
 
 #[derive(Debug, Serialize)]

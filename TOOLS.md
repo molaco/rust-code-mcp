@@ -47,6 +47,7 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`functions_with_filter`](#functions_with_filter) | Graph: Signatures | Functions in a crate matching a signature filter |
 | [`unsafe_audit`](#unsafe_audit) | Graph: Safety | Audit every `unsafe { ... }` block in local crates |
 | [`mut_static_audit`](#mut_static_audit) | Graph: Safety | Audit `static mut`/`LazyLock`/`OnceLock`/`OnceCell` |
+| [`similar_to_item`](#similar_to_item) | Graph: Semantic | Find semantic neighbors of a hypergraph Item via vector embeddings |
 
 ---
 
@@ -1283,6 +1284,68 @@ Phase 7 Path B (v10): type-aware audit of every local `static` item that matches
 - `type_string` is post-processed via the same `HirDisplay` trim as `function_signature` — e.g. `LazyLock<Mutex<Foo>, fn() -> Mutex<Foo>>` becomes `LazyLock<Mutex<Foo>>` (init-fn pointer dropped).
 - Sorted by `(qualified_name, matched_pattern)`.
 - Limitation: the `lazy_static!` macro is NOT detected — its expansion produces a generated wrapper type whose name doesn't contain `LazyLock`. Use `items_with_attribute` or grep to cover that case.
+
+---
+
+### Semantic
+
+#### similar_to_item
+
+Find semantic neighbors of a hypergraph Item using vector embeddings. Resolves `target` (qualified name) via the persisted hypergraph, reads its source bytes from the recorded `(file, span)`, then runs `vector_only_search` using that source as the query. Returns ranked matches above `threshold`, capped at `limit`, optionally filtered by `item_kind`. Self-match (the seed's own chunk) is dropped automatically via line-range overlap with the seed's byte span.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `target` | string | Yes | Qualified name of the seed Item (function, struct, enum, etc.) |
+| `limit` | integer | No | Max number of results (default: 10) |
+| `threshold` | number | No | Minimum cosine similarity score (0.0-1.0). Results below are dropped. Default: 0.0 |
+| `item_kind` | string | No | Restrict result kind, matching the chunk's `symbol_kind` ("function", "struct", "enum", "trait", etc.). Case-insensitive. |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "target": "my_crate::auth::AuthError",
+  "limit": 10,
+  "threshold": 0.8,
+  "item_kind": "Struct"
+}
+```
+
+**Returns:**
+```json
+{
+  "seed": {
+    "qualified_name": "my_crate::auth::AuthError",
+    "file": "src/auth/error.rs",
+    "span": [200, 540],
+    "item_kind": "Struct"
+  },
+  "limit": 10,
+  "threshold": 0.8,
+  "item_kind_filter": "Struct",
+  "match_count": 2,
+  "matches": [
+    {
+      "similarity": 0.8731,
+      "symbol_name": "ProviderError",
+      "symbol_kind": "struct",
+      "file": "src/provider/error.rs",
+      "line_start": 88,
+      "line_end": 142,
+      "preview": "pub struct ProviderError {\n    kind: ProviderErrorKind,\n    source: Box<dyn Error + Send + Sync>,"
+    }
+  ]
+}
+```
+
+**Notes:**
+- **Prerequisites: BOTH `build_hypergraph` AND `index_codebase` must have run for the workspace.** This tool bridges the hypergraph (Item → file/span) with the vector store (chunk embeddings).
+- The seed's own chunk is dropped via line-range overlap, not file-path-only — so the seed file's other items can still appear as matches.
+- Useful for finding "what looks like X?" — duplicate error types, parser variants, builder patterns, conversion functions.
+- Embeddings encode lexical+syntactic patterns more than logical intent. Tune `threshold` (start ≈ 0.80) to filter noise.
+- v0.1: single-target lookup only. Pairwise scan / clustering is not implemented.
 
 ---
 
