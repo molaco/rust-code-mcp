@@ -9,6 +9,7 @@
 //!
 //! The MCP layer never sees `NodeId`s — only qualified names in and out.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rmcp::{
@@ -34,8 +35,8 @@ use crate::tools::search_tool::{
     FunctionsWithFilterParams, GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams,
     GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ModuleTreeParams,
     OverlapsParams, PubUsePubTypeAuditParams, ReExportChainParams, RecursiveCallersCountParams,
-    SimilarToItemParams, WhoCallsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams,
-    WorkspaceStatsParams,
+    SemanticOverlapsParams, SimilarToItemParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
+    WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -691,6 +692,280 @@ pub async fn similar_to_item(
     json_result(&resp)
 }
 
+/// v1.0 "semantic_overlaps": workspace-wide duplicate-detection audit.
+///
+/// Enumerates Items (optionally scoped to a crate / item_kind), embeds each
+/// one's source via vector_only_search, builds a similarity graph above
+/// `threshold`, and either returns deduplicated pairs or single-linkage
+/// clusters of transitively-similar items.
+///
+/// Note on async vs spawn_blocking: the original plan called for
+/// `tokio::task::spawn_blocking` (mirroring `unsafe_audit`), but
+/// `vector_only_search` is async and cannot be `.await`-driven inside a
+/// spawn_blocking closure without re-entering the runtime. The per-seed loop
+/// is dominated by I/O (embedding generation + LanceDB roundtrip) which yields,
+/// so the runtime worker is not actually blocked. We therefore run the scan
+/// directly on the runtime, accepting the divergence from the plan.
+pub async fn semantic_overlaps(
+    params: SemanticOverlapsParams,
+) -> Result<CallToolResult, McpError> {
+    let directory = params.directory.clone();
+    let threshold = params.threshold.unwrap_or(0.80);
+    let max_pairs = params.max_pairs.unwrap_or(50);
+    let output_mode = params
+        .output_mode
+        .as_deref()
+        .unwrap_or("clusters")
+        .to_string();
+    if output_mode != "pairs" && output_mode != "clusters" {
+        return Err(McpError::invalid_params(
+            format!(
+                "output_mode must be \"pairs\" or \"clusters\"; got `{output_mode}`"
+            ),
+            None,
+        ));
+    }
+    let skip_tests = params.skip_test_chunks.unwrap_or(true);
+    let cross_crate_only = params.cross_crate_only.unwrap_or(false);
+    let item_kind_filter_label = params.item_kind.clone();
+    let crate_name = params.crate_name.clone();
+
+    // 0. Build hybrid_search up front (async).
+    let paths = crate::tools::project_paths::ProjectPaths::from_directory(Path::new(&directory));
+    let hybrid_search = crate::tools::query_tools::create_hybrid_search(&paths, None).await?;
+
+    // 1. Open snapshot.
+    let snap = open_workspace_snapshot(&directory)?;
+
+    // 2. Resolve crate scope (if any).
+    let crate_id_filter: Option<NodeId> = if let Some(qn) = &crate_name {
+        let (id, node) = snap
+            .lookup_by_qualified_name(qn)
+            .map_err(internal_error("lookup_by_qualified_name"))?
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("no node found for qualified name `{qn}`"),
+                    None,
+                )
+            })?;
+        Some(match node.kind {
+            NodeKind::Crate => id,
+            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("`{qn}` resolves to a Module with no crate_id"),
+                    None,
+                )
+            })?,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "`{qn}` is a {other:?}, expected a Crate or its root Module"
+                    ),
+                    None,
+                ));
+            }
+        })
+    } else {
+        None
+    };
+
+    let item_kind_enum = parse_item_kind_filter(item_kind_filter_label.as_deref())?;
+
+    // 3. Enumerate seed Items: NodeKind::Item with optional crate/item_kind
+    //    filters; require file+span (skip synthetic/macro-generated).
+    let mut seeds: Vec<(NodeId, Node)> = Vec::new();
+    {
+        let rtxn = snap
+            .env
+            .read_txn()
+            .map_err(|e| McpError::internal_error(format!("read_txn: {e}"), None))?;
+        for entry in snap
+            .dbs
+            .nodes_by_id
+            .iter(&rtxn)
+            .map_err(|e| McpError::internal_error(format!("nodes_by_id.iter: {e}"), None))?
+        {
+            let (key, node) = entry
+                .map_err(|e| McpError::internal_error(format!("nodes_by_id entry: {e}"), None))?;
+            if node.kind != NodeKind::Item {
+                continue;
+            }
+            if let Some(cid) = crate_id_filter {
+                if node.crate_id != Some(cid) {
+                    continue;
+                }
+            }
+            if let Some(want_kind) = item_kind_enum {
+                if node.item_kind != Some(want_kind) {
+                    continue;
+                }
+            }
+            if node.file.is_none() || node.span.is_none() {
+                continue;
+            }
+            if skip_tests && node.qualified_name.contains("::tests::") {
+                continue;
+            }
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            seeds.push((NodeId(id), node));
+        }
+    }
+
+    // 4. For each seed: read source bytes (cache file contents), run
+    //    vector_only_search(K=20), resolve each chunk back to an Item,
+    //    insert directed edges keyed by canonical (smaller-id-first) NodeId
+    //    pair. Drops self-matches, threshold misses, test chunks, and
+    //    same-crate pairs when cross_crate_only is set.
+    let mut file_cache: HashMap<String, String> = HashMap::new();
+    type EdgeKey = (NodeId, NodeId);
+    let mut edges: HashMap<EdgeKey, Vec<f32>> = HashMap::new();
+
+    for (seed_id, seed_node) in &seeds {
+        let seed_file = seed_node.file.as_deref().expect("filtered above");
+        let seed_span = seed_node.span.expect("filtered above");
+        let abs_seed_path = PathBuf::from(&directory).join(seed_file);
+        let abs_seed_str = abs_seed_path.to_string_lossy().to_string();
+
+        if !file_cache.contains_key(&abs_seed_str) {
+            match std::fs::read_to_string(&abs_seed_path) {
+                Ok(s) => {
+                    file_cache.insert(abs_seed_str.clone(), s);
+                }
+                Err(_) => continue,
+            }
+        }
+        let content = file_cache
+            .get(&abs_seed_str)
+            .expect("inserted above");
+        let (start, end) = (seed_span.0 as usize, seed_span.1 as usize);
+        let Some(seed_source_slice) = content.get(start..end) else {
+            continue;
+        };
+        let trimmed = seed_source_slice.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let seed_source = trimmed.to_string();
+        let seed_line_start = content[..start].matches('\n').count() as u32 + 1;
+        let seed_line_end = content[..end].matches('\n').count() as u32 + 1;
+        let seed_rel_path = Path::new(seed_file).to_path_buf();
+
+        let results = match hybrid_search.vector_only_search(&seed_source, 20).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        for r in results {
+            if r.score < threshold {
+                continue;
+            }
+            let chunk_path = r.chunk.context.file_path.clone();
+            let chunk_ls = r.chunk.context.line_start as u32;
+            let chunk_le = r.chunk.context.line_end as u32;
+
+            // Self-match drop: same logic as `similar_to_item` — file ends_with
+            // the workspace-relative seed path AND chunk lines overlap seed lines.
+            if chunk_path.ends_with(&seed_rel_path) {
+                let overlaps = chunk_ls <= seed_line_end && chunk_le >= seed_line_start;
+                if overlaps {
+                    continue;
+                }
+            }
+
+            // Resolve chunk → Item.
+            let Some((other_id, other_node)) =
+                resolve_chunk_to_item(&snap, &chunk_path, chunk_ls, chunk_le, &mut file_cache)
+            else {
+                continue;
+            };
+            if other_id == *seed_id {
+                continue;
+            }
+            if cross_crate_only && other_node.crate_id == seed_node.crate_id {
+                continue;
+            }
+            if skip_tests && other_node.qualified_name.contains("::tests::") {
+                continue;
+            }
+
+            // Canonical pair (smaller id bytes first).
+            let key = if seed_id.as_bytes() < other_id.as_bytes() {
+                (*seed_id, other_id)
+            } else {
+                (other_id, *seed_id)
+            };
+            edges.entry(key).or_default().push(r.score);
+        }
+    }
+
+    // 5. Symmetric dedup: average the per-direction scores.
+    let mut pairs: Vec<(NodeId, NodeId, f32)> = edges
+        .into_iter()
+        .map(|((a, b), scores)| {
+            let avg = scores.iter().sum::<f32>() / scores.len() as f32;
+            (a, b, avg)
+        })
+        .collect();
+    pairs.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal));
+    let pair_count = pairs.len();
+
+    // 6. Build response.
+    //    NodeId → ItemRef lookup. Most pairs reference seed nodes; a few may
+    //    reference items outside the seed set (resolved via chunk overlap on a
+    //    file that contains both seed and non-seed items). For the latter, do
+    //    an extra `node_by_id` read.
+    let seed_index: HashMap<NodeId, &Node> =
+        seeds.iter().map(|(id, n)| (*id, n)).collect();
+    let lookup_ref = |id: NodeId| -> Option<ItemRef> {
+        if let Some(node) = seed_index.get(&id) {
+            return Some(node_to_item_ref(node));
+        }
+        let rtxn = snap.read_txn().ok()?;
+        let node = snap.node_by_id(&rtxn, id).ok().flatten()?;
+        Some(node_to_item_ref(&node))
+    };
+
+    let scope = ScopeSummary {
+        directory: directory.clone(),
+        crate_name: crate_name.clone(),
+        item_kind: item_kind_filter_label.clone(),
+        seed_count: seeds.len(),
+    };
+
+    if output_mode == "pairs" {
+        let truncated = pairs.into_iter().take(max_pairs);
+        let pair_refs: Vec<SimilarityPair> = truncated
+            .filter_map(|(a, b, s)| {
+                Some(SimilarityPair {
+                    a: lookup_ref(a)?,
+                    b: lookup_ref(b)?,
+                    similarity: s,
+                })
+            })
+            .collect();
+        return json_result(&SemanticOverlapsResp {
+            scope,
+            threshold,
+            pair_count,
+            output_mode,
+            pairs: Some(pair_refs),
+            clusters: None,
+        });
+    }
+
+    // Clusters mode (default).
+    let clusters = build_clusters(&pairs, max_pairs, lookup_ref);
+    json_result(&SemanticOverlapsResp {
+        scope,
+        threshold,
+        pair_count,
+        output_mode,
+        pairs: None,
+        clusters: Some(clusters),
+    })
+}
+
 pub async fn functions_with_filter(
     params: FunctionsWithFilterParams,
 ) -> Result<CallToolResult, McpError> {
@@ -1333,6 +1608,230 @@ fn visibility_label(
     }
 }
 
+// ----- semantic_overlaps helpers -----
+
+/// Parse the user-supplied `item_kind` filter string into an `Option<ItemKind>`.
+/// Case-insensitive. None → no filter. Unknown variants return an
+/// `invalid_params` error.
+fn parse_item_kind_filter(s: Option<&str>) -> Result<Option<ItemKind>, McpError> {
+    let Some(raw) = s else {
+        return Ok(None);
+    };
+    let kind = match raw.to_ascii_lowercase().as_str() {
+        "function" | "fn" => ItemKind::Function,
+        "struct" => ItemKind::Struct,
+        "enum" => ItemKind::Enum,
+        "union" => ItemKind::Union,
+        "trait" => ItemKind::Trait,
+        "typealias" | "type_alias" | "type" => ItemKind::TypeAlias,
+        "const" => ItemKind::Const,
+        "static" => ItemKind::Static,
+        "assocfunction" | "assocfn" | "assoc_function" => ItemKind::AssocFunction,
+        "assocconst" | "assoc_const" => ItemKind::AssocConst,
+        "assoctype" | "assoc_type" => ItemKind::AssocType,
+        "method" => ItemKind::Method,
+        "enumvariant" | "enum_variant" | "variant" => ItemKind::EnumVariant,
+        other => {
+            return Err(McpError::invalid_params(
+                format!(
+                    "unknown item_kind `{other}`; expected Function | Struct | Enum | Union | Trait | TypeAlias | Const | Static | AssocFunction | AssocConst | AssocType | Method | EnumVariant"
+                ),
+                None,
+            ));
+        }
+    };
+    Ok(Some(kind))
+}
+
+/// Pure helper: returns true iff `[a_start, a_end]` and `[b_start, b_end]`
+/// overlap as inclusive line ranges. Extracted for unit testing.
+fn line_range_overlaps(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
+    a_start <= b_end && a_end >= b_start
+}
+
+/// Map a vector-store chunk's `(file, line_range)` to a hypergraph Item NodeId.
+///
+/// `chunk_file` is normally absolute (vector store stores absolute paths).
+/// `snap` carries workspace-relative paths on each Node. We do a component-aware
+/// suffix match via `chunk_file.ends_with(node.file)` (mirrors the v0.1
+/// self-match fix in `similar_to_item`). `file_contents_cache` caches file
+/// contents keyed by absolute path string so repeated chunk lookups in the same
+/// file pay just one I/O.
+///
+/// Returns the first Item whose byte-span-derived line range overlaps
+/// `[chunk_line_start, chunk_line_end]`. None if no Item matches.
+fn resolve_chunk_to_item(
+    snap: &OpenedSnapshot,
+    chunk_file: &Path,
+    chunk_line_start: u32,
+    chunk_line_end: u32,
+    file_contents_cache: &mut HashMap<String, String>,
+) -> Option<(NodeId, Node)> {
+    let rtxn = snap.env.read_txn().ok()?;
+    for entry in snap.dbs.nodes_by_id.iter(&rtxn).ok()? {
+        let (key, node) = entry.ok()?;
+        if node.kind != NodeKind::Item {
+            continue;
+        }
+        let Some(rel_file) = node.file.as_deref() else {
+            continue;
+        };
+        let Some(span) = node.span else {
+            continue;
+        };
+        let rel_path = Path::new(rel_file);
+        if !chunk_file.ends_with(rel_path) {
+            continue;
+        }
+        // Derive the workspace root from the absolute chunk_file so we can
+        // resolve other Items in the same file from cached content.
+        // We use chunk_file as the absolute key for the cache.
+        let chunk_file_key = chunk_file.to_string_lossy().to_string();
+        if !file_contents_cache.contains_key(&chunk_file_key) {
+            match std::fs::read_to_string(chunk_file) {
+                Ok(s) => {
+                    file_contents_cache.insert(chunk_file_key.clone(), s);
+                }
+                Err(_) => continue,
+            }
+        }
+        let content = file_contents_cache.get(&chunk_file_key)?;
+        let (start, end) = (span.0 as usize, span.1 as usize);
+        if start > content.len() || end > content.len() || start > end {
+            continue;
+        }
+        let item_line_start = content[..start].matches('\n').count() as u32 + 1;
+        let item_line_end = content[..end].matches('\n').count() as u32 + 1;
+        if line_range_overlaps(item_line_start, item_line_end, chunk_line_start, chunk_line_end) {
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            return Some((NodeId(id), node));
+        }
+    }
+    None
+}
+
+/// Build a small ItemRef from a Node (used in semantic_overlaps response).
+fn node_to_item_ref(node: &Node) -> ItemRef {
+    ItemRef {
+        qualified_name: node.qualified_name.clone(),
+        item_kind: node.item_kind.map(|k| short_item_kind_label(k).to_string()),
+        file: node.file.clone().unwrap_or_default(),
+        span: node.span.unwrap_or((0, 0)),
+    }
+}
+
+/// Single-linkage clustering via union-find. Each edge unions its two endpoints
+/// and contributes its score to the resulting cluster's score statistics.
+/// Singleton groups are dropped. Sort: by size desc, then min_similarity desc.
+/// Each cluster's member list is capped at `max_members` (sets `truncated=true`
+/// when the cap kicks in).
+fn build_clusters<F>(
+    edges: &[(NodeId, NodeId, f32)],
+    max_members: usize,
+    lookup: F,
+) -> Vec<SimilarityCluster>
+where
+    F: Fn(NodeId) -> Option<ItemRef>,
+{
+    // Collect node set.
+    let mut nodes: Vec<NodeId> = Vec::new();
+    let mut seen: HashMap<NodeId, usize> = HashMap::new();
+    for (a, b, _) in edges {
+        if !seen.contains_key(a) {
+            seen.insert(*a, nodes.len());
+            nodes.push(*a);
+        }
+        if !seen.contains_key(b) {
+            seen.insert(*b, nodes.len());
+            nodes.push(*b);
+        }
+    }
+    let n = nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Union-find with path compression.
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    for (a, b, _) in edges {
+        let ra = find(&mut parent, seen[a]);
+        let rb = find(&mut parent, seen[b]);
+        if ra != rb {
+            parent[ra] = rb;
+        }
+    }
+
+    // Group node indices by root.
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+
+    // For each group, collect score stats from the subset of edges whose
+    // endpoints both fall in this group.
+    let mut clusters: Vec<SimilarityCluster> = Vec::new();
+    for (_root, group) in groups {
+        if group.len() < 2 {
+            continue;
+        }
+        let group_set: std::collections::HashSet<usize> = group.iter().copied().collect();
+        let mut group_scores: Vec<f32> = Vec::new();
+        for (a, b, s) in edges {
+            let ai = seen[a];
+            let bi = seen[b];
+            if group_set.contains(&ai) && group_set.contains(&bi) {
+                group_scores.push(*s);
+            }
+        }
+        if group_scores.is_empty() {
+            continue;
+        }
+        let sum: f32 = group_scores.iter().sum();
+        let avg = sum / group_scores.len() as f32;
+        let mut min_sim = group_scores[0];
+        for s in &group_scores[1..] {
+            if *s < min_sim {
+                min_sim = *s;
+            }
+        }
+
+        let size = group.len();
+        let truncated = size > max_members;
+        let take_n = max_members.min(size);
+        let members: Vec<ItemRef> = group
+            .into_iter()
+            .take(take_n)
+            .filter_map(|i| lookup(nodes[i]))
+            .collect();
+
+        clusters.push(SimilarityCluster {
+            members,
+            avg_similarity: avg,
+            min_similarity: min_sim,
+            size,
+            truncated,
+        });
+    }
+
+    clusters.sort_by(|a, b| {
+        b.size.cmp(&a.size).then_with(|| {
+            b.min_similarity
+                .partial_cmp(&a.min_similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+    clusters
+}
+
 // ----- response shapes -----
 
 #[derive(Debug, Serialize)]
@@ -1618,6 +2117,52 @@ struct SimilarMatch {
     line_end: usize,
     /// First 3 lines of `chunk.content` joined with `\n`.
     preview: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticOverlapsResp {
+    scope: ScopeSummary,
+    threshold: f32,
+    pair_count: usize,
+    output_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pairs: Option<Vec<SimilarityPair>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clusters: Option<Vec<SimilarityCluster>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ScopeSummary {
+    directory: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crate_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_kind: Option<String>,
+    seed_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SimilarityPair {
+    a: ItemRef,
+    b: ItemRef,
+    similarity: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct SimilarityCluster {
+    members: Vec<ItemRef>,
+    avg_similarity: f32,
+    min_similarity: f32,
+    size: usize,
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ItemRef {
+    qualified_name: String,
+    item_kind: Option<String>,
+    file: String,
+    span: (u32, u32),
 }
 
 #[derive(Debug, Serialize)]
@@ -2181,5 +2726,109 @@ mod tests {
             .and_then(|c| c.as_text())
             .map(|t| t.text.clone())
             .unwrap_or_default()
+    }
+
+    // ----- semantic_overlaps unit tests -----
+    //
+    // Note: a `resolve_chunk_to_item` end-to-end test would need a fully
+    // populated LMDB snapshot, which is hard to make deterministic.
+    // The plan defers it; we only test the pure helpers here:
+    //   - `line_range_overlaps` (the overlap predicate),
+    //   - `build_clusters` (single-linkage union-find).
+
+    fn nid(byte: u8) -> NodeId {
+        let mut id = [0u8; 32];
+        id[0] = byte;
+        NodeId(id)
+    }
+
+    #[test]
+    fn line_range_overlaps_inclusive_bounds() {
+        // touching at endpoints counts as overlap (inclusive ranges).
+        assert!(line_range_overlaps(1, 5, 5, 10));
+        assert!(line_range_overlaps(5, 10, 1, 5));
+        // strictly disjoint
+        assert!(!line_range_overlaps(1, 4, 5, 10));
+        assert!(!line_range_overlaps(5, 10, 1, 4));
+        // containment
+        assert!(line_range_overlaps(1, 100, 50, 60));
+        assert!(line_range_overlaps(50, 60, 1, 100));
+        // identical
+        assert!(line_range_overlaps(7, 7, 7, 7));
+    }
+
+    #[test]
+    fn build_clusters_two_groups_drops_singletons() {
+        let a = nid(1);
+        let b = nid(2);
+        let c = nid(3);
+        let d = nid(4);
+        let e = nid(5);
+        let edges = vec![
+            (a, b, 0.90),
+            (b, c, 0.85),
+            (d, e, 0.95),
+        ];
+        let lookup = |id: NodeId| {
+            Some(ItemRef {
+                qualified_name: format!("n_{}", id.as_bytes()[0]),
+                item_kind: Some("Fn".to_string()),
+                file: "x.rs".to_string(),
+                span: (0, 0),
+            })
+        };
+
+        let clusters = build_clusters(&edges, 50, lookup);
+
+        // Two clusters {A,B,C} and {D,E}; no singletons.
+        assert_eq!(clusters.len(), 2);
+        // Sorted by size desc: {A,B,C} (size 3) before {D,E} (size 2).
+        assert_eq!(clusters[0].size, 3);
+        assert_eq!(clusters[1].size, 2);
+        assert!(!clusters[0].truncated);
+        assert!(!clusters[1].truncated);
+        // {A,B,C} avg of 0.90 and 0.85 = 0.875.
+        let abc_avg = clusters[0].avg_similarity;
+        assert!((abc_avg - 0.875).abs() < 1e-5, "avg = {abc_avg}");
+        // min_similarity for {A,B,C} is 0.85.
+        assert!((clusters[0].min_similarity - 0.85).abs() < 1e-5);
+        // {D,E} avg / min both 0.95.
+        assert!((clusters[1].avg_similarity - 0.95).abs() < 1e-5);
+        assert!((clusters[1].min_similarity - 0.95).abs() < 1e-5);
+    }
+
+    #[test]
+    fn build_clusters_max_members_caps_and_marks_truncated() {
+        let a = nid(1);
+        let b = nid(2);
+        let c = nid(3);
+        let d = nid(4);
+        // 4-node single cluster via single-linkage chain.
+        let edges = vec![
+            (a, b, 0.90),
+            (b, c, 0.90),
+            (c, d, 0.90),
+        ];
+        let lookup = |id: NodeId| {
+            Some(ItemRef {
+                qualified_name: format!("n_{}", id.as_bytes()[0]),
+                item_kind: None,
+                file: "x.rs".to_string(),
+                span: (0, 0),
+            })
+        };
+        let clusters = build_clusters(&edges, 2, lookup);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].size, 4);
+        assert_eq!(clusters[0].members.len(), 2);
+        assert!(clusters[0].truncated);
+    }
+
+    #[test]
+    fn build_clusters_empty_input() {
+        let edges: Vec<(NodeId, NodeId, f32)> = Vec::new();
+        let lookup = |_id: NodeId| -> Option<ItemRef> { None };
+        let clusters = build_clusters(&edges, 50, lookup);
+        assert!(clusters.is_empty());
     }
 }

@@ -48,6 +48,7 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`unsafe_audit`](#unsafe_audit) | Graph: Safety | Audit every `unsafe { ... }` block in local crates |
 | [`mut_static_audit`](#mut_static_audit) | Graph: Safety | Audit `static mut`/`LazyLock`/`OnceLock`/`OnceCell` |
 | [`similar_to_item`](#similar_to_item) | Graph: Semantic | Find semantic neighbors of a hypergraph Item via vector embeddings |
+| [`semantic_overlaps`](#semantic_overlaps) | Graph: Semantic | Workspace-wide audit: cluster semantically-similar Items via vector embeddings |
 
 ---
 
@@ -1346,6 +1347,91 @@ Find semantic neighbors of a hypergraph Item using vector embeddings. Resolves `
 - Useful for finding "what looks like X?" — duplicate error types, parser variants, builder patterns, conversion functions.
 - Embeddings encode lexical+syntactic patterns more than logical intent. Tune `threshold` (start ≈ 0.80) to filter noise.
 - v0.1: single-target lookup only. Pairwise scan / clustering is not implemented.
+
+#### semantic_overlaps
+
+Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source via `vector_only_search`, builds a similarity graph above `threshold` (default 0.80), and either returns deduplicated pairs or single-linkage clusters of transitively-similar items. The workspace-scale counterpart to `similar_to_item`: where `similar_to_item` answers *"given X, what's like X?"*, `semantic_overlaps` answers *"what's duplicated that I don't know about?"*.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `crate_name` | string | No | Optional crate qualified name to scope the scan. Default: all local crates. |
+| `item_kind` | string | No | Optional item-kind filter ("Function" \| "Struct" \| "Enum" \| "Trait" \| "Method" \| ...). Case-insensitive. Default: all kinds. |
+| `threshold` | number | No | Minimum cosine similarity (0.0-1.0). Default: 0.80. Raise to 0.85+ for stricter "definitely duplicate" signal. |
+| `max_pairs` | integer | No | Cap on returned pairs OR cluster member count. Default: 50. |
+| `output_mode` | string | No | `"pairs"` (raw similarity edges) or `"clusters"` (single-linkage groups). Default: `"clusters"`. |
+| `skip_test_chunks` | boolean | No | Drop matches whose qualified name contains `::tests::`. Default: true. |
+| `cross_crate_only` | boolean | No | Drop pairs whose two items share a crate. Default: false. |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "crate_name": "my_crate",
+  "item_kind": "Function",
+  "threshold": 0.85,
+  "output_mode": "clusters"
+}
+```
+
+**Returns (clusters mode, default):**
+```json
+{
+  "scope": {
+    "directory": "/path/to/workspace",
+    "crate_name": "my_crate",
+    "item_kind": "Function",
+    "seed_count": 142
+  },
+  "threshold": 0.85,
+  "pair_count": 23,
+  "output_mode": "clusters",
+  "clusters": [
+    {
+      "members": [
+        { "qualified_name": "my_crate::a::parse_x", "item_kind": "Fn", "file": "src/a.rs", "span": [120, 480] },
+        { "qualified_name": "my_crate::b::parse_y", "item_kind": "Fn", "file": "src/b.rs", "span": [50, 410] },
+        { "qualified_name": "my_crate::c::parse_z", "item_kind": "Fn", "file": "src/c.rs", "span": [10, 360] }
+      ],
+      "avg_similarity": 0.91,
+      "min_similarity": 0.87,
+      "size": 3,
+      "truncated": false
+    }
+  ]
+}
+```
+
+**Returns (pairs mode):**
+```json
+{
+  "scope": { "directory": "...", "seed_count": 142 },
+  "threshold": 0.85,
+  "pair_count": 23,
+  "output_mode": "pairs",
+  "pairs": [
+    {
+      "a": { "qualified_name": "my_crate::a::parse_x", "item_kind": "Fn", "file": "src/a.rs", "span": [120, 480] },
+      "b": { "qualified_name": "my_crate::b::parse_y", "item_kind": "Fn", "file": "src/b.rs", "span": [50, 410] },
+      "similarity": 0.92
+    }
+  ]
+}
+```
+
+**Use cases:**
+- Offline duplicate-detection / refactor planning: find functions that should be unified, structs that should share a common type, etc.
+- Audit a crate boundary: pass `cross_crate_only: true` to surface items duplicated across crates.
+- Audit a specific kind: pass `item_kind: "Function"` (or "Struct") to scope the scan.
+
+**Notes / limitations:**
+- **Prerequisites: BOTH `build_hypergraph` AND `index_codebase` must have run for the workspace.** Bridges the hypergraph (Item → file/span) with the vector store (chunk embeddings).
+- Latency is **seconds-to-minutes** at workspace scale (one vector search per seed Item; ~150ms per search). Scope with `crate_name` for an interactive call.
+- Single-linkage clustering can chain through outliers — one bridging pair can pull two distant clusters together. Tighten `threshold` to mitigate.
+- Self-matches (chunk whose `(file, line range)` overlaps the seed's span) are dropped automatically — same logic as `similar_to_item`.
+- Test fixtures dominate noise; `skip_test_chunks` is on by default.
+- v1.0: synchronous per-seed loop, no embedding cache. Repeated runs re-embed every item.
 
 ---
 
