@@ -38,6 +38,10 @@
   5. dead_pub_report — "anything obviously rotting?"
   6. overlaps — "anything obviously broken?"
   7. analyze_complexity(file=hottest_file_per_crate_edges) — "where's the gnarl?"
+  8. unsafe_audit(directory) — "any unsafe code I should know about?" Filter `has_safety_comment=false` first for undocumented blocks.
+  9. mut_static_audit(directory) — "any global mutable state? hidden singletons?"
+  10. semantic_overlaps(threshold=0.95) — "any literal duplicate items across the workspace?" 1.0-similarity clusters surface dead-easy refactor wins via the content_hash short-circuit.
+  11. (optional) forbidden_dependency_check(rules) — when architectural rules exist (e.g. domain crate must not import tokio).
 
   3. Crate-level audit ("dissect crate X")
 
@@ -85,10 +89,12 @@
   - Trait impl coverage. who_imports(target=Trait) — modules that use Trait, typically because they implement it or take it as a generic bound.
   - Trait deletion check. who_uses(Trait) empty across crates outside the defining one → safe to delete or seal.
   - Trait method removal check. who_uses(Trait::method) empty → safe to remove the method (but check trait impls aren't hardcoding it).
+  - Layer 10 trait dispatch. who_calls(target=Trait::method) — every fn body that contains a call resolving back to Trait::method, with caller-fn attribution and file:byte-range. Replaces the older "who_uses with fn-level resolution" pre-Layer-10 limitation.
 
   7. Cross-crate dependency analysis
 
   - Full edge matrix. crate_edges.
+  - Sortable per-crate metric. crate_dependency_metric(sort_by="instability"|"afferent"|"efferent"|"item_count"|"abstractness", top_n=N) — Robert Martin instability + abstractness + fan-in/fan-out per local crate. Cleaner than scrolling the full edge matrix when you want a ranked summary.
   - Heaviest dependency. Sort by total_refs_via_usages desc.
   - Most-imported single symbol. Scan crate_edges symbol breakdowns for the highest combined import_count + usage_count.
   - What flows on edge A→B. Find the row in crate_edges for (A, B) — symbols lists each carrying symbol with import vs usage counts.
@@ -108,7 +114,7 @@
   - "What's the minimum viable refactor target?" → crate_edges between two crates; if unique_symbols is small (1-3), that's the refactor target.
   - "Test-only helpers I can move to dev-deps?" → who_uses_summary filtering rows where category_breakdown is all Test.
   - "Verify a refactor didn't widen the API." → snapshot get_declared_reexports + dead_pub_report before, refactor, snapshot after, diff JSON.
-  - "Find duplicate logic worth extracting." → get_similar_code(fn_body) for each function; cluster semantically similar fns; for each cluster, run who_uses_summary to see if a shared helper would benefit them all.
+  - "Find duplicate logic worth extracting." → semantic_overlaps(crate_name=X, item_kind="Function") returns ranked clusters in one call; for each cluster, who_uses_summary on members to verify they're called and to plan migration.
   - "Which complex functions have the highest blast radius?" → analyze_complexity to find gnarly fns; who_uses(complex_fn) to see fan-in; prioritize high-complexity × high-fan-in.
   - "Find dead facade re-exports." (high-leverage recipe) → intersect get_declared_reexports(module=crate_root) with dead_pub_in_crate(crate). Items that appear in BOTH are dead facade branches: re-exported at the crate root but nothing imports either path. Drop the `pub use` line, demote source to `pub(crate)`. Spotted on tui in coding-agent-bad: RunState, InvalidTransition, RunnerWakeError were all re-exported AND dead.
   - "Detect half-finished migrations." (high-leverage recipe) → from overlaps.cross_crate_type_collisions, find collisions where the same consumer module uses BOTH versions. who_uses_summary on each side, then look for consumer_qualified_name overlap between the two row sets. If a consumer is in both, it's converting between the two types — usually a half-finished refactor where the type was duplicated rather than moved. Spotted on coding-agent-bad: AgentConfig in agent::config and config crates, both used by coding-agent::compose.
@@ -125,6 +131,8 @@
   - Vendored-library caveat. Vendored or library-style crates have inflated dead-pub counts because their pub surface is "designed for general use" but consumed narrowly in this workspace. We measured 47 dead pubs in plurimus (a vendored UI lib) on coding-agent-bad — that's expected, not a problem. Filter or de-prioritize known external/vendored crates before reading dead_pub_report.
   - Cyclomatic complexity hotspots. analyze_complexity(file) for each crate's main files; sort outputs.
   - Cognitive complexity vs blast radius. analyze_complexity × who_uses to find the fns most worth refactoring.
+  - Convergent enum design. semantic_overlaps(item_kind="EnumVariant", threshold=0.95) — variants whose source bytes hash identically (e.g. `Error,` repeated as a unit variant in 6 different crates' error enums). content_hash short-circuit gives similarity=1.0 directly.
+  - Same-shape struct detection. semantic_overlaps(item_kind="Struct", cross_crate_only=true, threshold=0.85) — structurally similar structs across crates (e.g. `TokenUsage` defined in 3 different crates).
 
   10. Test vs production analysis (Test/Other category split)
 
@@ -159,21 +167,35 @@
 
   13. Semantic similarity-driven analysis
 
-  - Find similar functions. get_similar_code(target) → vector candidates.
-  - Refactor candidate finding. Combine get_similar_code (find similar) with who_uses (verify they're called) to identify dedupe candidates.
-  - Naming-convention enforcement. module_tree(crate) lists fn names; get_similar_code finds semantically similar bodies with different names.
-  - Cross-crate duplicate detection. overlaps.cross_crate_type_collisions finds same-name types; get_similar_code confirms they're semantically the same.
+  Three-tier vector tool model. Pick the tier matching what you have in hand:
+
+  - Tier 1 — get_similar_code(query). Free-text natural-language description ("function that parses JSON"). Best when no symbol or qualified name is known. Chunk-level results, no Item awareness.
+  - Tier 2 — similar_to_item(target=Y). Single qualified-name seed → ranked semantic neighbors via item-level embeddings. Returns score, kind, file per match. Use for "what's like X?" investigation. ~100-300ms per call.
+  - Tier 3 — semantic_overlaps(directory). Workspace-wide audit, no seed. Returns clusters of transitively-similar Items. v1.1 caches embeddings per Item in LMDB — first scan pays the embedding cost, subsequent scans on unchanged code are essentially free. Use for offline duplicate-detection / refactor planning.
+
+  - Find similar functions. similar_to_item(target=fn) for one seed; semantic_overlaps(item_kind="Function") for a workspace audit returning ranked clusters.
+  - Refactor candidate finding. semantic_overlaps(crate_name=X) returns ranked clusters in one call; for each cluster, who_uses_summary on members to verify they're called and plan migration.
+  - Naming-convention enforcement. semantic_overlaps with cross_crate_only=true surfaces same-shape items with different names — a structural rename audit.
+  - Cross-crate duplicate detection. semantic_overlaps(item_kind="Struct", cross_crate_only=true) is the dedicated workflow. Complementary to overlaps.cross_crate_type_collisions: overlaps is name-equality / structure-only, semantic_overlaps is content-similar — keep both.
+  - Type-1 clone detection. semantic_overlaps(threshold=0.95) surfaces literal-source duplicates at similarity=1.0 via the content_hash short-circuit. Real example: enum `Error` variant duplicated across 6 crates in `coding-agent` collapses into a single 1.0-similarity cluster.
+
+  Two main UX knobs: max_cluster_size (default 15, drops chained mega-clusters from single-linkage) and cross_crate_only (toggle to filter intra-crate noise on workspace-wide scans). See §29 for the shipped tool architecture summary.
 
   14. Function-level call graphs
 
-  who_uses_in (hypergraph) gives module-level resolution; get_call_graph (parser) gives function-to-function within-file. Use cases:
+  Layer 10 (who_calls / calls_from / call_graph / callers_in_crate / recursive_callers_count) is the new workspace-wide fn→fn answer. get_call_graph (parser) is now only the within-file fallback when Layer 10 doesn't fit.
 
-  - Trace function calls within a file. get_call_graph(file=X.rs) → which fns call which.
-  - Find leaf functions (no internal callers). get_call_graph outputs without incoming edges.
-  - Find entry-point functions. get_call_graph outputs with no outgoing edges.
-  - Verify expected call paths. "Does handle_request call validate_input?" → check the parser-level edge.
+  - Fn → fn callers (workspace-wide). who_calls(target=fn) → every call site, file:byte-range, caller fn attributed. Calls from closures attribute to the enclosing fn.
+  - Fn → fn callees (workspace-wide). calls_from(caller=fn) → every outgoing reference made from this fn's body.
+  - Bounded recursive call tree. call_graph(root=fn, depth=3) → recursive descent over outgoing edges, capped at max=8 (deeper trees rarely fit). truncated_at_cycle / truncated_at_depth flags surface where the walk stopped.
+  - Crate-scoped call audit. callers_in_crate(target=fn, krate=X) → callers limited to one crate. Useful for enforcing architectural boundaries (e.g. "no caller of internal_helper outside the defining crate").
+  - Blast-radius integer. recursive_callers_count(target=fn, depth=8) → exact count of distinct transitive caller fns. Replaces who_uses_summary heuristics for fn-level fan-in.
+  - Trace function calls within a file. get_call_graph(file=X.rs) → which fns call which. Parser-only fallback; use Layer 10 first.
+  - Find leaf functions (no internal callers). get_call_graph outputs without incoming edges, OR who_calls(target=fn) returning an empty list.
+  - Find entry-point functions. get_call_graph outputs with no outgoing edges, OR calls_from(caller=fn) returning an empty list.
+  - Verify expected call paths. "Does handle_request call validate_input?" → calls_from(caller=handle_request) and check for validate_input in the result.
 
-  Limitation: get_call_graph is per-file or per-fn, not workspace-wide. Cross-file calls show up only in who_uses aggregation.
+  Limitation: trait dispatch via dynamic calls is still an inference and may miss some sites; the resolver is type-based.
 
   15. Reading code in context
 
@@ -230,59 +252,51 @@
 
   21. Tool index — cheat sheet
 
-  ┌────────────────────────┬────────────────┬─────────────────────────────┬───────────────────────────────────────────┐
-  │          Tool          │     Layer      │           Returns           │                 Best for                  │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ build_hypergraph       │ Layer 4        │ snapshot metadata           │ initialize/refresh                        │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ workspace_stats        │ Layer 6        │ counts                      │ overview                                  │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ crate_edges            │ Layer 6        │ edge matrix                 │ architecture                              │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ overlaps               │ Layer 6        │ hygiene findings            │ quality audit                             │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ module_tree            │ Layer 6        │ recursive tree              │ structural dump                           │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ dead_pub_report        │ Layer 6        │ dead pub items              │ refactor planning                         │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ dead_pub_in_crate      │ Layer 6        │ per-crate dead              │ targeted refactor                         │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_imports            │ Layer 6        │ use-edges in module         │ per-module analysis                       │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_exports            │ Layer 6        │ visibility-filtered exports │ API audit                                 │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_reexports          │ Layer 6        │ reachable pub use           │ facade audit                              │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_declared_reexports │ Layer 6        │ all pub use declarations    │ full re-export audit                      │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ who_imports            │ Layer 6        │ reverse use-edges           │ importer inventory                        │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ who_uses               │ Layer 6        │ non-import refs             │ call-site inventory                       │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ who_uses_summary       │ Layer 6        │ aggregated rollup           │ "where is this concentrated?"             │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ search                 │ tantivy/BM25   │ text matches                │ when you don't know the name              │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ find_definition        │ RA             │ file:line                   │ jump to declaration                       │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ find_references        │ RA             │ refs incl. locals           │ catch-all (different scope than who_uses) │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_dependencies       │ parser         │ per-file imports            │ file-level (not module)                   │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_call_graph         │ parser         │ function call edges         │ within-file call structure                │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ analyze_complexity     │ parser         │ metrics                     │ gnarl finding                             │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ get_similar_code       │ LanceDB        │ semantic neighbors          │ dedup candidates                          │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ read_file_content      │ filesystem     │ raw bytes                   │ render context                            │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ index_codebase         │ infrastructure │ indexes                     │ prereq for search/similar                 │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ clear_cache            │ infrastructure │ --                          │ recover from corruption                   │
-  ├────────────────────────┼────────────────┼─────────────────────────────┼───────────────────────────────────────────┤
-  │ health_check           │ infrastructure │ status                      │ verify ready                              │
-  └────────────────────────┴────────────────┴─────────────────────────────┴───────────────────────────────────────────┘
+  | Tool | Layer | Returns | Best for |
+  |---|---|---|---|
+  | build_hypergraph | Layer 4 | snapshot metadata | initialize/refresh |
+  | workspace_stats | Layer 6 | counts | overview |
+  | crate_edges | Layer 6 | edge matrix | architecture |
+  | crate_dependency_metric | Layer 6 | sorted fan-in/fan-out | crate-rank metric without scrolling crate_edges |
+  | overlaps | Layer 6 | hygiene findings | quality audit |
+  | module_tree | Layer 6 | recursive tree | structural dump |
+  | dead_pub_report | Layer 6 | dead pub items | refactor planning |
+  | dead_pub_in_crate | Layer 6 | per-crate dead | targeted refactor |
+  | get_imports | Layer 6 | use-edges in module | per-module analysis |
+  | get_exports | Layer 6 | visibility-filtered exports | API audit |
+  | get_reexports | Layer 6 | reachable pub use | facade audit |
+  | get_declared_reexports | Layer 6 | all pub use declarations | full re-export audit |
+  | who_imports | Layer 6 | reverse use-edges | importer inventory |
+  | who_uses | Layer 6 | non-import refs | call-site inventory |
+  | who_uses_summary | Layer 6 | aggregated rollup | "where is this concentrated?" |
+  | forbidden_dependency_check | Layer 6 | rule violations | architectural rule enforcement / CI |
+  | enum_variants | Layer 6 | variant list | enum surface inspection |
+  | item_attributes | Layer 6 | attributes on Y | per-item attribute fingerprint |
+  | items_with_attribute | Layer 6 | items by attr | workspace attribute audit |
+  | pub_use_pub_type_audit | Layer 6 | suspicious type aliases | facade audit |
+  | re_export_chain | Layer 6 | hop list | trace a long pub-use chain |
+  | who_calls | Layer 10 | caller-fn refs | workspace-wide fn fan-in |
+  | calls_from | Layer 10 | callee-fn refs | workspace-wide fn fan-out |
+  | call_graph | Layer 10 | bounded call tree | recursive callees with depth cap |
+  | callers_in_crate | Layer 10 | callers in one crate | crate-scoped fn audit |
+  | recursive_callers_count | Layer 10 | integer count | exact blast-radius metric |
+  | function_signature | Phase 5 | sig record | per-fn sig inspection |
+  | functions_with_filter | Phase 5 | filtered fn list | sig-based fn discovery |
+  | unsafe_audit | Phase 6 | unsafe blocks | SAFETY-comment audit |
+  | mut_static_audit | Phase 7 | static-state hits | hidden-singleton audit |
+  | search | tantivy/BM25 | text matches | when you don't know the name |
+  | find_definition | RA | file:line | jump to declaration |
+  | find_references | RA | refs incl. locals | catch-all (different scope than who_uses) |
+  | get_dependencies | parser | per-file imports | file-level (not module) |
+  | get_call_graph | parser | function call edges | within-file call structure |
+  | analyze_complexity | parser | metrics | gnarl finding |
+  | get_similar_code | LanceDB | semantic neighbors | free-text vector search |
+  | similar_to_item | LanceDB+graph | ranked neighbors | "what's like Y?" |
+  | semantic_overlaps | LanceDB+graph | clusters/pairs | workspace-wide duplicate detection |
+  | read_file_content | filesystem | raw bytes | render context |
+  | index_codebase | infrastructure | indexes | prereq for search/similar |
+  | clear_cache | infrastructure | -- | recover from corruption |
+  | health_check | infrastructure | status | verify ready |
 
   22. Combining old + new — frequent patterns
 
@@ -320,14 +334,26 @@
 
   §11 — Architecture
   - DAG enforcement → walk crate_edges in code, detect cycles. Pure script using existing data.
-  - "Domain crates free of framework deps" → for any crate matching domain|core|model|kernel, filter crate_edges for consumer_crate=X and check producer set against a forbidden list (tokio, bevy, serde_json, hyper, etc.). Pure rule check on existing data.
-  - "Translate external formats at the boundary" → if a domain crate has cross-crate edges to provider/store/http crates, that's a leak.
-  - Heaviest cross-crate edges → crate_edges sorted by total_refs. The top edges define the architecture; if they're surprising, the architecture is.
-  - No-cycle check between layered crates (e.g., core ↛ ui ↛ core) → DAG walk on crate_edges.
+  - "Domain crates free of framework deps" → forbidden_dependency_check(rules=[{consumer: "domain*", producer: "tokio"}, {consumer: "domain*", producer: "serde_json"}, {consumer: "domain*", producer: "hyper"}, ...]). Pure rule check; produces violations with sample_symbol, unique_symbols, total_refs per offending edge.
+  - "Translate external formats at the boundary" → forbidden_dependency_check rules from domain crates to provider/store/http producers; any violation is a leak.
+  - Heaviest cross-crate edges → crate_edges sorted by total_refs, OR crate_dependency_metric(sort_by="afferent"|"efferent") for a ranked summary.
+  - No-cycle check between layered crates (e.g., core ↛ ui ↛ core) → DAG walk on crate_edges (no dedicated cycle-detection tool yet).
 
   §12 — Async as a boundary
-  - "Domain crate importing tokio" → filter crate_edges for (consumer=domain_crate, producer=tokio). Same pattern works for bevy/futures/etc.
+  - "Domain crate importing tokio" → forbidden_dependency_check(rules=[{consumer: "domain*", producer: "tokio"}]) is the canonical implementation. Same pattern for bevy/futures/etc.
   - Note: the narrower "no .await in domain logic" is parser-territory — outside graph scope.
+
+  §13 — Unsafe code
+  - SAFETY-comment compliance → unsafe_audit(directory) with has_safety_comment=false filter for undocumented unsafe blocks. Block size and enclosing-fn attribution per finding.
+
+  §NEW — Global mutable state
+  - Hidden-singleton detection → mut_static_audit(directory) reports every static matching `static mut` / `LazyLock<...>` / `OnceLock<...>` / `OnceCell<...>` with type_string and span. lazy_static! macro expansion is NOT detected — combine with items_with_attribute or grep.
+
+  §NEW — Deprecation rollout
+  - "What's deprecated and who still calls it?" → items_with_attribute(crate_name=X, attribute_pattern="#[deprecated") then who_uses per finding. Cross-reference deprecation surface with active call-site count.
+
+  §NEW — Function-signature consistency
+  - Self-kind audit across trait implementors → functions_with_filter(krate=X, self_kind="ref") vs self_kind="ref_mut" / "owned" — surfaces methods whose self-kind drifts across implementors.
 
   §17 — Testing
   - Test-only constructor audit → who_uses_summary(Type::new) showing 100% Test = fixture builder. (Recipe in §10.)
@@ -343,11 +369,64 @@
 
   24. What you can't do today
 
-  - Function-to-function call graph workspace-wide. who_uses is module-level; get_call_graph is file-level. There's no "fn → fn across the workspace" tool.
-  - Trait impl enumeration. "Every concrete impl of Trait" requires Layer 4c (deferred). who_imports(Trait) is the workaround.
+  - Trait impl enumeration. Enumerating every concrete `impl Trait for T` body requires Layer 4c (deferred). For trait method audits, who_calls(Trait::method) (Layer 10) finds every dispatched call site; functions_with_filter(self_kind=...) audits method-shape consistency. The remaining gap is enumerating impl blocks themselves as graph entities.
   - Cross-snapshot diffs as a tool. Possible by hand; no diff_hypergraph tool yet.
-  - Macro-expanded code. Categorization can be murky; some macro-introduced refs don't surface cleanly.
+  - Macro-expanded code. Categorization can be murky; some macro-introduced refs don't surface cleanly. lazy_static! is one concrete blind spot for mut_static_audit.
   - Per-method visibility on the Item Node. Methods don't have Declared bindings, so Node.visibility is null. To get a method's visibility, read Node.file + Node.span and inspect source.
-  - Pagination. who_uses on a popular trait can return thousands of rows. No cursor (Phase D deferred).
+  - Pagination. who_uses on a popular trait can return thousands of rows. No cursor (Phase D deferred). functions_with_filter is paginated (limit/offset).
   - Inherent impls of foreign types. Methods on dep-crate types aren't extracted.
   - Non-Rust files. Vector store can index any text; hypergraph is Rust-only.
+
+  25. Architectural rule enforcement
+
+  - DAG enforcement / layering checks. forbidden_dependency_check(rules) returns concrete violations with sample_symbol/unique_symbols/total_refs per offending edge. Glob patterns on consumer/producer (`domain*`, `tokio`, `*_test`) plus an optional `except` consumer-side override. Wrap in CI for layered architectures.
+  - Layered crate audit. Enumerate crates via dead_pub_report.crates[].crate, group by layer (domain/service/transport/...), assert no upward edges by passing layer-violating pairs as forbidden rules.
+  - Cycle-free DAG. crate_dependency_metric(sort_by="instability") surfaces unstable boundary crates; manual cycle walk on crate_edges (no dedicated cycle-detection tool yet).
+  - Severity tagging. Each rule carries optional `severity` and `message` strings, passed through unchanged in violations — useful for distinguishing "error" from "warn" in CI output.
+
+  26. Attribute-driven audits
+
+  - Per-item fingerprint. item_attributes(target=Y) lists every `#[...]` and `///` doc-comment line on Y in source order. Empty list when the AST source can't be resolved.
+  - Workspace-wide attribute search. items_with_attribute(crate_name=X, attribute_pattern="#[deprecated") finds every item carrying a specific attribute. Anchored prefix match — e.g. `#[must_use]` matches `#[must_use]` exactly but the pattern `must_use` matches both attribute prefixes and doc-comment-body prefixes.
+  - Match location. Each result row carries `match_location: "attr"` or `"doc"` so callers can filter visually.
+  - Common audits. `deprecated` (rollout status), `must_use` (API contract), `non_exhaustive` (forward-compat surface), `serde(skip)` (serialization opt-outs), `derive(Serialize)` (wire-format inventory), `inline` (perf hint surface).
+  - Combine. items_with_attribute(attr="#[deprecated") × who_uses per finding → "deprecated items still being called."
+
+  27. Signature-based fn discovery
+
+  - Single-fn signature. function_signature(target=Y) returns params (name + stringified type + by_ref + mutability), return type, generics, is_async, self_param (Owned/Ref/RefMut, or null for free fns). Alternative to reading source.
+  - Crate-wide filtered enumeration. functions_with_filter(krate=X, ...) with these knobs:
+    - min_param_count — find fns with ≥N non-self args.
+    - has_param_type — substring match on the rendered HIR type. E.g. `&Path`, `tokio::sync::Mutex`.
+    - returns_type_pattern — substring match on return type. E.g. `Result<` for fallible fns, `Result.*MyError` for migration targets.
+    - is_async — `true` requires async, `false` requires non-async.
+    - self_kind — `"none"` (free fn or assoc fn without self), `"owned"` (consuming method), `"ref"` (`&self`), `"ref_mut"` (`&mut self`).
+  - Pagination. limit (default 50) / offset; compare total_match_count to offset+match_count to detect "more pages exist". `summary: true` drops the signature payload when over the token budget.
+  - Common audits.
+    - "All async fns returning a specific Result type" — migration helper.
+    - "Consuming methods" (self_kind="owned") — builder-pattern candidates.
+    - "Methods on `&Path`" — filesystem-touching surface.
+    - "Self-kind consistency across trait implementors" — `&self` vs `&mut self` mismatches.
+  - Caveats. Type strings come from RA's HirDisplay; allocator/hasher type parameters and LazyLock/OnceLock init-fn pointer params are stripped for readability. Trait-impl method bodies are NOT included in functions_with_filter results. trait_bounds reflects declaration-site bounds only — where-clause bounds added later are not included (RA limitation).
+
+  28. Unsafe-code & global-state audits
+
+  Unsafe blocks (unsafe_audit):
+  - SAFETY-comment compliance. Filter has_safety_comment=false → undocumented unsafe. Heuristic: SAFETY appears as a substring in the 5 source lines preceding the unsafe keyword.
+  - Block-size distribution. Sort by line_count desc → top candidates for breakdown into smaller blocks.
+  - Blast-radius weighting. For each block's enclosing_function_name, run recursive_callers_count → "how many fns transitively touch unsafe code?"
+  - Live computation. ~2-3s per call (workspace load); nothing cached.
+
+  Static state (mut_static_audit):
+  - Pattern coverage. `static mut`, `LazyLock<...>`, `OnceLock<...>`, `OnceCell<...>`. Type-aware (HirDisplay), not source-text regex. One finding per pattern match — a static matching multiple patterns produces multiple rows.
+  - Per-finding fan-in. who_uses(target=qualified_name) → who depends on the global.
+  - Audit by pattern. Filter findings by matched_pattern to focus on e.g. only `static mut` (the riskiest) or only `LazyLock<...>` (the most common).
+  - Blind spot. lazy_static! macro is NOT detected — its expansion produces a generated wrapper type whose name doesn't contain LazyLock. Use items_with_attribute or grep to cover that case.
+
+  29. Workspace-wide duplicate detection
+
+  Cross-reference: see §13 for the full three-tier vector tool model. The shipped tool architecture for readers landing here directly:
+
+  - v1.0 / v1.0.1: chunk-search + manual clustering via get_similar_code + overlaps. Replaced by:
+  - v1.1: semantic_overlaps(directory) — per-Item embeddings cached in LMDB, in-memory cosine, content-hash short-circuit (identical-source items get similarity=1.0 directly), single-linkage clustering with max_cluster_size cap (default 15). The single canonical workflow for "what's duplicated that I don't know about?"
+  - Complementary, not redundant. overlaps.cross_crate_type_collisions is name-equality / structure-only; semantic_overlaps is content-similar. Keep both; pick by question shape.
