@@ -1429,12 +1429,16 @@ Clusters are returned sorted by `avg_similarity` descending — high-similarity 
 - Audit a specific kind: pass `item_kind: "Function"` (or "Struct") to scope the scan.
 
 **Notes / limitations:**
-- **Prerequisites: BOTH `build_hypergraph` AND `index_codebase` must have run for the workspace.** Bridges the hypergraph (Item → file/span) with the vector store (chunk embeddings).
-- Latency is **seconds-to-minutes** at workspace scale (one vector search per seed Item; ~150ms per search). Scope with `crate_name` for an interactive call.
+- **Prerequisite: `build_hypergraph` must have run for the workspace.** v1.1 no longer requires `index_codebase` — the tool embeds Item source directly and caches vectors in the snapshot's LMDB env.
+- First-scan latency is **seconds-to-minutes** at workspace scale (each Item is embedded once); subsequent scans on unchanged code are **near-instant** because vectors are reused from the cache.
 - Single-linkage clustering can chain through outliers — one bridging pair can pull two distant clusters together. Tighten `threshold` to mitigate.
-- Self-matches (chunk whose `(file, line range)` overlaps the seed's span) are dropped automatically — same logic as `similar_to_item`.
 - Test fixtures dominate noise; `skip_test_chunks` is on by default.
-- v1.0: synchronous per-seed loop, no embedding cache. Repeated runs re-embed every item.
+
+**v1.1 caching:**
+- **Cache key:** `(NodeId, content_hash, embedder_version)`. `content_hash` is `SHA-256(item_source)` truncated to 16 bytes; mismatch invalidates the entry. `embedder_version` pins the embedding model + dimension (currently `fastembed:all-MiniLM-L6-v2:dim384:v1`); changing the model invalidates every entry.
+- **Storage:** the `embeddings_by_target` sub-DB inside the snapshot's LMDB env (one entry per Item that has been embedded). `build_hypergraph` leaves it empty; `semantic_overlaps` is the only writer.
+- **Cache invalidation:** edits to an Item's source flip its `content_hash` → next `semantic_overlaps` call re-embeds just that item. `build_hypergraph --force_rebuild` produces a fresh `graph_id` and therefore a fresh, empty cache.
+- **Identical-source short-circuit (v1.1c):** Items whose source bytes hash to the same value get `similarity = 1.0` directly — no cosine call.
 
 **Notes from validation:**
 - Use `threshold: 0.80` for crate-scoped scans (chaining is less of a problem at small scale).

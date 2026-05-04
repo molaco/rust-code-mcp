@@ -20,12 +20,12 @@ use serde::Serialize;
 
 use crate::graph::{
     Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
-    DeadPubFinding, EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation,
-    FunctionFilter, FunctionSignature, FunctionWithSignature, GraphEnvOptions, GraphPaths,
-    ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport,
-    PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursiveCallersCount, SelfKindFilter,
-    Usage, UsageCategory, UsageSummaryRow, WorkspaceStats, build_and_persist, open_current,
-    snapshot::BuildOptions,
+    DeadPubFinding, EmbeddingRecord, EnrichedCallSite, ForbiddenDependencyRule,
+    ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
+    GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
+    OpenedSnapshot, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
+    RecursiveCallersCount, SelfKindFilter, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
+    build_and_persist, open_current, snapshot::BuildOptions,
 };
 use crate::graph::queries::ItemWithAttribute;
 use crate::tools::search_tool::{
@@ -692,23 +692,40 @@ pub async fn similar_to_item(
     json_result(&resp)
 }
 
-/// v1.0 "semantic_overlaps": workspace-wide duplicate-detection audit.
+/// v1.1 "semantic_overlaps": workspace-wide duplicate-detection audit with
+/// a per-Item embedding cache.
 ///
-/// Enumerates Items (optionally scoped to a crate / item_kind), embeds each
-/// one's source via vector_only_search, builds a similarity graph above
-/// `threshold`, and either returns deduplicated pairs or single-linkage
-/// clusters of transitively-similar items.
+/// Algorithm (replaces v1.0's per-seed `vector_only_search` pipeline):
+///   1. Enumerate seed Items (filter by crate / item_kind / file+span / tests).
+///   2. For each seed: read source bytes, hash them (SHA-256 truncated to
+///      16 bytes), look up `embeddings_by_target` — if hit AND content_hash
+///      AND embedder_version match, reuse the cached vector; else mark for
+///      embedding.
+///   3. Batch-embed all cache misses via `EmbeddingGenerator::embed_batch_async`
+///      in chunks of `EMBED_CHUNK`; persist each fresh vector to LMDB.
+///   4. Identical-source short-circuit (v1.1c): items sharing a content_hash
+///      get `score = 1.0` directly (skip cosine for that pair).
+///   5. In-memory pairwise cosine over remaining (NodeId, vector) pairs.
+///      O(N²) on 384-dim vectors — comfortable for a few thousand items.
+///   6. Apply existing filters (cross_crate_only, skip_tests, threshold) and
+///      dedupe symmetric edges via canonical (smaller-id-first) key.
 ///
-/// Note on async vs spawn_blocking: the original plan called for
-/// `tokio::task::spawn_blocking` (mirroring `unsafe_audit`), but
-/// `vector_only_search` is async and cannot be `.await`-driven inside a
-/// spawn_blocking closure without re-entering the runtime. The per-seed loop
-/// is dominated by I/O (embedding generation + LanceDB roundtrip) which yields,
-/// so the runtime worker is not actually blocked. We therefore run the scan
-/// directly on the runtime, accepting the divergence from the plan.
+/// Subsequent scans on unchanged code reuse cached vectors — only freshly
+/// modified items pay the embedding cost. The cache lives in LMDB at the
+/// `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears
+/// it (the new graph_id implies a fresh snapshot env).
 pub async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
+    /// Stable identifier for the embedding model + dimension. Cache entries
+    /// whose `embedder_version` does not match this string are treated as
+    /// misses and refreshed. Bump when the embedder model or dimension
+    /// changes.
+    const EMBEDDER_VERSION: &str = "fastembed:all-MiniLM-L6-v2:dim384:v1";
+    /// Max texts per `embed_batch_async` call. Keeps memory bounded when the
+    /// workspace has thousands of seeds.
+    const EMBED_CHUNK: usize = 64;
+
     let directory = params.directory.clone();
     let threshold = params.threshold.unwrap_or(0.85);
     let max_pairs = params.max_pairs.unwrap_or(50);
@@ -730,10 +747,6 @@ pub async fn semantic_overlaps(
     let cross_crate_only = params.cross_crate_only.unwrap_or(false);
     let item_kind_filter_label = params.item_kind.clone();
     let crate_name = params.crate_name.clone();
-
-    // 0. Build hybrid_search up front (async).
-    let paths = crate::tools::project_paths::ProjectPaths::from_directory(Path::new(&directory));
-    let hybrid_search = crate::tools::query_tools::create_hybrid_search(&paths, None).await?;
 
     // 1. Open snapshot.
     let snap = open_workspace_snapshot(&directory)?;
@@ -813,94 +826,233 @@ pub async fn semantic_overlaps(
         }
     }
 
-    // 4. For each seed: read source bytes (cache file contents), run
-    //    vector_only_search(K=20), resolve each chunk back to an Item,
-    //    insert directed edges keyed by canonical (smaller-id-first) NodeId
-    //    pair. Drops self-matches, threshold misses, test chunks, and
-    //    same-crate pairs when cross_crate_only is set.
+    // 4. v1.1: per-Item embedding cache + pairwise cosine.
+    //
+    // Per-seed context: id, node, content_hash, optional cached vector,
+    // optional source text (Some only when the cache missed and we still
+    // need to embed it). After the embedding pass, every retained ctx has
+    // `cached_vec = Some(_)` and `source = None`.
+    struct SeedCtx {
+        id: NodeId,
+        node: Node,
+        content_hash: [u8; 16],
+        cached_vec: Option<Vec<f32>>,
+        source: Option<String>,
+    }
+
+    let mut seeds_ctx: Vec<SeedCtx> = Vec::new();
     let mut file_cache: HashMap<String, String> = HashMap::new();
-    type EdgeKey = (NodeId, NodeId);
-    let mut edges: HashMap<EdgeKey, Vec<f32>> = HashMap::new();
 
-    for (seed_id, seed_node) in &seeds {
-        let seed_file = seed_node.file.as_deref().expect("filtered above");
-        let seed_span = seed_node.span.expect("filtered above");
-        let abs_seed_path = PathBuf::from(&directory).join(seed_file);
-        let abs_seed_str = abs_seed_path.to_string_lossy().to_string();
+    // First pass: read each seed's source, hash it, and check the cache.
+    {
+        use sha2::{Digest, Sha256};
+        let rtxn = snap
+            .env
+            .read_txn()
+            .map_err(|e| McpError::internal_error(format!("read_txn: {e}"), None))?;
+        for (seed_id, seed_node) in seeds.drain(..) {
+            let seed_file = seed_node.file.as_deref().expect("filtered above");
+            let seed_span = seed_node.span.expect("filtered above");
+            let abs_seed_path = PathBuf::from(&directory).join(seed_file);
+            let abs_seed_str = abs_seed_path.to_string_lossy().to_string();
 
-        if !file_cache.contains_key(&abs_seed_str) {
-            match std::fs::read_to_string(&abs_seed_path) {
-                Ok(s) => {
-                    file_cache.insert(abs_seed_str.clone(), s);
-                }
-                Err(_) => continue,
-            }
-        }
-        let content = file_cache
-            .get(&abs_seed_str)
-            .expect("inserted above");
-        let (start, end) = (seed_span.0 as usize, seed_span.1 as usize);
-        let Some(seed_source_slice) = content.get(start..end) else {
-            continue;
-        };
-        let trimmed = seed_source_slice.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let seed_source = trimmed.to_string();
-        let seed_line_start = content[..start].matches('\n').count() as u32 + 1;
-        let seed_line_end = content[..end].matches('\n').count() as u32 + 1;
-        let seed_rel_path = Path::new(seed_file).to_path_buf();
-
-        let results = match hybrid_search.vector_only_search(&seed_source, 20).await {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        for r in results {
-            if r.score < threshold {
-                continue;
-            }
-            let chunk_path = r.chunk.context.file_path.clone();
-            let chunk_ls = r.chunk.context.line_start as u32;
-            let chunk_le = r.chunk.context.line_end as u32;
-
-            // Self-match drop: same logic as `similar_to_item` — file ends_with
-            // the workspace-relative seed path AND chunk lines overlap seed lines.
-            if chunk_path.ends_with(&seed_rel_path) {
-                let overlaps = chunk_ls <= seed_line_end && chunk_le >= seed_line_start;
-                if overlaps {
-                    continue;
+            if !file_cache.contains_key(&abs_seed_str) {
+                match std::fs::read_to_string(&abs_seed_path) {
+                    Ok(s) => {
+                        file_cache.insert(abs_seed_str.clone(), s);
+                    }
+                    Err(_) => continue,
                 }
             }
-
-            // Resolve chunk → Item.
-            let Some((other_id, other_node)) =
-                resolve_chunk_to_item(&snap, &chunk_path, chunk_ls, chunk_le, &mut file_cache)
-            else {
+            let content = file_cache
+                .get(&abs_seed_str)
+                .expect("inserted above");
+            let (start, end) = (seed_span.0 as usize, seed_span.1 as usize);
+            let Some(seed_source_slice) = content.get(start..end) else {
                 continue;
             };
-            if other_id == *seed_id {
-                continue;
-            }
-            if cross_crate_only && other_node.crate_id == seed_node.crate_id {
-                continue;
-            }
-            if skip_tests && other_node.qualified_name.contains("::tests::") {
+            let trimmed = seed_source_slice.trim();
+            if trimmed.is_empty() {
                 continue;
             }
 
-            // Canonical pair (smaller id bytes first).
-            let key = if seed_id.as_bytes() < other_id.as_bytes() {
-                (*seed_id, other_id)
-            } else {
-                (other_id, *seed_id)
+            // SHA-256(source) truncated to 16 bytes.
+            let mut hasher = Sha256::new();
+            hasher.update(trimmed.as_bytes());
+            let full = hasher.finalize();
+            let mut content_hash = [0u8; 16];
+            content_hash.copy_from_slice(&full[..16]);
+
+            // Cache lookup. Hit only if content_hash AND embedder_version match.
+            let cached: Option<Vec<f32>> = match snap
+                .dbs
+                .embeddings_by_target
+                .get(&rtxn, seed_id.as_bytes())
+                .map_err(|e| {
+                    McpError::internal_error(
+                        format!("embeddings_by_target.get: {e}"),
+                        None,
+                    )
+                })? {
+                Some(rec)
+                    if rec.content_hash == content_hash
+                        && rec.embedder_version == EMBEDDER_VERSION =>
+                {
+                    Some(rec.vector)
+                }
+                _ => None,
             };
-            edges.entry(key).or_default().push(r.score);
+
+            let needs_embed = cached.is_none();
+            seeds_ctx.push(SeedCtx {
+                id: seed_id,
+                node: seed_node,
+                content_hash,
+                cached_vec: cached,
+                source: if needs_embed {
+                    Some(trimmed.to_string())
+                } else {
+                    None
+                },
+            });
         }
     }
 
-    // 5. Symmetric dedup: average the per-direction scores.
+    // 5. Batch-embed cache misses (v1.1b) and persist each fresh vector.
+    let mut miss_indices: Vec<usize> = Vec::new();
+    let mut miss_texts: Vec<String> = Vec::new();
+    for (idx, ctx) in seeds_ctx.iter().enumerate() {
+        if let Some(ref src) = ctx.source {
+            miss_indices.push(idx);
+            miss_texts.push(src.clone());
+        }
+    }
+
+    if !miss_texts.is_empty() {
+        let embedder = crate::embeddings::EmbeddingGenerator::new()
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!("EmbeddingGenerator init: {e}"),
+                    None,
+                )
+            })?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut wtxn = snap
+            .env
+            .write_txn()
+            .map_err(|e| McpError::internal_error(format!("write_txn: {e}"), None))?;
+
+        for chunk_start in (0..miss_texts.len()).step_by(EMBED_CHUNK) {
+            let chunk_end = (chunk_start + EMBED_CHUNK).min(miss_texts.len());
+            let texts: Vec<String> = miss_texts[chunk_start..chunk_end].to_vec();
+            let vectors = embedder
+                .embed_batch_async(texts)
+                .await
+                .map_err(|e| {
+                    McpError::internal_error(
+                        format!("embed_batch_async: {e}"),
+                        None,
+                    )
+                })?;
+
+            for (offset, vector) in vectors.into_iter().enumerate() {
+                let idx = miss_indices[chunk_start + offset];
+                let ctx = &mut seeds_ctx[idx];
+                let rec = EmbeddingRecord {
+                    content_hash: ctx.content_hash,
+                    vector: vector.clone(),
+                    embedder_version: EMBEDDER_VERSION.to_string(),
+                    generated_at_unix: now,
+                };
+                snap.dbs
+                    .embeddings_by_target
+                    .put(&mut wtxn, ctx.id.as_bytes(), &rec)
+                    .map_err(|e| {
+                        McpError::internal_error(
+                            format!("embeddings_by_target.put: {e}"),
+                            None,
+                        )
+                    })?;
+                ctx.cached_vec = Some(vector);
+                ctx.source = None;
+            }
+        }
+
+        wtxn.commit()
+            .map_err(|e| McpError::internal_error(format!("wtxn.commit: {e}"), None))?;
+    }
+
+    // 6. Edge accumulator. For symmetric dedup we use a canonical
+    //    (smaller-id-first) key.
+    type EdgeKey = (NodeId, NodeId);
+    let mut edges: HashMap<EdgeKey, Vec<f32>> = HashMap::new();
+
+    let canonical = |a: NodeId, b: NodeId| -> EdgeKey {
+        if a.as_bytes() < b.as_bytes() {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    };
+
+    // 7. v1.1c — identical-source short-circuit. Items sharing a content_hash
+    //    get score=1.0 directly (subject to existing filters); skip the
+    //    cosine pass for those pairs.
+    let mut by_hash: HashMap<[u8; 16], Vec<usize>> = HashMap::new();
+    for (i, ctx) in seeds_ctx.iter().enumerate() {
+        if ctx.cached_vec.is_some() {
+            by_hash.entry(ctx.content_hash).or_default().push(i);
+        }
+    }
+    for indices in by_hash.values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        for ai in 0..indices.len() {
+            let a = &seeds_ctx[indices[ai]];
+            for bi in (ai + 1)..indices.len() {
+                let b = &seeds_ctx[indices[bi]];
+                if cross_crate_only && a.node.crate_id == b.node.crate_id {
+                    continue;
+                }
+                // skip_tests was already enforced during seed enumeration.
+                let key = canonical(a.id, b.id);
+                edges.entry(key).or_default().push(1.0);
+            }
+        }
+    }
+
+    // 8. In-memory pairwise cosine. O(N²) on 384-dim vectors. Identical-hash
+    //    pairs are skipped here (already handled above with score=1.0).
+    for i in 0..seeds_ctx.len() {
+        let Some(va) = seeds_ctx[i].cached_vec.as_ref() else {
+            continue;
+        };
+        for j in (i + 1)..seeds_ctx.len() {
+            let Some(vb) = seeds_ctx[j].cached_vec.as_ref() else {
+                continue;
+            };
+            let a = &seeds_ctx[i];
+            let b = &seeds_ctx[j];
+            if a.content_hash == b.content_hash {
+                continue;
+            }
+            if cross_crate_only && a.node.crate_id == b.node.crate_id {
+                continue;
+            }
+            let score = cosine(va, vb);
+            if score < threshold {
+                continue;
+            }
+            let key = canonical(a.id, b.id);
+            edges.entry(key).or_default().push(score);
+        }
+    }
+
+    // 9. Symmetric dedup: average the per-direction scores.
     let mut pairs: Vec<(NodeId, NodeId, f32)> = edges
         .into_iter()
         .map(|((a, b), scores)| {
@@ -911,27 +1063,21 @@ pub async fn semantic_overlaps(
     pairs.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal));
     let pair_count = pairs.len();
 
-    // 6. Build response.
-    //    NodeId → ItemRef lookup. Most pairs reference seed nodes; a few may
-    //    reference items outside the seed set (resolved via chunk overlap on a
-    //    file that contains both seed and non-seed items). For the latter, do
-    //    an extra `node_by_id` read.
+    // 10. Build response. v1.1 only ever produces edges between seeds, so
+    //     the lookup table is the seeds themselves — no fallback `node_by_id`
+    //     read needed.
+    let seed_count = seeds_ctx.len();
     let seed_index: HashMap<NodeId, &Node> =
-        seeds.iter().map(|(id, n)| (*id, n)).collect();
+        seeds_ctx.iter().map(|c| (c.id, &c.node)).collect();
     let lookup_ref = |id: NodeId| -> Option<ItemRef> {
-        if let Some(node) = seed_index.get(&id) {
-            return Some(node_to_item_ref(node));
-        }
-        let rtxn = snap.read_txn().ok()?;
-        let node = snap.node_by_id(&rtxn, id).ok().flatten()?;
-        Some(node_to_item_ref(&node))
+        seed_index.get(&id).map(|node| node_to_item_ref(node))
     };
 
     let scope = ScopeSummary {
         directory: directory.clone(),
         crate_name: crate_name.clone(),
         item_kind: item_kind_filter_label.clone(),
-        seed_count: seeds.len(),
+        seed_count,
     };
 
     if output_mode == "pairs" {
@@ -1649,8 +1795,33 @@ fn parse_item_kind_filter(s: Option<&str>) -> Result<Option<ItemKind>, McpError>
 
 /// Pure helper: returns true iff `[a_start, a_end]` and `[b_start, b_end]`
 /// overlap as inclusive line ranges. Extracted for unit testing.
+///
+/// As of v1.1 of `semantic_overlaps` no production caller uses this — kept
+/// alive by tests and as a reachable helper for `resolve_chunk_to_item` so
+/// future tools can re-introduce chunk → Item resolution.
+#[allow(dead_code)]
 fn line_range_overlaps(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
     a_start <= b_end && a_end >= b_start
+}
+
+/// Cosine similarity between two equal-length f32 vectors. Used by
+/// `semantic_overlaps` v1.1 for the in-memory pairwise pass. Returns 0.0
+/// when either vector has zero norm (instead of NaN); slices of unequal
+/// length are silently truncated to the shorter length via `zip`.
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot = 0f32;
+    let mut na = 0f32;
+    let mut nb = 0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na.sqrt() * nb.sqrt())
+    }
 }
 
 /// Map a vector-store chunk's `(file, line_range)` to a hypergraph Item NodeId.
@@ -1664,6 +1835,12 @@ fn line_range_overlaps(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bo
 ///
 /// Returns the first Item whose byte-span-derived line range overlaps
 /// `[chunk_line_start, chunk_line_end]`. None if no Item matches.
+///
+/// As of v1.1, `semantic_overlaps` no longer routes through chunk → Item
+/// resolution (it embeds Item source directly), so this helper has no
+/// production caller. Retained for future tools that bridge the vector
+/// store with the hypergraph.
+#[allow(dead_code)]
 fn resolve_chunk_to_item(
     snap: &OpenedSnapshot,
     chunk_file: &Path,
@@ -2749,6 +2926,25 @@ mod tests {
         let mut id = [0u8; 32];
         id[0] = byte;
         NodeId(id)
+    }
+
+    #[test]
+    fn cosine_basic_identities() {
+        // identical → 1.0
+        let v = vec![1.0_f32, 2.0, 3.0];
+        assert!((cosine(&v, &v) - 1.0).abs() < 1e-6);
+        // orthogonal → 0.0
+        let a = vec![1.0_f32, 0.0];
+        let b = vec![0.0_f32, 1.0];
+        assert!(cosine(&a, &b).abs() < 1e-6);
+        // opposite → -1.0
+        let a = vec![1.0_f32, 2.0, 3.0];
+        let neg: Vec<f32> = a.iter().map(|x| -x).collect();
+        assert!((cosine(&a, &neg) + 1.0).abs() < 1e-6);
+        // zero-norm input → 0.0 (no NaN)
+        let z = vec![0.0_f32; 3];
+        assert_eq!(cosine(&z, &v), 0.0);
+        assert_eq!(cosine(&v, &z), 0.0);
     }
 
     #[test]
