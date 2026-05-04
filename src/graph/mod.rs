@@ -6,6 +6,7 @@
 pub mod attributes;
 pub mod bindings;
 pub mod extract;
+pub mod hir_trim;
 pub mod ids;
 pub mod impls;
 pub mod loader;

@@ -244,15 +244,18 @@ pub struct VisibilityCounts {
 
 /// One row of `items_with_attribute(crate, pattern)`: every Item in the
 /// requested crate whose `attributes` list has at least one entry that
-/// substring-matches the supplied pattern. `matched_attribute` is the first
+/// anchor-matches the supplied pattern. `matched_attribute` is the first
 /// matching entry on the Item — useful for caller-side rendering even when
-/// the Item carries multiple attributes.
+/// the Item carries multiple attributes. `match_location` is `"attr"` when
+/// the pattern matched at the start of the attribute string, or `"doc"` when
+/// it matched at the start of the body of a `///` doc comment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemWithAttribute {
     pub target: NodeId,
     pub qualified_name: String,
     pub item_kind: Option<ItemKind>,
     pub matched_attribute: String,
+    pub match_location: String,
     pub file: Option<String>,
     pub span: Option<(u32, u32)>,
 }
@@ -1030,8 +1033,21 @@ impl OpenedSnapshot {
                 out.push(node);
             }
         }
-        // Sort by qualified name for deterministic order across runs.
-        out.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        // Sort by source position so variants come back in declaration order
+        // rather than alphabetically. Nodes without spans (rare; only ones
+        // missing nav-target metadata) sort to the end with empty file path
+        // and (0, 0) span to keep ordering deterministic.
+        out.sort_by(|a, b| {
+            let a_key = (
+                a.file.as_deref().unwrap_or(""),
+                a.span.map(|(s, _)| s).unwrap_or(0),
+            );
+            let b_key = (
+                b.file.as_deref().unwrap_or(""),
+                b.span.map(|(s, _)| s).unwrap_or(0),
+            );
+            a_key.cmp(&b_key)
+        });
         Ok(out)
     }
 
@@ -1048,12 +1064,17 @@ impl OpenedSnapshot {
     }
 
     /// v8: every Item in `crate_id` whose attribute list has at least one
-    /// entry containing `attr_pattern` as a substring. The pattern is matched
-    /// case-sensitively against each attribute's string form
-    /// (`"#[derive(Debug, Clone)]"`, `"#[must_use]"`, `"/// SAFETY: ..."`,
-    /// etc.) — callers wanting `#[must_use]` should pass `"#[must_use]"` (or
-    /// `"must_use"` for a looser match). Returns enriched rows with file +
-    /// span so callers can navigate. Sorted by qualified name.
+    /// entry that anchor-matches `attr_pattern`. The pattern matches
+    /// case-sensitively when it appears at the **start** of the attribute
+    /// string (e.g. attr `"#[must_use]"` matches pattern `"#[must_use]"` and
+    /// pattern `"#[must_use"`), OR at the start of the **body** of a `///`
+    /// doc comment (the body is whatever follows the `/// ` prefix). This
+    /// avoids false positives where the pattern text appears in the middle
+    /// of an unrelated attribute — e.g. searching `#[must_use]` no longer
+    /// matches `#[tool(description = "...#[must_use]...")]` whose body just
+    /// happens to mention the pattern. Empty patterns match nothing.
+    /// Returns enriched rows with file + span so callers can navigate.
+    /// Sorted by qualified name.
     pub fn items_with_attribute(
         &self,
         crate_id: NodeId,
@@ -1061,6 +1082,14 @@ impl OpenedSnapshot {
     ) -> Result<Vec<ItemWithAttribute>> {
         let rtxn = self.env.read_txn()?;
         let mut out: Vec<ItemWithAttribute> = Vec::new();
+        // Empty pattern: match nothing. Substring containment of "" is
+        // trivially true on every string, which would flood callers with
+        // every attribute-bearing item — almost certainly not what they
+        // wanted. The previous behavior here was the same trivial-true
+        // bug; switch to "match nothing" as the safer default.
+        if attr_pattern.is_empty() {
+            return Ok(out);
+        }
         for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
             let (key, node) = entry?;
             if node.kind != NodeKind::Item {
@@ -1069,11 +1098,10 @@ impl OpenedSnapshot {
             if node.crate_id != Some(crate_id) {
                 continue;
             }
-            let Some(matched) = node
+            let Some((matched, location)) = node
                 .attributes
                 .iter()
-                .find(|a| a.contains(attr_pattern))
-                .cloned()
+                .find_map(|a| match_attribute(a, attr_pattern).map(|loc| (a.clone(), loc)))
             else {
                 continue;
             };
@@ -1084,6 +1112,7 @@ impl OpenedSnapshot {
                 qualified_name: node.qualified_name,
                 item_kind: node.item_kind,
                 matched_attribute: matched,
+                match_location: location.to_string(),
                 file: node.file,
                 span: node.span,
             });
@@ -2408,6 +2437,41 @@ fn usage_category_label(c: UsageCategory) -> &'static str {
     }
 }
 
+/// Anchored attribute match used by `items_with_attribute`.
+///
+/// Returns `Some("attr")` when `pat` is a prefix of the raw attribute
+/// string, `Some("doc")` when the attribute is a `///` doc-comment
+/// (`"/// body"`) and `pat` is a prefix of the body, otherwise `None`.
+///
+/// The intent is that searching for `#[must_use]` matches an attribute
+/// stored as `"#[must_use]"` or `"#[must_use = \"...\"]"`, but does NOT
+/// match unrelated attributes whose body merely contains the literal text
+/// `#[must_use]` (e.g. `#[tool(description = "...#[must_use]...")]`).
+///
+/// Doc-comment lines are stored verbatim as `"/// body"` (the lexer
+/// preserves the leading space). Stripping the `/// ` prefix lets a
+/// caller search for `SAFETY` and match a doc line `"/// SAFETY: ..."`,
+/// while still matching the full-string form `/// SAFETY` against the
+/// raw attribute prefix.
+///
+/// Empty pattern returns `None` (the caller short-circuits empty
+/// patterns to "match nothing").
+fn match_attribute(attr: &str, pat: &str) -> Option<&'static str> {
+    if pat.is_empty() {
+        return None;
+    }
+    if attr.starts_with(pat) {
+        return Some("attr");
+    }
+    // Doc lines in our model are always stored as `"/// body"`.
+    if let Some(body) = attr.strip_prefix("/// ") {
+        if body.starts_with(pat) {
+            return Some("doc");
+        }
+    }
+    None
+}
+
 /// Render a `BindingVisibility` as the human-readable string we emit on
 /// `ModuleTreeNode.visibility` for Items: `"pub"`, `"pub(crate)"`,
 /// `"pub(in path::to::mod)"`, or `"pub(self)"` for the implicit-private case.
@@ -3213,10 +3277,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// v8: `items_with_attribute(crate, pattern)` substring-matches the
-    /// attribute strings on every Item in the crate. Searching for `derive`
-    /// across `file_search_mcp` should find at least the `Node` and
-    /// `ItemKind` types.
+    /// v8: `items_with_attribute(crate, pattern)` anchor-matches the
+    /// attribute strings on every Item in the crate. Searching for
+    /// `#[derive(` (anchored at the attribute start) across
+    /// `file_search_mcp` should find at least the `Node` and `ItemKind`
+    /// types.
     #[test]
     fn items_with_attribute_finds_derive_users() {
         let snap = shared_snapshot();
@@ -3232,7 +3297,7 @@ pub(crate) mod tests {
             root_node.parent_id.expect("module should have parent")
         };
         let hits = snap
-            .items_with_attribute(crate_id, "derive")
+            .items_with_attribute(crate_id, "#[derive(")
             .expect("items_with_attribute failed");
         assert!(
             !hits.is_empty(),
@@ -3251,15 +3316,99 @@ pub(crate) mod tests {
                 .any(|q| q == "file_search_mcp::graph::model::ItemKind"),
             "expected ItemKind among derive-bearing items, got {qnames:?}"
         );
-        // Every hit must carry a derive in its matched_attribute (substring
-        // match guarantees this; explicit assertion for clarity).
+        // Every hit must carry a derive in its matched_attribute. With the
+        // anchored prefix matcher, the attribute starts with `#[derive(...)]`
+        // so `"derive"` won't match at offset 0 of the attribute string —
+        // but it WILL match the doc-body of a `/// derive ...` line, or
+        // (more commonly) a top-level attribute *if any* starts with the
+        // literal text `derive`. The pattern `derive(` would have similar
+        // issue. So loosen the assertion to "the matched_attribute mentions
+        // derive somewhere" — what we really care about is that the test
+        // surfaces the expected items.
         for h in &hits {
             assert!(
                 h.matched_attribute.contains("derive"),
-                "matched_attribute should contain `derive`, got `{}`",
-                h.matched_attribute
+                "matched_attribute should contain `derive`, got `{}` (location={})",
+                h.matched_attribute,
+                h.match_location,
             );
         }
+    }
+
+    /// Item #2 audit: anchored matching must NOT surface items whose
+    /// attributes merely contain the pattern text mid-string. The MCP tool
+    /// methods on `SearchToolRouter` carry a `#[tool(description = "...")]`
+    /// attribute whose body mentions `#[must_use]` in prose (e.g. the
+    /// description for `mut_static_audit`). The legacy substring matcher
+    /// flagged those as `#[must_use]` items; the anchored matcher must not.
+    #[test]
+    fn items_with_attribute_does_not_match_pattern_inside_attr_body() {
+        let snap = shared_snapshot();
+        let (root_id, root_node) = snap
+            .lookup_by_qualified_name("file_search_mcp")
+            .unwrap()
+            .unwrap();
+        let crate_id = if root_node.kind == NodeKind::Crate {
+            root_id
+        } else {
+            root_node.parent_id.expect("module should have parent")
+        };
+        let results = snap
+            .items_with_attribute(crate_id, "#[must_use]")
+            .expect("items_with_attribute failed");
+        for hit in &results {
+            assert!(
+                !hit.qualified_name.contains("SearchToolRouter::item_attributes"),
+                "anchored match should skip mentions of `#[must_use]` inside other attributes' bodies, got hit={hit:?}"
+            );
+            assert!(
+                !hit.qualified_name.contains("SearchToolRouter::items_with_attribute"),
+                "same — should skip the items_with_attribute tool description, got hit={hit:?}"
+            );
+            // The audit also matched a doc comment in
+            // OpenedSnapshot::items_with_attribute earlier — verify that's
+            // also gone now (the doc body started with `(`, not `#[`).
+            assert!(
+                !hit.qualified_name.contains("OpenedSnapshot::items_with_attribute"),
+                "should not match doc-comment lines that merely mention `#[must_use]`, got hit={hit:?}"
+            );
+            // Every surviving hit must either start the attr with the
+            // pattern, or have a doc-body that does.
+            let m = &hit.matched_attribute;
+            let body_match = m
+                .strip_prefix("/// ")
+                .map(|b| b.starts_with("#[must_use]"))
+                .unwrap_or(false);
+            assert!(
+                m.starts_with("#[must_use]") || body_match,
+                "matched_attribute `{m}` (location={}) should anchor at start or in doc body",
+                hit.match_location,
+            );
+        }
+    }
+
+    /// Item #2: empty pattern must return zero results (vs. the legacy
+    /// substring containment which trivially matched everything).
+    #[test]
+    fn items_with_attribute_empty_pattern_returns_nothing() {
+        let snap = shared_snapshot();
+        let (root_id, root_node) = snap
+            .lookup_by_qualified_name("file_search_mcp")
+            .unwrap()
+            .unwrap();
+        let crate_id = if root_node.kind == NodeKind::Crate {
+            root_id
+        } else {
+            root_node.parent_id.expect("module should have parent")
+        };
+        let results = snap
+            .items_with_attribute(crate_id, "")
+            .expect("items_with_attribute failed");
+        assert!(
+            results.is_empty(),
+            "empty pattern should return zero hits, got {} hits",
+            results.len()
+        );
     }
 
     /// Phase 4a smoke: `pub_use_pub_type_audit` returns without error

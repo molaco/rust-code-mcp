@@ -500,6 +500,7 @@ pub async fn items_with_attribute(
             qualified_name: h.qualified_name,
             item_kind: h.item_kind.map(item_kind_label),
             matched_attribute: h.matched_attribute,
+            match_location: h.match_location,
             file: h.file,
             span: h.span,
         })
@@ -596,16 +597,32 @@ pub async fn functions_with_filter(
         .functions_with_filter(crate_id, &filter)
         .map_err(internal_error("functions_with_filter"))?;
 
-    let enriched: Vec<EnrichedFunctionWithSignature> = matches
+    // Pagination + summary mode (Item #4 + #5).
+    // Slice in the wrapper layer; the query is workspace-bounded and not
+    // inherently large — the cost is in serialization payload size.
+    let total_match_count = matches.len();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(50);
+    let summary = params.summary.unwrap_or(false);
+
+    let sliced = matches
         .into_iter()
-        .map(|m| EnrichedFunctionWithSignature {
+        .skip(offset)
+        .take(limit);
+
+    let enriched: Vec<FunctionsWithFilterMatch> = sliced
+        .map(|m| FunctionsWithFilterMatch {
             target: m.qualified_name.clone(),
             qualified_name: m.qualified_name,
-            signature: m.signature,
+            signature: if summary { None } else { Some(m.signature) },
         })
         .collect();
+
     json_result(&FunctionsWithFilterResponse {
         krate: params.krate,
+        total_match_count,
+        offset,
+        limit,
         match_count: enriched.len(),
         matches: enriched,
     })
@@ -737,12 +754,58 @@ pub async fn crate_dependency_metric(
     params: CrateDependencyMetricParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
-    let metrics: Vec<CrateMetric> = snap
+    let mut metrics: Vec<CrateMetric> = snap
         .crate_dependency_metric()
         .map_err(internal_error("crate_dependency_metric"))?;
+
+    // Item #7: optional sort + top_n slicing. Sort first, then slice.
+    if let Some(sort_key) = params.sort_by.as_deref() {
+        match sort_key {
+            "instability" => metrics.sort_by(|a, b| {
+                b.instability
+                    .partial_cmp(&a.instability)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            "abstractness" => metrics.sort_by(|a, b| {
+                b.abstractness
+                    .partial_cmp(&a.abstractness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            "item_count" => metrics.sort_by(|a, b| b.item_count.cmp(&a.item_count)),
+            "afferent" => metrics.sort_by(|a, b| b.afferent.cmp(&a.afferent)),
+            "efferent" => metrics.sort_by(|a, b| b.efferent.cmp(&a.efferent)),
+            other => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "sort_by must be one of `instability`, `item_count`, `afferent`, `efferent`, `abstractness`; got `{other}`"
+                    ),
+                    None,
+                ));
+            }
+        }
+    }
+
+    if let Some(n) = params.top_n {
+        metrics.truncate(n);
+    }
+
+    // Render NodeIds as hex strings rather than the raw 32-byte arrays
+    // serde_bytes_32 emits for [u8; 32].
+    let rendered: Vec<CrateMetricRendered> = metrics
+        .into_iter()
+        .map(|m| CrateMetricRendered {
+            crate_id: m.crate_id.to_hex(),
+            crate_name: m.crate_name,
+            efferent: m.efferent,
+            afferent: m.afferent,
+            instability: m.instability,
+            abstractness: m.abstractness,
+            item_count: m.item_count,
+        })
+        .collect();
     json_result(&CrateDependencyMetricResponse {
-        crate_count: metrics.len(),
-        metrics,
+        crate_count: rendered.len(),
+        metrics: rendered,
     })
 }
 
@@ -780,16 +843,38 @@ pub async fn unsafe_audit(
     let findings: Vec<crate::graph::unsafe_audit::UnsafeFinding> = snap
         .unsafe_audit(&loaded)
         .map_err(internal_error("unsafe_audit"))?;
+    // Render NodeIds as hex strings rather than the raw 32-byte arrays
+    // serde_bytes_32 emits for [u8; 32].
+    #[derive(serde::Serialize)]
+    struct UnsafeFindingRendered {
+        file: String,
+        span: (u32, u32),
+        line_count: u32,
+        enclosing_function: Option<String>,
+        enclosing_function_name: Option<String>,
+        has_safety_comment: bool,
+    }
     #[derive(serde::Serialize)]
     struct Resp {
         directory: String,
         finding_count: usize,
-        findings: Vec<crate::graph::unsafe_audit::UnsafeFinding>,
+        findings: Vec<UnsafeFindingRendered>,
     }
+    let rendered: Vec<UnsafeFindingRendered> = findings
+        .into_iter()
+        .map(|f| UnsafeFindingRendered {
+            file: f.file,
+            span: f.span,
+            line_count: f.line_count,
+            enclosing_function: f.enclosing_function.map(|n| n.to_hex()),
+            enclosing_function_name: f.enclosing_function_name,
+            has_safety_comment: f.has_safety_comment,
+        })
+        .collect();
     json_result(&Resp {
         directory: params.directory,
-        finding_count: findings.len(),
-        findings,
+        finding_count: rendered.len(),
+        findings: rendered,
     })
 }
 
@@ -800,16 +885,38 @@ pub async fn mut_static_audit(
     let findings = snap
         .mut_static_audit()
         .map_err(internal_error("mut_static_audit"))?;
+    // Render NodeIds as hex strings rather than the raw 32-byte arrays
+    // serde_bytes_32 emits for [u8; 32].
+    #[derive(serde::Serialize)]
+    struct MutStaticFindingRendered {
+        item: String,
+        qualified_name: String,
+        matched_pattern: String,
+        type_string: String,
+        file: Option<String>,
+        span: Option<(u32, u32)>,
+    }
     #[derive(serde::Serialize)]
     struct Resp {
         directory: String,
         finding_count: usize,
-        findings: Vec<crate::graph::queries::MutStaticFinding>,
+        findings: Vec<MutStaticFindingRendered>,
     }
+    let rendered: Vec<MutStaticFindingRendered> = findings
+        .into_iter()
+        .map(|f| MutStaticFindingRendered {
+            item: f.item.to_hex(),
+            qualified_name: f.qualified_name,
+            matched_pattern: f.matched_pattern,
+            type_string: f.type_string,
+            file: f.file,
+            span: f.span,
+        })
+        .collect();
     json_result(&Resp {
         directory: params.directory,
-        finding_count: findings.len(),
-        findings,
+        finding_count: rendered.len(),
+        findings: rendered,
     })
 }
 
@@ -1221,6 +1328,9 @@ struct EnrichedItemWithAttribute {
     #[serde(skip_serializing_if = "Option::is_none")]
     item_kind: Option<&'static str>,
     matched_attribute: String,
+    /// `"attr"` when the pattern matched the start of the attribute string,
+    /// `"doc"` when it matched the start of a `///` doc-comment body.
+    match_location: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1264,7 +1374,21 @@ struct EnrichedReExportLink {
 #[derive(Debug, Serialize)]
 struct CrateDependencyMetricResponse {
     crate_count: usize,
-    metrics: Vec<CrateMetric>,
+    metrics: Vec<CrateMetricRendered>,
+}
+
+/// MCP-rendered mirror of `CrateMetric`: emits `crate_id` as a 64-char hex
+/// string instead of the raw 32-byte array `serde_bytes_32` would produce
+/// for `NodeId`.
+#[derive(Debug, Serialize)]
+struct CrateMetricRendered {
+    crate_id: String,
+    crate_name: String,
+    efferent: u32,
+    afferent: u32,
+    instability: f64,
+    abstractness: f64,
+    item_count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -1304,17 +1428,31 @@ struct FunctionSignatureResponse {
 struct FunctionsWithFilterResponse {
     #[serde(rename = "crate")]
     krate: String,
+    /// Unfiltered total before `offset`/`limit` slicing — callers compare
+    /// this to `offset + match_count` to detect "more pages exist".
+    total_match_count: usize,
+    /// Offset applied to the match list (after the filter, before the
+    /// returned `matches`).
+    offset: usize,
+    /// Cap applied to the (offset-skipped) match list.
+    limit: usize,
+    /// Length of the returned `matches` (after offset+limit slicing). Always
+    /// `<= limit`, and `<= total_match_count.saturating_sub(offset)`.
     match_count: usize,
-    matches: Vec<EnrichedFunctionWithSignature>,
+    matches: Vec<FunctionsWithFilterMatch>,
 }
 
 #[derive(Debug, Serialize)]
-struct EnrichedFunctionWithSignature {
+struct FunctionsWithFilterMatch {
     /// Convenience alias for `qualified_name` so callers that want one
     /// "navigate-to" string don't have to know which field carries it.
     target: String,
     qualified_name: String,
-    signature: FunctionSignature,
+    /// `None` when `summary=true` (the field is omitted entirely from the
+    /// JSON response thanks to `skip_serializing_if`); otherwise carries the
+    /// full FunctionSignature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature: Option<FunctionSignature>,
 }
 
 // Path import suppress dead-code on Path when unused.
@@ -1490,6 +1628,353 @@ mod tests {
         assert!(
             body.contains("\"crates\""),
             "expected crates array in response: {body}"
+        );
+    }
+
+    /// Item #4: default `limit=50` caps the matches returned by the
+    /// wrapper, while `total_match_count` always reflects the unfiltered
+    /// (pre-slice) count. We use `is_async=true` as the permissive filter
+    /// (signatures.rs::tests confirms this returns >0 matches in the
+    /// workspace). The default-limit cap holds whether or not the
+    /// workspace currently has > 50 async fns: `match_count <= limit` and
+    /// `total_match_count >= match_count` regardless.
+    #[tokio::test]
+    async fn functions_with_filter_default_limit_caps_results() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        let result = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+            directory: manifest_dir.to_string(),
+            krate: "file_search_mcp".to_string(),
+            min_param_count: None,
+            has_param_type: None,
+            returns_type_pattern: None,
+            is_async: Some(true),
+            self_kind: None,
+            limit: None,
+            offset: None,
+            summary: None,
+        })
+        .await
+        .expect("functions_with_filter");
+
+        let body = first_text(&result);
+        let v: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("response was not valid JSON: {e} — body: {body}"));
+        let match_count = v
+            .get("match_count")
+            .and_then(|x| x.as_u64())
+            .expect("match_count present") as usize;
+        let limit = v
+            .get("limit")
+            .and_then(|x| x.as_u64())
+            .expect("limit present") as usize;
+        let total_match_count = v
+            .get("total_match_count")
+            .and_then(|x| x.as_u64())
+            .expect("total_match_count present") as usize;
+        let matches = v
+            .get("matches")
+            .and_then(|x| x.as_array())
+            .expect("matches array present");
+
+        assert_eq!(limit, 50, "default limit should be 50");
+        assert!(
+            match_count <= 50,
+            "match_count must respect default limit 50, got {match_count}"
+        );
+        assert_eq!(
+            matches.len(),
+            match_count,
+            "matches.len() must equal match_count"
+        );
+        assert!(
+            total_match_count >= match_count,
+            "total_match_count ({total_match_count}) must be >= match_count ({match_count})"
+        );
+    }
+
+    /// Item #5: when `summary=true`, each match drops the full `signature`
+    /// payload. We rely on `#[serde(skip_serializing_if = "Option::is_none")]`
+    /// on the field, so the JSON object should not contain a `signature`
+    /// key at all in summary mode.
+    #[tokio::test]
+    async fn functions_with_filter_summary_mode_omits_signature() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        let result = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+            directory: manifest_dir.to_string(),
+            krate: "file_search_mcp".to_string(),
+            min_param_count: None,
+            has_param_type: None,
+            returns_type_pattern: None,
+            is_async: Some(true),
+            self_kind: None,
+            limit: Some(10),
+            offset: None,
+            summary: Some(true),
+        })
+        .await
+        .expect("functions_with_filter");
+
+        let body = first_text(&result);
+        let v: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("response was not valid JSON: {e} — body: {body}"));
+        let matches = v
+            .get("matches")
+            .and_then(|x| x.as_array())
+            .expect("matches array present");
+        assert!(
+            !matches.is_empty(),
+            "expected at least one match for is_async=true: {body}"
+        );
+        for (idx, m) in matches.iter().enumerate() {
+            let obj = m.as_object().expect("match is an object");
+            assert!(
+                !obj.contains_key("signature"),
+                "summary mode must omit `signature` key from match[{idx}]: {m}"
+            );
+            assert!(
+                obj.contains_key("target"),
+                "summary mode must keep `target` key: {m}"
+            );
+            assert!(
+                obj.contains_key("qualified_name"),
+                "summary mode must keep `qualified_name` key: {m}"
+            );
+        }
+    }
+
+    /// Item #4: `offset` skips matches; with `offset` >= `total_match_count`
+    /// no matches are returned, but `total_match_count` and `limit` still
+    /// echo the request inputs.
+    #[tokio::test]
+    async fn functions_with_filter_offset_pagination() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        // First page.
+        let page1 = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+            directory: manifest_dir.to_string(),
+            krate: "file_search_mcp".to_string(),
+            min_param_count: None,
+            has_param_type: None,
+            returns_type_pattern: None,
+            is_async: Some(true),
+            self_kind: None,
+            limit: Some(5),
+            offset: Some(0),
+            summary: Some(true),
+        })
+        .await
+        .expect("functions_with_filter");
+        let body1 = first_text(&page1);
+        let v1: serde_json::Value = serde_json::from_str(&body1).expect("page1 JSON");
+        let total = v1
+            .get("total_match_count")
+            .and_then(|x| x.as_u64())
+            .expect("total_match_count") as usize;
+        let matches1: Vec<String> = v1
+            .get("matches")
+            .and_then(|x| x.as_array())
+            .expect("matches array")
+            .iter()
+            .map(|m| m.get("qualified_name").and_then(|s| s.as_str()).unwrap_or("").to_string())
+            .collect();
+
+        // Second page (offset = 5).
+        let page2 = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+            directory: manifest_dir.to_string(),
+            krate: "file_search_mcp".to_string(),
+            min_param_count: None,
+            has_param_type: None,
+            returns_type_pattern: None,
+            is_async: Some(true),
+            self_kind: None,
+            limit: Some(5),
+            offset: Some(5),
+            summary: Some(true),
+        })
+        .await
+        .expect("functions_with_filter");
+        let body2 = first_text(&page2);
+        let v2: serde_json::Value = serde_json::from_str(&body2).expect("page2 JSON");
+        let matches2: Vec<String> = v2
+            .get("matches")
+            .and_then(|x| x.as_array())
+            .expect("matches array")
+            .iter()
+            .map(|m| m.get("qualified_name").and_then(|s| s.as_str()).unwrap_or("").to_string())
+            .collect();
+
+        assert_eq!(
+            v2.get("offset").and_then(|x| x.as_u64()).unwrap() as usize,
+            5,
+            "offset must echo back the request"
+        );
+        // If total > 5, page2's first row must differ from page1's first row.
+        if total > 5 && !matches1.is_empty() && !matches2.is_empty() {
+            assert_ne!(
+                matches1[0], matches2[0],
+                "offset=5 must shift the match window vs offset=0"
+            );
+        }
+    }
+
+    /// Item #7: `top_n` caps the number of metric rows returned.
+    #[tokio::test]
+    async fn crate_dependency_metric_top_n_caps_count() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        let result = crate_dependency_metric(
+            crate::tools::search_tool::CrateDependencyMetricParams {
+                directory: manifest_dir.to_string(),
+                top_n: Some(3),
+                sort_by: Some("item_count".to_string()),
+            },
+        )
+        .await
+        .expect("crate_dependency_metric");
+
+        let body = first_text(&result);
+        let v: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("response was not valid JSON: {e} — body: {body}"));
+        let metrics = v
+            .get("metrics")
+            .and_then(|x| x.as_array())
+            .expect("metrics array present");
+        assert!(
+            metrics.len() <= 3,
+            "top_n=3 must cap metrics.len(), got {}",
+            metrics.len()
+        );
+        let crate_count = v
+            .get("crate_count")
+            .and_then(|x| x.as_u64())
+            .expect("crate_count present") as usize;
+        assert_eq!(
+            crate_count,
+            metrics.len(),
+            "crate_count must equal metrics.len() after slicing"
+        );
+    }
+
+    /// Item #7: `sort_by=instability` sorts metrics non-increasing.
+    #[tokio::test]
+    async fn crate_dependency_metric_sort_by_instability_descending() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        let result = crate_dependency_metric(
+            crate::tools::search_tool::CrateDependencyMetricParams {
+                directory: manifest_dir.to_string(),
+                top_n: None,
+                sort_by: Some("instability".to_string()),
+            },
+        )
+        .await
+        .expect("crate_dependency_metric");
+
+        let body = first_text(&result);
+        let v: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("response was not valid JSON: {e} — body: {body}"));
+        let metrics = v
+            .get("metrics")
+            .and_then(|x| x.as_array())
+            .expect("metrics array present");
+        let instabilities: Vec<f64> = metrics
+            .iter()
+            .map(|m| {
+                m.get("instability")
+                    .and_then(|x| x.as_f64())
+                    .expect("instability is a number")
+            })
+            .collect();
+        for w in instabilities.windows(2) {
+            assert!(
+                w[0] >= w[1],
+                "instability must be non-increasing under sort_by=instability: {:?}",
+                instabilities
+            );
+        }
+    }
+
+    /// Item #7: an unknown `sort_by` value is rejected with `invalid_params`.
+    #[tokio::test]
+    async fn crate_dependency_metric_unknown_sort_by_errors() {
+        let _guard = DEFAULT_SNAPSHOT_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+        build_hypergraph(BuildHypergraphParams {
+            directory: manifest_dir.to_string(),
+            force_rebuild: Some(false),
+        })
+        .await
+        .expect("build_hypergraph");
+
+        let result = crate_dependency_metric(
+            crate::tools::search_tool::CrateDependencyMetricParams {
+                directory: manifest_dir.to_string(),
+                top_n: None,
+                sort_by: Some("garbage_key".to_string()),
+            },
+        )
+        .await;
+
+        let err = result.expect_err("unknown sort_by must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("sort_by") && msg.contains("garbage_key"),
+            "error must mention both `sort_by` and the bad value, got: {msg}"
         );
     }
 

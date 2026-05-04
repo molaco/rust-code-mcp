@@ -16,6 +16,7 @@ use ra_ap_hir_def::ModuleDefId;
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_vfs::Vfs;
 
+use super::hir_trim::trim_hir_display;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, StaticMetadata};
 
@@ -43,7 +44,7 @@ pub fn extract_statics(
                 .or_insert_with(|| krate.to_display_target(db));
 
             let ty = s.ty(db);
-            let type_string = ty.display(db, dt).to_string();
+            let type_string = trim_hir_display(&ty.display(db, dt).to_string());
             let is_mut = s.is_mut(db);
 
             if type_string.is_empty() {

@@ -20,7 +20,8 @@ use super::loader::{self, LoadedWorkspace};
 use super::model::{Binding, ExtractionModel, Namespace, Usage};
 use super::storage::{
     CURRENT_POINTER_FILENAME, GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths,
-    SCHEMA_VERSION, compute_fingerprint, graph_id_for, read_manifest, write_manifest,
+    SCHEMA_VERSION, compute_fingerprint, graph_id_for, read_manifest, read_manifest_compatible,
+    write_manifest,
 };
 
 #[derive(Debug, Clone)]
@@ -404,7 +405,11 @@ pub fn open_specific(
     if !manifest_path.exists() {
         return Ok(None);
     }
-    let manifest = read_manifest(&manifest_path)?;
+    // Soft-fail on schema mismatch so callers see "no snapshot — call
+    // build_hypergraph first" rather than a cryptic schema-mismatch error.
+    let Some(manifest) = read_manifest_compatible(&manifest_path)? else {
+        return Ok(None);
+    };
     if !snapshot_dir.join("data.mdb").exists() {
         bail!("snapshot manifest exists but data.mdb missing at {}", snapshot_dir.display());
     }
