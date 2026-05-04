@@ -361,6 +361,23 @@ pub struct FunctionsWithFilterParams {
     pub summary: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct SimilarToItemParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Qualified name of the seed Item (function, struct, enum, etc.)")]
+    pub target: String,
+    #[schemars(description = "Max number of results (default: 10)")]
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[schemars(description = "Minimum cosine similarity score (0.0-1.0). Results below are dropped. Default: 0.0")]
+    #[serde(default)]
+    pub threshold: Option<f32>,
+    #[schemars(description = "Restrict results to items of this kind, matching the chunk's symbol_kind (\"Function\", \"Struct\", \"Enum\", \"Trait\", etc.). Case-insensitive. Default: no filter.")]
+    #[serde(default)]
+    pub item_kind: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
