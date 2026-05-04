@@ -51,7 +51,12 @@ pub async fn build_hypergraph(
         force_rebuild: params.force_rebuild.unwrap_or(false),
         ..Default::default()
     };
-    let result = build_and_persist(&dir, opts)
+    // build_and_persist runs `loader::load` + the full extract pass + LMDB
+    // writes synchronously (4-18s wall-clock). Hand off to a blocking thread
+    // so the tokio runtime worker stays free to handle other tool calls.
+    let result = tokio::task::spawn_blocking(move || build_and_persist(&dir, opts))
+        .await
+        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
         .map_err(|e| McpError::internal_error(format!("build_hypergraph failed: {e:#}"), None))?;
 
     json_result(&BuildHypergraphResponse {
@@ -834,15 +839,23 @@ pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolRes
 pub async fn unsafe_audit(
     params: crate::tools::search_tool::UnsafeAuditParams,
 ) -> Result<CallToolResult, McpError> {
-    let snap = open_workspace_snapshot(&params.directory)?;
-    let canonical = std::path::PathBuf::from(&params.directory)
-        .canonicalize()
-        .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-    let loaded = crate::graph::loader::load(&canonical)
-        .map_err(internal_error("loader::load"))?;
-    let findings: Vec<crate::graph::unsafe_audit::UnsafeFinding> = snap
-        .unsafe_audit(&loaded)
-        .map_err(internal_error("unsafe_audit"))?;
+    let directory = params.directory.clone();
+    // The audit calls `loader::load` (full RA workspace load, ~2-3s) and
+    // then walks every file's syntax tree. Run on a blocking thread so the
+    // tokio runtime worker stays free for concurrent tool calls.
+    let findings: Vec<crate::graph::unsafe_audit::UnsafeFinding> =
+        tokio::task::spawn_blocking(move || -> Result<_, McpError> {
+            let snap = open_workspace_snapshot(&directory)?;
+            let canonical = std::path::PathBuf::from(&directory)
+                .canonicalize()
+                .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
+            let loaded = crate::graph::loader::load(&canonical)
+                .map_err(internal_error("loader::load"))?;
+            snap.unsafe_audit(&loaded)
+                .map_err(internal_error("unsafe_audit"))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))??;
     // Render NodeIds as hex strings rather than the raw 32-byte arrays
     // serde_bytes_32 emits for [u8; 32].
     #[derive(serde::Serialize)]
