@@ -378,6 +378,33 @@ pub struct SimilarToItemParams {
     pub item_kind: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct SemanticOverlapsParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
+    #[serde(default)]
+    pub crate_name: Option<String>,
+    #[schemars(description = "Optional item-kind filter (\"Function\" | \"Struct\" | \"Enum\" | \"Trait\" | \"Method\"). Default: all kinds.")]
+    #[serde(default)]
+    pub item_kind: Option<String>,
+    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Default 0.80 (general embedder convention). Raise to 0.85+ for stricter \"definitely duplicate\" signal.")]
+    #[serde(default)]
+    pub threshold: Option<f32>,
+    #[schemars(description = "Cap on returned pairs OR cluster member count. Default 50.")]
+    #[serde(default)]
+    pub max_pairs: Option<usize>,
+    #[schemars(description = "Output mode: \"pairs\" (raw similarity edges) or \"clusters\" (single-linkage groups). Default \"clusters\".")]
+    #[serde(default)]
+    pub output_mode: Option<String>,
+    #[schemars(description = "Drop matches whose qualified name contains `::tests::`. Default true.")]
+    #[serde(default)]
+    pub skip_test_chunks: Option<bool>,
+    #[schemars(description = "Drop pairs whose two items share a crate. Default false.")]
+    #[serde(default)]
+    pub cross_crate_only: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
