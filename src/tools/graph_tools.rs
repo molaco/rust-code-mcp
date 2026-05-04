@@ -710,8 +710,9 @@ pub async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
-    let threshold = params.threshold.unwrap_or(0.80);
+    let threshold = params.threshold.unwrap_or(0.85);
     let max_pairs = params.max_pairs.unwrap_or(50);
+    let max_cluster_size = params.max_cluster_size.unwrap_or(15);
     let output_mode = params
         .output_mode
         .as_deref()
@@ -955,7 +956,10 @@ pub async fn semantic_overlaps(
     }
 
     // Clusters mode (default).
-    let clusters = build_clusters(&pairs, max_pairs, lookup_ref);
+    let mut clusters = build_clusters(&pairs, max_pairs, lookup_ref);
+    if max_cluster_size > 0 {
+        clusters.retain(|c| c.size <= max_cluster_size);
+    }
     json_result(&SemanticOverlapsResp {
         scope,
         threshold,
@@ -1723,7 +1727,8 @@ fn node_to_item_ref(node: &Node) -> ItemRef {
 
 /// Single-linkage clustering via union-find. Each edge unions its two endpoints
 /// and contributes its score to the resulting cluster's score statistics.
-/// Singleton groups are dropped. Sort: by size desc, then min_similarity desc.
+/// Singleton groups are dropped. Sort: by avg_similarity desc, then size desc,
+/// then min_similarity desc.
 /// Each cluster's member list is capped at `max_members` (sets `truncated=true`
 /// when the cap kicks in).
 fn build_clusters<F>(
@@ -1823,11 +1828,15 @@ where
     }
 
     clusters.sort_by(|a, b| {
-        b.size.cmp(&a.size).then_with(|| {
-            b.min_similarity
-                .partial_cmp(&a.min_similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        b.avg_similarity
+            .partial_cmp(&a.avg_similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.size.cmp(&a.size))
+            .then_with(|| {
+                b.min_similarity
+                    .partial_cmp(&a.min_similarity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
     clusters
 }
@@ -2782,19 +2791,19 @@ mod tests {
 
         // Two clusters {A,B,C} and {D,E}; no singletons.
         assert_eq!(clusters.len(), 2);
-        // Sorted by size desc: {A,B,C} (size 3) before {D,E} (size 2).
-        assert_eq!(clusters[0].size, 3);
-        assert_eq!(clusters[1].size, 2);
+        // Sorted by avg_similarity desc: {D,E} (avg 0.95) before {A,B,C} (avg 0.875).
+        assert_eq!(clusters[0].size, 2);
+        assert_eq!(clusters[1].size, 3);
         assert!(!clusters[0].truncated);
         assert!(!clusters[1].truncated);
+        // {D,E} avg / min both 0.95.
+        assert!((clusters[0].avg_similarity - 0.95).abs() < 1e-5);
+        assert!((clusters[0].min_similarity - 0.95).abs() < 1e-5);
         // {A,B,C} avg of 0.90 and 0.85 = 0.875.
-        let abc_avg = clusters[0].avg_similarity;
+        let abc_avg = clusters[1].avg_similarity;
         assert!((abc_avg - 0.875).abs() < 1e-5, "avg = {abc_avg}");
         // min_similarity for {A,B,C} is 0.85.
-        assert!((clusters[0].min_similarity - 0.85).abs() < 1e-5);
-        // {D,E} avg / min both 0.95.
-        assert!((clusters[1].avg_similarity - 0.95).abs() < 1e-5);
-        assert!((clusters[1].min_similarity - 0.95).abs() < 1e-5);
+        assert!((clusters[1].min_similarity - 0.85).abs() < 1e-5);
     }
 
     #[test]

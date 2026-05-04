@@ -388,12 +388,15 @@ pub struct SemanticOverlapsParams {
     #[schemars(description = "Optional item-kind filter (\"Function\" | \"Struct\" | \"Enum\" | \"Trait\" | \"Method\"). Default: all kinds.")]
     #[serde(default)]
     pub item_kind: Option<String>,
-    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Default 0.80 (general embedder convention). Raise to 0.85+ for stricter \"definitely duplicate\" signal.")]
+    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Default 0.85 (good balance of recall vs noise at workspace scale; drop to 0.80 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal).")]
     #[serde(default)]
     pub threshold: Option<f32>,
     #[schemars(description = "Cap on returned pairs OR cluster member count. Default 50.")]
     #[serde(default)]
     pub max_pairs: Option<usize>,
+    #[schemars(description = "Drop clusters whose member count exceeds this cap (single-linkage chaining produces large noisy clusters; default 15 trims them while keeping high-signal pair/trio clusters). Set to 0 to disable.")]
+    #[serde(default)]
+    pub max_cluster_size: Option<usize>,
     #[schemars(description = "Output mode: \"pairs\" (raw similarity edges) or \"clusters\" (single-linkage groups). Default \"clusters\".")]
     #[serde(default)]
     pub output_mode: Option<String>,
