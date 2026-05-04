@@ -193,9 +193,47 @@ Hygiene: <k> cross-crate collisions, <l> module shadows, <m> within-crate dupes
 Gnarl: top complex fns in <crate>
 ```
 
+### Step 8. Unsafe surface
+
+```
+unsafe_audit(directory=...)
+```
+
+Returns every `unsafe { ... }` block in the workspace's local crates with `file`, `span`, `line_count`, `enclosing_function_name`, and a `has_safety_comment` flag. Filter to `has_safety_comment=false` for the "any undocumented unsafe?" question. Empty result is the healthy signal — most workspaces should have zero or single-digit undocumented unsafe. Cross-reference each finding's `enclosing_function_name` with `recursive_callers_count` to weight risk by blast radius (W20).
+
+### Step 9. Global mutable state
+
+```
+mut_static_audit(directory=...)
+```
+
+Returns every local `static` whose HIR type matches `static mut` / `LazyLock<...>` / `OnceLock<...>` / `OnceCell<...>`. Inventory check: how many process-global mutables does this workspace carry? `LazyLock<Mutex<...>>` and `OnceCell<...>` patterns are usually the ones to scrutinize ("should this be DI'd?"). `static mut` matches are FFI / legacy hot spots. The `lazy_static!` macro is NOT detected — see W21 limitations.
+
+### Step 10. Literal duplicates
+
+```
+semantic_overlaps(directory=..., threshold=0.95)
+```
+
+`threshold=0.95` (and the v1.1c content-hash short-circuit at similarity 1.0) surfaces source-byte duplicates: same enum variant pasted across different error enums, the same trivial helper struct redeclared per crate, etc. Top clusters are dead-easy refactor wins because there is literally nothing to harmonize — the source is identical. (See W13 for tighter recipes.)
+
+### Step 11. Optional: architectural rules
+
+If the workspace claims a layered architecture, codify the layer rules:
+
+```
+forbidden_dependency_check(directory=..., rules=[
+  { consumer: "domain*", producer: "tokio", severity: "error" },
+  { consumer: "domain*", producer: "reqwest", severity: "error" },
+  { consumer: "domain*", producer: "serde_json", severity: "warn" },
+])
+```
+
+Returns `violation_count` and per-violation rows with `consumer_crate`, `producer_crate`, `sample_symbol`, `unique_symbols`, `total_refs`. Empty `violations` is the pass signal. (Detail in W17.)
+
 ### Worked example (`coding-agent-bad`)
 
-17 crates, 1441 fan-in on `domain` (universal types crate), `agent` is heaviest fan-out consumer. `pub_crate_share` low — many bare `pub`. 89 dead pubs (47 in `plurimus`, a vendored UI lib — exclude). 5 cross-crate collisions, 1 module shadow, 6 within-crate duplicates. `common_fn_names` empty (good).
+17 crates, 1441 fan-in on `domain` (universal types crate), `agent` is heaviest fan-out consumer. `pub_crate_share` low — many bare `pub`. 89 dead pubs (47 in `plurimus`, a vendored UI lib — exclude). 5 cross-crate collisions, 1 module shadow, 6 within-crate duplicates. `common_fn_names` empty (good). `unsafe_audit` had no findings (clean). `mut_static_audit` surfaced a handful of `LazyLock` singletons in the agent crate (worth a DI review). `semantic_overlaps(threshold=0.95)` found six 1.0-similarity clusters of the unit `Error` variant duplicated across `ToolResultKind` / `StopReason` / `FinishReason` enums — Recipe 13.2 in action.
 
 ### Decision frames
 
@@ -510,6 +548,14 @@ who_imports(directory=..., target=<crate>::T)
 
 Modules that import `T` typically either implement it or take it as a generic bound.
 
+### Step 4.5. Layer 10 trait dispatch tracing
+
+```
+who_calls(directory=..., target=<crate>::T::M)
+```
+
+For each method M on the trait, `who_calls` returns every fn body that contains a call resolving back to `T::M`. Pre-Layer-10 these queries either errored or returned only same-fn references; post-Layer-10 they return workspace-wide call sites attributed to the enclosing fn — including dispatch through generic bounds and `dyn T` receivers. Pair with `who_uses_summary` from Step 3 to sort methods by total call-site count and to spot the case where one method dominates the dispatch traffic (often the "real" core of the abstraction).
+
 ### Step 5. Trait deletion / sealing check
 
 | Pattern | Verdict |
@@ -558,6 +604,16 @@ Key recipes (from that doc):
 - Decompose `crate_edges` into per-producer fan-in / per-consumer fan-out / top-N edges.
 - `dead_pub_report ∩ get_declared_reexports = dead facade` (drop the `pub use`, demote source).
 - Hot-symbol drilldown via `who_uses_summary`.
+
+### Sortable metric — `crate_dependency_metric`
+
+```
+crate_dependency_metric(directory=..., sort_by="afferent", top_n=10)
+```
+
+Per-local-crate Robert Martin metric: `afferent` (Ca = distinct incoming consumer crates), `efferent` (Ce = distinct outgoing producer crates), `instability = Ce / (Ce + Ca)` (0 = max stable, 1 = max unstable), `abstractness = (traits + pub_type_aliases) / total_items`. `sort_by` accepts `instability` / `item_count` / `afferent` / `efferent` / `abstractness` (all descending), and `top_n` slices the head. Use as a high-level overview before drilling into `crate_edges` filtered by a specific crate — the metric ranking surfaces the architectural core (low instability) and the workhorses (high efferent), and the abstractness ratio flags facade-style crates.
+
+Cross-link: see W23 for the dedicated workflow.
 
 ---
 
@@ -649,11 +705,18 @@ Post-refactor: same calls. Diff JSON. New entries in declared_reexports that wer
 
 ### Recipe 8.10 — "Find duplicate logic worth extracting"
 
+One call returns ranked clusters of semantically-similar fns in crate X:
+
 ```
-get_similar_code(query=<fn body>)
+semantic_overlaps(directory=..., crate_name=X, item_kind="Function")
 ```
 
-For each function, list semantic neighbors. Cluster. For each cluster, run `who_uses_summary` on each member to see if a shared helper would benefit them all. (Detail in W13.)
+For each cluster:
+  1. Inspect `members` — qualified names, files, spans, and `avg_similarity` / `min_similarity`.
+  2. Run `who_uses_summary(target=<member>)` per member to verify they're called and to plan migration order.
+  3. Top clusters by `avg_similarity` are the best extraction targets.
+
+Cross-reference: workspace-scale via `semantic_overlaps(directory=...)` with no `crate_name` filter; cross-crate-only via `cross_crate_only=true` to surface the case where the same logic is duplicated across crates. Detail in W13.
 
 ### Recipe 8.11 — "Which complex files have the highest blast radius?"
 
@@ -922,134 +985,301 @@ If `pub use` chain can become `pub(crate) use`, source can be `pub(crate)`. `dea
 
 ## W13 — Semantic similarity-driven analysis
 
-Find duplicate or near-duplicate logic that's named differently or split across crates.
+Find duplicate or near-duplicate logic that's named differently, split across crates, or simply pasted in two places. Three vector-backed tools cover three different question shapes; pick the right one before reaching for any of them.
 
-### Scope — function bodies, type bodies, files
+### Scope — function bodies, type bodies, and Item-level semantic search across the workspace
+
+### Three vector tools, three jobs
+
+| Tool | Seed shape | Scope | When to use |
+|---|---|---|---|
+| `get_similar_code(query)` | Free-text natural-language description ("function that parses JSON") | Chunk-level matches across the indexed codebase | You don't know the symbol or its name. Useful when starting from a log message, a doc string, or a bug-report fragment. |
+| `similar_to_item(target, limit, threshold, item_kind)` | A single qualified-name Item | Item-level semantic neighbors via vector embeddings | You already have ONE Item and want neighbors. ~100-300ms per call. Investigation tool: "what's like X?" |
+| `semantic_overlaps(directory, ...)` | No seed — workspace-wide | Pairs or clusters of transitively-similar Items | Audit / refactor planning. v1.1 caches per-Item embeddings in LMDB; first scan pays the full embed cost, subsequent scans on unchanged code are essentially free. |
+
+`get_similar_code` doesn't know about Item nodes — it returns chunk previews and you have to bridge yourself. `similar_to_item` resolves the seed via the hypergraph (`target` → `(file, span)`), reads its source, and runs `vector_only_search` against the indexed corpus. `semantic_overlaps` enumerates Items in scope, embeds each Item's source bytes (cached), runs an in-memory pairwise cosine scan, and returns either deduplicated `pairs` or single-linkage `clusters`. The three tools answer progressively bigger questions and require progressively more setup.
 
 ### Prerequisites
 
-```
-index_codebase(directory=...)
-```
+`build_hypergraph` must have run for any tool that takes a qualified-name seed (`similar_to_item`, `semantic_overlaps`). `index_codebase` must additionally have run for `get_similar_code` and `similar_to_item` (they share the vector store). `semantic_overlaps` v1.1 embeds Item source directly and caches in the snapshot's LMDB env — it does NOT require a fresh `index_codebase`.
 
-Required for `search` (BM25) and `get_similar_code`.
-
-### Step 1. Find similar functions
+### Step 1. Pick the tier
 
 ```
-get_similar_code(query=<fn body or description>)
+Do you have a qualified name?
+├── No → get_similar_code(query=<free text>)
+└── Yes
+    ├── You want neighbors of one specific Item → similar_to_item(target=Y)
+    └── You want a workspace-wide audit → semantic_overlaps(directory=...)
 ```
 
-Returns vector candidates ranked by semantic similarity.
+Cross-cuts:
+- If the question is "find me one needle by description", `get_similar_code` is the right tier — it doesn't require a hypergraph build.
+- If the question is "is X duplicated?", `similar_to_item(target=X)` is the cheapest — single embed + vector-only search.
+- If the question is "what's duplicated that I don't know about?", `semantic_overlaps` is the only tool that answers it without manually seeding every candidate.
 
-### Step 2. Verify they're called
+### Step 2. Run the appropriate tool
 
-For each candidate:
+Free-text:
+
+```
+get_similar_code(directory=..., query=<description>, limit=10)
+```
+
+Returns ranked chunk previews. Each row carries `symbol_name`, `symbol_kind`, `file`, `line_start/end`, and a short preview. Bridge to a qualified name via `find_definition` or `module_tree` walking when you need to drop into the hypergraph.
+
+Single-seed:
+
+```
+similar_to_item(directory=..., target=<qualified_name>, limit=10, threshold=0.80, item_kind="Function")
+```
+
+Returns ranked vector matches above `threshold`, capped at `limit`, optionally filtered by `item_kind` (case-insensitive: `"function"` / `"struct"` / `"enum"` / `"trait"` / etc.). Self-match is dropped via line-range overlap. Tune `threshold` from 0.80 (start permissive) upward.
+
+Workspace audit:
+
+```
+semantic_overlaps(directory=..., crate_name=<optional>, item_kind=<optional>,
+                  threshold=0.85, output_mode="clusters", max_pairs=50,
+                  max_cluster_size=15, skip_test_chunks=true, cross_crate_only=false)
+```
+
+Returns either `pairs` (raw similarity edges, deduplicated) or `clusters` (single-linkage groups), sorted by `avg_similarity` desc. Test fixtures dominate noise and are dropped by default.
+
+### Step 3. Verify (when the tool returns candidates)
+
+Vector similarity is necessary but not sufficient. For each candidate cluster member or returned match:
 
 ```
 who_uses_summary(directory=..., target=<qualified_name>)
 ```
 
-Filter out dead candidates. Cluster live ones by domain area.
-
-### Step 3. Confirm semantic equivalence
+Filters out dead candidates and quantifies migration cost. If the candidate isn't in the hypergraph (e.g. macro-generated), fall back to `find_definition(symbol_name=...)` and `read_file_content` at the file:span.
 
 ```
 read_file_content(file_path=...)
 ```
 
-at each candidate's span. Inspect manually — vector similarity isn't proof of semantic equivalence.
+at each candidate's span. Inspect manually — embeddings encode lexical+syntactic patterns more than logical intent, and a high cosine score on two similarly-shaped fns can still hide diverged behavior.
 
 ### Step 4. Targeted recipes
 
-#### Recipe 13.1 — "Find similar functions across crates"
+#### Recipe 13.1 — "Find duplicate logic worth extracting"
 
-`get_similar_code(target=<fn>)` → cluster results by crate. If a single concept has implementations in 3+ crates, factor into a shared crate.
+```
+semantic_overlaps(directory=..., crate_name=X, item_kind="Function", threshold=0.80)
+```
 
-#### Recipe 13.2 — "Refactor candidate finding"
+Crate-scoped scans tolerate a lower threshold because chaining is bounded by the crate's smaller item count. For each top cluster:
 
-`get_similar_code(target)` + `who_uses_summary` per candidate → identify dedupe candidates worth the effort. Skip candidates with low fan-in (not worth deduping unused code).
+1. Read `members` — qualified names, files, spans, `avg_similarity`, `min_similarity`.
+2. Run `who_uses_summary(target=<member>)` per member to verify they're called and to plan migration order (members with higher fan-in dictate signature constraints).
+3. Top clusters by `avg_similarity` are the best extraction targets. Cross-reference with `analyze_complexity(file_path=<member.file>)` to prioritize: similarity × complexity × blast radius is the refactor-priority scoring.
 
-#### Recipe 13.3 — "Naming-convention enforcement"
+This replaces the older "cluster `get_similar_code` results manually" recipe — `semantic_overlaps` does the cluster step natively.
 
-`module_tree(crate)` lists fn names. `get_similar_code(query=<body>)` finds semantically similar bodies with different names. Mismatched names = inconsistent vocabulary.
+#### Recipe 13.2 — "Type-1 clone detection (literal duplicates)"
 
-#### Recipe 13.4 — "Cross-crate duplicate detection (corroboration)"
+```
+semantic_overlaps(directory=..., threshold=0.95)
+```
 
-`overlaps.cross_crate_type_collisions` finds same-name types. `get_similar_code(query=<body>)` confirms whether they're semantically the same. Different names + similar bodies are subtler dupes (often missed by `overlaps`).
+`threshold=0.95` plus the v1.1c content-hash short-circuit (Items whose source bytes hash identically get `similarity = 1.0` directly, no cosine call) surfaces literal duplicates. The cheapest refactor wins — no semantic harmonization needed because the source is the same.
+
+Real example from `coding-agent-bad`: the unit `Error` variant duplicated as a unit variant in 6 different crates' error enums (`ToolResultKind::Error`, `StopReason::Error`, `FinishReason::Error`, etc.). All collapse to a 1.0-similarity cluster. The fix is not "extract a function" but "introduce a shared unit-error trait or factor out the variant", and the cluster makes the case visible at a glance.
+
+#### Recipe 13.3 — "Convergent enum design"
+
+```
+semantic_overlaps(directory=..., item_kind="EnumVariant", threshold=0.95)
+```
+
+Variants whose source bytes hash identically get clustered. Catches the case where the same logical state (`Idle` / `Done` / `Error` / `Pending`) was modeled as separate variants on different enums — the very signal that two enums should share a base or one is redundant.
+
+Cross-link with `enum_variants(target=<each enum>)` (W24) to get the full variant list per host enum and `who_uses(target=<crate>::Enum::Variant)` for fan-in per variant.
+
+#### Recipe 13.4 — "Same-shape struct detection across crates"
+
+```
+semantic_overlaps(directory=..., item_kind="Struct", cross_crate_only=true, threshold=0.85)
+```
+
+`cross_crate_only=true` drops same-crate pairs (≈76% of pairs in our measured workspaces) — the remaining clusters are structurally similar structs that live in different crates and probably should not.
+
+Real example: `TokenUsage` defined separately in 3 crates (an HTTP-client crate, a chat-completion crate, and a token-budget crate) — all carrying `prompt_tokens: u32`, `completion_tokens: u32`, `total_tokens: u32`. The cluster surfaces them as a single `domain::TokenUsage` extraction candidate.
+
+#### Recipe 13.5 — "Refactor candidate ranking"
+
+```
+semantic_overlaps(directory=..., crate_name=X)
+```
+
+Returns clusters sorted by `avg_similarity` descending. Top clusters are the highest-confidence extraction targets. Combine with:
+
+```
+analyze_complexity(file_path=<member.file>)             → file-level cyclomatic
+who_uses_summary(directory=..., target=<member>)        → fan-in
+```
+
+Score by `avg_similarity × complexity × fan_in` — the cluster whose members are both gnarly and widely-used yields the largest payoff. Use `output_mode="pairs"` instead of `"clusters"` when you need raw edges for migration planning (each pair is a single concrete decision: "merge A into B or vice versa?").
+
+#### Recipe 13.6 — "Naming-convention enforcement"
+
+```
+semantic_overlaps(directory=..., cross_crate_only=true, threshold=0.85)
+```
+
+Cross-crate clusters whose members carry different names but similar source signal a naming inconsistency: `now_ms` in one crate, `now_ts` in another, `unix_now_secs` in a third. The cluster surfaces them; rename to a single convention before extracting.
 
 ### Decision frames
 
-| Finding | Action |
+| Situation | Tier / parameters |
 |---|---|
-| 3+ semantically similar fns across crates | Factor into shared utility crate |
-| 2 similar fns in same crate | Inline / unify |
-| Similar fns with different names | Rename one to match the convention |
-| Vector candidates that are actually different | Confirm visually before deduping |
+| You don't know the symbol's name | `get_similar_code` |
+| You have one symbol, want neighbors | `similar_to_item(target=Y, threshold=0.80)` |
+| You want a workspace audit | `semantic_overlaps(directory=...)` |
+| Crate-scoped scan | `semantic_overlaps(crate_name=X, threshold=0.80)` (tighter chaining at small scale) |
+| Workspace-wide scan | `semantic_overlaps(directory=..., threshold=0.85)` (default; 0.80 produces useless mega-clusters via single-linkage chaining) |
+| "Is anything duplicated literally?" | `semantic_overlaps(threshold=0.95)` (content-hash short-circuit at 1.0) |
+| "Is anything duplicated across crate boundaries?" | `semantic_overlaps(cross_crate_only=true)` (drops 76% of pairs in our measured workspaces) |
+| Want raw edges for migration planning | `output_mode="pairs"` (better than `"clusters"` for pairwise decisions) |
+| Want grouped signal for extraction planning | `output_mode="clusters"` (default; better for "extract one helper for these three fns") |
 
 ### Pattern reference
 
-| Signal | Means |
+| Pattern | Invocation |
 |---|---|
-| High vector similarity + identical fn signatures | Strong dedupe candidate |
-| High vector similarity + different signatures | Conceptually similar but possibly intentionally separate |
-| Vector candidates in `tests` modules | Test fixtures repeated; factor into common (W9 covers this) |
+| Crate audit | `semantic_overlaps(crate_name=X, item_kind="Function", threshold=0.80)` |
+| Workspace audit | `semantic_overlaps(directory=..., threshold=0.85)` |
+| Type-1 clones | `semantic_overlaps(threshold=0.95)` |
+| Cross-crate structs | `semantic_overlaps(item_kind="Struct", cross_crate_only=true)` |
+| Variant convergence | `semantic_overlaps(item_kind="EnumVariant", threshold=0.95)` |
+| Single-seed lookup | `similar_to_item(target=Y, threshold=0.80)` |
+| Free-text needle | `get_similar_code(query="function that parses JSON")` |
+
+### Limitations
+
+- Single-linkage clustering can chain through outliers — one bridging pair can pull two distant clusters together. The `max_cluster_size=15` default drops the worst chains; bump it to inspect them or set to 0 to disable. Tightening `threshold` is the principled mitigation.
+- The embedder is `fastembed:all-MiniLM-L6-v2:dim384:v1`. Cache key is `(NodeId, content_hash, embedder_version)`; switching the embedding model invalidates every cached entry.
+- First-scan latency is seconds-to-minutes at workspace scale (each Item is embedded once); subsequent scans on unchanged code are near-instant because vectors are reused. Edits to an Item flip its `content_hash` → next call re-embeds just that Item.
+- Embeddings encode lexical+syntactic patterns more than logical intent. A high cosine score on two similarly-shaped fns can still hide diverged behavior — verify with `read_file_content` before deduping.
+- `semantic_overlaps` does NOT subsume `overlaps.cross_crate_type_collisions`. The latter is name-equality / structure-only (catches `Foo` declared in two crates regardless of body), and the former is content-similar (catches different-name look-alikes). They're complementary: collisions for naming hygiene, semantic overlaps for refactor planning.
+- v1.1 supports only single-linkage clustering — no HDBSCAN, no k-means, no density-based variants. Streaming partial results is also not implemented; the tool returns the full payload or nothing.
 
 ---
 
-## W14 — Function-level call graphs
+## W14 — Function-level call graphs (workspace-wide)
 
-Within-file fn-to-fn edges. Parser-driven, not workspace-wide.
+Layer 10 makes fn-body call edges first-class graph data. Five tools cover incoming, outgoing, recursive descent, crate-scoped filter, and a transitive-caller count. The older `get_call_graph` (parser, single-file) is now the within-file fallback.
 
-### Scope — single file
+### Scope — single fn or single file
 
-### Step 1. Pull the call graph
+### Layer 10 (workspace-wide) vs `get_call_graph` (within-file)
+
+| Question | Tool |
+|---|---|
+| "Who calls fn Y, anywhere?" | `who_calls(target=Y)` |
+| "What does fn Y call, anywhere?" | `calls_from(caller=Y)` |
+| "What's reachable from Y up to depth N?" | `call_graph(root=Y, depth=N)` |
+| "Who in crate X calls Y?" | `callers_in_crate(target=Y, krate=X)` |
+| "How many distinct fns transitively call Y?" | `recursive_callers_count(target=Y, depth=N)` |
+| "What does this single file look like internally?" | `get_call_graph(file_path=...)` (parser fallback) |
+
+Layer 10 is HIR-resolved and includes calls through generic bounds and `dyn T` receivers; the parser-driven `get_call_graph` only sees the AST in one file and misses cross-file edges entirely.
+
+### Step 1. Pull workspace-wide callers
+
+```
+who_calls(directory=..., target=<crate>::Y)
+```
+
+Returns every fn body containing a call to Y. Each row carries `caller` (the enclosing fn's qualified name), `file`, byte `start` / `end`, and `category` (Read/Write/Test/Other). References in const initializers, type aliases, and other non-function scopes are excluded — use `who_uses` to see all reference sites. Calls from closures attribute to the enclosing fn.
+
+This is the workspace-wide upgrade of the older "filter `who_uses` to call sites manually" recipe.
+
+### Step 2. Pull workspace-wide callees
+
+```
+calls_from(directory=..., caller=<crate>::Y)
+```
+
+Every outgoing reference made from Y's body. Same row shape as `who_calls` but with `callee` instead of `caller`. Use to inventory Y's downstream surface — "what does this fn touch?" — before extracting helpers.
+
+### Step 3. Bounded recursive call tree
+
+```
+call_graph(directory=..., root=<crate>::Y, depth=3)
+```
+
+Bounded recursive descent over outgoing call edges from `root`. `depth` defaults to 3 and is capped at 8. Returns a tree where each node carries `fn_qualified_name`, `crate_name`, `callees`, `truncated_at_cycle` (the fn was already expanded earlier in the traversal — its callees are visible elsewhere in the tree), and `truncated_at_depth` (depth ran out at this node and there were unvisited callees).
+
+Useful for "what does this fn ultimately reach?" without composing many `calls_from` calls. Pick depth deliberately: depth=2 keeps the tree readable; depth=8 is the cap and produces large outputs on hub fns.
+
+### Step 4. Crate-scoped audit
+
+```
+callers_in_crate(directory=..., target=<crate>::Y, krate=<other_crate>)
+```
+
+`who_calls(target=Y)` filtered to call sites whose *caller fn* lives in the named crate. Use to verify a crate boundary holds — e.g. "no fn in `domain` should call into `agent::orchestrator`" → `callers_in_crate(target=agent::orchestrator::*, krate=domain)` should return zero.
+
+### Step 5. Blast-radius integer
+
+```
+recursive_callers_count(directory=..., target=<crate>::Y, depth=8)
+```
+
+Reverse BFS counting distinct transitive caller fns up to `depth` hops. Returns `direct_callers`, `transitive_callers`, `depth_reached`, `truncated_at_depth`. Counts *fns*, not call sites — a fn that calls Y five times counts as 1 caller.
+
+Replaces the older "count rows in `who_uses_summary`" heuristic (which counted module-level consumers and missed transitive reach). Useful as a single integer to weight refactor risk: a fn with `transitive_callers=200` is a critical-path hub; deleting or changing its signature has 200-fn fallout. Pair with `unsafe_audit` (W20) and `mut_static_audit` (W21) to score which findings sit on hot paths.
+
+### Step 6. Within-file structure (parser fallback)
 
 ```
 get_call_graph(file_path=<path>)
 ```
 
-Returns function call edges within the file: `caller -> callee` pairs.
+Parser-based, single-file: returns fn-to-fn edges within the file's AST. Use when:
+- You don't have a hypergraph build (e.g. analyzing a non-workspace dependency drop, or a snapshot where `build_hypergraph` would take too long).
+- You want fn-arity-style structural analysis on a single file (find dispatch hubs by out-degree).
+- You want to corroborate Layer 10 results — the parser sees what's syntactically there, Layer 10 sees what HIR resolved.
 
-### Step 2. Identify shape
-
-- **Leaf functions**: outputs without incoming edges. Often the public entry points OR utility leaves.
-- **Entry-point functions**: outputs with no outgoing edges. Often dispatch handlers.
-- **Hub functions**: high in-degree AND out-degree. Refactor candidates if also gnarly (W15).
-
-### Step 3. Verify expected call paths
-
-"Does `handle_request` call `validate_input`?" → check the parser-level edge directly.
-
-### Step 4. Compose with cross-file analysis
-
-Within-file: `get_call_graph(file_path=...)`.
-Cross-file: `who_uses(target=<qualified_fn>)` aggregates module-level. Compose:
-
-```
-get_call_graph(file_path=<file_with_complex_fn>)         → see internal call tree
-who_uses(directory=..., target=<crate>::<complex_fn>) → see external callers
-```
+Compose: `get_call_graph(file_path=<file_with_complex_fn>)` for internal structure, then `who_calls(target=<crate>::<fn>)` for external callers — together you get the full picture for one fn.
 
 ### Decision frames
 
-| Finding | Action |
+| Goal | Tool |
 |---|---|
-| File has many fns with no edges (no callers, no callees) | File is a flat collection of unrelated helpers — consider splitting |
-| One fn with high out-degree calling 10+ helpers | Refactor candidate; pull inline or extract module |
-| Cycles in call graph | Recursion or mutual recursion; verify intent |
+| Workspace-wide caller list | `who_calls` |
+| Workspace-wide callee list | `calls_from` |
+| "What's reachable from here?" | `call_graph(depth=2 or 3)` |
+| "Does this caller crate respect the rule?" | `callers_in_crate` |
+| Single integer for refactor scoring | `recursive_callers_count` |
+| Within-file structure (no hypergraph) | `get_call_graph` |
 
-### Limitations
-
-- **Not workspace-wide**: cross-file calls show up only via `who_uses` aggregation.
-- **Method dispatch**: parser-level, may miss virtual dispatch through traits.
+Depth budget for `call_graph`:
+- depth=1 → direct callees only (cheaper than `calls_from` if you also want cycle/depth-truncation flags).
+- depth=2 → readable in JSON for most fns.
+- depth=3 → default; balance of recall vs payload.
+- depth≥6 → hub fns produce large outputs; use sparingly.
 
 ### Pattern reference
 
-| Signal | Means |
+| Pattern | Invocation |
 |---|---|
-| Single fn calls 20+ others in same file | Either dispatcher (legitimate) or god-fn (refactor) |
-| Cycle detected | Mutual recursion; verify intent and termination |
+| List every caller of Y | `who_calls(target=Y)` |
+| List every callee of Y | `calls_from(caller=Y)` |
+| Reachability map up to depth 3 | `call_graph(root=Y, depth=3)` |
+| Crate boundary check | `callers_in_crate(target=Y, krate=X)` |
+| Refactor blast radius | `recursive_callers_count(target=Y, depth=8)` |
+| File-internal structure | `get_call_graph(file_path=<file>)` |
+
+### Limitations
+
+- Trait dispatch via dynamic calls is a static-resolution heuristic (Layer 10 follows HIR's resolved callee; runtime polymorphism through `dyn Trait` may be incomplete depending on how RA resolved the receiver type).
+- No enum-of-fn-pointers tracking — a `match` arm dispatching to one of N fn pointers reads as a load, not as N call edges.
+- Macro-expanded calls may not surface — `println!("{}", foo())` resolves the inner `foo()` call, but a custom macro whose expansion contains a call may be invisible if the call isn't visible in the post-expansion HIR.
+- `get_call_graph` is parser-only and misses cross-file calls entirely; use Layer 10 for workspace-wide questions.
 
 ---
 
@@ -1220,6 +1450,816 @@ New entries = widened API. Investigate each before merging.
 
 ---
 
+## W17 — Architectural rule enforcement
+
+Declarative crate-edge rule check. CI-friendly: rules are passed as a list, the tool returns concrete violations with `consumer_crate`, `producer_crate`, `sample_symbol`, `unique_symbols`, `total_refs`. Empty `violations` is the pass signal.
+
+### Scope — workspace-wide, declarative rule check
+
+### Step 1. Define rules
+
+Each rule has a glob-style `consumer` pattern and `producer` pattern (with `*` wildcards), plus optional `except` (consumer-side override), `severity`, and `message`:
+
+```
+rules = [
+  { consumer: "domain*",    producer: "tokio",      severity: "error", message: "domain crates must be runtime-agnostic" },
+  { consumer: "domain*",    producer: "serde_json", severity: "warn"  },
+  { consumer: "domain*",    producer: "reqwest",    severity: "error" },
+  { consumer: "domain*",    producer: "hyper",      severity: "error" },
+  { consumer: "domain*",    producer: "bevy*",      severity: "error" },
+]
+```
+
+Glob semantics: `*` matches zero or more characters in the crate name. `consumer="domain*"` catches `domain`, `domain_core`, `domain_types`, etc.
+
+### Step 2. Run the check
+
+```
+forbidden_dependency_check(directory=..., rules=[...])
+```
+
+Returns:
+
+```json
+{
+  "rule_count": 5,
+  "violation_count": 2,
+  "violations": [
+    { "rule": { "consumer": "domain*", "producer": "tokio" },
+      "edge": { "consumer_crate": "domain_x", "producer_crate": "tokio" },
+      "sample_symbol": "tokio::spawn", "unique_symbols": 5, "total_refs": 17 }
+  ]
+}
+```
+
+One violation per (rule × matching edge). The tool is a pure filter over `crate_edges` — same data, declarative shape, no extra graph cost.
+
+### Step 3. Triage
+
+For each violation:
+- `read_file_content(file=<sample_call_site>)` at the span (use `who_imports(target=<sample_symbol>)` to surface the actual file:line).
+- Confirm whether the import is legitimate (e.g. an integration test in the domain crate) or a real layering break.
+- For legitimate cases, add an `except` clause to the rule (or narrow the `consumer` glob) and re-run.
+- For real breaks, fix the import — either move the offending code out of the domain crate or factor the dependency through an abstraction.
+
+### Step 4. Targeted recipes
+
+#### Recipe 17.1 — "Layered architecture audit (DAG enforcement)"
+
+For each layer pair where the lower layer must not consume from the upper:
+
+```
+forbidden_dependency_check(rules=[
+  { consumer: "domain*",      producer: "agent*",       severity: "error" },
+  { consumer: "domain*",      producer: "tui*",         severity: "error" },
+  { consumer: "agent*",       producer: "tui*",         severity: "error" },
+])
+```
+
+Empty `violations` confirms the layer DAG holds. Any non-empty result is a layering break.
+
+#### Recipe 17.2 — "Async boundary check"
+
+The domain crate must not import async runtimes:
+
+```
+forbidden_dependency_check(rules=[
+  { consumer: "domain*", producer: "tokio",   severity: "error" },
+  { consumer: "domain*", producer: "futures", severity: "error" },
+  { consumer: "domain*", producer: "async-*", severity: "error" },
+])
+```
+
+Real example from `coding-agent-bad`: `domain` imported `tokio::sync::Mutex` because a refactor never finished — surfaced as a single violation with `unique_symbols=1`.
+
+#### Recipe 17.3 — "Domain crate framework hygiene"
+
+Domain crates should be framework-agnostic:
+
+```
+forbidden_dependency_check(rules=[
+  { consumer: "domain*", producer: "bevy*",     severity: "error" },
+  { consumer: "domain*", producer: "reqwest",   severity: "error" },
+  { consumer: "domain*", producer: "hyper",     severity: "error" },
+  { consumer: "domain*", producer: "axum",      severity: "error" },
+  { consumer: "domain*", producer: "actix-web", severity: "error" },
+])
+```
+
+### Decision frames
+
+| Question | Answer |
+|---|---|
+| Should this rule live in CI? | Yes — `violation_count > 0` is a non-zero exit code candidate. |
+| Should it live in-IDE? | Cheap enough (filter over `crate_edges`) to run on every save. |
+| How to handle "partial" rules? | Use `except` for consumer-side overrides (e.g. domain crate may import `serde` but not `serde_json` — express as two rules with the broader rule narrowed). |
+| Multiple rules contradicting? | The check evaluates each rule independently — overlapping rules each produce their own violation rows. Keep rules orthogonal. |
+
+### Pattern reference
+
+| Use case | Rule shape |
+|---|---|
+| Layered DAG | `consumer: "lower*", producer: "upper*"` |
+| Async-free domain | `consumer: "domain*", producer: "tokio"` |
+| Framework-free domain | `consumer: "domain*", producer: "bevy*"` |
+| Forbid binary→library reverse | `consumer: "lib*", producer: "bin*"` |
+
+### Limitations
+
+- Only crate-level edges. Can't enforce "domain modules must not import …" within a single crate — for that, drop to `get_imports(module=...)` and hand-roll a check.
+- No cycle detection. `crate_edges` lists forward edges; the check is filter-only. For cycles, walk `crate_edges` manually (a small `python -c` script over the persisted JSON does the job).
+- Same caveat as `crate_edges`: cross-crate method calls / trait dispatch are NOT counted in `total_refs`. A consumer that imports a trait but only uses it via method dispatch may register `total_refs=0` while still violating the rule.
+- Glob is `*`-only — no `?`, no character classes, no negation in the pattern itself (use `except` for that).
+
+---
+
+## W18 — Attribute-driven audits
+
+Per-Item attributes (and `///` doc-comment lines) are first-class graph data. Two tools cover the per-item view and the workspace-wide search.
+
+### Scope — single Item or workspace-wide attribute audit
+
+### Step 1. Per-item attribute fingerprint
+
+```
+item_attributes(directory=..., target=<crate>::Y)
+```
+
+Returns the trimmed source text of every `#[...]` attribute (e.g. `#[derive(Debug, Clone)]`, `#[must_use]`, `#[non_exhaustive]`, `#[inline]`) and every `///` doc-comment line in source order. Useful for rendering context around an Item without reading the full file.
+
+### Step 2. Workspace-wide attribute search
+
+```
+items_with_attribute(directory=..., crate_name=X, attribute_pattern="#[must_use]")
+```
+
+Anchored prefix match on each attribute string OR on the body of a `///` doc-comment. Each result row carries `match_location: "attr"` or `"doc"` so callers can filter visually. Case-sensitive.
+
+`attribute_pattern` is a substring anchored as a prefix — e.g. `"#[deprecated"` matches `#[deprecated]`, `#[deprecated(note = "...")]`, but not `// #[deprecated]` in a comment block.
+
+### Step 3. Combine with usage data
+
+For each finding, run:
+
+```
+who_uses(directory=..., target=<finding.qualified_name>)
+who_uses_summary(directory=..., target=<finding.qualified_name>)
+```
+
+Pairs the attribute presence with consumption signal: "deprecated items still being called", "must_use functions whose return is being ignored at the call site" (the latter requires reading call sites manually), etc.
+
+### Step 4. Targeted recipes
+
+#### Recipe 18.1 — "Deprecation rollout audit"
+
+```
+items_with_attribute(crate_name=X, attribute_pattern="#[deprecated")
+```
+
+For each finding, `who_uses_summary(target=<qualified_name>)` → rank by remaining caller count. Items with non-zero callers are the migration backlog; items with zero callers are safe to delete the deprecated attribute (and the item itself).
+
+#### Recipe 18.2 — "Serialization surface inventory"
+
+```
+items_with_attribute(crate_name=X, attribute_pattern="#[derive(Serialize")
+```
+
+Surfaces every type that participates in the wire format. Cross-reference with `module_tree(krate=X)` to confirm visibility (a `pub` Serialize struct is wire-format-stable; a `pub(crate)` Serialize struct may be incidental).
+
+Note: `#[derive(Debug, Clone, Serialize)]` matches as one attribute string (the derive list isn't split). `attribute_pattern="#[derive(Serialize"` will match it; `attribute_pattern="#[derive(Clone)]"` will NOT match `#[derive(Debug, Clone, Serialize)]` because of the differing literal prefix.
+
+#### Recipe 18.3 — "Must-use compliance"
+
+```
+items_with_attribute(crate_name=X, attribute_pattern="#[must_use]")
+```
+
+Returns every `#[must_use]` Item — the API contract list. Cross-reference with `module_tree` to find pub fns/types that should carry `#[must_use]` but don't (manual review required — there is no anti-attribute audit).
+
+#### Recipe 18.4 — "Forward-compat audit"
+
+```
+items_with_attribute(crate_name=X, attribute_pattern="#[non_exhaustive]")
+```
+
+Surfaces enums and structs that are evolution-safe (callers must use `_` arms / non-positional construction). Combine with `enum_variants(target=<finding>)` (W24) to inventory variants per `#[non_exhaustive]` enum and predict downstream breakage when adding a new variant.
+
+#### Recipe 18.5 — "Test-only fns"
+
+```
+items_with_attribute(crate_name=X, attribute_pattern="#[cfg(test)]")
+```
+
+Catches `#[cfg(test)] fn` declarations. Does NOT catch `#[cfg(test)] mod tests { fn ... }` — module-gated test fns inherit the gate from their parent module and don't carry the attribute themselves. For module-level cfg-gating, walk `module_tree` and inspect parent attributes manually.
+
+### Decision frames
+
+| Situation | Pattern shape |
+|---|---|
+| Match exact attribute | `attribute_pattern="#[must_use]"` (anchored prefix; the closing `]` makes the match strict) |
+| Match attribute family | `attribute_pattern="#[deprecated"` (no closing bracket; matches `#[deprecated]`, `#[deprecated(...)]`) |
+| Match doc-comment substring | `attribute_pattern="TODO"` against doc-comment bodies (anchored at the start of each `///` line body) |
+| Match derive trait | `attribute_pattern="#[derive(Serialize"` (matches any derive list containing Serialize first; for non-first position the substring won't match — derives are not split) |
+
+### Pattern reference
+
+| Audit | Pattern |
+|---|---|
+| Deprecations | `"#[deprecated"` |
+| Must-use | `"#[must_use]"` |
+| Non-exhaustive | `"#[non_exhaustive]"` |
+| Inline hints | `"#[inline"` |
+| Test-only fns | `"#[cfg(test)]"` |
+| Serializable types | `"#[derive(Serialize"` |
+| Doc TODOs | `"TODO"` (matches `match_location: "doc"`) |
+
+### Limitations
+
+- Derive lists count as a single attribute string — `#[derive(Debug, Clone, Serialize)]` is one entry, not three. Substring match against the derive list works but isn't position-independent (the list is rendered as written).
+- Nested attributes (`#[serde(skip)]` inside `#[derive(...)]`) are NOT split; they're rendered as one string when they appear in the source as one.
+- Match is anchored prefix — substring-anywhere matching requires reading the full attribute list and filtering client-side.
+- `#[cfg(test)]` on a `mod` is NOT inherited by child fns in the result list — those child fns won't carry the attribute on their own row.
+
+---
+
+## W19 — Signature-based fn discovery
+
+Recorded `FunctionSignature` data per fn unlocks signature-shape filtering at workspace scale: "every async fn returning `Result<_, MyError>`", "every fn with ≥5 params", "every fn that takes `&Path`".
+
+### Scope — single crate or per-fn signature inspection
+
+### Step 1. Per-fn signature
+
+```
+function_signature(directory=..., target=<crate>::Y)
+```
+
+Returns the recorded signature: `is_async`, `self_param` (Owned/Ref/RefMut, or null for free fns / assoc fns without self), `params` (each with `name`, `type_string`, `by_ref`, `mutability`), `return_type`, `generics` (each with declaration-site trait bounds). Useful when reading the source would be more expensive than asking the graph.
+
+Type strings come from RA's `HirDisplay` rendered against the function's owning crate; allocator/hasher type parameters (`, Global>`, `, RandomState>`, `, BuildHasherDefault<...>>`) and `LazyLock`/`OnceLock` init-fn pointer parameters are stripped.
+
+### Step 2. Crate-wide filtered enumeration
+
+```
+functions_with_filter(directory=..., krate=X,
+                      min_param_count=<n>,
+                      has_param_type=<substring>,
+                      returns_type_pattern=<substring>,
+                      is_async=<bool>,
+                      self_kind=<"none"|"owned"|"ref"|"ref_mut">,
+                      limit=50, offset=0,
+                      summary=false)
+```
+
+Knobs:
+- `min_param_count` — fns with at least N non-self params.
+- `has_param_type` — case-sensitive substring against any param's stringified type (e.g. `"&Path"`, `"tokio::sync::Mutex"`).
+- `returns_type_pattern` — case-sensitive substring against return type (e.g. `"Result<"`, `"Result.*MyError"` — note: substring, not regex).
+- `is_async` — `true` for async-only / `false` for sync-only / omit for both.
+- `self_kind` — `"none"` (free fns + assoc fns without self), `"owned"` (`self`), `"ref"` (`&self`), `"ref_mut"` (`&mut self`).
+- `limit` (default 50), `offset` (default 0).
+- `summary=true` drops the `signature` payload from each match — useful for lightweight enumeration when the full signatures exceed the MCP token budget.
+
+Sorted by qualified name. Trait-impl method bodies are NOT included (Layer 4 limitation — impl items aren't Item nodes).
+
+### Step 3. Pagination
+
+`total_match_count` returned per call. Compare to `offset + match_count` to detect "more pages exist". Bump `offset` by `limit` until `match_count < limit`.
+
+### Step 4. Targeted recipes
+
+#### Recipe 19.1 — "Migration helper"
+
+```
+functions_with_filter(krate=X, returns_type_pattern="Result<", is_async=true, has_param_type="OldError")
+```
+
+Surfaces every async fn returning a Result that mentions the legacy error type. Pair with `who_calls(target=<finding>)` (W14) to scope migration scope per fn.
+
+#### Recipe 19.2 — "Builder pattern detection"
+
+```
+functions_with_filter(krate=X, self_kind="owned")
+```
+
+Consuming methods (`fn foo(self) -> Self`) are the builder-pattern signature. Combine with `returns_type_pattern="Self"` for a tight builder filter.
+
+#### Recipe 19.3 — "Filesystem-touching surface"
+
+```
+functions_with_filter(krate=X, has_param_type="&Path")
+```
+
+Or `has_param_type="PathBuf"`. Returns every fn that takes a path. Pair with `who_uses_summary` per finding to rank by fan-in — the top filesystem-touching fns are the natural seam for an injected `FileSystem` trait if you want to factor I/O.
+
+#### Recipe 19.4 — "Self-kind consistency"
+
+For trait T's methods (from `module_tree`):
+
+```
+function_signature(target=<crate>::T::method)
+```
+
+per method. Compare `self_param` shape across the trait's method set — inconsistent self-kind on a trait (some `&self`, some `&mut self`, some owned `self`) is usually a smell.
+
+For implementor crates, run `functions_with_filter(krate=<impl_crate>, self_kind="ref_mut")` and check whether impl methods match the trait's declared self-kind.
+
+#### Recipe 19.5 — "High-arity fns"
+
+```
+functions_with_filter(krate=X, min_param_count=5)
+```
+
+Refactor candidates — fns with five or more params usually want a struct-of-args, builder pattern, or splitting. Cross-reference with `analyze_complexity` for the file containing the fn — high-arity + high cyclomatic = top refactor priority.
+
+### Decision frames
+
+| Goal | Mode |
+|---|---|
+| Workspace inventory ("list every async Result fn") | `summary=true` (drops signature payload) |
+| Single-fn analysis | `function_signature(target=Y)` (no need for filter) |
+| Migration prep | `functions_with_filter(returns_type_pattern=<old type>, is_async=...)` |
+| Refactor candidate detection | `functions_with_filter(min_param_count=5)` |
+| Self-kind audit | `function_signature` per method, compare manually |
+
+### Pattern reference
+
+| Filter combo | Result |
+|---|---|
+| `min_param_count=5` | Refactor candidates |
+| `has_param_type="&Path"` | I/O surface |
+| `returns_type_pattern="Result<"` + `is_async=true` | Async fallible API |
+| `self_kind="owned"` | Consuming / builder methods |
+| `self_kind="none"` | Free fns + static assoc fns |
+| `has_param_type="tokio::sync::Mutex"` | Async-locked critical sections |
+
+### Limitations
+
+- `has_param_type` and `returns_type_pattern` are substring matches on `HirDisplay` output, not type-aware. `Result<MyError>` and `MyError` both substring-match `"MyError"` — disambiguation is the caller's job.
+- Default type parameters (e.g. `, Global>` from `Vec<T, Global>`) are trimmed but other defaults may still appear depending on RA's render.
+- `impl Trait` signatures may differ slightly from source (RA's `HirDisplay` renders the resolved trait obj, not the source `impl Trait` syntax).
+- Trait-impl method bodies are NOT included — only free fns, inherent assoc fns, and trait declaration fns. To audit impl methods, walk `module_tree` filtered to impl Items.
+- Where-clause bounds on generics are NOT included in `trait_bounds` — only declaration-site bounds (RA limitation).
+
+---
+
+## W20 — Unsafe-block audit
+
+Every `unsafe { ... }` block in the workspace's local crates surfaces with its enclosing fn, line count, and a `has_safety_comment` heuristic flag. Live computation; nothing cached.
+
+### Scope — workspace-wide
+
+### Step 1. Pull every unsafe block
+
+```
+unsafe_audit(directory=...)
+```
+
+Returns:
+
+```json
+{
+  "directory": "...",
+  "finding_count": <n>,
+  "findings": [
+    { "file": "src/foo.rs", "span": [1024, 1100], "line_count": 4,
+      "enclosing_function": "<64-char-hex>",
+      "enclosing_function_name": "my_crate::do_unsafe_thing",
+      "has_safety_comment": true }
+  ]
+}
+```
+
+Sorted by `(file, span)`. Per-invocation cost is dominated by the workspace load (~2-3s).
+
+### Step 2. SAFETY-comment compliance
+
+Filter `has_safety_comment=false`:
+
+```
+findings | where has_safety_comment=false
+```
+
+The flag is true when `SAFETY` appears as a substring in any of the 5 source lines preceding the `unsafe` keyword. False = undocumented unsafe — the audit's primary output. Empty-after-filter is the healthy signal.
+
+### Step 3. Block-size distribution
+
+Sort by `line_count` descending → top candidates for breakdown into smaller annotated blocks. Idiomatic Rust prefers small unsafe blocks with one-fact-per-block SAFETY comments; a 30-line unsafe block usually mixes too many invariants under one umbrella SAFETY note.
+
+### Step 4. Blast-radius weighting
+
+For each block:
+
+```
+recursive_callers_count(directory=..., target=<enclosing_function_name>, depth=8)
+```
+
+(Detail in W14.) The integer answers "how many fns transitively touch unsafe code via this fn?" A block whose enclosing fn has `transitive_callers=200` is on the hot path; a block whose enclosing fn has `transitive_callers=2` is a leaf.
+
+### Step 5. Render context
+
+For each finding worth investigating:
+
+```
+read_file_content(file_path=<finding.file>)
+```
+
+Slice [span[0] - 500, span[1] + 200] for the SAFETY comment and surrounding fn body. Review whether the comment matches the actual invariant being upheld.
+
+### Step 6. Targeted recipes
+
+#### Recipe 20.1 — "Undocumented-unsafe inventory"
+
+Filter `has_safety_comment=false`; sort by `line_count` desc. Top candidates are the largest undocumented unsafe blocks — the highest-leverage places to add SAFETY comments first.
+
+#### Recipe 20.2 — "Unsafe blast radius"
+
+For each finding, `recursive_callers_count(target=<enclosing_function_name>, depth=8)`. Sort by `transitive_callers` desc → unsafe ranked by how many callers are downstream. Combine with `has_safety_comment=false` to identify high-blast-radius undocumented unsafe.
+
+#### Recipe 20.3 — "Per-crate unsafe surface"
+
+Group findings by the first path component of `file` (the crate dir). Crates with disproportionate unsafe density are the targets for FFI / perf-critical-section review.
+
+### Decision frames
+
+| Finding | Verdict |
+|---|---|
+| Small undocumented block (`line_count ≤ 2`) using `mem::transmute` between equivalent reprs | Tolerable; idiom |
+| Small undocumented block doing pointer arithmetic | Add SAFETY comment |
+| Large undocumented block (`line_count ≥ 10`) | Break into smaller blocks each with its own SAFETY |
+| Block with documented SAFETY but high blast radius | Re-review the comment quality on PR |
+| Block with no enclosing fn (e.g. const initializer) | `enclosing_function_name=null`; harder to attribute risk — review case-by-case |
+
+### Pattern reference
+
+| Audit | Invocation |
+|---|---|
+| Undocumented unsafe | `unsafe_audit` filtered to `has_safety_comment=false` |
+| Top by size | `unsafe_audit` sorted by `line_count` desc |
+| Top by blast radius | `unsafe_audit` × `recursive_callers_count(target=enclosing_fn)` |
+| Per-crate density | `unsafe_audit` grouped by file's first path component |
+
+### Limitations
+
+- `has_safety_comment` is a substring heuristic — it checks for `SAFETY` in the 5 lines preceding the `unsafe` keyword. It does NOT validate comment quality, freshness, or whether the comment matches the actual invariant.
+- `enclosing_function_name` is null for unsafe in const initializers, trait bounds, and closures-without-fn-parent. These cases need manual review.
+- Live computation per invocation (no caching). Workspace load is ~2-3s; subsequent calls in the same session may be faster if RA's incremental cache is warm.
+- Only counts `unsafe { ... }` blocks — does not surface `unsafe fn` declarations as findings (use `items_with_attribute` or `function_signature` for that).
+
+---
+
+## W21 — Global mutable state audit
+
+Type-aware audit of every local `static` item whose HIR type matches `static mut` / `LazyLock<...>` / `OnceLock<...>` / `OnceCell<...>`.
+
+### Scope — workspace-wide
+
+### Step 1. Pull every match
+
+```
+mut_static_audit(directory=...)
+```
+
+Returns:
+
+```json
+{
+  "directory": "...",
+  "finding_count": 5,
+  "findings": [
+    { "item": "<64-char-hex>",
+      "qualified_name": "my_crate::CONFIG",
+      "matched_pattern": "LazyLock<...>",
+      "type_string": "LazyLock<Mutex<Foo>>",
+      "file": "src/config.rs",
+      "span": [200, 260] }
+  ]
+}
+```
+
+Sorted by `(qualified_name, matched_pattern)`. A single static matching multiple patterns produces one finding per pattern. `type_string` is post-processed: init-fn pointers and allocator parameters are dropped.
+
+### Step 2. Per-pattern audit
+
+Filter findings by `matched_pattern`:
+- `static mut` — the riskiest; requires `unsafe` to access. FFI / legacy compatibility hot spot.
+- `LazyLock<...>` — process-lifetime init; common, often legitimate.
+- `OnceLock<...>` — write-once cells.
+- `OnceCell<...>` — same shape, different crate.
+
+### Step 3. Per-finding fan-in
+
+For each finding:
+
+```
+who_uses(directory=..., target=<finding.qualified_name>)
+who_uses_summary(directory=..., target=<finding.qualified_name>)
+```
+
+Quantifies how many sites depend on the global. High fan-in = removing it requires touching many sites; the global is load-bearing.
+
+### Step 4. Render context
+
+```
+read_file_content(file_path=<finding.file>)
+```
+
+at `span` widened by ~30 lines. Review init expression and surrounding documentation.
+
+### Step 5. Targeted recipes
+
+#### Recipe 21.1 — "Hidden singleton inventory"
+
+List every `LazyLock` / `OnceLock` / `OnceCell` finding. The top candidates for "should this be DI'd instead of a global?" — singletons are easy to ship and hard to test. Rank by `who_uses_summary.total` desc to find the most consumed singletons (the most painful to remove, but also the highest-leverage if removed).
+
+#### Recipe 21.2 — "static mut audit"
+
+Filter to `matched_pattern="static mut"`. These are FFI / legacy compatibility cases. Each warrants a SAFETY review — `static mut` access requires `unsafe`, and the audit surfaces every site where the unsafe pre-condition must hold. Cross-reference with `unsafe_audit` (W20) — many `static mut` sites have a corresponding `unsafe { /* read STATIC_MUT */ }` block elsewhere.
+
+#### Recipe 21.3 — "Cross-pattern singletons"
+
+A static of type `LazyLock<OnceCell<T>>` would match both patterns and produce two findings for the same item. Group by `qualified_name` → cross-pattern singletons (uncommon; usually intentional layered init).
+
+### Decision frames
+
+| Pattern | Likely verdict |
+|---|---|
+| `LazyLock<HashMap<K, V>>` for a constant lookup table | Process-lifetime constant — fine |
+| `LazyLock<Mutex<State>>` for shared mutable state | Hidden singleton — DI candidate |
+| `OnceLock<Sender<T>>` for a global channel | Often DI candidate (carries side effects) |
+| `static mut COUNT: usize = 0` | FFI / legacy — review SAFETY pre-conditions |
+| `OnceCell<Config>` populated at startup | Probably fine; init order matters |
+
+### Pattern reference
+
+| Audit | Invocation |
+|---|---|
+| All globals | `mut_static_audit(directory=...)` |
+| Risky `static mut` only | filter to `matched_pattern="static mut"` |
+| Singletons | filter to `matched_pattern` ∈ {`LazyLock<...>`, `OnceLock<...>`, `OnceCell<...>`} |
+| Cross-reference fan-in | per-finding `who_uses_summary(target=qualified_name)` |
+| Cross-reference unsafe | `unsafe_audit` with `static mut` finding's qualified name in the unsafe block |
+
+### Limitations
+
+- The `lazy_static!` macro is NOT detected. Its expansion produces a generated wrapper type whose name doesn't contain `LazyLock`. Use `items_with_attribute(crate_name=X, attribute_pattern="lazy_static")` (matches `#[macro_use]` + `lazy_static!` invocations indirectly via items declared inside it) or `search(keyword="lazy_static!")` to cover that case.
+- `parking_lot::Mutex<T>` constructor calls inside a fn body are NOT scanned — only `static` items are checked. For `Mutex` usage patterns inside fns, drop to `functions_with_filter(has_param_type="Mutex")`.
+- Type-string match is post-processed (init-fn pointers dropped) — comparing `type_string` literally across findings is reliable; comparing against ad-hoc strings outside the tool may diverge.
+
+---
+
+## W22 — Re-export chain tracing
+
+Trace `pub use` chains through facade modules. Pair with the `pub type` audit to catch aliases that are masquerading as re-exports.
+
+### Scope — single Item with a long re-export chain, or a crate's facade audit
+
+### Step 1. Trace a chain
+
+```
+re_export_chain(directory=..., target=<crate>::module::Y)
+```
+
+Walks every `pub use` re-export of the canonical target up to 8 hops with cycle detection, breadth-first. Returns `links` (one per visited binding) with `from_module`, `visible_name`, and `depth`. Useful for auditing the public surface — "this Item is exposed at facade depth 4? do we need that?".
+
+### Step 2. Detect pub-type masquerading as re-export
+
+```
+pub_use_pub_type_audit(directory=..., crate_name=X)
+```
+
+Returns every `pub type` alias in the named crate whose owning module also carries a `pub use ... as <alias_name>` (or `pub use ::<alias_name>`) binding. Indicates the alias may be acting as a re-export disguised as a `pub type` declaration. The model does NOT record what the alias's RHS resolves to, so the heuristic can't confirm — verify with `find_definition(symbol_name=<alias>)` before acting.
+
+### Step 3. Targeted recipes
+
+#### Recipe 22.1 — "Decode a long facade chain"
+
+When an Item is exported via 3+ hops, callers face a guess-the-canonical-path problem. `re_export_chain(target=<canonical>)` shows each step:
+
+```
+re_export_chain(target=domain::auth::AuthError)
+  → links: [
+      { from_module: "domain", visible_name: "AuthError", depth: 1 },
+      { from_module: "shared", visible_name: "AuthError", depth: 2 },
+      { from_module: "agent",  visible_name: "AuthError", depth: 3 }
+    ]
+```
+
+This reveals which crate facades pin the visibility. Combine with `who_imports(target=domain::auth::AuthError)` to see which facade path consumers actually use — if everyone reaches for the canonical, drop the facades.
+
+#### Recipe 22.2 — "Crate facade hygiene"
+
+```
+pub_use_pub_type_audit(crate_name=X)
+```
+
+Surfaces `pub type Y = path::Y;` that should be `pub use path::Y;`. The aliases keep the public name but introduce an extra type-level indirection that `pub use` would express more directly. Convert per finding:
+
+```
+// Before:
+pub use foo::FooImpl;  // also re-exported
+pub type Foo = foo::FooImpl;  // <-- the audit flags this
+
+// After (one of):
+pub use foo::FooImpl as Foo;  // single re-export
+// or just keep the pub use FooImpl; and drop the alias.
+```
+
+### Decision frames
+
+| Situation | Action |
+|---|---|
+| `pub type Y = Path;` where Y has no generic shape change | Should be `pub use Path as Y;` — drop the alias |
+| `pub type Y<T> = Path<T, DefaultParam>;` (shape-changing) | Correct as `pub type` — keep |
+| Re-export chain depth ≥ 4 | Audit each hop; consumers usually skip to the canonical |
+| Re-export chain depth = 1 | Single facade — fine |
+
+### Pattern reference
+
+| Use case | Invocation |
+|---|---|
+| Trace one Item's facade exposure | `re_export_chain(target=Y)` |
+| Audit a crate's pub type aliases | `pub_use_pub_type_audit(crate_name=X)` |
+| Verify alias RHS | `find_definition(symbol_name=<alias>)` after the audit |
+
+### Limitations
+
+- `pub_use_pub_type_audit` is heuristic: compares alias name to `pub use` bindings declared in the same module; can't confirm the RHS resolves to the same target. False positives when an alias and a `pub use` happen to share a name but point to different types.
+- `re_export_chain` walks up to 8 hops with cycle detection. Beyond 8, deeper chains aren't enumerated — increase if you have a workspace with extreme facade depth (rare).
+- The chain only follows `pub use` re-export edges; `pub use *` glob re-exports are followed as well, but glob re-exports of glob re-exports (a chain of `pub use foo::*; pub use bar::*;`) may surface additional bindings depending on the resolver.
+
+---
+
+## W23 — Sortable per-crate dependency metric
+
+Robert Martin's instability/abstractness metric per local crate, sortable by any of five keys. Surfaces architectural shape at higher resolution than reading the full `crate_edges` matrix.
+
+### Scope — workspace-wide
+
+### Step 1. Pull sorted metric
+
+```
+crate_dependency_metric(directory=..., sort_by=<key>, top_n=<n>)
+```
+
+Returns one row per local crate:
+
+```json
+{
+  "crate_count": 12,
+  "metrics": [
+    { "crate_id": "<64-char-hex>", "crate_name": "my_crate",
+      "efferent": 5, "afferent": 2,
+      "instability": 0.71, "abstractness": 0.18, "item_count": 142 }
+  ]
+}
+```
+
+- `efferent` (Ce) — distinct outgoing producer crates (fan-out).
+- `afferent` (Ca) — distinct incoming consumer crates (fan-in).
+- `instability = Ce / (Ce + Ca)` — 0 = max stable (lots of consumers, no dependencies); 1 = max unstable.
+- `abstractness = (traits + pub_type_aliases) / total_items` — high abstractness = trait-and-alias-heavy crate (facades, abstract layers).
+
+`sort_by` accepts `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending). `top_n` slices the head after sorting.
+
+### Step 2. Cross-reference
+
+Pick the top crate from the metric; pull `crate_edges(directory=...)` filtered to that crate to see the per-edge breakdown:
+
+```
+crate_edges(directory=...) | filter consumer_crate=<top> OR producer_crate=<top>
+```
+
+The metric ranks; `crate_edges` shows the symbols carrying each edge.
+
+### Step 3. Targeted recipes
+
+#### Recipe 23.1 — "Most-depended-on crate"
+
+```
+crate_dependency_metric(sort_by="afferent", top_n=10)
+```
+
+Top by `afferent` = "what's the architectural core?" — crates with high fan-in are the universal-types layer. Matches the `crate_edges` decomposition in W2 / W7 but at higher resolution and with the abstractness ratio attached.
+
+#### Recipe 23.2 — "Most-dependent crate"
+
+```
+crate_dependency_metric(sort_by="efferent", top_n=10)
+```
+
+Top by `efferent` = "what's the workhorse / orchestrator?" — crates with high fan-out integrate many services. Often the binary, the integration crate, or a god-crate candidate.
+
+#### Recipe 23.3 — "Stable-but-concrete vs abstract main-sequence"
+
+Robert Martin's main-sequence: stable crates should be abstract (high `abstractness`, low `instability`). Crates that are stable AND concrete (low instability, low abstractness) are the rigid concrete cores — refactor caution. Crates that are abstract AND unstable are facades over volatile internals — verify intent.
+
+### Decision frames
+
+| Situation | Tool |
+|---|---|
+| Per-edge analysis (which symbols flow on this edge?) | `crate_edges` |
+| High-level ranking | `crate_dependency_metric` |
+| Find architectural core | `sort_by="afferent"` |
+| Find workhorses | `sort_by="efferent"` |
+| Find facades / abstract layers | `sort_by="abstractness"` |
+| Find god-crates | `sort_by="item_count"` |
+| Find unstable cores | `sort_by="instability"` |
+
+### Pattern reference
+
+| Audit | Invocation |
+|---|---|
+| Top 10 by fan-in | `crate_dependency_metric(sort_by="afferent", top_n=10)` |
+| Top 10 by fan-out | `crate_dependency_metric(sort_by="efferent", top_n=10)` |
+| Top 10 by item count | `crate_dependency_metric(sort_by="item_count", top_n=10)` |
+| Top 10 by abstractness | `crate_dependency_metric(sort_by="abstractness", top_n=10)` |
+| Top 10 most unstable | `crate_dependency_metric(sort_by="instability", top_n=10)` |
+
+### Limitations
+
+- Counts edges, not symbols. For symbol-level breakdown of any (consumer, producer) pair, drop to `crate_edges` and filter.
+- NaN-guarded: degenerate counts (zero items, zero edges) return 0.0 for both metrics.
+- Unknown `sort_by` values produce an `invalid_params` error.
+- `abstractness` counts `traits + pub_type_aliases` — it does NOT count `pub use` re-exports (which are bindings, not items). A facade that's all `pub use` will have low `abstractness` despite being structurally a facade.
+
+---
+
+## W24 — Enum-variant inspection
+
+Variants of an enum are first-class — list them, then per-variant fan-in via `who_uses(target=Enum::Variant)`.
+
+### Scope — single enum
+
+### Step 1. Pull the variants
+
+```
+enum_variants(directory=..., target=<crate>::E)
+```
+
+Returns one row per variant in source order with `display_name`, `qualified_name`, `(file, span)`. Useful for auditing the variant set without parsing the source manually.
+
+### Step 2. Per-variant fan-in
+
+For each variant:
+
+```
+who_uses(directory=..., target=<crate>::E::Variant)
+who_uses_summary(directory=..., target=<crate>::E::Variant)
+```
+
+Returns every pattern-match / construction site for the variant. Sort by total → "which states actually carry the load?".
+
+### Step 3. Cross-reference with `semantic_overlaps`
+
+```
+semantic_overlaps(directory=..., item_kind="EnumVariant", threshold=0.95)
+```
+
+Variants whose source bytes hash identically (e.g. unit `Error` variant duplicated across 6 different enums) cluster together. The signal that the same logical state was modeled as separate variants on different enums — convergent enum design.
+
+### Step 4. Targeted recipes
+
+#### Recipe 24.1 — "Variant fan-in"
+
+For an enum E, compute fan-in for every variant. Heaviest-used variants surface as the load-bearing states; rarely-used variants are candidates for collapse / split into a different type.
+
+#### Recipe 24.2 — "Dead variant detection"
+
+Variants with empty `who_uses` are dead. The constructor never executes; the pattern-match arm never matches. Either:
+- The variant is reserved for future use (intentional; document with a comment).
+- The variant is genuine dead state — remove (but verify the enum isn't `#[non_exhaustive]`, which preserves the variant for downstream pattern matching even if no caller in this workspace uses it).
+
+#### Recipe 24.3 — "Convergent enum design"
+
+`semantic_overlaps(item_kind="EnumVariant", threshold=0.95)` (Recipe 13.3) clusters variants whose source is identical. Each cluster is a candidate for harmonization — extract a shared base, introduce a trait, or collapse the convergent enums into one.
+
+### Decision frames
+
+| Finding | Action |
+|---|---|
+| Empty `who_uses` for a variant | Dead variant; remove (mind `#[non_exhaustive]`) |
+| One variant carries 90% of fan-in | Other variants may be over-modeled — consider flattening |
+| Variants are mostly unused unit variants | Collapse into a flag / single variant |
+| Same variant duplicated across 3+ enums | Convergent design — harmonize |
+
+### Pattern reference
+
+| Audit | Invocation |
+|---|---|
+| List variants | `enum_variants(target=E)` |
+| Per-variant fan-in | per-variant `who_uses_summary(target=E::Variant)` |
+| Convergence | `semantic_overlaps(item_kind="EnumVariant", threshold=0.95)` |
+| Cross-reference attributes | `item_attributes(target=E)` for `#[non_exhaustive]` etc. |
+
+### Limitations
+
+- Discriminants (the explicit `= 5` part of `Variant = 5`) are present only when the source declared them — implicit discriminants aren't computed.
+- Struct/tuple variant fields are NOT enumerated separately — `Variant { a: T, b: U }` returns one row for the variant; the fields are not graph nodes. To inspect fields, drop to `read_file_content` at the variant's span.
+- `who_uses(target=E::Variant)` resolves correctly for direct variant references, but pattern-matches that bind via `_` or `..` may not carry an explicit reference to the variant — the count is a lower bound.
+
+---
+
 ## Output handling — when results are large
 
 Some MCP outputs persist to a tool-results JSON file because they exceed the inline preview budget. Examples:
@@ -1308,6 +2348,68 @@ All read tools (everything except `build_hypergraph`, `index_codebase`, `clear_c
 | Audit a type's method API | W11 |
 | Audit a public API surface | W12 |
 | Find duplicates by similarity | W13 |
-| Trace within-file call structure | W14 |
+| Trace fn-level call graphs (workspace-wide) | W14 |
 | Prioritize by complexity × blast radius | W15 |
 | Compare two snapshots / branches | W16 |
+| Enforce architectural rules | W17 |
+| Audit attributes (deprecated / must_use / non_exhaustive) | W18 |
+| Find fns by signature shape | W19 |
+| Audit `unsafe { ... }` blocks | W20 |
+| Audit `static mut` / `LazyLock` / `OnceLock` / `OnceCell` | W21 |
+| Trace `pub use` re-export chains | W22 |
+| Rank crates by Robert Martin metric | W23 |
+| Inspect enum variants and per-variant fan-in | W24 |
+
+### W13 sub-recipes (semantic similarity)
+
+| Recipe | Use case |
+|---|---|
+| 13.1 | Find duplicate logic worth extracting |
+| 13.2 | Type-1 clone detection (literal duplicates, similarity 1.0) |
+| 13.3 | Convergent enum design |
+| 13.4 | Same-shape struct detection across crates |
+| 13.5 | Refactor candidate ranking |
+| 13.6 | Naming-convention enforcement |
+
+### W14 sub-recipes (call graph)
+
+| Recipe / step | Use case |
+|---|---|
+| Step 1 (`who_calls`) | Workspace-wide caller list |
+| Step 2 (`calls_from`) | Workspace-wide callee list |
+| Step 3 (`call_graph`) | Bounded reachability tree from a root fn |
+| Step 4 (`callers_in_crate`) | Crate boundary check |
+| Step 5 (`recursive_callers_count`) | Refactor blast-radius integer |
+| Step 6 (`get_call_graph`) | Within-file structure (parser fallback) |
+
+### W17-W24 sub-recipes
+
+| Recipe | Use case |
+|---|---|
+| 17.1 | Layered architecture audit (DAG enforcement) |
+| 17.2 | Async boundary check (domain crate must not import tokio/futures) |
+| 17.3 | Domain crate framework hygiene |
+| 18.1 | Deprecation rollout audit |
+| 18.2 | Serialization surface inventory |
+| 18.3 | Must-use compliance |
+| 18.4 | Forward-compat audit (`#[non_exhaustive]`) |
+| 18.5 | Test-only fns (`#[cfg(test)]`) |
+| 19.1 | Migration helper (filter by old return type) |
+| 19.2 | Builder pattern detection (`self_kind="owned"`) |
+| 19.3 | Filesystem-touching surface (`has_param_type="&Path"`) |
+| 19.4 | Self-kind consistency |
+| 19.5 | High-arity fns (`min_param_count=5`) |
+| 20.1 | Undocumented-unsafe inventory |
+| 20.2 | Unsafe blast radius |
+| 20.3 | Per-crate unsafe surface |
+| 21.1 | Hidden singleton inventory |
+| 21.2 | `static mut` audit |
+| 21.3 | Cross-pattern singletons |
+| 22.1 | Decode a long facade chain |
+| 22.2 | Crate facade hygiene (`pub_use_pub_type_audit`) |
+| 23.1 | Most-depended-on crate |
+| 23.2 | Most-dependent crate |
+| 23.3 | Stable-but-concrete vs abstract main-sequence |
+| 24.1 | Variant fan-in |
+| 24.2 | Dead variant detection |
+| 24.3 | Convergent enum design |
