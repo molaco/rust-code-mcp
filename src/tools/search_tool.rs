@@ -285,6 +285,12 @@ pub struct ReExportChainParams {
 pub struct CrateDependencyMetricParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
+    #[schemars(description = "Optional cap on returned rows after sorting. Default: None (all rows).")]
+    #[serde(default)]
+    pub top_n: Option<usize>,
+    #[schemars(description = "Optional sort key applied before `top_n` slicing. One of `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending). Unknown values produce an `invalid_params` error.")]
+    #[serde(default)]
+    pub sort_by: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -344,6 +350,15 @@ pub struct FunctionsWithFilterParams {
     #[schemars(description = "Optional self-kind filter: \"none\" | \"owned\" | \"ref\" | \"ref_mut\"")]
     #[serde(default)]
     pub self_kind: Option<String>,
+    #[schemars(description = "Optional cap on returned matches after slicing. Default: 50. Use together with `offset` to paginate. Compare `total_match_count` to `limit + offset` to detect more pages.")]
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[schemars(description = "Optional offset into the (sorted) match list, applied before `limit`. Default: 0.")]
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[schemars(description = "Optional summary mode. When `true`, each match drops the full `signature` payload, returning only `target` and `qualified_name`. Default: false.")]
+    #[serde(default)]
+    pub summary: Option<bool>,
 }
 
 #[cfg(test)]

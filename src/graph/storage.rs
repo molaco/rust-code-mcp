@@ -465,5 +465,29 @@ pub fn read_manifest(path: &Path) -> Result<GraphManifest> {
     Ok(manifest)
 }
 
+/// Soft-fail variant of [`read_manifest`]. Returns `Ok(None)` when the
+/// manifest is well-formed but encodes a different `schema_version` than
+/// the running server. Real errors (missing file, malformed JSON) still
+/// propagate.
+///
+/// Use this from read paths where a stale snapshot should be reported as
+/// "no compatible snapshot available — call build_hypergraph first" rather
+/// than as an opaque internal error.
+pub fn read_manifest_compatible(path: &Path) -> Result<Option<GraphManifest>> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let manifest: GraphManifest = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse manifest {}", path.display()))?;
+    if manifest.schema_version != SCHEMA_VERSION {
+        tracing::warn!(
+            stored_schema_version = manifest.schema_version,
+            current_schema_version = SCHEMA_VERSION,
+            manifest_path = %path.display(),
+            "ignoring incompatible snapshot manifest (schema_version mismatch)"
+        );
+        return Ok(None);
+    }
+    Ok(Some(manifest))
+}
+
 #[allow(dead_code)]
 fn _binding_id_marker(_: BindingId) {}
