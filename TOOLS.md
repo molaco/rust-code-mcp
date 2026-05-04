@@ -1350,7 +1350,7 @@ Find semantic neighbors of a hypergraph Item using vector embeddings. Resolves `
 
 #### semantic_overlaps
 
-Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source via `vector_only_search`, builds a similarity graph above `threshold` (default 0.85), and either returns deduplicated pairs or single-linkage clusters of transitively-similar items. The workspace-scale counterpart to `similar_to_item`: where `similar_to_item` answers *"given X, what's like X?"*, `semantic_overlaps` answers *"what's duplicated that I don't know about?"*.
+Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each Item's source bytes (cached per-Item in the snapshot's LMDB env), runs an in-memory pairwise cosine scan, and either returns deduplicated pairs or single-linkage clusters of transitively-similar items above `threshold` (default 0.85). The workspace-scale counterpart to `similar_to_item`: where `similar_to_item` answers *"given X, what's like X?"*, `semantic_overlaps` answers *"what's duplicated that I don't know about?"*.
 
 Clusters are returned sorted by `avg_similarity` descending — high-similarity small clusters appear first, large noisy clusters last.
 
