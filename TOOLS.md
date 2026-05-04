@@ -1350,7 +1350,9 @@ Find semantic neighbors of a hypergraph Item using vector embeddings. Resolves `
 
 #### semantic_overlaps
 
-Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source via `vector_only_search`, builds a similarity graph above `threshold` (default 0.80), and either returns deduplicated pairs or single-linkage clusters of transitively-similar items. The workspace-scale counterpart to `similar_to_item`: where `similar_to_item` answers *"given X, what's like X?"*, `semantic_overlaps` answers *"what's duplicated that I don't know about?"*.
+Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source via `vector_only_search`, builds a similarity graph above `threshold` (default 0.85), and either returns deduplicated pairs or single-linkage clusters of transitively-similar items. The workspace-scale counterpart to `similar_to_item`: where `similar_to_item` answers *"given X, what's like X?"*, `semantic_overlaps` answers *"what's duplicated that I don't know about?"*.
+
+Clusters are returned sorted by `avg_similarity` descending — high-similarity small clusters appear first, large noisy clusters last.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -1358,8 +1360,9 @@ Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a 
 | `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
 | `crate_name` | string | No | Optional crate qualified name to scope the scan. Default: all local crates. |
 | `item_kind` | string | No | Optional item-kind filter ("Function" \| "Struct" \| "Enum" \| "Trait" \| "Method" \| ...). Case-insensitive. Default: all kinds. |
-| `threshold` | number | No | Minimum cosine similarity (0.0-1.0). Default: 0.80. Raise to 0.85+ for stricter "definitely duplicate" signal. |
+| `threshold` | number | No | Minimum cosine similarity (0.0-1.0). Default: 0.85 (good balance of recall vs noise at workspace scale; drop to 0.80 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict "definitely duplicate" signal). |
 | `max_pairs` | integer | No | Cap on returned pairs OR cluster member count. Default: 50. |
+| `max_cluster_size` | integer | No | Drop clusters whose member count exceeds this cap (single-linkage chaining produces large noisy clusters). Default: 15. Set to 0 to disable. |
 | `output_mode` | string | No | `"pairs"` (raw similarity edges) or `"clusters"` (single-linkage groups). Default: `"clusters"`. |
 | `skip_test_chunks` | boolean | No | Drop matches whose qualified name contains `::tests::`. Default: true. |
 | `cross_crate_only` | boolean | No | Drop pairs whose two items share a crate. Default: false. |
@@ -1432,6 +1435,12 @@ Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a 
 - Self-matches (chunk whose `(file, line range)` overlaps the seed's span) are dropped automatically — same logic as `similar_to_item`.
 - Test fixtures dominate noise; `skip_test_chunks` is on by default.
 - v1.0: synchronous per-seed loop, no embedding cache. Repeated runs re-embed every item.
+
+**Notes from validation:**
+- Use `threshold: 0.80` for crate-scoped scans (chaining is less of a problem at small scale).
+- Use the default `0.85` (or higher) for workspace-wide scans — 0.80 produces useless mega-clusters via single-linkage chaining.
+- `cross_crate_only: true` is a strong noise filter when auditing a workspace.
+- `max_cluster_size: 15` (default) drops chained mega-clusters; bump it up if you want to inspect them, set to 0 to disable entirely.
 
 ---
 
