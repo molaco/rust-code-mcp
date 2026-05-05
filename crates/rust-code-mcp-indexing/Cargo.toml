@@ -4,3 +4,28 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rust-code-mcp-model = { workspace = true }
+rust-code-mcp-syntax = { workspace = true }
+rust-code-mcp-embeddings = { workspace = true }
+rust-code-mcp-bm25 = { workspace = true }
+rust-code-mcp-vector-store = { workspace = true }
+anyhow = { workspace = true }
+bincode = { workspace = true }
+directories = { workspace = true }
+glob = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }
+rs_merkle = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+sled = { workspace = true }
+sysinfo = { workspace = true }
+tantivy = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+num_cpus = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -4,10 +4,10 @@
 //! sensitive file filtering, secrets scanning, size checks, and
 //! change detection via the metadata cache.
 
-use crate::indexing::IndexingError;
 use crate::metadata_cache::MetadataCache;
 use crate::security::secrets::SecretsScanner;
 use crate::security::SensitiveFileFilter;
+use crate::IndexingError;
 use std::path::Path;
 
 /// Handles file filtering, security scanning, and change detection.

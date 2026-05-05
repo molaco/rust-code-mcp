@@ -3,10 +3,10 @@
 //! Extracted from `IndexerCore` to encapsulate embedding pipeline concerns:
 //! GPU-optimized batch embedding generation and memory-aware batch sizing.
 
-use crate::chunker::CodeChunk;
-use crate::embeddings::{Embedding, EmbeddingGenerator};
-use crate::indexing::IndexingError;
 use crate::metrics::memory::MemoryMonitor;
+use crate::IndexingError;
+use rust_code_mcp_embeddings::{Embedding, EmbeddingGenerator};
+use rust_code_mcp_model::CodeChunk;
 use std::sync::{Arc, Mutex};
 
 /// Handles batch embedding generation and memory-aware batch sizing.

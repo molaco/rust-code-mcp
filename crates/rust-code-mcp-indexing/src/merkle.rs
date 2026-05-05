@@ -311,7 +311,7 @@ struct MerkleSnapshot {
 
 // hex encoding helper
 mod hex {
-    pub fn encode(bytes: &[u8]) -> String {
+    pub(super) fn encode(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }

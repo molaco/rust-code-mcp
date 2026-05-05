@@ -5,15 +5,15 @@
 //! - VectorStore: Vector indexing operations (LanceDB embedded backend)
 //! - IndexerCore: Core file processing and embedding generation
 
-use crate::chunker::{ChunkId, CodeChunk};
-use crate::embeddings::EmbeddingGenerator;
-use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
-use crate::indexing::indexer_core::IndexerCore;
-use crate::indexing::tantivy_adapter::TantivyAdapter;
+use crate::errors::{categorize_error, ErrorCategory, ErrorCollector, ErrorDetail};
+use crate::indexer_core::{IndexerCore, ProcessedFile};
 use crate::metrics::IndexingMetrics;
-use crate::vector_store::VectorStore;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
+use rust_code_mcp_bm25::{Bm25Search, ChunkSchema, TantivyAdapter, TantivyConfig};
+use rust_code_mcp_embeddings::EmbeddingGenerator;
+use rust_code_mcp_model::{ChunkId, CodeChunk};
+use rust_code_mcp_vector_store::VectorStore;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tantivy::Index;
@@ -86,7 +86,7 @@ impl UnifiedIndexer {
         let core = IndexerCore::new(cache_path, None)?;
 
         // Initialize Tantivy adapter
-        let tantivy_config = crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
+        let tantivy_config = TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
         let tantivy = TantivyAdapter::new(tantivy_config)?;
 
         // Initialize embedded vector store
@@ -246,7 +246,7 @@ impl UnifiedIndexer {
     pub async fn index_directory_with_backup(
         &mut self,
         dir_path: &Path,
-        backup_manager: Option<&crate::monitoring::backup::BackupManager>,
+        backup_manager: Option<&crate::backup::BackupManager>,
     ) -> Result<IndexStats> {
         let stats = self.index_directory(dir_path).await?;
 
@@ -257,7 +257,7 @@ impl UnifiedIndexer {
                     stats.indexed_files
                 );
 
-                match crate::indexing::merkle::FileSystemMerkle::from_directory(dir_path) {
+                match crate::merkle::FileSystemMerkle::from_directory(dir_path) {
                     Ok(merkle) => {
                         if let Err(e) = manager.create_backup(&merkle) {
                             tracing::warn!("Failed to create backup: {}", e);
@@ -423,7 +423,7 @@ impl UnifiedIndexer {
     }
 
     /// Get access to the Tantivy schema
-    pub fn tantivy_schema(&self) -> &crate::schema::ChunkSchema {
+    pub fn tantivy_schema(&self) -> &ChunkSchema {
         self.tantivy.schema()
     }
 
@@ -433,7 +433,7 @@ impl UnifiedIndexer {
     }
 
     /// Create a Bm25Search instance from the Tantivy index
-    pub fn create_bm25_search(&self) -> Result<crate::search::bm25::Bm25Search> {
+    pub fn create_bm25_search(&self) -> Result<Bm25Search> {
         self.tantivy.create_bm25_search()
     }
 
@@ -474,11 +474,11 @@ impl UnifiedIndexer {
     fn process_batch_errors(&self, error_collector: &ErrorCollector, stats: &mut IndexStats) {
         for error in error_collector.get_errors() {
             match error.category {
-                crate::indexing::errors::ErrorCategory::Permanent => {
+                ErrorCategory::Permanent => {
                     tracing::debug!("Skipped {}: {}", error.file_path.display(), error.message);
                     stats.skipped_files += 1;
                 }
-                crate::indexing::errors::ErrorCategory::Transient => {
+                ErrorCategory::Transient => {
                     tracing::warn!("Failed {}: {}", error.file_path.display(), error.message);
                     stats.skipped_files += 1;
                 }
@@ -488,7 +488,7 @@ impl UnifiedIndexer {
 
     async fn process_and_index_batch(
         &mut self,
-        processed: &[crate::indexing::indexer_core::ProcessedFile],
+        processed: &[ProcessedFile],
         stats: &mut IndexStats,
     ) -> Result<()> {
         let embed_start = Instant::now();

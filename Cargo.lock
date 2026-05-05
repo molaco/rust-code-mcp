@@ -6676,6 +6676,31 @@ version = "0.1.0"
 [[package]]
 name = "rust-code-mcp-indexing"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "directories",
+ "glob",
+ "num_cpus",
+ "rayon",
+ "regex",
+ "rs_merkle",
+ "rust-code-mcp-bm25",
+ "rust-code-mcp-embeddings",
+ "rust-code-mcp-model",
+ "rust-code-mcp-syntax",
+ "rust-code-mcp-vector-store",
+ "serde",
+ "sha2",
+ "sled",
+ "sysinfo",
+ "tantivy",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
 
 [[package]]
 name = "rust-code-mcp-model"

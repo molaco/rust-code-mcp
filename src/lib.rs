@@ -9,6 +9,11 @@ pub use rust_code_mcp_bm25::{Bm25Search, ChunkSchema, TantivyAdapter, TantivyCon
 pub use rust_code_mcp_embeddings::{
     ChunkWithEmbedding, EmbeddingError, EmbeddingGenerator, EmbeddingPipeline,
 };
+pub use rust_code_mcp_indexing::{
+    get_snapshot_path, BackupManager, ConsistencyChecker, ConsistencyReport, ErrorCategory,
+    ErrorCollector, ErrorDetail, IndexFileResult, IndexStats, IndexerConfig, IndexerCore,
+    IndexerCoreConfig, IndexingError, IncrementalIndexer, ProcessedFile, UnifiedIndexer,
+};
 pub use rust_code_mcp_syntax::{
     CallGraph, Chunker, Import, ParseResult, Range, RustParser, Symbol, SymbolKind, TypeReference,
     Visibility,

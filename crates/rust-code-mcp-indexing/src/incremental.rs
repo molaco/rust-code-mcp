@@ -9,8 +9,8 @@
 //!
 //! This achieves 100-1000x speedup vs full reindexing for unchanged codebases.
 
-use crate::indexing::merkle::{ChangeSet, FileSystemMerkle};
-use crate::indexing::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
+use crate::merkle::{ChangeSet, FileSystemMerkle};
+use crate::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing;

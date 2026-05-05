@@ -2,8 +2,8 @@
 
 use thiserror::Error;
 
-use crate::embeddings::EmbeddingError;
-use crate::vector_store::VectorStoreError;
+use rust_code_mcp_embeddings::EmbeddingError;
+use rust_code_mcp_vector_store::VectorStoreError;
 
 /// Errors that can occur during indexing operations
 #[derive(Error, Debug)]

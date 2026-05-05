@@ -31,14 +31,14 @@
 //! # }
 //! ```
 
-use crate::chunker::{Chunker, CodeChunk};
 use crate::config::IndexerCoreConfig;
-use crate::embeddings::{Embedding, EmbeddingGenerator};
-use crate::indexing::embedding_batcher::EmbeddingBatcher;
-use crate::indexing::file_processor::FileProcessor;
-use crate::indexing::IndexingError;
+use crate::embedding_batcher::EmbeddingBatcher;
+use crate::file_processor::FileProcessor;
 use crate::metadata_cache::MetadataCache;
-use crate::parser::RustParser;
+use crate::IndexingError;
+use rust_code_mcp_embeddings::{Embedding, EmbeddingGenerator};
+use rust_code_mcp_model::CodeChunk;
+use rust_code_mcp_syntax::{Chunker, RustParser};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
