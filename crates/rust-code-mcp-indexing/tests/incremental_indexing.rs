@@ -9,13 +9,13 @@
 //! 6. Merkle snapshots persist across indexer instances
 
 use anyhow::Result;
-use file_search_mcp::indexing::{IncrementalIndexer, IndexStats};
-use std::path::{Path, PathBuf};
+use rust_code_mcp_indexing::IncrementalIndexer;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Helper to create a test environment with temporary directories
 struct TestEnv {
-    temp_dir: TempDir,
+    _temp_dir: TempDir,
     cache_path: PathBuf,
     tantivy_path: PathBuf,
     codebase_path: PathBuf,
@@ -34,7 +34,7 @@ impl TestEnv {
         let collection_name = format!("test_incremental_{}", uuid::Uuid::new_v4());
 
         Ok(Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             cache_path,
             tantivy_path,
             codebase_path,
@@ -157,7 +157,7 @@ async fn test_file_addition_detection() -> Result<()> {
 
     // First index
     let stats1 = indexer.index_with_change_detection(&env.codebase_path).await?;
-    let initial_files = stats1.indexed_files;
+    let _initial_files = stats1.indexed_files;
 
     // Add new file
     env.write_file("new.rs", r#"

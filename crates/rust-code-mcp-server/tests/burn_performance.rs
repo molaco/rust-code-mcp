@@ -17,7 +17,7 @@ use anyhow::Result;
 use std::time::Instant;
 
 async fn index_burn_codebase(force: bool) -> Result<(String, std::time::Duration)> {
-    use file_search_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+    use rust_code_mcp_server::tools::index_tool::{index_codebase, IndexCodebaseParams};
 
     let params = IndexCodebaseParams {
         directory: "/home/molaco/Documents/burn".to_string(),
@@ -78,8 +78,8 @@ async fn test_burn_gpu_performance() -> Result<()> {
     println!("\n--- Indexing complete ---\n");
 
     // Parse results
-    let indexed_files = result.match_indices("Indexed files:").count();
-    let total_chunks = result.match_indices("Total chunks:").count();
+    let _indexed_files = result.match_indices("Indexed files:").count();
+    let _total_chunks = result.match_indices("Total chunks:").count();
 
     println!("Performance Metrics:");
     println!("  Total time: {:.2} minutes ({:.2}s)",
@@ -129,13 +129,13 @@ async fn test_burn_incremental_index() -> Result<()> {
 
     // First index (full)
     println!("Running full index...");
-    let start1 = Instant::now();
+    let _start1 = Instant::now();
     let (_result1, elapsed1) = index_burn_codebase(true).await?;
     println!("Full index: {:.2} minutes\n", elapsed1.as_secs_f64() / 60.0);
 
     // Second index (incremental - should be much faster)
     println!("Running incremental index (no changes)...");
-    let start2 = Instant::now();
+    let _start2 = Instant::now();
     let (_result2, elapsed2) = index_burn_codebase(false).await?;
     println!("Incremental index: {:.2} seconds\n", elapsed2.as_secs_f64());
 

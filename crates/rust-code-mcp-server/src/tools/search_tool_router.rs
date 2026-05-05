@@ -51,7 +51,7 @@
 //!
 //! ### Basic Usage
 //! ```rust,no_run
-//! use file_search_mcp::tools::search_tool_router::SearchToolRouter;
+//! use rust_code_mcp_server::tools::search_tool_router::SearchToolRouter;
 //!
 //! // Create router without sync manager
 //! let router = SearchToolRouter::new();
@@ -59,8 +59,8 @@
 //!
 //! ### With Background Sync
 //! ```rust,no_run
-//! use file_search_mcp::tools::search_tool_router::SearchToolRouter;
-//! use file_search_mcp::mcp::SyncManager;
+//! use rust_code_mcp_server::tools::search_tool_router::SearchToolRouter;
+//! use rust_code_mcp_server::mcp::SyncManager;
 //! use std::sync::Arc;
 //!
 //! // Create router with background sync

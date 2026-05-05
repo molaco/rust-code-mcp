@@ -257,6 +257,8 @@ name = "synthetic_crate"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [lib]
 path = "src/lib.rs"
 "#;

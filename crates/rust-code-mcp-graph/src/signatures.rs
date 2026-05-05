@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn signature_loader_load() {
         // `fn load(directory: &Path) -> Result<LoadedWorkspace>`
-        let sig = sig_of("file_search_mcp::graph::loader::load");
+        let sig = sig_of("rust_code_mcp_graph::loader::load");
         assert!(!sig.is_async, "load is sync");
         assert!(sig.self_param.is_none(), "load is a free fn");
         assert_eq!(sig.params.len(), 1, "load has one param");
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn signature_opened_snapshot_usages_of() {
         // `fn usages_of(&self, target: NodeId) -> Result<Vec<Usage>>`
-        let sig = sig_of("file_search_mcp::graph::snapshot::OpenedSnapshot::usages_of");
+        let sig = sig_of("rust_code_mcp_graph::snapshot::OpenedSnapshot::usages_of");
         assert_eq!(
             sig.self_param,
             Some(SelfKind::Ref),
@@ -207,14 +207,14 @@ mod tests {
 
     #[test]
     fn signature_workspace_stats_is_async() {
-        let sig = sig_of("file_search_mcp::tools::graph_tools::workspace_stats");
+        let sig = sig_of("rust_code_mcp_server::tools::graph_tools::workspace_stats");
         assert!(sig.is_async, "workspace_stats should be async");
     }
 
     #[test]
     fn signature_node_id_from_components() {
         // `fn from_components(parts: &[&str]) -> Self`
-        let sig = sig_of("file_search_mcp::graph::ids::NodeId::from_components");
+        let sig = sig_of("rust_code_mcp_graph::ids::NodeId::from_components");
         assert!(sig.self_param.is_none(), "from_components has no self");
         assert_eq!(sig.params.len(), 1, "from_components has one param");
     }
@@ -223,7 +223,7 @@ mod tests {
     fn functions_with_filter_smoke_async() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp_server")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
@@ -242,7 +242,7 @@ mod tests {
             .expect("functions_with_filter failed");
         assert!(
             !matches.is_empty(),
-            "expected at least one async fn in file_search_mcp"
+            "expected at least one async fn in rust_code_mcp_server"
         );
         for m in &matches {
             assert!(
@@ -257,7 +257,7 @@ mod tests {
     fn functions_with_filter_smoke_min_params() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp_graph")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
@@ -282,7 +282,7 @@ mod tests {
     fn functions_with_filter_smoke_self_kind() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp_graph")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
@@ -312,7 +312,7 @@ mod tests {
     fn functions_with_filter_async_total_exceeds_default_limit() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp_server")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {

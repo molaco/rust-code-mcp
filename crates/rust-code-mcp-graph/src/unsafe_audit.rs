@@ -256,12 +256,11 @@ mod tests {
     use super::*;
     use crate::loader;
     use crate::queries::tests::shared_snapshot;
-    use std::path::Path;
 
     #[test]
     fn finds_at_least_one_unsafe_block_in_self_workspace() {
         let snap = shared_snapshot();
-        let loaded = loader::load(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let loaded = loader::load(crate::test_workspace_root().as_path()).unwrap();
         let findings = unsafe_audit_impl(&loaded, snap).unwrap();
         assert!(
             !findings.is_empty(),
@@ -277,7 +276,7 @@ mod tests {
     #[test]
     fn unsafe_blocks_in_snapshot_rs_have_no_safety_comment() {
         let snap = shared_snapshot();
-        let loaded = loader::load(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let loaded = loader::load(crate::test_workspace_root().as_path()).unwrap();
         let findings = unsafe_audit_impl(&loaded, snap).unwrap();
         let snapshot_findings: Vec<&UnsafeFinding> = findings
             .iter()
@@ -298,7 +297,7 @@ mod tests {
     #[test]
     fn enclosing_function_resolves_for_snapshot_unsafe() {
         let snap = shared_snapshot();
-        let loaded = loader::load(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let loaded = loader::load(crate::test_workspace_root().as_path()).unwrap();
         let findings = unsafe_audit_impl(&loaded, snap).unwrap();
         let in_build_and_persist = findings.iter().find(|f| {
             f.file.ends_with("snapshot.rs")

@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn loads_self_workspace() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let loaded = load(Path::new(manifest_dir)).expect("load this workspace");
+        let workspace = crate::test_workspace_root();
+        let loaded = load(&workspace).expect("load this workspace");
         assert!(!loaded.local_crates.is_empty(), "expected at least one local crate");
         let names: Vec<String> = loaded
             .local_crates
@@ -101,8 +101,8 @@ mod tests {
             })
             .collect();
         assert!(
-            names.iter().any(|n| n == "file_search_mcp"),
-            "expected file_search_mcp in local crates, got {names:?}"
+            names.iter().any(|n| n == "rust_code_mcp_graph"),
+            "expected rust_code_mcp_graph in local crates, got {names:?}"
         );
     }
 }

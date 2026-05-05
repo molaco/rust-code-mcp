@@ -438,18 +438,16 @@ pub fn open_specific(
 mod tests {
     use super::*;
     use crate::model::{BindingKind, NodeKind};
-    use std::path::Path;
-
     #[test]
     fn build_and_open_self_workspace() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace = crate::test_workspace_root();
         let tempdir = tempfile::tempdir().unwrap();
         let opts = BuildOptions {
             data_dir_override: Some(tempdir.path().to_path_buf()),
             ..Default::default()
         };
 
-        let result = build_and_persist(Path::new(manifest_dir), opts.clone()).unwrap();
+        let result = build_and_persist(&workspace, opts.clone()).unwrap();
         assert!(!result.reused, "first build should not be reused");
         assert!(result.node_count > 0);
         assert!(result.binding_count > 0);
@@ -460,7 +458,7 @@ mod tests {
         assert!(result.snapshot_path.join("data.mdb").exists());
 
         // Reuse path: second call should return reused=true with no rebuild.
-        let result2 = build_and_persist(Path::new(manifest_dir), opts.clone()).unwrap();
+        let result2 = build_and_persist(&workspace, opts.clone()).unwrap();
         assert!(result2.reused);
         assert_eq!(result.graph_id, result2.graph_id);
         assert_eq!(result.node_count, result2.node_count);
@@ -478,7 +476,7 @@ mod tests {
         for entry in opened.dbs.nodes_by_id.iter(&rtxn).unwrap() {
             let (key, node) = entry.unwrap();
             if node.kind == NodeKind::Item
-                && node.qualified_name == "file_search_mcp::graph::loader::load"
+                && node.qualified_name == "rust_code_mcp_graph::loader::load"
             {
                 let mut id = [0u8; 32];
                 id.copy_from_slice(key);

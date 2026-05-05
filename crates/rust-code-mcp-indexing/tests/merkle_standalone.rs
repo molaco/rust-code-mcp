@@ -3,8 +3,7 @@
 //! These tests verify the core Merkle tree functionality.
 
 use anyhow::Result;
-use file_search_mcp::indexing::merkle::{ChangeSet, FileSystemMerkle};
-use std::path::PathBuf;
+use rust_code_mcp_indexing::merkle::FileSystemMerkle;
 use tempfile::TempDir;
 
 #[test]

@@ -32,15 +32,6 @@ impl JsonRpcRequest {
     }
 }
 
-/// JSON-RPC 2.0 response structure
-#[derive(Debug, serde::Deserialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Option<u64>,
-    result: Option<Value>,
-    error: Option<Value>,
-}
-
 /// Test environment for MCP JSON-RPC testing
 struct McpTestEnv {
     codebase_path: PathBuf,
@@ -329,7 +320,7 @@ async fn test_json_rpc_error_handling() -> Result<()> {
 #[tokio::test]
 #[ignore]
 async fn test_gpu_memory_monitoring() -> Result<()> {
-    use file_search_mcp::metrics::memory::MemoryMonitor;
+    use rust_code_mcp_indexing::metrics::memory::MemoryMonitor;
 
     println!("\n========================================");
     println!("GPU Memory Monitoring Test");

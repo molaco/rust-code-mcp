@@ -52,3 +52,12 @@ pub use storage::{
     GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths, SCHEMA_VERSION,
     compute_fingerprint,
 };
+
+#[cfg(test)]
+pub(crate) fn test_workspace_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("graph crate should live under crates/rust-code-mcp-graph")
+        .to_path_buf()
+}

@@ -2,6 +2,7 @@
 /.TRASH
 /storage
 /.fastembed_cache/
+**/.fastembed_cache/
 /.tantivy_bench/
 .mcp.json
 /OUTPUT/

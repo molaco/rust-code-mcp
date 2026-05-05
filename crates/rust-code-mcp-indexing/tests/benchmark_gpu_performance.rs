@@ -6,7 +6,7 @@
 //! Run with: cargo test --release benchmark_gpu_performance --ignored -- --nocapture
 
 use anyhow::Result;
-use file_search_mcp::indexing::{IncrementalIndexer, IndexStats};
+use rust_code_mcp_indexing::{IncrementalIndexer, IndexStats};
 use std::path::PathBuf;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -130,7 +130,7 @@ async fn benchmark_gpu_performance() -> Result<()> {
 
     // Calculate expected metrics
     let chunks_per_file = stats.total_chunks as f64 / stats.indexed_files as f64;
-    let embedding_time_estimate = stats.total_chunks as f64 * 0.003; // ~3ms per chunk on CPU
+    let _embedding_time_estimate = stats.total_chunks as f64 * 0.003; // ~3ms per chunk on CPU
     let embedding_throughput = stats.total_chunks as f64 / results.total_time.as_secs_f64();
 
     println!("Chunks per file:     {:.1}", chunks_per_file);
