@@ -5,6 +5,7 @@
 #![warn(unreachable_pub, dead_code)]
 
 pub use rust_code_mcp_model::{ChunkContext, ChunkId, CodeChunk, Embedding, EMBEDDING_DIM};
+pub use rust_code_mcp_bm25::{Bm25Search, ChunkSchema, TantivyAdapter, TantivyConfig};
 pub use rust_code_mcp_embeddings::{
     ChunkWithEmbedding, EmbeddingError, EmbeddingGenerator, EmbeddingPipeline,
 };

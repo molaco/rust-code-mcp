@@ -6648,6 +6648,14 @@ dependencies = [
 [[package]]
 name = "rust-code-mcp-bm25"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rust-code-mcp-model",
+ "serde_json",
+ "tantivy",
+ "tempfile",
+ "tracing",
+]
 
 [[package]]
 name = "rust-code-mcp-embeddings"
