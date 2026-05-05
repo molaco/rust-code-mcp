@@ -26,46 +26,25 @@ pub struct ConsistencyReport {
 }
 
 impl ConsistencyReport {
-    /// Print a human-readable summary
+    /// Log a human-readable summary.
+    ///
+    /// MCP stdio servers must keep stdout reserved for JSON-RPC frames.
     pub fn print_summary(&self) {
-        println!("\n=== Index Consistency Report ===");
-        println!("Tantivy chunks: {}", self.tantivy_count);
-        println!("Vector chunks:  {}", self.vector_count);
+        let missing_from_vectors_preview: Vec<_> =
+            self.missing_from_vectors.iter().take(10).collect();
+        let missing_from_tantivy_preview: Vec<_> =
+            self.missing_from_tantivy.iter().take(10).collect();
 
-        if self.is_consistent {
-            println!("✓ Indexes are CONSISTENT");
-        } else {
-            println!("✗ Indexes are INCONSISTENT");
-
-            if !self.missing_from_vectors.is_empty() {
-                println!("\nMissing from vector store: {} chunks", self.missing_from_vectors.len());
-                if self.missing_from_vectors.len() <= 10 {
-                    for chunk_id in &self.missing_from_vectors {
-                        println!("  - {:?}", chunk_id);
-                    }
-                } else {
-                    println!("  (showing first 10)");
-                    for chunk_id in self.missing_from_vectors.iter().take(10) {
-                        println!("  - {:?}", chunk_id);
-                    }
-                }
-            }
-
-            if !self.missing_from_tantivy.is_empty() {
-                println!("\nMissing from Tantivy: {} chunks", self.missing_from_tantivy.len());
-                if self.missing_from_tantivy.len() <= 10 {
-                    for chunk_id in &self.missing_from_tantivy {
-                        println!("  - {:?}", chunk_id);
-                    }
-                } else {
-                    println!("  (showing first 10)");
-                    for chunk_id in self.missing_from_tantivy.iter().take(10) {
-                        println!("  - {:?}", chunk_id);
-                    }
-                }
-            }
-        }
-        println!("================================\n");
+        tracing::info!(
+            tantivy_count = self.tantivy_count,
+            vector_count = self.vector_count,
+            is_consistent = self.is_consistent,
+            missing_from_vectors_count = self.missing_from_vectors.len(),
+            missing_from_vectors_preview = ?missing_from_vectors_preview,
+            missing_from_tantivy_count = self.missing_from_tantivy.len(),
+            missing_from_tantivy_preview = ?missing_from_tantivy_preview,
+            "Index consistency report"
+        );
     }
 }
 
