@@ -10,13 +10,14 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
-use ra_ap_hir::{ModuleDef, PathResolution, Semantics, attach_db};
+use ra_ap_hir::{Semantics, attach_db};
 use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_syntax::SyntaxNode;
 use ra_ap_syntax::ast::{self, AstNode, HasLoopBody};
 use ra_ap_vfs::{FileId, Vfs};
 use serde::{Deserialize, Serialize};
 
+use super::ast_resolve::resolve_call_to_function;
 use super::ids::NodeId;
 use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
@@ -282,21 +283,12 @@ pub fn match_transmute(
             Some(c) => c,
             None => continue,
         };
-        let path_expr = match call.expr() {
-            Some(ast::Expr::PathExpr(p)) => p,
-            _ => continue,
-        };
-        let path = match path_expr.path() {
-            Some(p) => p,
+        if !matches!(call.expr(), Some(ast::Expr::PathExpr(_))) {
+            continue;
+        }
+        let func = match resolve_call_to_function(sema, &call) {
+            Some(f) => f,
             None => continue,
-        };
-        let resolution = match sema.resolve_path(&path) {
-            Some(r) => r,
-            None => continue,
-        };
-        let func = match resolution {
-            PathResolution::Def(ModuleDef::Function(f)) => f,
-            _ => continue,
         };
         let canonical = canonical_function_path(db, func);
         if canonical == "std::mem::transmute" || canonical == "core::mem::transmute" {
@@ -320,21 +312,12 @@ pub fn match_self_recursion(
     let mut out = Vec::new();
     for node in body.descendants() {
         if let Some(call) = ast::CallExpr::cast(node.clone()) {
-            let path_expr = match call.expr() {
-                Some(ast::Expr::PathExpr(p)) => p,
-                _ => continue,
-            };
-            let path = match path_expr.path() {
-                Some(p) => p,
+            if !matches!(call.expr(), Some(ast::Expr::PathExpr(_))) {
+                continue;
+            }
+            let func = match resolve_call_to_function(sema, &call) {
+                Some(f) => f,
                 None => continue,
-            };
-            let resolution = match sema.resolve_path(&path) {
-                Some(r) => r,
-                None => continue,
-            };
-            let func = match resolution {
-                PathResolution::Def(ModuleDef::Function(f)) => f,
-                _ => continue,
             };
             let canonical = canonical_function_path(db, func);
             if canonical == self_qualified_name {

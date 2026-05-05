@@ -3,6 +3,7 @@
 //! Layered as: loader → extraction model → extraction passes → persistence
 //! → read path → MCP tools. Each layer is built and tested in isolation.
 
+pub mod ast_resolve;
 pub mod attributes;
 pub mod bindings;
 pub mod channel_audit;
