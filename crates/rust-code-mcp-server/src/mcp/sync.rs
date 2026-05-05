@@ -6,8 +6,8 @@
 //! - Uses IncrementalIndexer for fast change detection
 //! - Tracks multiple directories independently
 
-use crate::embeddings::EMBEDDING_DIM;
-use crate::indexing::incremental::IncrementalIndexer;
+use rust_code_mcp_embeddings::EMBEDDING_DIM;
+use rust_code_mcp_indexing::incremental::IncrementalIndexer;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

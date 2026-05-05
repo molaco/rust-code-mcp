@@ -137,8 +137,6 @@ rust-code-mcp-graph = { workspace = true }
 rust-code-mcp-ra-analysis = { workspace = true }
 rust-code-mcp-server = { workspace = true }
 
-# MCP and async runtime
-rmcp = { workspace = true }
 tokio = { workspace = true }
 
 # Search and indexing

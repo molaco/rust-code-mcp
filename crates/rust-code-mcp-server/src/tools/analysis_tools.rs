@@ -88,7 +88,7 @@ use std::fs;
 use std::path::Path;
 use tracing;
 
-use crate::parser::RustParser;
+use rust_code_mcp_syntax::RustParser;
 
 use crate::semantic::SEMANTIC;
 
@@ -326,17 +326,17 @@ pub async fn analyze_complexity(file_path: &str) -> Result<CallToolResult, McpEr
     let function_count = parse_result
         .symbols
         .iter()
-        .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Function { .. }))
+        .filter(|s| matches!(s.kind, rust_code_mcp_syntax::SymbolKind::Function { .. }))
         .count();
     let struct_count = parse_result
         .symbols
         .iter()
-        .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Struct))
+        .filter(|s| matches!(s.kind, rust_code_mcp_syntax::SymbolKind::Struct))
         .count();
     let trait_count = parse_result
         .symbols
         .iter()
-        .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Trait))
+        .filter(|s| matches!(s.kind, rust_code_mcp_syntax::SymbolKind::Trait))
         .count();
 
     // Calculate cyclomatic complexity (simplified - count decision points)

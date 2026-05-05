@@ -11,10 +11,10 @@ use tokio::fs;
 use std::path::Path;
 use tracing;
 
-use crate::embeddings::{EmbeddingGenerator, EMBEDDING_DIM};
-use crate::search::HybridSearch;
+use rust_code_mcp_embeddings::{EmbeddingGenerator, EMBEDDING_DIM};
+use rust_code_mcp_search::HybridSearch;
 use crate::tools::project_paths::ProjectPaths;
-use crate::vector_store::VectorStore;
+use rust_code_mcp_vector_store::VectorStore;
 
 /// Read and return the content of a specified file
 pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
@@ -83,9 +83,9 @@ pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpErr
 
 /// Try to open BM25 search for an existing index.
 /// Returns None if the index doesn't exist or is corrupt.
-fn try_open_bm25(paths: &ProjectPaths) -> Option<crate::search::bm25::Bm25Search> {
-    use crate::config::indexer::TantivyConfig;
-    use crate::indexing::tantivy_adapter::TantivyAdapter;
+fn try_open_bm25(paths: &ProjectPaths) -> Option<rust_code_mcp_bm25::Bm25Search> {
+    use rust_code_mcp_bm25::TantivyConfig;
+    use rust_code_mcp_indexing::tantivy_adapter::TantivyAdapter;
 
     let config = TantivyConfig::default(&paths.tantivy_path);
     TantivyAdapter::new(config)
@@ -96,7 +96,7 @@ fn try_open_bm25(paths: &ProjectPaths) -> Option<crate::search::bm25::Bm25Search
 /// Remove stale index artifacts so ensure_indexed does a full rebuild.
 /// Called when try_open_bm25 detects a corrupt or missing tantivy index.
 fn clean_stale_index(paths: &ProjectPaths, dir: &Path) {
-    use crate::indexing::incremental::get_snapshot_path;
+    use rust_code_mcp_indexing::incremental::get_snapshot_path;
 
     // Remove corrupt tantivy index
     if paths.tantivy_path.exists() {
@@ -119,8 +119,8 @@ async fn ensure_indexed(
     dir_path: &Path,
     paths: &ProjectPaths,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
-) -> Result<crate::indexing::unified::IndexStats, McpError> {
-    use crate::indexing::unified::UnifiedIndexer;
+) -> Result<rust_code_mcp_indexing::unified::IndexStats, McpError> {
+    use rust_code_mcp_indexing::unified::UnifiedIndexer;
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
 
@@ -157,7 +157,7 @@ async fn ensure_indexed(
 /// Create a HybridSearch with a pre-validated BM25 search
 pub(crate) async fn create_hybrid_search(
     paths: &ProjectPaths,
-    bm25_search: Option<crate::search::bm25::Bm25Search>,
+    bm25_search: Option<rust_code_mcp_bm25::Bm25Search>,
 ) -> Result<HybridSearch, McpError> {
     let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
         McpError::invalid_params(format!("Failed to initialize embedding generator: {}", e), None)
@@ -178,9 +178,9 @@ pub(crate) async fn create_hybrid_search(
 
 /// Format search results into a display string
 fn format_results(
-    results: &[crate::search::SearchResult],
+    results: &[rust_code_mcp_search::SearchResult],
     keyword: &str,
-    stats: Option<&crate::indexing::unified::IndexStats>,
+    stats: Option<&rust_code_mcp_indexing::unified::IndexStats>,
     rebuilt: bool,
 ) -> String {
     if results.is_empty() {

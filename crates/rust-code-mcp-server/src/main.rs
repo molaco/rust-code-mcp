@@ -1,6 +1,6 @@
-use file_search_mcp::mcp::SyncManager;
-use file_search_mcp::tools::search_tool::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
+use rust_code_mcp_server::mcp::SyncManager;
+use rust_code_mcp_server::tools::search_tool::SearchTool;
 use std::sync::Arc;
 use tracing_subscriber::{self, EnvFilter};
 
@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // on a multi-crate workspace went from ~7s to 7+ minutes purely from log
     // formatting overhead. Keep this at WARN unless explicitly overridden.
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,file_search_mcp=info"));
+        .unwrap_or_else(|_| EnvFilter::new("warn,rust_code_mcp_server=info"));
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(std::io::stderr)

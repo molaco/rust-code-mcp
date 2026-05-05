@@ -44,7 +44,8 @@ pub use queries::{
     VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
 };
 pub use snapshot::{
-    BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
+    BuildOptions, BuildResult, GraphRoTxn, OpenedSnapshot, build_and_persist, open_current,
+    open_specific,
 };
 pub use unsafe_audit::UnsafeFinding;
 pub use storage::{

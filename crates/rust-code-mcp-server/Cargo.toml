@@ -4,3 +4,29 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rust-code-mcp-model = { workspace = true }
+rust-code-mcp-syntax = { workspace = true }
+rust-code-mcp-embeddings = { workspace = true }
+rust-code-mcp-bm25 = { workspace = true }
+rust-code-mcp-vector-store = { workspace = true }
+rust-code-mcp-search = { workspace = true }
+rust-code-mcp-indexing = { workspace = true }
+rust-code-mcp-graph = { workspace = true }
+rust-code-mcp-ra-analysis = { workspace = true }
+anyhow = { workspace = true }
+directories = { workspace = true }
+rmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tantivy = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "rust-code-mcp"
+path = "src/main.rs"

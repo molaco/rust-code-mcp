@@ -1,8 +1,7 @@
-//! MCP (Model Context Protocol) integration
-//!
-//! This module provides background synchronization and server management
-//! for the rust-code-mcp service.
+//! Legacy MCP facade.
 
-pub mod sync;
+pub use rust_code_mcp_server::mcp::*;
 
-pub use sync::*;
+pub mod sync {
+    pub use rust_code_mcp_server::mcp::sync::*;
+}

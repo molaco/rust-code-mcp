@@ -45,7 +45,7 @@ use std::path::PathBuf;
 use tantivy::Index;
 use tracing;
 
-use crate::metadata_cache::MetadataCache;
+use rust_code_mcp_indexing::metadata_cache::MetadataCache;
 use crate::schema::FileSchema;
 
 /// Get the path for storing persistent index and cache

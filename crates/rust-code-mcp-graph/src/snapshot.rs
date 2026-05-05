@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use heed::{Env, RoTxn, RwTxn, WithoutTls};
-type GraphRoTxn<'e> = RoTxn<'e, WithoutTls>;
+pub type GraphRoTxn<'e> = RoTxn<'e, WithoutTls>;
 type GraphRwTxn<'e> = RwTxn<'e>;
 
 use super::extract;

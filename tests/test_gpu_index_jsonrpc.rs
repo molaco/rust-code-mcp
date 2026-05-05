@@ -81,17 +81,24 @@ impl McpTestEnv {
 async fn call_index_tool_direct(
     codebase_path: &str,
     force_reindex: bool,
-) -> Result<rmcp::model::CallToolResult> {
-    use file_search_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+) -> Result<(Option<bool>, usize, String)> {
+    use rust_code_mcp_server::tools::index_tool::{index_codebase, IndexCodebaseParams};
 
     let params = IndexCodebaseParams {
         directory: codebase_path.to_string(),
         force_reindex: Some(force_reindex),
     };
 
-    index_codebase(params, None)
+    let result = index_codebase(params, None)
         .await
-        .map_err(|e| anyhow::anyhow!("MCP error: {:?}", e))
+        .map_err(|e| anyhow::anyhow!("MCP error: {:?}", e))?;
+    let first_content = result
+        .content
+        .first()
+        .map(|content| format!("{:?}", content))
+        .unwrap_or_default();
+
+    Ok((result.is_error, result.content.len(), first_content))
 }
 
 #[tokio::test]
@@ -150,18 +157,14 @@ async fn test_gpu_index_jsonrpc_rust_code_mcp() -> Result<()> {
     println!("Time per file: {:?}", elapsed / rust_file_count.max(1) as u32);
 
     // Verify result structure
-    assert!(
-        result.is_error.is_none() || !result.is_error.unwrap(),
-        "Indexing should succeed"
-    );
-    assert!(!result.content.is_empty(), "Should return content");
+    assert!(result.0.is_none() || !result.0.unwrap(), "Indexing should succeed");
+    assert!(result.1 > 0, "Should return content");
 
     // Extract and display result
-    if let Some(content) = result.content.first() {
-        // Content is likely a string representation - extract the text
-        let text = format!("{:?}", content);
+    if !result.2.is_empty() {
+        let text = &result.2;
         println!("\nIndexing Result:");
-        println!("{}", text);
+        println!("{text}");
 
         // Verify key information in result (check both debug output and actual content)
         let has_success = text.contains("Successfully indexed") || text.contains("Indexed files");
@@ -228,8 +231,8 @@ async fn test_gpu_incremental_index() -> Result<()> {
     println!("Second index time: {:?}\n", elapsed2);
 
     // Verify both succeeded
-    assert!(result1.is_error.is_none() || !result1.is_error.unwrap());
-    assert!(result2.is_error.is_none() || !result2.is_error.unwrap());
+    assert!(result1.0.is_none() || !result1.0.unwrap());
+    assert!(result2.0.is_none() || !result2.0.unwrap());
 
     // Second index should be much faster (change detection)
     println!("\n========================================");
@@ -271,11 +274,11 @@ async fn test_gpu_batch_size_optimization() -> Result<()> {
     .await?;
     let elapsed = start.elapsed();
 
-    assert!(result.is_error.is_none() || !result.is_error.unwrap());
+    assert!(result.0.is_none() || !result.0.unwrap());
 
     // Extract metrics from result
-    if let Some(content) = result.content.first() {
-        let text = format!("{:?}", content);
+    if !result.2.is_empty() {
+        let text = &result.2;
         println!("Result:\n{}\n", text);
 
         // Check for performance indicators
@@ -361,7 +364,7 @@ async fn test_gpu_memory_monitoring() -> Result<()> {
     println!("  Percent: {:.1}%", mem_percent_after);
     println!("  Delta: {:.2} MB\n", (mem_after as i64 - mem_before as i64) as f64 / 1_000_000.0);
 
-    assert!(result.is_error.is_none() || !result.is_error.unwrap());
+    assert!(result.0.is_none() || !result.0.unwrap());
 
     println!("========================================");
     println!("Memory Monitoring: OK");

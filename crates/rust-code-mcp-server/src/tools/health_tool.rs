@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 
 use crate::monitoring::health::HealthMonitor;
-use crate::search::Bm25Search;
-use crate::vector_store::VectorStore;
-use crate::indexing::incremental::get_snapshot_path;
+use rust_code_mcp_search::Bm25Search;
+use rust_code_mcp_vector_store::VectorStore;
+use rust_code_mcp_indexing::incremental::get_snapshot_path;
 use sha2::{Digest, Sha256};
 
 /// Health check parameters (optional directory to check specific project)

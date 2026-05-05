@@ -18,7 +18,7 @@ use rmcp::{
 };
 use serde::Serialize;
 
-use crate::graph::{
+use rust_code_mcp_graph::{
     Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
     DeadPubFinding, EmbeddingRecord, EnrichedCallSite, ForbiddenDependencyRule,
     ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
@@ -27,7 +27,7 @@ use crate::graph::{
     RecursiveCallersCount, SelfKindFilter, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
     build_and_persist, open_current, snapshot::BuildOptions,
 };
-use crate::graph::queries::ItemWithAttribute;
+use rust_code_mcp_graph::queries::ItemWithAttribute;
 use crate::tools::search_tool::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
     CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
@@ -929,7 +929,7 @@ pub async fn semantic_overlaps(
     }
 
     if !miss_texts.is_empty() {
-        let embedder = crate::embeddings::EmbeddingGenerator::new()
+        let embedder = rust_code_mcp_embeddings::EmbeddingGenerator::new()
             .map_err(|e| {
                 McpError::internal_error(
                     format!("EmbeddingGenerator init: {e}"),
@@ -1419,13 +1419,13 @@ pub async fn unsafe_audit(
     // The audit calls `loader::load` (full RA workspace load, ~2-3s) and
     // then walks every file's syntax tree. Run on a blocking thread so the
     // tokio runtime worker stays free for concurrent tool calls.
-    let findings: Vec<crate::graph::unsafe_audit::UnsafeFinding> =
+    let findings: Vec<rust_code_mcp_graph::unsafe_audit::UnsafeFinding> =
         tokio::task::spawn_blocking(move || -> Result<_, McpError> {
             let snap = open_workspace_snapshot(&directory)?;
             let canonical = std::path::PathBuf::from(&directory)
                 .canonicalize()
                 .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-            let loaded = crate::graph::loader::load(&canonical)
+            let loaded = rust_code_mcp_graph::loader::load(&canonical)
                 .map_err(internal_error("loader::load"))?;
             snap.unsafe_audit(&loaded)
                 .map_err(internal_error("unsafe_audit"))
@@ -1544,7 +1544,7 @@ pub async fn missing_docs_audit(
     };
 
     let kind_filter = match params.item_kind.as_deref() {
-        None => crate::graph::docs_audit::default_kind_filter(),
+        None => rust_code_mcp_graph::docs_audit::default_kind_filter(),
         Some(labels) => {
             let mut set = std::collections::HashSet::new();
             for label in labels {
@@ -1561,13 +1561,13 @@ pub async fn missing_docs_audit(
         }
     };
 
-    let opts = crate::graph::docs_audit::AuditOpts {
+    let opts = rust_code_mcp_graph::docs_audit::AuditOpts {
         crate_id_filter,
         kind_filter,
         skip_test_items: params.skip_test_items.unwrap_or(true),
     };
 
-    let findings = crate::graph::docs_audit::missing_docs_audit(&snap, opts)
+    let findings = rust_code_mcp_graph::docs_audit::missing_docs_audit(&snap, opts)
         .map_err(internal_error("missing_docs_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -1649,7 +1649,7 @@ pub async fn derive_audit(
     };
 
     let kind_filter = match params.item_kind.as_deref() {
-        None => crate::graph::derive_audit::default_kind_filter(),
+        None => rust_code_mcp_graph::derive_audit::default_kind_filter(),
         Some(labels) => {
             let mut set = std::collections::HashSet::new();
             for label in labels {
@@ -1686,7 +1686,7 @@ pub async fn derive_audit(
     let required_derives: std::collections::HashSet<String> =
         params.required_derives.iter().cloned().collect();
 
-    let opts = crate::graph::derive_audit::AuditOpts {
+    let opts = rust_code_mcp_graph::derive_audit::AuditOpts {
         crate_id_filter,
         kind_filter,
         required_derives,
@@ -1694,7 +1694,7 @@ pub async fn derive_audit(
         skip_test_items: params.skip_test_items.unwrap_or(true),
     };
 
-    let findings = crate::graph::derive_audit::derive_audit(&snap, opts)
+    let findings = rust_code_mcp_graph::derive_audit::derive_audit(&snap, opts)
         .map_err(internal_error("derive_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -1782,20 +1782,20 @@ pub async fn recursion_check(
     };
 
     let max_cycle_length =
-        crate::graph::recursion_check::clamp_cycle_length(params.max_cycle_length);
+        rust_code_mcp_graph::recursion_check::clamp_cycle_length(params.max_cycle_length);
 
-    let opts = crate::graph::recursion_check::RecursionOpts {
+    let opts = rust_code_mcp_graph::recursion_check::RecursionOpts {
         crate_id_filter,
         max_cycle_length,
     };
 
-    let cycles = crate::graph::recursion_check::recursion_check(&snap, opts)
+    let cycles = rust_code_mcp_graph::recursion_check::recursion_check(&snap, opts)
         .map_err(internal_error("recursion_check"))?;
 
     let mut rendered: Vec<RecursionCycleRendered> = Vec::with_capacity(cycles.len());
     for cycle in cycles {
         let qualified_names =
-            crate::graph::recursion_check::enclosing_fn_qualified_names(&snap, &cycle.fns)
+            rust_code_mcp_graph::recursion_check::enclosing_fn_qualified_names(&snap, &cycle.fns)
                 .map_err(internal_error("enclosing_fn_qualified_names"))?;
         let starting_node_id = cycle
             .fns
@@ -1850,7 +1850,7 @@ pub async fn channel_capacity_audit(
     let crate_name = params.crate_name.clone();
     let skip_test_fns = params.skip_test_fns.unwrap_or(true);
 
-    let findings: Vec<crate::graph::channel_audit::ChannelFinding> =
+    let findings: Vec<rust_code_mcp_graph::channel_audit::ChannelFinding> =
         tokio::task::spawn_blocking(move || -> Result<_, McpError> {
             let snap = open_workspace_snapshot(&directory)?;
 
@@ -1886,14 +1886,14 @@ pub async fn channel_capacity_audit(
             let canonical = std::path::PathBuf::from(&directory)
                 .canonicalize()
                 .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-            let loaded = crate::graph::loader::load(&canonical)
+            let loaded = rust_code_mcp_graph::loader::load(&canonical)
                 .map_err(internal_error("loader::load"))?;
 
-            let opts = crate::graph::channel_audit::ChannelAuditOpts {
+            let opts = rust_code_mcp_graph::channel_audit::ChannelAuditOpts {
                 crate_id_filter,
                 skip_test_fns,
             };
-            crate::graph::channel_audit::channel_capacity_audit(&loaded, &snap, opts)
+            rust_code_mcp_graph::channel_audit::channel_capacity_audit(&loaded, &snap, opts)
                 .map_err(internal_error("channel_capacity_audit"))
         })
         .await
@@ -1956,14 +1956,14 @@ pub async fn fn_body_audit(
     let skip_test_fns = params.skip_test_fns.unwrap_or(true);
 
     let patterns_set =
-        crate::graph::fn_body_audit::parse_pattern_filter(patterns_input.as_deref())
+        rust_code_mcp_graph::fn_body_audit::parse_pattern_filter(patterns_input.as_deref())
             .map_err(|m| McpError::invalid_params(m, None))?;
 
     let mut patterns_used: Vec<String> =
         patterns_set.iter().map(|s| s.to_string()).collect();
     patterns_used.sort();
 
-    let findings: Vec<crate::graph::fn_body_audit::FnBodyFinding> =
+    let findings: Vec<rust_code_mcp_graph::fn_body_audit::FnBodyFinding> =
         tokio::task::spawn_blocking(move || -> Result<_, McpError> {
             let snap = open_workspace_snapshot(&directory)?;
 
@@ -1999,15 +1999,15 @@ pub async fn fn_body_audit(
             let canonical = std::path::PathBuf::from(&directory)
                 .canonicalize()
                 .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-            let loaded = crate::graph::loader::load(&canonical)
+            let loaded = rust_code_mcp_graph::loader::load(&canonical)
                 .map_err(internal_error("loader::load"))?;
 
-            let opts = crate::graph::fn_body_audit::FnBodyAuditOpts {
+            let opts = rust_code_mcp_graph::fn_body_audit::FnBodyAuditOpts {
                 crate_id_filter,
                 patterns: patterns_set,
                 skip_test_fns,
             };
-            crate::graph::fn_body_audit::fn_body_audit(&loaded, &snap, opts)
+            rust_code_mcp_graph::fn_body_audit::fn_body_audit(&loaded, &snap, opts)
                 .map_err(internal_error("fn_body_audit"))
         })
         .await
@@ -2291,7 +2291,7 @@ fn short_item_kind_label(k: ItemKind) -> &'static str {
 
 fn visibility_label(
     snap: &OpenedSnapshot,
-    rtxn: &heed::RoTxn<'_, heed::WithoutTls>,
+    rtxn: &rust_code_mcp_graph::GraphRoTxn<'_>,
     vis: &BindingVisibility,
 ) -> String {
     match vis {

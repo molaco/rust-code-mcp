@@ -2409,7 +2409,6 @@ dependencies = [
  "ra_ap_vfs",
  "rayon",
  "regex",
- "rmcp",
  "rs_merkle",
  "rust-code-mcp-bm25",
  "rust-code-mcp-embeddings",
@@ -6767,6 +6766,28 @@ dependencies = [
 [[package]]
 name = "rust-code-mcp-server"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "rmcp",
+ "rust-code-mcp-bm25",
+ "rust-code-mcp-embeddings",
+ "rust-code-mcp-graph",
+ "rust-code-mcp-indexing",
+ "rust-code-mcp-model",
+ "rust-code-mcp-ra-analysis",
+ "rust-code-mcp-search",
+ "rust-code-mcp-syntax",
+ "rust-code-mcp-vector-store",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tantivy",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "rust-code-mcp-syntax"
