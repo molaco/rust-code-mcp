@@ -1,0 +1,6 @@
+[package]
+name = "rust-code-mcp-bm25"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

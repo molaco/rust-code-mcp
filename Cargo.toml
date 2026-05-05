@@ -1,9 +1,40 @@
 [package]
 name = "file-search-mcp"
+version.workspace = true
+edition.workspace = true
+
+[workspace]
+resolver = "3"
+members = [
+  "crates/rust-code-mcp-model",
+  "crates/rust-code-mcp-syntax",
+  "crates/rust-code-mcp-embeddings",
+  "crates/rust-code-mcp-bm25",
+  "crates/rust-code-mcp-vector-store",
+  "crates/rust-code-mcp-search",
+  "crates/rust-code-mcp-indexing",
+  "crates/rust-code-mcp-graph",
+  "crates/rust-code-mcp-ra-analysis",
+  "crates/rust-code-mcp-server",
+]
+default-members = ["."]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
+rust-code-mcp-model = { path = "crates/rust-code-mcp-model" }
+rust-code-mcp-syntax = { path = "crates/rust-code-mcp-syntax" }
+rust-code-mcp-embeddings = { path = "crates/rust-code-mcp-embeddings" }
+rust-code-mcp-bm25 = { path = "crates/rust-code-mcp-bm25" }
+rust-code-mcp-vector-store = { path = "crates/rust-code-mcp-vector-store" }
+rust-code-mcp-search = { path = "crates/rust-code-mcp-search" }
+rust-code-mcp-indexing = { path = "crates/rust-code-mcp-indexing" }
+rust-code-mcp-graph = { path = "crates/rust-code-mcp-graph" }
+rust-code-mcp-ra-analysis = { path = "crates/rust-code-mcp-ra-analysis" }
+rust-code-mcp-server = { path = "crates/rust-code-mcp-server" }
+
 # MCP and async runtime
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = [
   "server",
@@ -25,7 +56,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1.0"
 bincode = "1.3"
-uuid = { version = "1.10", features = ["v4", "serde"] }  # Unique IDs for chunks
+uuid = { version = "1.10", features = ["v4", "serde"] }
 
 # Logging
 tracing = "0.1"
@@ -36,10 +67,10 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 
 # Phase 1: Persistent Index + Incremental Updates
-notify = "6"           # File watching
-sled = "0.34"          # Embedded key-value store for metadata cache
-sha2 = "0.10"          # SHA-256 file hashing
-directories = "5"      # Cross-platform config/data directories
+notify = "6"
+sled = "0.34"
+sha2 = "0.10"
+directories = "5"
 
 # Phase 2: Rust code parsing with rust-analyzer syntax
 ra_ap_syntax = "0.0.330"
@@ -59,16 +90,16 @@ ra_ap_base_db = "0.0.330"
 heed = "0.22.1"
 
 # Phase 3: Semantic Code Chunking
-text-splitter = "0.13"  # Semantic text chunking
+text-splitter = "0.13"
 
 # Phase 4: Embedding Generation
-fastembed = { git = "https://github.com/Anush008/fastembed-rs" }  # Local embeddings (ONNX-based) from GitHub
-ort = { version = "=2.0.0-rc.10", features = ["cuda", "download-binaries", "ndarray", "std"] }  # ONNX Runtime with CUDA support
+fastembed = { git = "https://github.com/Anush008/fastembed-rs" }
+ort = { version = "=2.0.0-rc.10", features = ["cuda", "download-binaries", "ndarray", "std"] }
 
 # Phase 5: Vector Database
-async-trait = "0.1"    # Async trait support
-thiserror = "1"        # Error derive macros
-futures = "0.3"        # Futures traits for stream operations
+async-trait = "0.1"
+thiserror = "1"
+futures = "0.3"
 
 # Vector database - embedded (default)
 lancedb = "0.15"
@@ -76,20 +107,109 @@ arrow-array = "53"
 arrow-schema = "53"
 
 # Additional dependencies for Phase 1
-walkdir = "2"          # Directory traversal for indexing
-anyhow = "1"           # Error handling
-regex = "1"            # Secrets scanning patterns
-glob = "0.3"           # File pattern matching
+walkdir = "2"
+anyhow = "1"
+regex = "1"
+glob = "0.3"
 
 # Merkle tree for 100x faster change detection (Week 2)
-rs_merkle = "1.4"      # Merkle tree implementation
+rs_merkle = "1.4"
 
 # Performance monitoring
-sysinfo = "0.30"       # System memory monitoring
+sysinfo = "0.30"
 
 # Parallel processing
-rayon = "1.10"         # Data parallelism
-num_cpus = "1.16"      # CPU count detection
+rayon = "1.10"
+num_cpus = "1.16"
+
+# Tests
+tempfile = "3"
+
+[dependencies]
+rust-code-mcp-model = { workspace = true }
+rust-code-mcp-syntax = { workspace = true }
+rust-code-mcp-embeddings = { workspace = true }
+rust-code-mcp-bm25 = { workspace = true }
+rust-code-mcp-vector-store = { workspace = true }
+rust-code-mcp-search = { workspace = true }
+rust-code-mcp-indexing = { workspace = true }
+rust-code-mcp-graph = { workspace = true }
+rust-code-mcp-ra-analysis = { workspace = true }
+rust-code-mcp-server = { workspace = true }
+
+# MCP and async runtime
+rmcp = { workspace = true }
+tokio = { workspace = true }
+
+# Search and indexing
+tantivy = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+uuid = { workspace = true }  # Unique IDs for chunks
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Phase 1: Persistent Index + Incremental Updates
+notify = { workspace = true }           # File watching
+sled = { workspace = true }             # Embedded key-value store for metadata cache
+sha2 = { workspace = true }             # SHA-256 file hashing
+directories = { workspace = true }      # Cross-platform config/data directories
+
+# Phase 2: Rust code parsing with rust-analyzer syntax
+ra_ap_syntax = { workspace = true }
+
+# IDE integration for semantic analysis (find_definition, find_references)
+ra_ap_ide = { workspace = true }
+ra_ap_ide_db = { workspace = true }
+"ra_ap_load-cargo" = { workspace = true }
+ra_ap_project_model = { workspace = true }
+ra_ap_vfs = { workspace = true }
+ra_ap_paths = { workspace = true }
+ra_ap_hir = { workspace = true }
+ra_ap_hir_def = { workspace = true }
+ra_ap_base_db = { workspace = true }
+
+# Persisted hypergraph store
+heed = { workspace = true }
+
+# Phase 3: Semantic Code Chunking
+text-splitter = { workspace = true }  # Semantic text chunking
+
+# Phase 4: Embedding Generation
+fastembed = { workspace = true }  # Local embeddings (ONNX-based) from GitHub
+ort = { workspace = true }  # ONNX Runtime with CUDA support
+
+# Phase 5: Vector Database
+async-trait = { workspace = true }    # Async trait support
+thiserror = { workspace = true }      # Error derive macros
+futures = { workspace = true }        # Futures traits for stream operations
+
+# Vector database - embedded (default)
+lancedb = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+
+# Additional dependencies for Phase 1
+walkdir = { workspace = true }        # Directory traversal for indexing
+anyhow = { workspace = true }         # Error handling
+regex = { workspace = true }          # Secrets scanning patterns
+glob = { workspace = true }           # File pattern matching
+
+# Merkle tree for 100x faster change detection (Week 2)
+rs_merkle = { workspace = true }      # Merkle tree implementation
+
+# Performance monitoring
+sysinfo = { workspace = true }        # System memory monitoring
+
+# Parallel processing
+rayon = { workspace = true }          # Data parallelism
+num_cpus = { workspace = true }       # CPU count detection
 
 [features]
 default = ["embedded"]  # LanceDB embedded backend (zero-config)
@@ -140,8 +260,8 @@ name = "dead_pub_report"
 path = "examples/dead_pub_report.rs"
 
 [dev-dependencies]
-tempfile = "3"         # Temporary directories for tests
-walkdir = "2"          # For test file discovery
+tempfile = { workspace = true }       # Temporary directories for tests
+walkdir = { workspace = true }        # For test file discovery
 
 [[example]]
 name = "count_items"

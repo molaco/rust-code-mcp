@@ -1,0 +1,6 @@
+[package]
+name = "rust-code-mcp-syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

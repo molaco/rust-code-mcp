@@ -2411,6 +2411,16 @@ dependencies = [
  "regex",
  "rmcp",
  "rs_merkle",
+ "rust-code-mcp-bm25",
+ "rust-code-mcp-embeddings",
+ "rust-code-mcp-graph",
+ "rust-code-mcp-indexing",
+ "rust-code-mcp-model",
+ "rust-code-mcp-ra-analysis",
+ "rust-code-mcp-search",
+ "rust-code-mcp-server",
+ "rust-code-mcp-syntax",
+ "rust-code-mcp-vector-store",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -6634,6 +6644,46 @@ checksum = "bb09b49230ba22e8c676e7b75dfe2887dea8121f18b530ae0ba519ce442d2b21"
 dependencies = [
  "sha2",
 ]
+
+[[package]]
+name = "rust-code-mcp-bm25"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-embeddings"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-graph"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-indexing"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-model"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-ra-analysis"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-search"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-server"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-syntax"
+version = "0.1.0"
+
+[[package]]
+name = "rust-code-mcp-vector-store"
+version = "0.1.0"
 
 [[package]]
 name = "rust-stemmers"

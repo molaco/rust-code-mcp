@@ -1,0 +1,6 @@
+[package]
+name = "rust-code-mcp-search"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

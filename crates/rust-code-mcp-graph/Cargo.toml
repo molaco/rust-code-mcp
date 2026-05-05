@@ -1,0 +1,6 @@
+[package]
+name = "rust-code-mcp-graph"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

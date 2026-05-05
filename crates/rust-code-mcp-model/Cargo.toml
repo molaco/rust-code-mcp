@@ -1,0 +1,6 @@
+[package]
+name = "rust-code-mcp-model"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
