@@ -7,6 +7,7 @@ pub mod memory;
 
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 /// Metrics collected during indexing operations
 #[derive(Debug, Clone, Default)]
@@ -96,52 +97,54 @@ impl IndexingMetrics {
 
     /// Print a detailed summary of metrics
     pub fn print_summary(&self) {
-        println!("\n=== Indexing Metrics ===");
-        println!("Files: {}/{} indexed ({} skipped, {} unchanged)",
+        let mut summary = String::new();
+        let _ = writeln!(summary, "\n=== Indexing Metrics ===");
+        let _ = writeln!(summary, "Files: {}/{} indexed ({} skipped, {} unchanged)",
             self.indexed_files,
             self.total_files,
             self.skipped_files,
             self.unchanged_files
         );
-        println!("Chunks: {}", self.total_chunks);
-        println!("Duration: {:.2}s", self.total_duration.as_secs_f64());
-        println!("Throughput: {:.1} files/sec", self.throughput());
+        let _ = writeln!(summary, "Chunks: {}", self.total_chunks);
+        let _ = writeln!(summary, "Duration: {:.2}s", self.total_duration.as_secs_f64());
+        let _ = writeln!(summary, "Throughput: {:.1} files/sec", self.throughput());
 
         if !self.file_latencies.is_empty() {
-            println!("\nLatency:");
-            println!("  p50: {:?}", self.p50());
-            println!("  p95: {:?}", self.p95());
-            println!("  p99: {:?}", self.p99());
+            let _ = writeln!(summary, "\nLatency:");
+            let _ = writeln!(summary, "  p50: {:?}", self.p50());
+            let _ = writeln!(summary, "  p95: {:?}", self.p95());
+            let _ = writeln!(summary, "  p99: {:?}", self.p99());
         }
 
-        println!("\nPhase breakdown:");
+        let _ = writeln!(summary, "\nPhase breakdown:");
         let total_secs = self.total_duration.as_secs_f64();
         if total_secs > 0.0 {
-            println!("  Parse:  {:.2}s ({:.1}%)",
+            let _ = writeln!(summary, "  Parse:  {:.2}s ({:.1}%)",
                 self.parse_duration.as_secs_f64(),
                 self.parse_duration.as_secs_f64() / total_secs * 100.0
             );
-            println!("  Embed:  {:.2}s ({:.1}%)",
+            let _ = writeln!(summary, "  Embed:  {:.2}s ({:.1}%)",
                 self.embed_duration.as_secs_f64(),
                 self.embed_duration.as_secs_f64() / total_secs * 100.0
             );
-            println!("  Index:  {:.2}s ({:.1}%)",
+            let _ = writeln!(summary, "  Index:  {:.2}s ({:.1}%)",
                 self.index_duration.as_secs_f64(),
                 self.index_duration.as_secs_f64() / total_secs * 100.0
             );
         }
 
-        println!("\nMemory: {:.2} MB peak", self.peak_memory_bytes as f64 / 1_000_000.0);
-        println!("Cache hit rate: {:.1}%", self.cache_hit_rate * 100.0);
-        println!("Errors: {} ({:.2}%)", self.error_count, self.error_rate() * 100.0);
+        let _ = writeln!(summary, "\nMemory: {:.2} MB peak", self.peak_memory_bytes as f64 / 1_000_000.0);
+        let _ = writeln!(summary, "Cache hit rate: {:.1}%", self.cache_hit_rate * 100.0);
+        let _ = writeln!(summary, "Errors: {} ({:.2}%)", self.error_count, self.error_rate() * 100.0);
 
         if !self.errors_by_type.is_empty() {
-            println!("\nErrors by type:");
+            let _ = writeln!(summary, "\nErrors by type:");
             for (error_type, count) in &self.errors_by_type {
-                println!("  {}: {}", error_type, count);
+                let _ = writeln!(summary, "  {}: {}", error_type, count);
             }
         }
-        println!("========================\n");
+        let _ = writeln!(summary, "========================");
+        tracing::info!("{}", summary);
     }
 }
 
