@@ -276,7 +276,7 @@ mod tests {
     //!   * `Node` struct (model.rs) — `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]`
     //!   * `ItemKind` enum (model.rs) — `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]`
     //!   * `extract_attributes` itself — has no attrs, returns empty Vec.
-    use crate::graph::queries::tests::shared_snapshot;
+    use crate::queries::tests::shared_snapshot;
 
     fn attrs_of(qualified: &str) -> Vec<String> {
         let snap = shared_snapshot();

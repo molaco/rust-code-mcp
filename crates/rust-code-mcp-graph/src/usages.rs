@@ -188,9 +188,9 @@ mod tests {
     //! These tests load a *real* cargo workspace through rust-analyzer, so
     //! they pay the full RA load cost on first call (~3-5s release).
     //! Subsequent tests reuse the cached snapshot.
-    use crate::graph::model::{NodeKind, Usage};
-    use crate::graph::snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
-    use crate::graph::storage::{GraphEnvOptions, GraphPaths};
+    use crate::model::{NodeKind, Usage};
+    use crate::snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
+    use crate::storage::{GraphEnvOptions, GraphPaths};
     use std::sync::OnceLock;
 
     /// Source of the synthetic fixture crate. Each `pub fn` below exercises

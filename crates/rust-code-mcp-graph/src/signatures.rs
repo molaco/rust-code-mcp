@@ -140,8 +140,8 @@ fn build_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::queries::tests::shared_snapshot;
-    use crate::graph::queries::{FunctionFilter, SelfKindFilter};
+    use crate::queries::tests::shared_snapshot;
+    use crate::queries::{FunctionFilter, SelfKindFilter};
 
     fn sig_of(qualified: &str) -> FunctionSignature {
         let snap = shared_snapshot();
@@ -227,7 +227,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
-            crate::graph::NodeKind::Crate => root_id,
+            crate::NodeKind::Crate => root_id,
             _ => root_node
                 .crate_id
                 .or(root_node.parent_id)
@@ -261,7 +261,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
-            crate::graph::NodeKind::Crate => root_id,
+            crate::NodeKind::Crate => root_id,
             _ => root_node
                 .crate_id
                 .or(root_node.parent_id)
@@ -286,7 +286,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
-            crate::graph::NodeKind::Crate => root_id,
+            crate::NodeKind::Crate => root_id,
             _ => root_node
                 .crate_id
                 .or(root_node.parent_id)
@@ -316,7 +316,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
-            crate::graph::NodeKind::Crate => root_id,
+            crate::NodeKind::Crate => root_id,
             _ => root_node
                 .crate_id
                 .or(root_node.parent_id)

@@ -313,7 +313,7 @@ fn crate_display_name(db: &RootDatabase, krate: Crate) -> String {
 }
 
 /// Build the module path from crate root to `module_id`, e.g. `["graph", "loader"]`
-/// for `crate::graph::loader`. Returns empty for the crate root itself.
+/// for `crate::loader`. Returns empty for the crate root itself.
 fn module_path_segments(db: &RootDatabase, def_map: &DefMap, module_id: ModuleId) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = Some(module_id);
@@ -332,8 +332,8 @@ fn module_path_segments(db: &RootDatabase, def_map: &DefMap, module_id: ModuleId
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::loader;
-    use crate::graph::model::{BindingKind, NodeKind};
+    use crate::loader;
+    use crate::model::{BindingKind, NodeKind};
     use std::path::Path;
     use std::sync::OnceLock;
 
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn extracts_impl_items_for_self() {
-        use crate::graph::model::ItemKind;
+        use crate::model::ItemKind;
 
         let model = shared_model();
 

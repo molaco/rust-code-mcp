@@ -4,3 +4,25 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
+bincode = { workspace = true }
+directories = { workspace = true }
+heed = { workspace = true }
+num_cpus = { workspace = true }
+ra_ap_hir = { workspace = true }
+ra_ap_hir_def = { workspace = true }
+ra_ap_ide = { workspace = true }
+ra_ap_ide_db = { workspace = true }
+"ra_ap_load-cargo" = { workspace = true }
+ra_ap_project_model = { workspace = true }
+ra_ap_syntax = { workspace = true }
+ra_ap_vfs = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

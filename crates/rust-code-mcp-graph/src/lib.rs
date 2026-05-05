@@ -1,6 +1,53 @@
-//! Persisted hypergraph APIs for rust-code-mcp.
+//! Persisted workspace hypergraph.
 //!
-//! This crate is intentionally empty in Phase 1. APIs are extracted in later
-//! phases while `file-search-mcp` remains the compatibility facade.
+//! Layered as: loader → extraction model → extraction passes → persistence
+//! → read path → MCP tools. Each layer is built and tested in isolation.
 
 #![warn(unreachable_pub, dead_code)]
+
+pub mod ast_resolve;
+pub mod attributes;
+pub mod bindings;
+pub mod channel_audit;
+pub mod derive_audit;
+pub mod docs_audit;
+pub mod extract;
+pub mod fn_body_audit;
+pub mod hir_trim;
+pub mod ids;
+pub mod impls;
+pub mod loader;
+pub mod model;
+pub mod queries;
+pub mod recursion_check;
+pub mod signatures;
+pub mod snapshot;
+pub mod statics;
+pub mod storage;
+pub mod unsafe_audit;
+pub mod usages;
+
+pub use extract::extract;
+pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
+pub use loader::{LoadedWorkspace, load};
+pub use model::{
+    Binding, BindingKind, BindingVisibility, EmbeddingRecord, ExtractionModel, FunctionSignature,
+    GenericBound, ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage,
+    UsageCategory,
+};
+pub use queries::{
+    CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
+    EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
+    FunctionWithSignature, ModuleShadow, ModuleTreeNode, MutStaticFinding, NodeKindCounts,
+    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, ReExportLink,
+    RecursiveCallersCount, SelfKindFilter, TypeCollision, TypeLocation, UsageSummaryRow,
+    VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
+};
+pub use snapshot::{
+    BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
+};
+pub use unsafe_audit::UnsafeFinding;
+pub use storage::{
+    GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths, SCHEMA_VERSION,
+    compute_fingerprint,
+};

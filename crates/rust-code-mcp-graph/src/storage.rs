@@ -21,13 +21,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
-use heed::types::{Bytes, SerdeBincode, Str, Unit};
+use heed::types::{Bytes, SerdeBincode, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn, WithoutTls};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
-use super::ids::{BindingId, NodeId};
+use super::ids::BindingId;
 use super::model::{Binding, EmbeddingRecord, FunctionSignature, Node, StaticMetadata, Usage};
 
 // v2 (2026-05): added usages_by_id / usages_by_target / usages_by_consumer

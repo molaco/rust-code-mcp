@@ -323,10 +323,10 @@ pub fn binding_id_for(binding: &Binding) -> BindingId {
 
 pub fn usage_id_for(u: &Usage) -> UsageId {
     let cat = match u.category {
-        crate::graph::model::UsageCategory::Read => "R",
-        crate::graph::model::UsageCategory::Write => "W",
-        crate::graph::model::UsageCategory::Test => "T",
-        crate::graph::model::UsageCategory::Other => "O",
+        super::model::UsageCategory::Read => "R",
+        super::model::UsageCategory::Write => "W",
+        super::model::UsageCategory::Test => "T",
+        super::model::UsageCategory::Other => "O",
     };
     UsageId::from_components(&[
         u.target.to_hex().as_str(),
@@ -437,7 +437,7 @@ pub fn open_specific(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::model::{BindingKind, NodeKind};
+    use crate::model::{BindingKind, NodeKind};
     use std::path::Path;
 
     #[test]

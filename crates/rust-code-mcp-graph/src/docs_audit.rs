@@ -193,8 +193,8 @@ pub fn default_kind_filter() -> HashSet<ItemKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::ids::NodeId;
-    use crate::graph::model::{Node, NodeKind};
+    use crate::ids::NodeId;
+    use crate::model::{Node, NodeKind};
 
     fn make_node(
         kind: ItemKind,

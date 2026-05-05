@@ -1,51 +1,87 @@
-//! Persisted workspace hypergraph.
-//!
-//! Layered as: loader → extraction model → extraction passes → persistence
-//! → read path → MCP tools. Each layer is built and tested in isolation.
+//! Legacy graph facade.
 
-pub mod ast_resolve;
-pub mod attributes;
-pub mod bindings;
-pub mod channel_audit;
-pub mod derive_audit;
-pub mod docs_audit;
-pub mod extract;
-pub mod fn_body_audit;
-pub mod hir_trim;
-pub mod ids;
-pub mod impls;
-pub mod loader;
-pub mod model;
-pub mod queries;
-pub mod recursion_check;
-pub mod signatures;
-pub mod snapshot;
-pub mod statics;
-pub mod storage;
-pub mod unsafe_audit;
-pub mod usages;
+pub use rust_code_mcp_graph::*;
 
-pub use extract::extract;
-pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
-pub use loader::{LoadedWorkspace, load};
-pub use model::{
-    Binding, BindingKind, BindingVisibility, EmbeddingRecord, ExtractionModel, FunctionSignature,
-    GenericBound, ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage,
-    UsageCategory,
-};
-pub use queries::{
-    CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
-    EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
-    FunctionWithSignature, ModuleShadow, ModuleTreeNode, MutStaticFinding, NodeKindCounts,
-    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, ReExportLink,
-    RecursiveCallersCount, SelfKindFilter, TypeCollision, TypeLocation, UsageSummaryRow,
-    VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
-};
-pub use snapshot::{
-    BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
-};
-pub use unsafe_audit::UnsafeFinding;
-pub use storage::{
-    GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths, SCHEMA_VERSION,
-    compute_fingerprint,
-};
+pub mod ast_resolve {
+    pub use rust_code_mcp_graph::ast_resolve::*;
+}
+
+pub mod attributes {
+    pub use rust_code_mcp_graph::attributes::*;
+}
+
+pub mod bindings {
+    pub use rust_code_mcp_graph::bindings::*;
+}
+
+pub mod channel_audit {
+    pub use rust_code_mcp_graph::channel_audit::*;
+}
+
+pub mod derive_audit {
+    pub use rust_code_mcp_graph::derive_audit::*;
+}
+
+pub mod docs_audit {
+    pub use rust_code_mcp_graph::docs_audit::*;
+}
+
+pub mod extract {
+    pub use rust_code_mcp_graph::extract::*;
+}
+
+pub mod fn_body_audit {
+    pub use rust_code_mcp_graph::fn_body_audit::*;
+}
+
+pub mod hir_trim {
+    pub use rust_code_mcp_graph::hir_trim::*;
+}
+
+pub mod ids {
+    pub use rust_code_mcp_graph::ids::*;
+}
+
+pub mod impls {
+    pub use rust_code_mcp_graph::impls::*;
+}
+
+pub mod loader {
+    pub use rust_code_mcp_graph::loader::*;
+}
+
+pub mod model {
+    pub use rust_code_mcp_graph::model::*;
+}
+
+pub mod queries {
+    pub use rust_code_mcp_graph::queries::*;
+}
+
+pub mod recursion_check {
+    pub use rust_code_mcp_graph::recursion_check::*;
+}
+
+pub mod signatures {
+    pub use rust_code_mcp_graph::signatures::*;
+}
+
+pub mod snapshot {
+    pub use rust_code_mcp_graph::snapshot::*;
+}
+
+pub mod statics {
+    pub use rust_code_mcp_graph::statics::*;
+}
+
+pub mod storage {
+    pub use rust_code_mcp_graph::storage::*;
+}
+
+pub mod unsafe_audit {
+    pub use rust_code_mcp_graph::unsafe_audit::*;
+}
+
+pub mod usages {
+    pub use rust_code_mcp_graph::usages::*;
+}

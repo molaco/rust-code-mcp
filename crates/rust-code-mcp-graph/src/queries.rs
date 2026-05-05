@@ -1822,7 +1822,7 @@ impl OpenedSnapshot {
     /// Phase 6: query-time audit of `unsafe { ... }` blocks across the
     /// workspace. Live computation (no cache); requires a `LoadedWorkspace`
     /// supplied by the caller. Implementation lives in
-    /// `crate::graph::unsafe_audit`.
+    /// `crate::unsafe_audit`.
     pub fn unsafe_audit(
         &self,
         loaded: &super::loader::LoadedWorkspace,
@@ -2551,8 +2551,8 @@ fn is_visible_from(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::graph::snapshot::{BuildOptions, build_and_persist, open_current};
-    use crate::graph::storage::{GraphEnvOptions, GraphPaths};
+    use crate::snapshot::{BuildOptions, build_and_persist, open_current};
+    use crate::storage::{GraphEnvOptions, GraphPaths};
     use std::path::Path;
     use std::sync::OnceLock;
 

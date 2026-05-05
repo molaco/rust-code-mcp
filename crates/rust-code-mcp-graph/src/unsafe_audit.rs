@@ -254,8 +254,8 @@ fn resolve_workspace_relative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::loader;
-    use crate::graph::queries::tests::shared_snapshot;
+    use crate::loader;
+    use crate::queries::tests::shared_snapshot;
     use std::path::Path;
 
     #[test]
