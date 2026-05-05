@@ -13,6 +13,10 @@ pub use rust_code_mcp_syntax::{
     CallGraph, Chunker, Import, ParseResult, Range, RustParser, Symbol, SymbolKind, TypeReference,
     Visibility,
 };
+pub use rust_code_mcp_vector_store::{
+    LanceDbBackend, SearchResult as VectorSearchResult, VectorStore, VectorStoreBackend,
+    VectorStoreConfig, VectorStoreError,
+};
 
 pub mod chunker;
 pub mod config;

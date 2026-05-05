@@ -6708,6 +6708,21 @@ dependencies = [
 [[package]]
 name = "rust-code-mcp-vector-store"
 version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "directories",
+ "futures",
+ "lancedb",
+ "rust-code-mcp-model",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "rust-stemmers"

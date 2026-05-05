@@ -14,11 +14,10 @@ use lancedb::index::scalar::BTreeIndexBuilder;
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::DistanceType;
+use rust_code_mcp_model::{ChunkId, CodeChunk, Embedding};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::chunker::{ChunkId, CodeChunk};
-use crate::embeddings::Embedding;
 use super::error::VectorStoreError;
 use super::traits::VectorStoreBackend;
 use super::SearchResult;
@@ -430,7 +429,7 @@ impl VectorStoreBackend for LanceDbBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunker::ChunkContext;
+    use rust_code_mcp_model::ChunkContext;
     use tempfile::TempDir;
 
     fn create_test_chunk(id: ChunkId, content: &str, file_path: &str) -> CodeChunk {

@@ -3,9 +3,8 @@
 //! Defines the interface that all vector storage backends must implement.
 
 use async_trait::async_trait;
+use rust_code_mcp_model::{ChunkId, CodeChunk, Embedding};
 
-use crate::chunker::{ChunkId, CodeChunk};
-use crate::embeddings::Embedding;
 use super::error::VectorStoreError;
 use super::SearchResult;
 
