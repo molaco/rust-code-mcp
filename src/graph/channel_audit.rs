@@ -13,13 +13,14 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
-use ra_ap_hir::{ModuleDef, PathResolution, Semantics, attach_db};
+use ra_ap_hir::{Semantics, attach_db};
 use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_syntax::AstToken;
 use ra_ap_syntax::ast::{self, AstNode, HasArgList};
 use ra_ap_vfs::{FileId, Vfs};
 use serde::{Deserialize, Serialize};
 
+use super::ast_resolve::resolve_call_to_function;
 use super::ids::NodeId;
 use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
@@ -44,8 +45,11 @@ pub struct ChannelFinding {
 
 pub fn classify_channel_path(canonical_path: &str) -> Option<(&'static str, bool)> {
     match canonical_path {
-        "tokio::sync::mpsc::channel" => Some(("tokio_mpsc", true)),
-        "tokio::sync::mpsc::unbounded_channel" => Some(("tokio_unbounded", false)),
+        "tokio::sync::mpsc::channel" | "tokio::sync::mpsc::bounded::channel" => {
+            Some(("tokio_mpsc", true))
+        }
+        "tokio::sync::mpsc::unbounded_channel"
+        | "tokio::sync::mpsc::unbounded::unbounded_channel" => Some(("tokio_unbounded", false)),
         "std::sync::mpsc::channel" => Some(("std_mpsc", false)),
         "std::sync::mpsc::sync_channel" => Some(("std_sync_channel", true)),
         "crossbeam_channel::bounded" => Some(("crossbeam_bounded", true)),
@@ -136,22 +140,13 @@ pub fn channel_capacity_audit(
                     None => continue,
                 };
 
-                let path_expr = match call.expr() {
-                    Some(ast::Expr::PathExpr(p)) => p,
-                    _ => continue,
-                };
-                let path = match path_expr.path() {
-                    Some(p) => p,
-                    None => continue,
-                };
+                if !matches!(call.expr(), Some(ast::Expr::PathExpr(_))) {
+                    continue;
+                }
 
-                let resolution = match sema.resolve_path(&path) {
-                    Some(r) => r,
+                let func = match resolve_call_to_function(&sema, &call) {
+                    Some(f) => f,
                     None => continue,
-                };
-                let func = match resolution {
-                    PathResolution::Def(ModuleDef::Function(f)) => f,
-                    _ => continue,
                 };
 
                 let canonical = canonical_function_path(db, func);
@@ -393,6 +388,22 @@ mod tests {
         assert_eq!(
             classify_channel_path("flume::unbounded"),
             Some(("flume_unbounded", false))
+        );
+    }
+
+    #[test]
+    fn classify_tokio_unbounded_via_defining_module() {
+        assert_eq!(
+            classify_channel_path("tokio::sync::mpsc::unbounded::unbounded_channel"),
+            Some(("tokio_unbounded", false))
+        );
+    }
+
+    #[test]
+    fn classify_tokio_bounded_via_defining_module() {
+        assert_eq!(
+            classify_channel_path("tokio::sync::mpsc::bounded::channel"),
+            Some(("tokio_mpsc", true))
         );
     }
 
