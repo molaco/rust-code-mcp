@@ -2,7 +2,7 @@
 
 This plan splits the current monolithic `file-search-mcp` package into focused
 `rust-code-mcp-*` crates while keeping the system buildable through a temporary
-root compatibility facade.
+legacy `file-search-mcp` compatibility facade.
 
 Hard rules:
 
@@ -43,7 +43,7 @@ indexing -> model + syntax + embeddings + bm25 + vector-store
 graph -> rust-analyzer HIR/IDE stack + heed
 ra-analysis -> rust-analyzer IDE stack
 server -> all feature crates + rmcp
-root facade -> all feature crates temporarily
+legacy file-search-mcp facade -> all feature crates temporarily
 ```
 
 ## Phase 0: Baseline
@@ -63,11 +63,11 @@ root facade -> all feature crates temporarily
 1. Add `[workspace]`, `[workspace.package]`, and `[workspace.dependencies]`.
 2. Use edition 2024.
 3. Create empty crates under `crates/`.
-4. Keep the current root package as a temporary `file-search-mcp` compatibility
-   facade to reduce churn in tests and examples.
+4. Keep the current root package as a temporary legacy `file-search-mcp`
+   compatibility facade to reduce churn in tests and examples.
 5. New package names use `rust-code-mcp-*`.
-6. Re-export new crate APIs through the root facade while extraction is in
-   progress.
+6. Re-export new crate APIs through the legacy facade while extraction is in
+   progress. Remove this facade in final cleanup once call sites are migrated.
 7. Run `cargo check --lib --bins --tests`.
 
 ## Phase 2: Extract rust-code-mcp-model
@@ -186,6 +186,16 @@ Decision point:
 - If moving all of `src/schema.rs`, export both `ChunkSchema` and `FileSchema`.
 - If keeping `FileSchema` server-side, move only `ChunkSchema` to BM25.
 
+Boundary decision:
+
+- Move Tantivy-specific helper logic from `src/tools/indexing_tools.rs` into
+  BM25 or indexing before server extraction if those helpers are still needed.
+- Preferred boundary: BM25 owns Tantivy index opening/schema helpers, so server
+  does not depend on Tantivy.
+- Fallback boundary: if `tools/indexing_tools.rs` remains server-side with
+  direct `tantivy::Index` or `FileSchema` imports, server must list `tantivy`
+  as a direct dependency.
+
 Dependencies:
 
 - `rust-code-mcp-model`
@@ -291,6 +301,10 @@ Dependencies:
 - `anyhow`
 - `tracing`
 
+Dev-dependencies:
+
+- `serde_json`
+
 Validation:
 
 ```text
@@ -335,6 +349,7 @@ Dependencies:
 - `sha2`
 - `rs_merkle`
 - `walkdir`
+- `directories`
 - `rayon`
 - `regex`
 - `glob`
@@ -349,9 +364,12 @@ Dependencies:
 
 Direct `tantivy` dependency:
 
-- Avoid exposing raw `tantivy::Index` if practical.
-- If APIs like consistency checks still use `tantivy::Index` directly, keep
-  `tantivy` as an indexing dependency until that surface is hidden or moved.
+- Preferred path: hide Tantivy behind `rust-code-mcp-bm25` APIs.
+- Current code has direct Tantivy touch points in consistency checks and
+  `UnifiedIndexer`; if those remain after extraction, list `tantivy` as a
+  direct indexing dependency.
+- Remove that direct dependency later once the public surface no longer exposes
+  or accepts raw Tantivy types.
 
 Validation:
 
@@ -378,6 +396,7 @@ Dependencies:
 - `directories`
 - `num_cpus`
 - `anyhow`
+- `tracing`
 - `ra_ap_hir`
 - `ra_ap_hir_def`
 - `ra_ap_ide`
@@ -422,6 +441,7 @@ Dependencies:
 - `ra_ap_vfs`
 - `anyhow`
 - `num_cpus`
+- `tracing`
 
 Validation:
 
@@ -452,12 +472,16 @@ Dependencies:
 - `serde_json`
 - `directories`
 - `sha2`
+- `tantivy`, only if Tantivy-specific `tools/indexing_tools.rs` helpers remain
+  server-side instead of moving behind BM25/indexing APIs
 
 Rules:
 
 - This is the only crate that depends on `rmcp`.
 - Final binary name is `rust-code-mcp`.
 - Server tools should import feature crate APIs directly.
+- Prefer keeping Tantivy-specific helper code out of server; server should call
+  BM25/indexing APIs instead of opening Tantivy indexes directly.
 
 Validation:
 
@@ -468,9 +492,10 @@ cargo check --lib --bins --tests
 
 ## Phase 12: Cleanup
 
-1. Convert root to a virtual workspace, or keep a minimal compatibility crate
-   only if downstream callers still need it.
-2. Remove the temporary `file-search-mcp` facade when call sites are migrated.
+1. Convert root to a virtual workspace, or keep a minimal legacy compatibility
+   crate only if downstream callers still need it.
+2. Remove the temporary legacy `file-search-mcp` facade when call sites are
+   migrated.
 3. Update tests and examples from `file_search_mcp::...` to exact new crates.
 4. Fix, gate, or retire stale rust-analyzer examples so all-target checks become
    meaningful.
