@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use ra_ap_syntax::{
     ast::{self, HasGenericArgs, HasModuleItem, HasName},
-    AstNode, Edition, SourceFile,
+    AstNode, SourceFile,
 };
 
 /// A reference to a type in the code
@@ -43,12 +43,14 @@ pub enum TypeUsageContext {
 }
 
 /// Build type references from source code (convenience wrapper that parses internally)
+#[cfg(test)]
 pub(crate) fn build_type_references(source: &str) -> Vec<TypeReference> {
-    build_type_references_with_edition(source, Edition::Edition2021)
+    build_type_references_with_edition(source, ra_ap_syntax::Edition::Edition2021)
 }
 
 /// Build type references from source code with a specific Rust edition
-pub(crate) fn build_type_references_with_edition(source: &str, edition: Edition) -> Vec<TypeReference> {
+#[cfg(test)]
+pub(crate) fn build_type_references_with_edition(source: &str, edition: ra_ap_syntax::Edition) -> Vec<TypeReference> {
     let parse = SourceFile::parse(source, edition);
     let file = parse.tree();
     build_type_references_from_ast(&file, source)

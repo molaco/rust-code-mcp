@@ -4,3 +4,5 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rust-code-mcp-model = { workspace = true }
+ra_ap_syntax = { workspace = true }

@@ -5,6 +5,10 @@
 #![warn(unreachable_pub, dead_code)]
 
 pub use rust_code_mcp_model::{ChunkContext, ChunkId, CodeChunk, Embedding, EMBEDDING_DIM};
+pub use rust_code_mcp_syntax::{
+    CallGraph, Chunker, Import, ParseResult, Range, RustParser, Symbol, SymbolKind, TypeReference,
+    Visibility,
+};
 
 pub mod chunker;
 pub mod config;

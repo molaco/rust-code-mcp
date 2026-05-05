@@ -6684,6 +6684,10 @@ version = "0.1.0"
 [[package]]
 name = "rust-code-mcp-syntax"
 version = "0.1.0"
+dependencies = [
+ "ra_ap_syntax",
+ "rust-code-mcp-model",
+]
 
 [[package]]
 name = "rust-code-mcp-vector-store"
