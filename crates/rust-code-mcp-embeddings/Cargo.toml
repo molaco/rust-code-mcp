@@ -4,3 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rust-code-mcp-model = { workspace = true }
+fastembed = { workspace = true }
+ort = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

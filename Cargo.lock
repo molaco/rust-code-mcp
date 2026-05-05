@@ -6652,6 +6652,14 @@ version = "0.1.0"
 [[package]]
 name = "rust-code-mcp-embeddings"
 version = "0.1.0"
+dependencies = [
+ "fastembed",
+ "ort",
+ "rust-code-mcp-model",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "rust-code-mcp-graph"
