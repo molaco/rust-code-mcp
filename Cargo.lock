@@ -6735,6 +6735,16 @@ dependencies = [
 [[package]]
 name = "rust-code-mcp-ra-analysis"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "num_cpus",
+ "ra_ap_ide",
+ "ra_ap_ide_db",
+ "ra_ap_load-cargo",
+ "ra_ap_project_model",
+ "ra_ap_vfs",
+ "tracing",
+]
 
 [[package]]
 name = "rust-code-mcp-search"
