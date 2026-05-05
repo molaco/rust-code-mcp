@@ -47,6 +47,11 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`functions_with_filter`](#functions_with_filter) | Graph: Signatures | Functions in a crate matching a signature filter |
 | [`unsafe_audit`](#unsafe_audit) | Graph: Safety | Audit every `unsafe { ... }` block in local crates |
 | [`mut_static_audit`](#mut_static_audit) | Graph: Safety | Audit `static mut`/`LazyLock`/`OnceLock`/`OnceCell` |
+| [`missing_docs_audit`](#missing_docs_audit) | Graph: Audit | Audit pure-`pub` Items lacking `///` doc-comments |
+| [`derive_audit`](#derive_audit) | Graph: Audit | Audit `pub` Items missing required derive macros |
+| [`recursion_check`](#recursion_check) | Graph: Audit | Detect direct or mutual recursion cycles in fn calls |
+| [`channel_capacity_audit`](#channel_capacity_audit) | Graph: Audit | Audit channel-construction call sites (bounded vs unbounded) |
+| [`fn_body_audit`](#fn_body_audit) | Graph: Audit | Walk fn bodies for unwrap/panic/lock-across-await/recursion/loop patterns |
 | [`similar_to_item`](#similar_to_item) | Graph: Semantic | Find semantic neighbors of a hypergraph Item via vector embeddings |
 | [`semantic_overlaps`](#semantic_overlaps) | Graph: Semantic | Workspace-wide audit: cluster semantically-similar Items via vector embeddings |
 
@@ -1285,6 +1290,319 @@ Phase 7 Path B (v10): type-aware audit of every local `static` item that matches
 - `type_string` is post-processed via the same `HirDisplay` trim as `function_signature` — e.g. `LazyLock<Mutex<Foo>, fn() -> Mutex<Foo>>` becomes `LazyLock<Mutex<Foo>>` (init-fn pointer dropped).
 - Sorted by `(qualified_name, matched_pattern)`.
 - Limitation: the `lazy_static!` macro is NOT detected — its expansion produces a generated wrapper type whose name doesn't contain `LazyLock`. Use `items_with_attribute` or grep to cover that case.
+
+---
+
+#### missing_docs_audit
+
+Phase 8: pure read-side audit of every local pure-`pub` Item whose extracted attributes carry no `///` doc-comment line. Reads from the v11 snapshot's `node.attributes` (populated at build time) and resolves each Item's effective visibility via its declaring `Binding`. No AST walk, no fresh RA load — sub-second on snapshots already on disk.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `crate_name` | string | No | Optional crate qualified name to scope the scan (accepts a Crate or its root Module). Default: all local crates. |
+| `item_kind` | array<string> | No | Optional list of item kinds to audit (e.g. `["Function", "Struct", "Trait"]`). Default: all "documentable" kinds — Function, Struct, Enum, Union, Trait, TypeAlias, Const, Static, Method (excludes EnumVariant, AssocConst, AssocType which rarely carry standalone docs). |
+| `skip_test_items` | boolean | No | Drop items whose qualified name contains `::tests::`. Default `true`. |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "crate_name": "my_crate",
+  "item_kind": ["Function", "Struct"],
+  "skip_test_items": true
+}
+```
+
+**Returns:**
+```json
+{
+  "scope": {
+    "directory": "/path/to/workspace",
+    "crate_name": "my_crate"
+  },
+  "finding_count": 2,
+  "findings": [
+    {
+      "target": "<64-char-hex>",
+      "qualified_name": "my_crate::api::Client",
+      "item_kind": "Struct",
+      "visibility": "pub",
+      "file": "src/api.rs",
+      "span": [120, 480]
+    }
+  ]
+}
+```
+
+**Notes:**
+- Only pure `pub` Items are flagged. `pub(crate)` and `pub(in path)` count as internal API per §10 and are skipped.
+- "Has docs" is satisfied when any entry in `node.attributes` starts with `///` — empty body lines (`///`) count as a doc-comment line.
+- Items without an extractable AST source (macro-generated impls) carry empty attributes; treat them as "no extractable docs", not "should have docs".
+- Sorted by `(file, span)`.
+- Prerequisite: `build_hypergraph` must have populated the v11 snapshot for this workspace.
+
+---
+
+#### derive_audit
+
+Phase 8: pure read-side audit of every local `pub` Struct / Enum / Union that is missing one or more required derive macros. Reads `node.attributes` (Phase 1 populated at build time) plus the declaring `Binding`'s visibility — no AST walk, no fresh RA load. Each `#[derive(...)]` attribute is parsed to a set of derive identifiers, with path qualifiers stripped (`serde::Serialize` and `::std::fmt::Debug` match `Serialize` / `Debug`). Findings are emitted whenever the set difference `required_derives - current_derives` is non-empty.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `crate_name` | string | No | Optional crate qualified name to scope the scan (accepts a Crate or its root Module). Default: all local crates. |
+| `item_kind` | array<string> | No | Subset of `["Struct", "Enum", "Union"]`. Default: all three. Any other kind triggers an `invalid_params` error. |
+| `required_derives` | array<string> | Yes | Non-empty list of derive identifiers to require (e.g. `["Debug"]` or `["Debug", "Clone", "PartialEq"]`). |
+| `pub_only` | boolean | No | Only audit items whose visibility is pure `pub` (the §8 "Debug almost always" rule applies to the public surface). Default `true`. |
+| `skip_test_items` | boolean | No | Drop items whose qualified name contains `::tests::`. Default `true`. |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "crate_name": "my_crate",
+  "item_kind": ["Struct", "Enum"],
+  "required_derives": ["Debug", "Clone"],
+  "pub_only": true,
+  "skip_test_items": true
+}
+```
+
+**Returns:**
+```json
+{
+  "scope": {
+    "directory": "/path/to/workspace",
+    "crate_name": "my_crate"
+  },
+  "required_derives": ["Debug", "Clone"],
+  "finding_count": 1,
+  "findings": [
+    {
+      "target": "<64-char-hex>",
+      "qualified_name": "my_crate::api::Client",
+      "item_kind": "Struct",
+      "visibility": "pub",
+      "file": "src/api.rs",
+      "span": [120, 480],
+      "current_derives": ["Debug"],
+      "missing_derives": ["Clone"]
+    }
+  ]
+}
+```
+
+**Notes:**
+- The derive parser strips leading path qualifiers — `#[derive(serde::Serialize)]` matches `Serialize`, `#[derive(::std::fmt::Debug)]` matches `Debug`.
+- Multiple `#[derive(...)]` attributes on one item accumulate into a single set of current derives.
+- Only pure `pub` Items are flagged when `pub_only=true`. `pub(crate)` / `pub(in path)` count as internal API per §10 and are skipped.
+- Items without an extractable AST source (macro-generated impls) carry empty attributes; if any derive is required, every required derive will be reported as missing.
+- Sorted by `(file, span)`.
+- Prerequisite: `build_hypergraph` must have populated the v11 snapshot for this workspace.
+
+---
+
+#### recursion_check
+
+Phase 8: pure read-side audit listing every fn that participates in a recursion cycle — self-recursion (`fn a() { a() }`) or mutual recursion (`fn a() { b() } fn b() { a() }`, possibly across crates). Walks the Layer 10 call graph data: enumerates fn NodeIds from `signatures_by_target` (Phase 5) and follows outgoing call edges via `usages_by_consumer_function` (caller fn NodeId → UsageId DUP_SORT; the Usage record's `target` is the callee). Runs a bounded DFS up to `max_cycle_length` from every fn. Cycles are canonicalized — rotated so the lowest-id `NodeId` comes first — and deduped, so a cycle viewed from different starting nodes counts once. No AST walk, no fresh RA load.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `crate_name` | string | No | Optional crate qualified name to scope the scan (accepts a Crate or its root Module). A cycle is included if at least one of its members lives in the requested crate (deliberately looser than "all members in crate" — surfaces cross-crate mutual recursion that touches the target crate). Default: all local crates. |
+| `max_cycle_length` | integer | No | Maximum cycle length to detect. Default `5` (covers self-loop + indirect recursion through a few hops). Clamped to `[1, 12]`. |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "crate_name": "my_crate",
+  "max_cycle_length": 5
+}
+```
+
+**Returns:**
+```json
+{
+  "scope": {
+    "directory": "/path/to/workspace",
+    "crate_name": "my_crate"
+  },
+  "max_cycle_length": 5,
+  "cycle_count": 1,
+  "cycles": [
+    {
+      "fns": ["my_crate::eval", "my_crate::step"],
+      "cycle_length": 2,
+      "direct_recursion": false,
+      "starting_node_id": "<64-char-hex>"
+    }
+  ]
+}
+```
+
+**Notes:**
+- `direct_recursion` is `true` iff `cycle_length == 1` (a fn that calls itself).
+- The DFS prunes paths longer than `max_cycle_length`; long indirect cycles (more than 12 hops) are out of reach by design.
+- Sorted by `(cycle_length asc, qualified_name of the lowest-id starting node)`.
+- Cycles are deduped by their canonical rotation — `[A, B, C]` and `[B, C, A]` count as the same cycle.
+- Use this to enforce §22 "no recursion in critical paths".
+- Prerequisite: `build_hypergraph` must have populated the v11 snapshot for this workspace (Layer 10 call graph requires it).
+
+---
+
+#### channel_capacity_audit
+
+Phase 8: AST-walk audit of every channel-construction call site across the workspace's local crates. Loads the workspace through rust-analyzer (~2-3s — dominates per-call cost), iterates every local module's source file via `definition_source_file_id`, walks the syntax tree for `CallExpr` nodes, and resolves each call's path through `Semantics::resolve_path` so aliased imports (`use tokio::sync::mpsc; mpsc::channel(N)`) still match the canonical entry. Hardcoded v1 path table covers the four standard ecosystems (tokio, std, crossbeam_channel, flume). For bounded constructors the first argument is parsed as a literal `u64` capacity (with `_` separators allowed); non-literal arguments (consts, variables, arithmetic) emit `capacity: null` while still flagging the call site. Mirrors the `unsafe_audit` enclosing-fn resolution: `Semantics::scope_at_offset` → `containing_function` → snapshot lookup by qualified name.
+[ANCHOR](#channel_capacity_audit)
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `crate_name` | string | No | Optional crate qualified name to scope the scan (accepts a Crate or its root Module). Default: all local crates. |
+| `skip_test_fns` | boolean | No | Drop findings inside `#[cfg(test)]` modules / fns. Default `true`. |
+
+**Recognized constructors:**
+| Canonical path | `kind` | `bounded` |
+|---|---|---|
+| `tokio::sync::mpsc::channel` | `tokio_mpsc` | yes |
+| `tokio::sync::mpsc::unbounded_channel` | `tokio_unbounded` | no |
+| `std::sync::mpsc::channel` | `std_mpsc` | no |
+| `std::sync::mpsc::sync_channel` | `std_sync_channel` | yes |
+| `crossbeam_channel::bounded` | `crossbeam_bounded` | yes |
+| `crossbeam_channel::unbounded` | `crossbeam_unbounded` | no |
+| `flume::bounded` | `flume_bounded` | yes |
+| `flume::unbounded` | `flume_unbounded` | no |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "skip_test_fns": true
+}
+```
+
+**Returns:**
+```json
+{
+  "scope": {
+    "directory": "/path/to/workspace"
+  },
+  "finding_count": 2,
+  "findings": [
+    {
+      "crate_name": "my_crate",
+      "kind": "tokio_mpsc",
+      "bounded": true,
+      "capacity": 1024,
+      "file": "src/runtime/mod.rs",
+      "span": [4521, 4560],
+      "enclosing_function": "<64-char-hex>",
+      "enclosing_function_name": "my_crate::runtime::spawn_pipeline"
+    },
+    {
+      "crate_name": "my_crate",
+      "kind": "tokio_unbounded",
+      "bounded": false,
+      "capacity": null,
+      "file": "src/events/bus.rs",
+      "span": [812, 850],
+      "enclosing_function": "<64-char-hex>",
+      "enclosing_function_name": "my_crate::events::bus::start"
+    }
+  ]
+}
+```
+
+**Notes:**
+- Only `crossbeam_channel::*` is recognized in v1 (the canonical crate). `crossbeam::channel::*` re-exports are NOT matched separately — `Semantics::resolve_path` resolves to the canonical `crossbeam_channel` definition, but if your codebase uses `crossbeam` as an umbrella the path table will need a v2 update.
+- `capacity` is `Some(N)` only when the first arg is a clean integer literal (with `_` separators allowed). Variables, consts, and arithmetic expressions emit `capacity: null` with `bounded: true` — the call site is still flagged for review.
+- `enclosing_function` is `null` for calls in const initializers or closures whose enclosing fn cannot be resolved.
+- `skip_test_fns=true` walks ancestors looking for `#[cfg(test)]` on any enclosing fn / module / impl / struct / etc. Heuristic — string match on the attribute syntax — accepts the common `#[cfg(test)]`, `#[cfg(any(test, ...))]`, and `#[cfg(all(test, ...))]` forms.
+- Sorted by `(file, span)`.
+- Use this to enforce §12 "use bounded channels", inventory channel construction during refactors, and surface unbounded-channel call sites for review.
+- Prerequisite: `build_hypergraph` must have populated the v11 snapshot for this workspace.
+
+---
+
+#### fn_body_audit
+
+Phase 8: query-time AST-walk audit walking every local fn's body across the workspace and emitting one finding per pattern hit. Loads the workspace through rust-analyzer (~2-3s — dominates per-call cost), iterates every local module's source file via `definition_source_file_id`, descends each top-level / nested `fn` item's body, and applies eight built-in pattern matchers. Five patterns are pure-syntactic AST walks (`unwrap`, `expect`, `panic_macros`, `unwrap_unchecked`, `unbounded_loop`); two use `Semantics::resolve_path` (`transmute`, `self_recursion` — `self_recursion` also uses `Semantics::resolve_method_call`); and `await_in_guard_scope` is a string-match heuristic over `let`-stmt initializer / type text. Enclosing fn is resolved via `Semantics::scope_at_offset` → `containing_function` → snapshot lookup by qualified name (mirrors `unsafe_audit` / `channel_capacity_audit`).
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root (directory containing Cargo.toml) |
+| `crate_name` | string | No | Optional crate qualified name to scope the scan (accepts a Crate or its root Module). Default: all local crates. |
+| `patterns` | array<string> | No | Subset of the 8 pattern labels to enable. Empty / null defaults to all 8. Unknown labels error with `invalid_params`. Available: `unwrap`, `expect`, `panic_macros`, `unwrap_unchecked`, `transmute`, `await_in_guard_scope`, `self_recursion`, `unbounded_loop`. |
+| `skip_test_fns` | boolean | No | Drop findings inside `#[cfg(test)]` modules / fns. Default `true`. |
+
+**Pattern reference:**
+| Pattern | What it matches | Guideline | Notes |
+|---|---|---|---|
+| `unwrap` | `MethodCallExpr` named `unwrap` | §9 — "Avoid `unwrap()` in production paths" | Matches any method named `unwrap`, not just `Result`/`Option`. v2 may add type-aware filtering. |
+| `expect` | `MethodCallExpr` named `expect` | §9 — "Avoid `expect()` in library code except for locally provable invariants" | |
+| `panic_macros` | `MacroCall` whose path's last segment is `panic` / `unreachable` / `todo` / `unimplemented` | §9 — "Use `panic!` for bugs only" | |
+| `unwrap_unchecked` | `MethodCallExpr` named `unwrap_unchecked` / `unwrap_err_unchecked` | §19 — "Treat every unsafe change as security-sensitive" | |
+| `transmute` | `CallExpr` resolving (via `Semantics::resolve_path`) to `std::mem::transmute` or `core::mem::transmute` | §19 — "Use `unsafe` only when safe Rust cannot express the operation" | Aliased imports follow path resolution. |
+| `await_in_guard_scope` | `AwaitExpr` whose nearest enclosing `BlockExpr` contains a `LetStmt` (lexically before the `.await`) whose initializer or type ascription contains a guard-related needle: `MutexGuard`, `RwLockReadGuard`, `RwLockWriteGuard`, bare `Guard`, `Ref<`, `RefMut<`, `.lock()`, `.read()`, `.write()`. | §12 — "Never hold a lock or span guard across `.await`" | Heuristic — review trigger, accepts false positives (e.g. user-defined types containing `Guard` in the name). |
+| `self_recursion` | Direct call (`CallExpr` via path resolution OR `MethodCallExpr` via method resolution) to the enclosing fn's canonical qualified name. | §22 — "No recursion in critical paths" | One finding per call site. Mutual recursion is NOT detected here — use `recursion_check` for cycles. |
+| `unbounded_loop` | `LoopExpr` (the `loop` keyword form only — `for`/`while` are not flagged) whose body has no `BreakExpr` / `ReturnExpr` / `?` `TryExpr` at any depth. | §22 — "Give loops clear upper bounds when practical" | Heuristic — event loops will fire. Disable via `patterns` if your codebase has many event-loop fns. |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "crate_name": "my_crate",
+  "patterns": ["unwrap", "panic_macros", "await_in_guard_scope"],
+  "skip_test_fns": true
+}
+```
+
+**Returns:**
+```json
+{
+  "scope": {
+    "directory": "/path/to/workspace",
+    "crate_name": "my_crate"
+  },
+  "patterns_used": ["await_in_guard_scope", "panic_macros", "unwrap"],
+  "finding_count": 2,
+  "findings": [
+    {
+      "target": "<64-char-hex>",
+      "qualified_name": "my_crate::pipeline::process",
+      "pattern": "unwrap",
+      "file": "src/pipeline.rs",
+      "span": [1240, 1259],
+      "context": "    let cfg = load_config();\n    let value = cfg.unwrap();\n    drive(value);"
+    },
+    {
+      "target": "<64-char-hex>",
+      "qualified_name": "my_crate::pipeline::drain",
+      "pattern": "await_in_guard_scope",
+      "file": "src/pipeline.rs",
+      "span": [2480, 2502],
+      "context": "    let g = state.lock().unwrap();\n    receiver.recv().await;\n    drop(g);"
+    }
+  ]
+}
+```
+
+**Notes:**
+- `target` and `qualified_name` are `null` when no enclosing fn can be resolved (rare — top-level expressions, items inside macro-expanded code).
+- `context` is a 1-3 line slice of the source file around the finding's span, trimmed of leading / trailing whitespace.
+- `await_in_guard_scope` only inspects `LetStmt`s in the same `BlockExpr` as the `.await`. Lock guards held in a parent scope are not detected; v2 may improve scope traversal.
+- `self_recursion` reports each recursive call site separately. A fn that calls itself three times produces three findings (with the same enclosing fn).
+- `transmute` only matches the canonical `std`/`core` paths. If your workspace re-exports it under a custom name, the resolution still follows the alias and matches.
+- Sorted by `(file, span, pattern)`.
+- Use this to enforce body-level guideline coverage as part of a `/guidelines-audit` skill or CI check.
+- Prerequisite: `build_hypergraph` must have populated the v11 snapshot for this workspace.
 
 ---
 
