@@ -22,12 +22,11 @@ use rust_code_mcp_graph::{
     Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
     DeadPubFinding, EmbeddingRecord, EnrichedCallSite, ForbiddenDependencyRule,
     ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
-    GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
+    GraphEnvOptions, GraphPaths, ItemKind, ItemWithAttribute, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
     RecursiveCallersCount, SelfKindFilter, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
-    build_and_persist, open_current, snapshot::BuildOptions,
+    BuildOptions, build_and_persist, open_current,
 };
-use rust_code_mcp_graph::queries::ItemWithAttribute;
 use crate::tools::search_tool::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
     CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,

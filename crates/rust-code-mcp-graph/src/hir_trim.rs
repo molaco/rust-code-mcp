@@ -24,7 +24,7 @@
 /// Strip std-library default type parameters from a HirDisplay-rendered
 /// type string. Idempotent. Linear in the input length (a few passes
 /// over short strings — these are at most a few hundred chars).
-pub fn trim_hir_display(s: &str) -> String {
+pub(crate) fn trim_hir_display(s: &str) -> String {
     let mut out = s.to_string();
 
     // 1. Strip `, Global>` repeatedly so nested `Vec<Vec<T, Global>, Global>`

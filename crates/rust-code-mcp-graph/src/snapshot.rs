@@ -16,7 +16,7 @@ type GraphRwTxn<'e> = RwTxn<'e>;
 
 use super::extract;
 use super::ids::{BindingId, NodeId, UsageId};
-use super::loader::{self, LoadedWorkspace};
+use super::loader;
 use super::model::{Binding, ExtractionModel, Namespace, Usage};
 use super::storage::{
     CURRENT_POINTER_FILENAME, GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths,
@@ -157,56 +157,6 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
     })
 }
 
-/// Lower-level entry for tests that already have a `LoadedWorkspace` in hand.
-pub fn persist_loaded(
-    loaded: &LoadedWorkspace,
-    options: &BuildOptions,
-) -> Result<BuildResult> {
-    let paths = match &options.data_dir_override {
-        Some(base) => GraphPaths::for_workspace_in(base, &loaded.workspace_root),
-        None => GraphPaths::for_workspace(&loaded.workspace_root),
-    };
-    paths.ensure_dirs()?;
-    let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
-    let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
-    let snapshot_dir = paths.snapshot_dir(&graph_id);
-    let manifest_path = paths.manifest_path(&graph_id);
-
-    if snapshot_dir.exists() {
-        fs::remove_dir_all(&snapshot_dir)?;
-    }
-    fs::create_dir_all(&snapshot_dir)?;
-    let env = unsafe { options.env.to_open_options().open(&snapshot_dir)? };
-
-    let model = extract::extract(loaded);
-    let (node_count, binding_count, usage_count) =
-        write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
-    let manifest = GraphManifest {
-        graph_id: graph_id.clone(),
-        workspace_root: loaded.workspace_root.display().to_string(),
-        workspace_hash: paths.workspace_hash.clone(),
-        fingerprint: fingerprint.clone(),
-        schema_version: SCHEMA_VERSION,
-        created_at_unix: now_unix()?,
-        node_count,
-        binding_count,
-        usage_count,
-    };
-    write_manifest(&manifest_path, &manifest)?;
-    publish_current(&paths, &graph_id)?;
-
-    Ok(BuildResult {
-        graph_id,
-        workspace_root: loaded.workspace_root.clone(),
-        fingerprint,
-        node_count,
-        binding_count,
-        usage_count,
-        reused: false,
-        snapshot_path: snapshot_dir,
-    })
-}
-
 fn write_model(
     env: &Env<WithoutTls>,
     _env_opts: GraphEnvOptions,
@@ -308,7 +258,7 @@ fn write_model(
     Ok((node_count, binding_count, usage_count))
 }
 
-pub fn binding_id_for(binding: &Binding) -> BindingId {
+pub(crate) fn binding_id_for(binding: &Binding) -> BindingId {
     let ns = match binding.namespace {
         Namespace::Type => "T",
         Namespace::Value => "V",
@@ -321,7 +271,7 @@ pub fn binding_id_for(binding: &Binding) -> BindingId {
     ])
 }
 
-pub fn usage_id_for(u: &Usage) -> UsageId {
+pub(crate) fn usage_id_for(u: &Usage) -> UsageId {
     let cat = match u.category {
         super::model::UsageCategory::Read => "R",
         super::model::UsageCategory::Write => "W",

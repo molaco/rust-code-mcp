@@ -5,27 +5,27 @@
 
 #![warn(unreachable_pub, dead_code)]
 
-pub mod ast_resolve;
-pub mod attributes;
-pub mod bindings;
+mod ast_resolve;
+mod attributes;
+mod bindings;
 pub mod channel_audit;
 pub mod derive_audit;
 pub mod docs_audit;
-pub mod extract;
+mod extract;
 pub mod fn_body_audit;
-pub mod hir_trim;
-pub mod ids;
-pub mod impls;
+mod hir_trim;
+mod ids;
+mod impls;
 pub mod loader;
-pub mod model;
-pub mod queries;
+mod model;
+mod queries;
 pub mod recursion_check;
-pub mod signatures;
-pub mod snapshot;
-pub mod statics;
-pub mod storage;
+mod signatures;
+mod snapshot;
+mod statics;
+mod storage;
 pub mod unsafe_audit;
-pub mod usages;
+mod usages;
 
 pub use extract::extract;
 pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
@@ -38,10 +38,10 @@ pub use model::{
 pub use queries::{
     CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
     EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
-    FunctionWithSignature, ModuleShadow, ModuleTreeNode, MutStaticFinding, NodeKindCounts,
-    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, ReExportLink,
-    RecursiveCallersCount, SelfKindFilter, TypeCollision, TypeLocation, UsageSummaryRow,
-    VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
+    FunctionWithSignature, ItemWithAttribute, ModuleShadow, ModuleTreeNode, MutStaticFinding,
+    NodeKindCounts, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
+    ReExportLink, RecursiveCallersCount, SelfKindFilter, TypeCollision, TypeLocation,
+    UsageSummaryRow, VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
 };
 pub use snapshot::{
     BuildOptions, BuildResult, GraphRoTxn, OpenedSnapshot, build_and_persist, open_current,

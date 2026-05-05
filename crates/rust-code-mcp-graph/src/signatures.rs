@@ -34,7 +34,7 @@ use super::hir_trim::trim_hir_display;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, FunctionSignature, GenericBound, Param, SelfKind};
 
-pub fn extract_signatures(
+pub(crate) fn extract_signatures(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     _vfs: &Vfs,

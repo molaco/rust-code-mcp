@@ -121,9 +121,9 @@ use super::model::{Binding, EmbeddingRecord, FunctionSignature, Node, StaticMeta
 // auto-invalidates entries). Old v10 snapshots auto-rebuild because
 // `graph_id_for` hashes `SCHEMA_VERSION`.
 pub const SCHEMA_VERSION: u32 = 11;
-pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
-pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
-pub const MANIFEST_FILENAME: &str = "manifest.json";
+pub(crate) const CURRENT_POINTER_FILENAME: &str = "CURRENT";
+pub(crate) const SNAPSHOTS_DIRNAME: &str = "snapshots";
+pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
 
 const DEFAULT_MAP_SIZE: usize = 1 << 30; // 1 GiB
 const DEFAULT_MAX_DBS: u32 = 16;
@@ -193,7 +193,7 @@ impl GraphPaths {
     }
 }
 
-pub fn default_data_dir() -> PathBuf {
+pub(crate) fn default_data_dir() -> PathBuf {
     ProjectDirs::from("dev", "rust-code-mcp", "search")
         .map(|dirs| dirs.data_dir().join("graphs"))
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp").join("graphs"))
@@ -264,7 +264,7 @@ pub fn compute_fingerprint(workspace_root: &Path) -> Result<String> {
     Ok(hex)
 }
 
-pub fn graph_id_for(workspace_hash: &str, fingerprint: &str) -> String {
+pub(crate) fn graph_id_for(workspace_hash: &str, fingerprint: &str) -> String {
     let mut h = Sha256::new();
     h.update(workspace_hash.as_bytes());
     h.update(&[0]);
@@ -468,12 +468,12 @@ pub struct GraphManifest {
     pub usage_count: u64,
 }
 
-pub fn write_manifest(path: &Path, manifest: &GraphManifest) -> Result<()> {
+pub(crate) fn write_manifest(path: &Path, manifest: &GraphManifest) -> Result<()> {
     let json = serde_json::to_string_pretty(manifest)?;
     fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))
 }
 
-pub fn read_manifest(path: &Path) -> Result<GraphManifest> {
+pub(crate) fn read_manifest(path: &Path) -> Result<GraphManifest> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let manifest: GraphManifest = serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse manifest {}", path.display()))?;
@@ -495,7 +495,7 @@ pub fn read_manifest(path: &Path) -> Result<GraphManifest> {
 /// Use this from read paths where a stale snapshot should be reported as
 /// "no compatible snapshot available — call build_hypergraph first" rather
 /// than as an opaque internal error.
-pub fn read_manifest_compatible(path: &Path) -> Result<Option<GraphManifest>> {
+pub(crate) fn read_manifest_compatible(path: &Path) -> Result<Option<GraphManifest>> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let manifest: GraphManifest = serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse manifest {}", path.display()))?;

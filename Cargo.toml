@@ -61,7 +61,6 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 
 # Phase 1: Persistent Index + Incremental Updates
-notify = "6"
 sled = "0.34"
 sha2 = "0.10"
 directories = "5"
@@ -75,16 +74,11 @@ ra_ap_ide_db = "0.0.330"
 "ra_ap_load-cargo" = "0.0.330"
 ra_ap_project_model = "0.0.330"
 ra_ap_vfs = "0.0.330"
-ra_ap_paths = "0.0.330"
 ra_ap_hir = "0.0.330"
 ra_ap_hir_def = "0.0.330"
-ra_ap_base_db = "0.0.330"
 
 # Persisted hypergraph store
 heed = "0.22.1"
-
-# Phase 3: Semantic Code Chunking
-text-splitter = "0.13"
 
 # Phase 4: Embedding Generation
 fastembed = { git = "https://github.com/Anush008/fastembed-rs" }

@@ -5,7 +5,6 @@
 pub mod config;
 pub mod mcp;
 pub mod monitoring;
-pub mod schema;
 pub mod semantic;
 pub mod tools;
 

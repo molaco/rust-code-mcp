@@ -11,6 +11,8 @@ pub use rust_code_mcp_model::{Embedding, EMBEDDING_DIM};
 use rust_code_mcp_model::{ChunkId, CodeChunk};
 use std::sync::{Arc, Mutex};
 
+const CUDA_MEMORY_LIMIT_ENV: &str = "RUST_CODE_MCP_CUDA_MEMORY_LIMIT_BYTES";
+
 /// A chunk with its generated embedding
 #[derive(Debug, Clone)]
 pub struct ChunkWithEmbedding {
@@ -33,11 +35,9 @@ impl EmbeddingGenerator {
     /// - ~80MB download
     /// - Good balance of speed and quality
     pub fn new() -> Result<Self, EmbeddingError> {
-        // Debug: Log environment variables critical for CUDA
-        tracing::info!("=== CUDA INITIALIZATION DEBUG ===");
-        tracing::info!("CUDA_HOME: {:?}", std::env::var("CUDA_HOME").ok());
-        tracing::info!("CUDA_PATH: {:?}", std::env::var("CUDA_PATH").ok());
-        tracing::info!("LD_LIBRARY_PATH: {:?}", std::env::var("LD_LIBRARY_PATH").ok());
+        tracing::debug!("CUDA_HOME: {:?}", std::env::var("CUDA_HOME").ok());
+        tracing::debug!("CUDA_PATH: {:?}", std::env::var("CUDA_PATH").ok());
+        tracing::debug!("LD_LIBRARY_PATH: {:?}", std::env::var("LD_LIBRARY_PATH").ok());
 
         // Check if CUDA libraries are accessible
         if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
@@ -51,14 +51,13 @@ impl EmbeddingGenerator {
                 } else {
                     false
                 };
-                tracing::info!("  LD path '{}': exists={}, has_cuda_libs={}", path, exists, has_cuda);
+                tracing::debug!("LD path '{}': exists={}, has_cuda_libs={}", path, exists, has_cuda);
             }
         }
 
         // Check CUDA availability BEFORE building provider
-        tracing::info!("Checking CUDAExecutionProvider availability...");
         let cuda_check_result = CUDAExecutionProvider::default().is_available();
-        tracing::info!("CUDA is_available() result: {:?}", cuda_check_result);
+        tracing::debug!("CUDA is_available() result: {:?}", cuda_check_result);
 
         let cuda_available = cuda_check_result.unwrap_or_else(|e| {
             tracing::warn!("CUDA availability check failed: {}", e);
@@ -68,10 +67,12 @@ impl EmbeddingGenerator {
 
         // Configure execution providers based on availability
         let execution_providers = if cuda_available {
-            tracing::info!("Configuring CUDA with 5.5GB memory limit");
-            // 8GB VRAM available, use 5.5GB to leave headroom for peak allocations
-            let cuda_provider = CUDAExecutionProvider::default()
-                .with_memory_limit(5_500_000_000); // 5.5GB limit for safety
+            let cuda_provider = if let Some(limit) = cuda_memory_limit_bytes() {
+                tracing::info!("Configuring CUDA memory limit: {} bytes", limit);
+                CUDAExecutionProvider::default().with_memory_limit(limit)
+            } else {
+                CUDAExecutionProvider::default()
+            };
 
             vec![
                 cuda_provider.build(),
@@ -185,6 +186,28 @@ impl EmbeddingGenerator {
             .collect();
 
         Ok(results)
+    }
+}
+
+fn cuda_memory_limit_bytes() -> Option<usize> {
+    match std::env::var(CUDA_MEMORY_LIMIT_ENV) {
+        Ok(value) => match value.parse::<usize>() {
+            Ok(limit) if limit > 0 => Some(limit),
+            Ok(_) => {
+                tracing::warn!("Ignoring zero CUDA memory limit from {}", CUDA_MEMORY_LIMIT_ENV);
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Ignoring invalid {}='{}': {}",
+                    CUDA_MEMORY_LIMIT_ENV,
+                    value,
+                    e
+                );
+                None
+            }
+        },
+        Err(_) => None,
     }
 }
 

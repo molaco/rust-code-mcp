@@ -20,7 +20,7 @@ use super::hir_trim::trim_hir_display;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, StaticMetadata};
 
-pub fn extract_statics(
+pub(crate) fn extract_statics(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     _vfs: &Vfs,

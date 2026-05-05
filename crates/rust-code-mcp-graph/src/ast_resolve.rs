@@ -15,7 +15,7 @@ use ra_ap_syntax::ast;
 /// generic-argument lists in the path. Returns `None` for non-function
 /// callables (tuple-struct / tuple-enum-variant constructors, closures, fn
 /// pointers).
-pub fn resolve_call_to_function<'db>(
+pub(crate) fn resolve_call_to_function<'db>(
     sema: &Semantics<'db, RootDatabase>,
     call: &ast::CallExpr,
 ) -> Option<Function> {
