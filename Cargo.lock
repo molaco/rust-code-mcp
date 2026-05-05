@@ -6664,6 +6664,10 @@ version = "0.1.0"
 [[package]]
 name = "rust-code-mcp-model"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
+]
 
 [[package]]
 name = "rust-code-mcp-ra-analysis"

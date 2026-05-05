@@ -4,6 +4,8 @@
 
 #![warn(unreachable_pub, dead_code)]
 
+pub use rust_code_mcp_model::{ChunkContext, ChunkId, CodeChunk, Embedding, EMBEDDING_DIM};
+
 pub mod chunker;
 pub mod config;
 pub mod embeddings;

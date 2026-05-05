@@ -5,16 +5,11 @@
 mod error;
 pub use error::EmbeddingError;
 
-/// Embedding dimension for all-MiniLM-L6-v2
-pub const EMBEDDING_DIM: usize = 384;
-
-use crate::chunker::{ChunkId, CodeChunk};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ort::execution_providers::{CPUExecutionProvider, CUDAExecutionProvider, ExecutionProvider};
+pub use rust_code_mcp_model::{Embedding, EMBEDDING_DIM};
+use rust_code_mcp_model::{ChunkId, CodeChunk};
 use std::sync::{Arc, Mutex};
-
-/// An embedding vector (384 dimensions for all-MiniLM-L6-v2)
-pub type Embedding = Vec<f32>;
 
 /// A chunk with its generated embedding
 #[derive(Debug, Clone)]
