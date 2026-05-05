@@ -1509,6 +1509,556 @@ pub async fn mut_static_audit(
     })
 }
 
+pub async fn missing_docs_audit(
+    params: crate::tools::search_tool::MissingDocsAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+
+    let crate_id_filter: Option<NodeId> = if let Some(qn) = &params.crate_name {
+        let (id, node) = snap
+            .lookup_by_qualified_name(qn)
+            .map_err(internal_error("lookup_by_qualified_name"))?
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("no node found for qualified name `{qn}`"),
+                    None,
+                )
+            })?;
+        Some(match node.kind {
+            NodeKind::Crate => id,
+            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("`{qn}` resolves to a Module with no crate_id"),
+                    None,
+                )
+            })?,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
+                    None,
+                ));
+            }
+        })
+    } else {
+        None
+    };
+
+    let kind_filter = match params.item_kind.as_deref() {
+        None => crate::graph::docs_audit::default_kind_filter(),
+        Some(labels) => {
+            let mut set = std::collections::HashSet::new();
+            for label in labels {
+                let kind = parse_item_kind_filter(Some(label.as_str()))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!("empty item_kind label in list"),
+                            None,
+                        )
+                    })?;
+                set.insert(kind);
+            }
+            set
+        }
+    };
+
+    let opts = crate::graph::docs_audit::AuditOpts {
+        crate_id_filter,
+        kind_filter,
+        skip_test_items: params.skip_test_items.unwrap_or(true),
+    };
+
+    let findings = crate::graph::docs_audit::missing_docs_audit(&snap, opts)
+        .map_err(internal_error("missing_docs_audit"))?;
+
+    #[derive(serde::Serialize)]
+    struct ScopeSummary {
+        directory: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crate_name: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct MissingDocsFindingRendered {
+        target: String,
+        qualified_name: String,
+        item_kind: String,
+        visibility: String,
+        file: Option<String>,
+        span: Option<(u32, u32)>,
+    }
+    #[derive(serde::Serialize)]
+    struct Resp {
+        scope: ScopeSummary,
+        finding_count: usize,
+        findings: Vec<MissingDocsFindingRendered>,
+    }
+
+    let rendered: Vec<MissingDocsFindingRendered> = findings
+        .into_iter()
+        .map(|f| MissingDocsFindingRendered {
+            target: f.target.to_hex(),
+            qualified_name: f.qualified_name,
+            item_kind: item_kind_label(f.item_kind).to_string(),
+            visibility: f.visibility,
+            file: f.file,
+            span: f.span,
+        })
+        .collect();
+
+    json_result(&Resp {
+        scope: ScopeSummary {
+            directory: params.directory,
+            crate_name: params.crate_name,
+        },
+        finding_count: rendered.len(),
+        findings: rendered,
+    })
+}
+
+pub async fn derive_audit(
+    params: crate::tools::search_tool::DeriveAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+
+    let crate_id_filter: Option<NodeId> = if let Some(qn) = &params.crate_name {
+        let (id, node) = snap
+            .lookup_by_qualified_name(qn)
+            .map_err(internal_error("lookup_by_qualified_name"))?
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("no node found for qualified name `{qn}`"),
+                    None,
+                )
+            })?;
+        Some(match node.kind {
+            NodeKind::Crate => id,
+            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("`{qn}` resolves to a Module with no crate_id"),
+                    None,
+                )
+            })?,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
+                    None,
+                ));
+            }
+        })
+    } else {
+        None
+    };
+
+    let kind_filter = match params.item_kind.as_deref() {
+        None => crate::graph::derive_audit::default_kind_filter(),
+        Some(labels) => {
+            let mut set = std::collections::HashSet::new();
+            for label in labels {
+                let kind = parse_item_kind_filter(Some(label.as_str()))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            "empty item_kind label in list".to_string(),
+                            None,
+                        )
+                    })?;
+                match kind {
+                    ItemKind::Struct | ItemKind::Enum | ItemKind::Union => {}
+                    other => {
+                        return Err(McpError::invalid_params(
+                            format!(
+                                "derive_audit only accepts Struct | Enum | Union, got {other:?}"
+                            ),
+                            None,
+                        ));
+                    }
+                }
+                set.insert(kind);
+            }
+            set
+        }
+    };
+
+    if params.required_derives.is_empty() {
+        return Err(McpError::invalid_params(
+            "required_derives must be a non-empty list of derive identifiers".to_string(),
+            None,
+        ));
+    }
+    let required_derives: std::collections::HashSet<String> =
+        params.required_derives.iter().cloned().collect();
+
+    let opts = crate::graph::derive_audit::AuditOpts {
+        crate_id_filter,
+        kind_filter,
+        required_derives,
+        pub_only: params.pub_only.unwrap_or(true),
+        skip_test_items: params.skip_test_items.unwrap_or(true),
+    };
+
+    let findings = crate::graph::derive_audit::derive_audit(&snap, opts)
+        .map_err(internal_error("derive_audit"))?;
+
+    #[derive(serde::Serialize)]
+    struct ScopeSummary {
+        directory: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crate_name: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct DeriveFindingRendered {
+        target: String,
+        qualified_name: String,
+        item_kind: String,
+        visibility: String,
+        file: Option<String>,
+        span: Option<(u32, u32)>,
+        current_derives: Vec<String>,
+        missing_derives: Vec<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct Resp {
+        scope: ScopeSummary,
+        required_derives: Vec<String>,
+        finding_count: usize,
+        findings: Vec<DeriveFindingRendered>,
+    }
+
+    let rendered: Vec<DeriveFindingRendered> = findings
+        .into_iter()
+        .map(|f| DeriveFindingRendered {
+            target: f.target.to_hex(),
+            qualified_name: f.qualified_name,
+            item_kind: item_kind_label(f.item_kind).to_string(),
+            visibility: f.visibility,
+            file: f.file,
+            span: f.span,
+            current_derives: f.current_derives,
+            missing_derives: f.missing_derives,
+        })
+        .collect();
+
+    json_result(&Resp {
+        scope: ScopeSummary {
+            directory: params.directory,
+            crate_name: params.crate_name,
+        },
+        required_derives: params.required_derives,
+        finding_count: rendered.len(),
+        findings: rendered,
+    })
+}
+
+pub async fn recursion_check(
+    params: crate::tools::search_tool::RecursionCheckParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+
+    let crate_id_filter: Option<NodeId> = if let Some(qn) = &params.crate_name {
+        let (id, node) = snap
+            .lookup_by_qualified_name(qn)
+            .map_err(internal_error("lookup_by_qualified_name"))?
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("no node found for qualified name `{qn}`"),
+                    None,
+                )
+            })?;
+        Some(match node.kind {
+            NodeKind::Crate => id,
+            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!("`{qn}` resolves to a Module with no crate_id"),
+                    None,
+                )
+            })?,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
+                    None,
+                ));
+            }
+        })
+    } else {
+        None
+    };
+
+    let max_cycle_length =
+        crate::graph::recursion_check::clamp_cycle_length(params.max_cycle_length);
+
+    let opts = crate::graph::recursion_check::RecursionOpts {
+        crate_id_filter,
+        max_cycle_length,
+    };
+
+    let cycles = crate::graph::recursion_check::recursion_check(&snap, opts)
+        .map_err(internal_error("recursion_check"))?;
+
+    let mut rendered: Vec<RecursionCycleRendered> = Vec::with_capacity(cycles.len());
+    for cycle in cycles {
+        let qualified_names =
+            crate::graph::recursion_check::enclosing_fn_qualified_names(&snap, &cycle.fns)
+                .map_err(internal_error("enclosing_fn_qualified_names"))?;
+        let starting_node_id = cycle
+            .fns
+            .first()
+            .map(|id| id.to_hex())
+            .unwrap_or_default();
+        rendered.push(RecursionCycleRendered {
+            fns: qualified_names,
+            cycle_length: cycle.cycle_length,
+            direct_recursion: cycle.direct_recursion,
+            starting_node_id,
+        });
+    }
+
+    #[derive(serde::Serialize)]
+    struct ScopeSummary {
+        directory: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crate_name: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct Resp {
+        scope: ScopeSummary,
+        max_cycle_length: usize,
+        cycle_count: usize,
+        cycles: Vec<RecursionCycleRendered>,
+    }
+
+    json_result(&Resp {
+        scope: ScopeSummary {
+            directory: params.directory,
+            crate_name: params.crate_name,
+        },
+        max_cycle_length,
+        cycle_count: rendered.len(),
+        cycles: rendered,
+    })
+}
+
+#[derive(serde::Serialize)]
+struct RecursionCycleRendered {
+    fns: Vec<String>,
+    cycle_length: usize,
+    direct_recursion: bool,
+    starting_node_id: String,
+}
+
+pub async fn channel_capacity_audit(
+    params: crate::tools::search_tool::ChannelCapacityAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let directory = params.directory.clone();
+    let crate_name = params.crate_name.clone();
+    let skip_test_fns = params.skip_test_fns.unwrap_or(true);
+
+    let findings: Vec<crate::graph::channel_audit::ChannelFinding> =
+        tokio::task::spawn_blocking(move || -> Result<_, McpError> {
+            let snap = open_workspace_snapshot(&directory)?;
+
+            let crate_id_filter: Option<NodeId> = if let Some(qn) = &crate_name {
+                let (id, node) = snap
+                    .lookup_by_qualified_name(qn)
+                    .map_err(internal_error("lookup_by_qualified_name"))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!("no node found for qualified name `{qn}`"),
+                            None,
+                        )
+                    })?;
+                Some(match node.kind {
+                    NodeKind::Crate => id,
+                    NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!("`{qn}` resolves to a Module with no crate_id"),
+                            None,
+                        )
+                    })?,
+                    other => {
+                        return Err(McpError::invalid_params(
+                            format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
+                            None,
+                        ));
+                    }
+                })
+            } else {
+                None
+            };
+
+            let canonical = std::path::PathBuf::from(&directory)
+                .canonicalize()
+                .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
+            let loaded = crate::graph::loader::load(&canonical)
+                .map_err(internal_error("loader::load"))?;
+
+            let opts = crate::graph::channel_audit::ChannelAuditOpts {
+                crate_id_filter,
+                skip_test_fns,
+            };
+            crate::graph::channel_audit::channel_capacity_audit(&loaded, &snap, opts)
+                .map_err(internal_error("channel_capacity_audit"))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))??;
+
+    #[derive(serde::Serialize)]
+    struct ScopeSummary {
+        directory: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crate_name: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct ChannelFindingRendered {
+        crate_name: String,
+        kind: String,
+        bounded: bool,
+        capacity: Option<u64>,
+        file: String,
+        span: (u32, u32),
+        enclosing_function: Option<String>,
+        enclosing_function_name: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct Resp {
+        scope: ScopeSummary,
+        finding_count: usize,
+        findings: Vec<ChannelFindingRendered>,
+    }
+
+    let rendered: Vec<ChannelFindingRendered> = findings
+        .into_iter()
+        .map(|f| ChannelFindingRendered {
+            crate_name: f.crate_name,
+            kind: f.kind,
+            bounded: f.bounded,
+            capacity: f.capacity,
+            file: f.file,
+            span: f.span,
+            enclosing_function: f.enclosing_function.map(|n| n.to_hex()),
+            enclosing_function_name: f.enclosing_function_name,
+        })
+        .collect();
+
+    json_result(&Resp {
+        scope: ScopeSummary {
+            directory: params.directory,
+            crate_name: params.crate_name,
+        },
+        finding_count: rendered.len(),
+        findings: rendered,
+    })
+}
+
+pub async fn fn_body_audit(
+    params: crate::tools::search_tool::FnBodyAuditParams,
+) -> Result<CallToolResult, McpError> {
+    let directory = params.directory.clone();
+    let crate_name = params.crate_name.clone();
+    let patterns_input = params.patterns.clone();
+    let skip_test_fns = params.skip_test_fns.unwrap_or(true);
+
+    let patterns_set =
+        crate::graph::fn_body_audit::parse_pattern_filter(patterns_input.as_deref())
+            .map_err(|m| McpError::invalid_params(m, None))?;
+
+    let mut patterns_used: Vec<String> =
+        patterns_set.iter().map(|s| s.to_string()).collect();
+    patterns_used.sort();
+
+    let findings: Vec<crate::graph::fn_body_audit::FnBodyFinding> =
+        tokio::task::spawn_blocking(move || -> Result<_, McpError> {
+            let snap = open_workspace_snapshot(&directory)?;
+
+            let crate_id_filter: Option<NodeId> = if let Some(qn) = &crate_name {
+                let (id, node) = snap
+                    .lookup_by_qualified_name(qn)
+                    .map_err(internal_error("lookup_by_qualified_name"))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!("no node found for qualified name `{qn}`"),
+                            None,
+                        )
+                    })?;
+                Some(match node.kind {
+                    NodeKind::Crate => id,
+                    NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!("`{qn}` resolves to a Module with no crate_id"),
+                            None,
+                        )
+                    })?,
+                    other => {
+                        return Err(McpError::invalid_params(
+                            format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
+                            None,
+                        ));
+                    }
+                })
+            } else {
+                None
+            };
+
+            let canonical = std::path::PathBuf::from(&directory)
+                .canonicalize()
+                .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
+            let loaded = crate::graph::loader::load(&canonical)
+                .map_err(internal_error("loader::load"))?;
+
+            let opts = crate::graph::fn_body_audit::FnBodyAuditOpts {
+                crate_id_filter,
+                patterns: patterns_set,
+                skip_test_fns,
+            };
+            crate::graph::fn_body_audit::fn_body_audit(&loaded, &snap, opts)
+                .map_err(internal_error("fn_body_audit"))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))??;
+
+    #[derive(serde::Serialize)]
+    struct ScopeSummary {
+        directory: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crate_name: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct FnBodyFindingRendered {
+        target: Option<String>,
+        qualified_name: Option<String>,
+        pattern: String,
+        file: String,
+        span: (u32, u32),
+        context: String,
+    }
+    #[derive(serde::Serialize)]
+    struct Resp {
+        scope: ScopeSummary,
+        patterns_used: Vec<String>,
+        finding_count: usize,
+        findings: Vec<FnBodyFindingRendered>,
+    }
+
+    let rendered: Vec<FnBodyFindingRendered> = findings
+        .into_iter()
+        .map(|f| FnBodyFindingRendered {
+            target: f.target.map(|n| n.to_hex()),
+            qualified_name: f.qualified_name,
+            pattern: f.pattern,
+            file: f.file,
+            span: f.span,
+            context: f.context,
+        })
+        .collect();
+
+    json_result(&Resp {
+        scope: ScopeSummary {
+            directory: params.directory,
+            crate_name: params.crate_name,
+        },
+        patterns_used,
+        finding_count: rendered.len(),
+        findings: rendered,
+    })
+}
+
 // ----- helpers -----
 
 fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {

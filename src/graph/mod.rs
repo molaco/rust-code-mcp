@@ -5,13 +5,18 @@
 
 pub mod attributes;
 pub mod bindings;
+pub mod channel_audit;
+pub mod derive_audit;
+pub mod docs_audit;
 pub mod extract;
+pub mod fn_body_audit;
 pub mod hir_trim;
 pub mod ids;
 pub mod impls;
 pub mod loader;
 pub mod model;
 pub mod queries;
+pub mod recursion_check;
 pub mod signatures;
 pub mod snapshot;
 pub mod statics;
