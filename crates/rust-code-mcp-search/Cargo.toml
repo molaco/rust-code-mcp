@@ -4,3 +4,17 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+rust-code-mcp-model = { workspace = true }
+rust-code-mcp-embeddings = { workspace = true }
+rust-code-mcp-bm25 = { workspace = true }
+rust-code-mcp-vector-store = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tantivy = { workspace = true }

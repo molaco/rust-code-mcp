@@ -3,7 +3,7 @@
 //! Automatically tunes the k parameter for optimal hybrid search quality
 //! using a test dataset and NDCG evaluation metrics.
 
-use crate::search::{HybridSearch, SearchResult};
+use crate::{HybridSearch, SearchResult};
 use serde::{Deserialize, Serialize};
 
 /// Test query with ground truth relevant results
@@ -341,7 +341,7 @@ pub async fn evaluate_hybrid_search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunker::{ChunkContext, ChunkId, CodeChunk};
+    use rust_code_mcp_model::{ChunkContext, ChunkId, CodeChunk};
     use std::path::PathBuf;
 
     fn create_mock_result(symbol_name: &str, score: f32) -> SearchResult {

@@ -7,10 +7,10 @@
 //!
 //! This ensures the system remains functional even when components are degraded.
 
-use crate::embeddings::EmbeddingGenerator;
-use crate::search::{Bm25Search, HybridSearch, SearchResult};
-use crate::vector_store::VectorStore;
+use crate::{Bm25Search, HybridSearch, SearchResult};
 use anyhow::{anyhow, Context, Result};
+use rust_code_mcp_embeddings::EmbeddingGenerator;
+use rust_code_mcp_vector_store::VectorStore;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing;

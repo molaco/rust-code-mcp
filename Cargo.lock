@@ -6692,6 +6692,20 @@ version = "0.1.0"
 [[package]]
 name = "rust-code-mcp-search"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rust-code-mcp-bm25",
+ "rust-code-mcp-embeddings",
+ "rust-code-mcp-model",
+ "rust-code-mcp-vector-store",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "rust-code-mcp-server"
