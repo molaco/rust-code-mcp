@@ -81,7 +81,8 @@ use rmcp::{
 // Re-export parameter types from search_tool for compatibility
 pub use crate::tools::search_tool::{
     AnalyzeComplexityParams, FileContentParams, FindDefinitionParams, FindReferencesParams,
-    GetCallGraphParams, GetDependenciesParams, GetSimilarCodeParams, SearchParams,
+    GetCallGraphParams, GetDependenciesParams, GetSimilarCodeParams, RenameSymbolParams,
+    SearchParams,
 };
 
 /// Main tool router struct
@@ -151,6 +152,19 @@ impl SearchToolRouter {
         }): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
         crate::tools::analysis_tools::find_references(&symbol_name, &directory).await
+    }
+
+    /// Preview a rename of a symbol across the project (read-only, no files modified)
+    #[tool(description = "Preview renaming a Rust symbol project-wide using rust-analyzer. Returns the set of edits and file moves WITHOUT modifying any files.")]
+    async fn rename_symbol(
+        &self,
+        Parameters(RenameSymbolParams {
+            symbol_name,
+            new_name,
+            directory,
+        }): Parameters<RenameSymbolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::analysis_tools::rename_symbol(&symbol_name, &new_name, &directory).await
     }
 
     /// Get dependencies for a file (imports and files that depend on it)
@@ -239,7 +253,7 @@ impl ServerHandler for SearchToolRouter {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) get_dependencies - analyze imports, 6) get_call_graph - show function call relationships, 7) analyze_complexity - calculate code metrics, 8) health_check - check system health status, 9) get_similar_code - semantic similarity search, 10) index_codebase - manually index a codebase with incremental change detection, 11) clear_cache - clear corrupted cache/index files to fix MetadataCache errors"
+                "This server provides code search and analysis tools: 1) search - keyword search in files, 2) read_file_content - read file contents, 3) find_definition - locate symbol definitions, 4) find_references - find symbol references, 5) rename_symbol - preview project-wide rename via rust-analyzer (no files written), 6) get_dependencies - analyze imports, 7) get_call_graph - show function call relationships, 8) analyze_complexity - calculate code metrics, 9) health_check - check system health status, 10) get_similar_code - semantic similarity search, 11) index_codebase - manually index a codebase with incremental change detection, 12) clear_cache - clear corrupted cache/index files to fix MetadataCache errors"
                     .into(),
             ),
         }

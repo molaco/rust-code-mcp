@@ -46,6 +46,16 @@ pub struct FindReferencesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RenameSymbolParams {
+    #[schemars(description = "Symbol name to rename (must match exactly; ambiguous names are rejected)")]
+    pub symbol_name: String,
+    #[schemars(description = "New name for the symbol (valid Rust identifier)")]
+    pub new_name: String,
+    #[schemars(description = "Project root directory containing Cargo.toml")]
+    pub directory: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GetDependenciesParams {
     #[schemars(description = "Path to the file to analyze")]
     pub file_path: String,
