@@ -238,10 +238,22 @@ impl SearchService {
     pub async fn similar(&self, req: SimilarRequest)
         -> Result<SimilarResponse, SearchError>;
 
-    /// Atomically reload Tantivy + LanceDB readers (post-commit).
+    /// Drop in-memory `IndexReader` / `Connection` `ArcSwap` slots for
+    /// `workspace`. The next operation on this service rebuilds via the
+    /// existing fingerprint-mismatch path. **Does not** delete on-disk
+    /// data (that is `clear_cache`'s job, in `rcm-server`) and **does
+    /// not** auto-reindex.
+    /// # Errors
+    /// Returns `SearchError::IndexBusy` if a writer is mid-batch on
+    /// `workspace`; in that case no handles are dropped.
+    pub fn invalidate(&self, workspace: &Path) -> Result<(), SearchError>;
+
+    /// Open new readers, atomically swap them in via `ArcSwap`, drop the
+    /// old after a grace period. Used by `SyncManager` after a Tantivy
+    /// schema-version bump. **Does not** delete on-disk data.
     /// # Errors
     /// Returns `SearchError::IndexBusy` if a writer is mid-batch.
-    pub async fn reload(&self) -> Result<(), SearchError>;
+    pub async fn reload(&self, workspace: &Path) -> Result<(), SearchError>;
 }
 
 impl CorpusWriter {
@@ -509,10 +521,18 @@ impl GraphService {
     pub async fn build_and_persist(&self, workspace: &std::path::Path)
         -> Result<GraphId, BuildError>;
 
-    /// Invalidate the in-memory snapshot handle.
+    /// Drop the in-memory `OpenedSnapshot` for `workspace`. The next
+    /// graph query rebuilds via the fingerprint-mismatch path in
+    /// `build_and_persist`. **Does not** delete on-disk LMDB data and
+    /// **does not** rebuild eagerly. This is the cheap operation called
+    /// by `clear_cache`.
+    pub fn invalidate(&self, workspace: &Path);
+
+    /// Eagerly rebuild the snapshot for `workspace` (used by
+    /// `SyncManager` schema-change paths, NOT by `clear_cache`).
     /// # Errors
-    /// None today — reserved for future async drains.
-    pub async fn invalidate(&self) -> Result<(), QueryError>;
+    /// Returns `QueryError::Build` on snapshot build failure.
+    pub async fn reload(&self, workspace: &Path) -> Result<(), QueryError>;
 
     /// Resolve a qualified name to a `NodeId`.
     /// # Errors

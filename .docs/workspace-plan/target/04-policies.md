@@ -192,20 +192,36 @@ Example crate root for a capability crate (`crates/rcm-search/src/lib.rs`):
 #![doc = include_str!("../README.md")]
 ```
 
-`clippy::disallowed_methods` is workspace-level. Its allow-list lives in `.clippy.toml`:
+`clippy::disallowed_methods` is workspace-level. The DENY-LIST (NOT an allow-list — clippy has no caller-crate-specific allow-list mechanism) lives in `.clippy.toml`:
 
 ```toml
-# .clippy.toml
+# .clippy.toml — names methods that are forbidden by default for ALL callers.
 disallowed-methods = [
     { path = "rcm_ra_host::RaHost::with_db",
-      reason = "RaHost::with_db is RA-host-internal; only rcm-graph and rcm-ide may call it.",
+      reason = "Closure-based RA-host internals; misuse risks lifetime leaks of RootDatabase.",
       allow-invalid = false },
     { path = "rcm_ra_host::RaHost::with_semantics",
       reason = "Same boundary as with_db." },
 ]
 ```
 
-The CI lint runs as `cargo clippy --workspace -- -D warnings`. Local exceptions in `rcm-graph` / `rcm-ide` are granted with `#[allow(clippy::disallowed_methods)]` on the specific call site, with a one-line justification.
+The lint then fires globally on every call site. Permission is granted **per call site** in `rcm-graph` and `rcm-ide` via:
+
+```rust
+#[allow(clippy::disallowed_methods)]   // SAFETY: rcm-graph extraction owns this RA load; closure scope is correct.
+host.with_db(|db| { /* ... */ });
+```
+
+The actual workspace-level enforcement is a CI grep that rejects this annotation outside the two trusted crates:
+
+```bash
+! grep -r '#\[allow(clippy::disallowed_methods)\]' \
+    --include='*.rs' \
+    crates/rcm-search crates/rcm-server crates/rcm-paths \
+    crates/rcm-embedding crates/rcm-ra-host crates/rcm-ra-syntax
+```
+
+Discipline + lint + grep, not a clippy feature. Anyone wanting to bypass the boundary must pass code review on adding either a new entry to `.clippy.toml` or a new `#[allow(...)]` site in `rcm-graph`/`rcm-ide`.
 
 ---
 
@@ -317,9 +333,9 @@ SIGINT (or stdin EOF on stdio transport)
 
 | Trigger                              | Action                                                                 |
 |--------------------------------------|------------------------------------------------------------------------|
-| `clear_cache(workspace)`             | `SearchService::reload`, `GraphService::invalidate`, `IdeService::evict` (returns `IndexBusy` mid-batch). |
+| `clear_cache(workspace, scope)`      | (1) Refuse with `IndexBusy` if a writer is mid-batch. (2) `rm -rf` the on-disk paths for the scope. (3) `SearchService::invalidate(workspace)`, `GraphService::invalidate(workspace)`, `IdeService::evict(workspace)` — drop handles only; do NOT reload, do NOT auto-reindex. The next op rebuilds via the existing fingerprint-mismatch path. |
 | Workspace fingerprint mismatch       | Transparent rebuild via `build_and_persist`.                           |
-| `SyncManager::sync_now` schema change| `SearchService::reload(workspace)`.                                    |
+| `SyncManager::sync_now` schema change| `SearchService::reload(workspace)` — opens new handles, `ArcSwap` swap, drops old after grace. No on-disk delete. |
 | SIGINT / stdin EOF                   | See sequence above.                                                    |
 | `track_directory(new)`               | No reload; `SearchService` opens lazily on first `search`.             |
 
@@ -450,6 +466,6 @@ Before adding a new external crate, reviewer confirms:
 
 Smoke checklist (the `cargo xtask smoke` job exercises against `fixtures/sample-workspace`):
 
-`index_codebase` → `search` → `find_definition` → `find_references` → `build_hypergraph` → `who_calls` / `who_imports` / `workspace_stats` → `get_dependencies` / `get_call_graph` / `analyze_complexity` → `semantic_overlaps` (when `embeddings` on) → `similar_to_item` → `clear_cache(ws)` then `search` (verifies reload).
+`index_codebase` → `search` → `find_definition` → `find_references` → `build_hypergraph` → `who_calls` / `who_imports` / `workspace_stats` → `get_dependencies` / `get_call_graph` / `analyze_complexity` → `semantic_overlaps` (when `embeddings` on) → `similar_to_item` → `clear_cache(ws)` then `search` (verifies on-disk delete + handle invalidation + lazy rebuild on next read).
 
 Failures in any blocking gate block merge. Warning gates surface in PR comments via the CI bot but do not block; persistent warnings become tracked issues.

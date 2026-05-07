@@ -283,8 +283,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace --locked
-      - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (deny warnings, lib+bins only — examples/benches retired separately before Phase 1)
+        run: cargo clippy --workspace --lib --bins -- -D warnings
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
         with: { command: check }
@@ -364,7 +364,7 @@ pub fn run() -> ExitCode {
 
 **Acceptance.** All four gate commands pass locally:
 - `nix develop ../nix-devshells#code --command cargo build --workspace --locked`
-- `nix develop ../nix-devshells#code --command cargo clippy --workspace --all-targets -- -D warnings`
+- `nix develop ../nix-devshells#code --command cargo clippy --workspace --lib --bins -- -D warnings` (NOT `--all-targets` — legacy `examples/`/`benches/` are retired separately before Phase 1; widening to `--all-targets` is a Phase 1 acceptance criterion, not a Phase 0 one)
 - `nix develop ../nix-devshells#code --command cargo deny check`
 - `nix develop ../nix-devshells#code --command cargo run -p xtask -- forbidden-deps`
 

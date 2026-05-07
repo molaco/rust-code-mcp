@@ -301,4 +301,4 @@ After each phase, the following MCP tool calls must succeed against a fixture wo
 - `get_dependencies`, `get_call_graph`, `analyze_complexity`
 - `semantic_overlaps` (when `embeddings` feature is on)
 - `similar_to_item`
-- `clear_cache(workspace)` followed by `search` (verifies reload path)
+- `clear_cache(workspace)` followed by `search` (verifies delete-then-invalidate, then lazy rebuild on next read via fingerprint mismatch — NOT reload, NOT auto-reindex)

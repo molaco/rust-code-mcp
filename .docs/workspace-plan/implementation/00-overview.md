@@ -20,7 +20,7 @@ The plan converts single-crate `file-search-mcp` into a virtual workspace of
 | 1 | 8 target crates expose frozen public APIs as adapters delegating to legacy. | medium | yes | XL | 0 |
 | 2 | Delete `LazyLock<Mutex<…>>` runtime singletons; services constructed once in `main`. | low | yes | S | 1 |
 | 3 | Operation-scoped `thiserror` enums per service; `anyhow` confined to `rcm-server`. | low | yes | M | 1 |
-| 4 | Service lifetime: `ArcSwap` readers, `Mutex` writer, `CancellationToken` shutdown, `clear_cache` reload. | medium | partial | L | 1, 3 |
+| 4 | Service lifetime: `ArcSwap` readers, `Mutex` writer, `CancellationToken` shutdown, `clear_cache` delete-then-invalidate (lazy rebuild on next op). | medium | partial | L | 1, 3 |
 | 5 | Sealed `Embed` trait; `embeddings`/`test-fakes` features; `rcm-graph::semantic-overlaps` feature. | low | yes | M | 1 |
 | 6 | Parser scope reduction — chunking-context AST in `rcm-search`; `get_dependencies`/`get_call_graph`/`analyze_complexity` route through HIR. | **high** | partial | L | 4, 5 |
 | 7 | Storage layout v2 migration via `xtask migrate-storage`. | high (ops) | partial | M | 0 |
