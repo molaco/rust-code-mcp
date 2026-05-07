@@ -28,7 +28,7 @@ members = [
 
 [workspace.package]
 edition      = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license      = "MIT OR Apache-2.0"
 authors      = ["rcm contributors"]
 repository   = "https://github.com/<org>/rust-code-mcp"
@@ -123,7 +123,7 @@ debug = "limited"
 
 ```toml
 [toolchain]
-channel    = "1.85.0"
+channel    = "1.95.0"
 components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
 profile    = "minimal"
 ```
@@ -427,7 +427,7 @@ Everything else — call counts, latencies, queue depths, cache hits, embedding 
 
 ### MSRV policy
 
-No external SDK consumers exist today. We pin `rust-version = "1.85"` in `[workspace.package]` to match `rust-toolchain.toml`, but make no MSRV stability promise yet. **If/when** a public crate is published or external consumers materialize, we will:
+No external SDK consumers exist today. We pin `rust-version = "1.95"` in `[workspace.package]` to match `rust-toolchain.toml`, but make no MSRV stability promise yet. **If/when** a public crate is published or external consumers materialize, we will:
 
 1. Set MSRV one stable behind the toolchain.
 2. Add a `cargo +<MSRV> check --workspace` job to CI.

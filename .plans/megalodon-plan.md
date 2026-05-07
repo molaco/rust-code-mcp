@@ -36,7 +36,7 @@ cosmetic crate renames.
 
 | Crate | Type | Purpose |
 |---|---|---|
-| `rcm-paths` | infra leaf | `ProjectPaths`, frozen workspace-hash recipe, `StorageRoot { Xdg, Explicit }`. The only crate that hashes a workspace path. |
+| `rcm-paths` | infra leaf | `ProjectPaths`, `StorageRoot { Xdg, Explicit }`, and a single owner for the workspace-hash recipe(s). **Phase 1 preserves the legacy raw-path-string recipe verbatim** to avoid orphaning existing on-disk indexes; canonicalization (and any unification across today's three divergent hash sites in `tools/project_paths.rs`, `graph/ids.rs`, `indexing/incremental.rs`) is a Phase 7 decision, not Phase 1. |
 | `rcm-ra-syntax` | infra leaf | Narrow, whitelisted re-exports of `ra_ap_syntax` items used by the chunker. Centralizes RA version pinning. |
 | `rcm-ra-host` | infra leaf | `RaHost` lifecycle wrapper around `RootDatabase` + `Vfs`. Two presets: `open_ide` (light, IDE) and `open_hir` (heavy, snapshot build). Closure-based access to `&RootDatabase`. |
 | `rcm-embedding` | infra leaf | Sealed `Embed` trait + `Embedder = Arc<dyn Embed>`. Production `FastEmbedEmbedder` (feature `embeddings`, default-on) and `DeterministicEmbedder` (feature `test-fakes`, default-off). |
@@ -77,8 +77,8 @@ script (Phase 0). xtask is excluded from this policy.
 
 Every phase below assumes these. They are the contract.
 
-**3.1. `clear_cache` is delete-then-invalidate, NOT reload.** Three steps,
-in order:
+**3.1. `clear_cache` is delete-then-invalidate, NOT reload — and lazy
+rebuild differs by capability.** Three steps, in order:
 
 1. Refuse with `IndexBusy` if a writer is mid-batch.
 2. `rm -rf` the on-disk artifacts for the requested scope (`workspace`
@@ -88,9 +88,16 @@ in order:
    `GraphService::invalidate(workspace)`, `IdeService::evict(workspace)`
    to drop in-memory handles.
 
-The next operation that needs data triggers a transparent rebuild via
-the existing fingerprint-mismatch path. There is no auto-reindex on
-clear.
+**Rebuild behavior is asymmetric.** `search` already lazily rebuilds on
+stale-index detection (`tools::query_tools::search` calls
+`UnifiedIndexer::ensure_indexed` today), so `clear_cache` followed by
+`search` works with no user action. **Graph queries do not auto-rebuild
+today** — `tools::graph_tools::*` returns "call `build_hypergraph`
+first" when the snapshot is missing. Phase 4 preserves this asymmetry:
+after `clear_cache`, the user must explicitly call `build_hypergraph`
+before the next graph query. Symmetry (graph auto-rebuilds on
+not-found) is an explicit non-goal of Phase 4; if wanted later, it gets
+its own phase. There is no auto-reindex on clear.
 
 **3.2. Sealed `Embed` trait, not concrete `Embedder`.** Capability crates
 take `Embedder = Arc<dyn Embed>`. Production impl is `FastEmbedEmbedder`
@@ -153,7 +160,7 @@ constraining domain types.
 `[workspace.package]` (edition `2024`), `[workspace.dependencies]`
 (every external dep pinned in one place), `[workspace.lints.rust]` and
 `[workspace.lints.clippy]`. `Cargo.lock` committed. `rust-toolchain.toml`
-pins `1.85.0` (edition 2024 + resolver "3"). `cargo-deny`,
+pins `1.95.0` (edition 2024 + resolver "3"). `cargo-deny`,
 `cargo-public-api`, and the forbidden-deps xtask script are CI gates.
 File-based modules only (`parser.rs` + `parser/lexer.rs`); no `mod.rs`
 in new code.
@@ -169,46 +176,85 @@ explicitly noted otherwise.
 ### Phase 0 — Workspace skeleton
 
 **Goal.** Establish the workspace shell and CI policy gates. No
-production code moves.
+production code moves; new placeholder crates are empty.
+
+**Important caveats up front.** Phase 0 is "shell-only" only because
+two real concessions are made: (a) the legacy crate is exempted from
+the strict clippy gate, because today's code has unresolved warnings
+across `chunker`, `parser`, `graph`, and `semantic`; (b) the toolchain
+flip from `nightly` (current `rust-toolchain.toml`) to stable `1.95.0`
+is verified before Phase 0 ships. Both are explicit steps below.
 
 **Steps.**
 
-1. Move the existing crate to `crates/file-search-mcp-legacy/`. It stays
-   functionally unchanged; only its location and binary target name change.
-2. Write the virtual `Cargo.toml` at the repo root with `resolver = "3"`,
-   `[workspace.package]` (edition `2024`, MSRV `1.85`),
+1. **Verify stable build.** Before any move, run
+   `cargo +1.95.0 build --bin file-search-mcp` against the current
+   single-crate layout. If the legacy code uses any nightly-only feature
+   (it shouldn't — repo is on nightly by historical accident), patch
+   those out FIRST. Phase 0 cannot proceed until the existing code
+   builds on stable 1.95.0.
+2. Move the existing crate to `crates/file-search-mcp-legacy/`. It
+   stays functionally unchanged; only its location and binary target
+   name change.
+3. Write the virtual `Cargo.toml` at the repo root with `resolver = "3"`,
+   `[workspace.package]` (edition `2024`, MSRV `1.95`),
    `[workspace.dependencies]` (mirror current deps), and
    `[workspace.lints]` (rust + clippy).
-3. Pin `rust-toolchain.toml` to `1.85.0` with components
-   `rustfmt, clippy, rust-src`.
-4. Create eight empty placeholder crates under `crates/` (the seven
+4. **Exempt legacy from strict lints.** Add a package-level `[lints]`
+   table in `crates/file-search-mcp-legacy/Cargo.toml` that overrides
+   the workspace lints to warn-only (NOT deny):
+   `[lints.rust] missing_docs = "allow"`, etc. New crates inherit the
+   strict workspace lints. A "legacy lint cleanup" sub-task runs in
+   parallel with Phase 1; the exemption is removed when complete (gate
+   for Phase 8 decommission).
+5. Pin `rust-toolchain.toml` to `1.95.0` with components
+   `rustfmt, clippy, rust-src`. Sync the `flake.nix` rust attribute in
+   the same commit.
+6. Create eight empty placeholder crates under `crates/` (the seven
    target crates + `xtask`). Each has a minimal `Cargo.toml`, a `lib.rs`
    with crate-root docs and per-crate `#![warn(...)]` attributes, and
    nothing else.
-5. Write `deny.toml` (advisories from RustSec, license allow-list,
+7. Write `deny.toml` (advisories from RustSec, license allow-list,
    duplicate-crate detection, ban list).
-6. Implement the `xtask forbidden-deps` subcommand. It parses
-   `cargo metadata` and rejects forbidden edges; xtask itself is excluded.
-7. Wire CI: `cargo build --workspace --locked`,
-   `cargo clippy --workspace --lib --bins -- -D warnings` (NOT
-   `--all-targets` — legacy ships stale `examples/`/`benches/` retired
-   separately later), `cargo deny check`, `cargo run -p xtask --
-   forbidden-deps`, `cargo public-api` baseline on each placeholder.
-8. Add `architecture.md` at the repo root noting the migration is in
-   progress; link to this plan and to `.docs/workspace-plan/`.
+8. Implement two `xtask` subcommands:
+   - `xtask forbidden-deps` — parses `cargo metadata` and rejects
+     forbidden edges; xtask itself is excluded.
+   - `xtask smoke` — runs the smoke checklist (§7) against
+     `fixtures/sample-workspace/`. Phase 0 ships with the subcommand
+     working against the legacy binary; subsequent phases keep it
+     green.
+9. Create `fixtures/sample-workspace/` — a small (~5-file) Rust
+   crate with known symbols, imports, and call relationships. Used by
+   `xtask smoke` and by integration tests in every phase.
+10. Wire CI: `cargo build --workspace --locked`,
+    `cargo clippy --workspace --lib --bins -- -D warnings`
+    (legacy is warn-only via its `[lints]`; new crates are strict),
+    `cargo deny check`, `cargo run -p xtask -- forbidden-deps`,
+    `cargo run -p xtask -- smoke`, `cargo public-api` baseline on each
+    placeholder.
+11. Add `architecture.md` at the repo root noting the migration is in
+    progress; link to this plan and to `.docs/workspace-plan/`.
 
 **Acceptance gate.**
-- [ ] All four CI gate commands green.
+- [ ] `cargo +1.95.0 build` succeeded against the original single-crate
+      layout BEFORE the workspace move.
+- [ ] All five CI gate commands green: build, clippy, deny, forbidden-deps,
+      smoke.
+- [ ] `xtask smoke` exits 0 against `fixtures/sample-workspace/` (against
+      the legacy binary at this phase).
 - [ ] `cargo public-api -p rcm-paths` (and other strict-tier placeholders)
       reports an empty public surface — establishes the baseline.
-- [ ] `rust-toolchain.toml` pinned at `1.85.0`.
-- [ ] Smoke checklist passes against the legacy binary unchanged.
+- [ ] `rust-toolchain.toml` pinned at `1.95.0`; `flake.nix` synced.
+- [ ] Legacy `[lints]` exemption documented in `crates/file-search-mcp-legacy/Cargo.toml`
+      with a `# REMOVED-IN-PHASE-8` comment.
 
 **Rollback.** `git revert` the workspace manifest commit; legacy crate
 untouched.
 
-**Risk.** Low. The `--all-targets` clippy gate is intentionally narrow
-to avoid blocking on the stale `examples/`/`benches/` already in the
+**Risk.** Low-medium. The toolchain flip and the legacy lint exemption
+are real concessions (not "shell only"). The `--all-targets` clippy gate
+is intentionally narrow to avoid blocking on the stale `examples/`/`benches/`
+already in the
 repo; widening to `--all-targets` is a Phase 1 acceptance criterion
 after example cleanup.
 
@@ -220,11 +266,17 @@ only on the new crates. **No behavior changes.**
 
 **Steps.**
 
-1. **Bottom-up implementation order.** `rcm-paths` first (the recipe
-   moves out of legacy and into the leaf; legacy now depends on
-   `rcm-paths` — the only allowed Phase-1 back-edge). Then
-   `rcm-ra-syntax` (re-exports). Then `rcm-ra-host` (wraps legacy's two
-   `load` paths). Then `rcm-embedding` (wraps legacy's
+1. **Bottom-up implementation order.** `rcm-paths` first. The legacy
+   raw-path-string hash recipe is moved out of legacy and into the leaf
+   **without modification** — `rcm-paths::resolve` produces the same
+   `<dir_hash>` strings today's code produces, so existing on-disk
+   indexes are not orphaned. If the three legacy hash sites
+   (`tools/project_paths.rs`, `graph/ids.rs`, `indexing/incremental.rs`)
+   currently disagree, `rcm-paths` exposes the per-consumer functions
+   they each used; unifying them is a Phase 7 decision, not Phase 1.
+   Legacy now depends on `rcm-paths` — the only allowed Phase-1 back-edge.
+   Then `rcm-ra-syntax` (re-exports). Then `rcm-ra-host` (wraps legacy's
+   two `load` paths). Then `rcm-embedding` (wraps legacy's
    `EmbeddingGenerator` behind the sealed `Embed` trait). Then capability
    crates: `rcm-search`, `rcm-graph`, `rcm-ide`. Finally `rcm-server`
    (the binary) replaces legacy's `main.rs`.
@@ -328,8 +380,12 @@ shutdown.
    drops handles; `reload` opens new handles + swaps + drops old after
    grace period. `clear_cache` calls `invalidate` (NOT `reload`).
 4. Wire `clear_cache` per §3.1: refuse on `IndexBusy` → `rm -rf` scope
-   paths → `invalidate`/`evict`. The next read triggers lazy rebuild via
-   the existing fingerprint-mismatch path.
+   paths → `invalidate`/`evict`. After clear, `search` lazily rebuilds
+   (existing `UnifiedIndexer::ensure_indexed` path). Graph queries
+   continue to error with "call `build_hypergraph` first" — Phase 4 does
+   NOT add graph auto-rebuild; the user must explicitly re-run
+   `build_hypergraph` after clearing graph data. Document this asymmetry
+   in the `clear_cache` tool description.
 5. `SyncManager::reload(workspace)` is the only eager-reload path,
    triggered after schema-version bumps detected by the worker.
 6. Wire `CancellationToken` shutdown: `tokio::select!` between sync tick
@@ -404,7 +460,13 @@ extract resolved structure. A measurement gate must pass before merge.
 1. Audit current parser usage; categorize each call site
    (chunker-context, ingestion-metadata, structural-tool).
 2. Define the chunker's reduced extractor in `rcm-search`. It produces
-   only embedding-context fields, not resolved structure.
+   only embedding-context fields, not resolved structure. **The
+   chunker's signature carries an inert `Option<&OpenedSnapshot>`
+   parameter from day one** even though the Phase-6 implementation
+   ignores it. This freezes the public chunker API for the future case
+   where snapshot-resolved chunking context is wanted; later phases
+   start using it without an API break. The `Option` is the simplest
+   forward-compatible shape and costs nothing to thread.
 3. Decide Tantivy field policy: for each field today populated by
    parser-derived structure, choose drop / approximate-via-ra-syntax /
    move-to-HIR-resolved. Recommend keeping fields populated by

@@ -55,7 +55,7 @@ members = [
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/molaco/rust-code-mcp-final"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 rmcp           = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = ["server", "transport-io"] }
@@ -122,20 +122,20 @@ The legacy crate's `Cargo.toml` keeps its current deps inline for Phase 0 (rewri
 
 ## Step 3 — Pin toolchain
 
-**What to do.** The current `rust-toolchain.toml` says `channel = "nightly"`, which contradicts DECISIONS §15 ("`rust-toolchain.toml` pinned"). Pin to a released stable that supports edition 2024 and `[workspace.lints]` (both stabilized by 1.85; resolver = "3" requires 1.84).
+**What to do.** The current `rust-toolchain.toml` says `channel = "nightly"`, which contradicts DECISIONS §15 ("`rust-toolchain.toml` pinned"). Pin to a released stable that supports edition 2024 and `[workspace.lints]` (both stabilized by 1.85; current pin: 1.95; resolver = "3" requires 1.84).
 
 **Files touched.** `/rust-toolchain.toml`:
 
 ```toml
 [toolchain]
-channel    = "1.85.0"
+channel    = "1.95.0"
 components = ["rustfmt", "clippy", "rust-src"]
 profile    = "minimal"
 ```
 
-`rust-src` is needed by `cargo public-api` (it builds against `rustdoc` JSON, which requires the source component on stable). If the nix devshell pins a different toolchain, sync the `flake.nix` rust attribute to `1.85.0` in the same commit.
+`rust-src` is needed by `cargo public-api` (it builds against `rustdoc` JSON, which requires the source component on stable). If the nix devshell pins a different toolchain, sync the `flake.nix` rust attribute to `1.95.0` in the same commit.
 
-**Acceptance.** `nix develop ../nix-devshells#code --command rustc --version` reports `1.85.0`. `nix develop ../nix-devshells#code --command cargo build --workspace` passes.
+**Acceptance.** `nix develop ../nix-devshells#code --command rustc --version` reports `1.95.0`. `nix develop ../nix-devshells#code --command cargo build --workspace` passes.
 
 **Reversal.** Restore previous `rust-toolchain.toml`.
 
@@ -278,7 +278,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.95.0
         with: { components: "rustfmt, clippy, rust-src" }
       - uses: Swatinem/rust-cache@v2
       - name: Build
@@ -490,7 +490,7 @@ Phase 1 may not start until **all** of the following hold on `main`:
 - [ ] `cargo deny check` exits 0 (warnings permitted; errors zero).
 - [ ] `cargo run -p xtask -- policy` exits 0.
 - [ ] `cargo public-api -p rcm-paths` (and the other strict-tier placeholders) reports an empty public surface — establishes the baseline for Phase 1 diffs.
-- [ ] `rust-toolchain.toml` pins `1.85.0` with `rustfmt`, `clippy`, `rust-src`.
+- [ ] `rust-toolchain.toml` pins `1.95.0` with `rustfmt`, `clippy`, `rust-src`.
 - [ ] `deny.toml` exists at repo root with the schema in Step 5.
 - [ ] All ten workspace members compile, including the legacy crate at its new path.
 - [ ] Every smoke MCP tool from DECISIONS §"Smoke checklist" passes against a fixture workspace.
