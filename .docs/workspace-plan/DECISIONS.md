@@ -74,7 +74,7 @@ xtask is excluded from runtime architecture policy checks.
 - Public closure-based API: `with_db<R>(&self, f: impl FnOnce(&RootDatabase) -> R) -> R`, `with_semantics<R>(&self, f: impl FnOnce(&Semantics<'_, RootDatabase>) -> R) -> R`.
 - Typed views: `vfs(&self) -> VfsView<'_>`, `local_crates(&self) -> &[CrateView]`, `workspace_fingerprint(&self) -> Fingerprint`.
 - `RaError` (`thiserror`).
-- **Boundary discipline:** `with_db`/`with_semantics` are technically `pub` (no friend crates in Rust). External misuse is policed by a workspace `clippy::disallowed_methods` rule that allow-lists only `rcm-graph` and `rcm-ide` for these calls.
+- **Boundary discipline:** `with_db`/`with_semantics` are technically `pub` (Rust has no friend crates). Clippy's `disallowed_methods` does NOT support caller-crate-specific allow-lists; the real enforcement is: the lint fires globally for these methods → `rcm-graph` and `rcm-ide` annotate their call sites with `#[allow(clippy::disallowed_methods)]` + justification → a CI grep rejects the same `#[allow]` outside those two crates. Discipline + lint + grep, not a clippy feature.
 - **Documented exemption** from API leak rule for the closure-receivable types.
 - Sync only. Async callers use `spawn_blocking`.
 
@@ -217,11 +217,26 @@ xtask -> excluded
 
 ### Invalidation triggers
 
+`clear_cache` is **delete-then-invalidate**, not reload-then-rebuild. The
+service handle methods are named accordingly:
+
+- `SearchService::invalidate(workspace)` — drop in-memory `IndexReader` /
+  `Connection` `ArcSwap` slots (so the next op reopens or rebuilds via
+  fingerprint mismatch); if a writer is mid-batch, return `IndexBusy` and
+  do nothing.
+- `GraphService::invalidate(workspace)` — drop the in-memory
+  `OpenedSnapshot`; the next graph query rebuilds via `build_and_persist`'s
+  existing fingerprint-mismatch path.
+- `IdeService::evict(workspace)` — remove the cached `RaHost` entry.
+
+Reload (without delete) is a separate operation reserved for `SyncManager`
+schema change detection — same code path, but no on-disk delete.
+
 | Trigger | Action |
 |---|---|
-| `clear_cache(workspace)` | `SearchService::reload(workspace)`, `GraphService::invalidate(workspace)`, `IdeService::evict(workspace)`. Returns `IndexBusy` if a writer is mid-batch. |
+| `clear_cache(workspace, scope)` | (1) Refuse with `IndexBusy` if a writer is mid-batch. (2) Delete on-disk artifacts for the scope (`workspaces/<hash>/{keyword,vector,metadata,merkle,graph}/`). (3) Call `SearchService::invalidate(workspace)`, `GraphService::invalidate(workspace)`, `IdeService::evict(workspace)`. (4) Do NOT auto-reindex; the next operation that needs data triggers a transparent rebuild via existing fingerprint logic. |
 | Workspace fingerprint mismatch on graph query | Transparent rebuild via `build_and_persist`. |
-| `SyncManager::sync_now` reports schema change | `SearchService::reload(workspace)`. |
+| `SyncManager::sync_now` reports schema change | `SearchService::reload(workspace)` — opens new handles, swaps via `ArcSwap`, drops old after grace period. No on-disk delete. |
 | SIGINT / stdin EOF | `CancellationToken::cancel()` → `SyncManager::run` exits → drain in-flight tools (30s budget) → drop in topological order: `server` → capability crates → leaves. Tantivy/LanceDB writes complete; loop does not interrupt them. After timeout, log + abort. |
 | `track_directory(new)` | No reload; `SearchService` opens lazily on first `search`. |
 
@@ -236,7 +251,7 @@ xtask -> excluded
 - `[workspace.package]` for shared metadata (edition `2024`, license, repo).
 - `[workspace.dependencies]` pins every external dep in one place.
 - `[workspace.lints.rust]`: `unsafe_op_in_unsafe_fn = "deny"`, `unreachable_pub = "warn"` (NOT `missing_docs` workspace-wide), `rust_2024_idioms = "warn"`.
-- `[workspace.lints.clippy]`: `disallowed_methods = "warn"` (used to allow-list `RaHost::with_db` callers), `pedantic = { level = "warn", priority = -1 }`.
+- `[workspace.lints.clippy]`: `disallowed_methods = "warn"` (lists `RaHost::with_db` / `with_semantics`; clippy fires globally; only `rcm-graph`/`rcm-ide` annotate call sites with `#[allow(...)]`; CI grep enforces no other crate does), `pedantic = { level = "warn", priority = -1 }`.
 - `cargo-deny` for advisories (RustSec), license allow-list, duplicate-crate detection.
 - `Cargo.lock` committed.
 - `rust-toolchain.toml` pinned.

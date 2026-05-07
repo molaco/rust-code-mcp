@@ -32,10 +32,19 @@ All three crates follow the strict-tier API leak rule: no `tantivy::`, `lancedb:
 
 ```toml
 [features]
-default = ["embeddings"]
-embeddings = ["rcm-embedding/embeddings"]   # default-on; gates dense vector arm
-test-fakes = ["rcm-embedding/test-fakes"]   # default-off; deterministic embedder
+default = []
+# rcm-search itself is trait-only against rcm-embedding. The production
+# fastembed/ort backend is enabled exclusively by the binary (`rcm-server`),
+# which depends on `rcm-embedding` with `features = ["embeddings"]`.
+# Capability crates depending on `rcm-embedding` use `default-features = false`.
+test-fakes = ["rcm-embedding/test-fakes"]   # default-off; deterministic embedder for unit tests
 ```
+
+`rcm-search` never pulls fastembed/ort directly. Any production embedder is
+threaded through `Arc<dyn Embed>` constructed by the binary; tests construct a
+`DeterministicEmbedder` via the `test-fakes` feature on `[dev-dependencies]`.
+This is what makes `cargo tree -p rcm-search | grep -E '(fastembed|ort)'`
+return empty — the asserted invariant in Phase 5.
 
 ### Public types
 

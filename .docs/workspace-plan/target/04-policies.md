@@ -97,8 +97,17 @@ rust_2024_idioms       = { level = "warn", priority = -1 }
 [workspace.lints.clippy]
 pedantic           = { level = "warn", priority = -1 }
 disallowed_methods = "warn"
-# disallowed_methods is paired with .clippy.toml at workspace root, which
-# allow-lists callers of RaHost::with_db / with_semantics to {rcm-graph, rcm-ide}.
+# .clippy.toml at the workspace root lists `RaHost::with_db` and
+# `RaHost::with_semantics` as disallowed_methods. Note: clippy does NOT
+# support caller-crate-specific allow-lists. The actual enforcement is:
+#   1. The lint fires globally for any caller of these methods.
+#   2. `rcm-graph` and `rcm-ide` annotate their call sites with
+#      `#[allow(clippy::disallowed_methods)]` and a `// SAFETY:` justification.
+#   3. PR review rejects new `#[allow(...)]` annotations outside those two
+#      crates. A trivial CI grep enforces this:
+#      `! grep -r '#\[allow(clippy::disallowed_methods)\]' \
+#         --include='*.rs' crates/rcm-{search,server,paths,embedding,ra-host,ra-syntax}`
+# This is discipline + lint + grep, not a clippy feature.
 
 [profile.release]
 lto       = "thin"

@@ -190,8 +190,11 @@ No features. No tokio.
 //! ## Boundary discipline
 //!
 //! `with_db`/`with_semantics` are technically `pub` (Rust has no friend
-//! crates). External misuse is policed by `clippy::disallowed_methods`
-//! allow-listing **only** `rcm-graph` and `rcm-ide`. Other consumers must
+//! crates). The `clippy::disallowed_methods` lint fires globally on these
+//! method names; only `rcm-graph` and `rcm-ide` annotate their call sites
+//! with `#[allow(clippy::disallowed_methods)]` + justification. A CI grep
+//! rejects the same `#[allow(...)]` annotation in any other crate. Clippy
+//! itself has no caller-crate-specific allow-list. Other consumers must
 //! use the typed views.
 //!
 //! **Exempt** from strict API leak rule for the closure arguments only.

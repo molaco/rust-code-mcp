@@ -121,10 +121,20 @@ impl SearchService {
 }
 ```
 
-`GraphService::reload` is similar but rebuilds the snapshot:
+`GraphService` has TWO distinct operations: `invalidate` (cheap, drop
+handle, used by `clear_cache`) and `reload` (rebuild snapshot, used by
+schema-change paths). `clear_cache` calls `invalidate`, NOT `reload`:
 
 ```rust
 impl GraphService {
+    /// Drop the cached `OpenedSnapshot`. The next query will rebuild via
+    /// the existing fingerprint-mismatch path. No on-disk work here.
+    pub fn invalidate(&self, workspace: &Path) {
+        self.snapshot.swap(Arc::new(OpenedSnapshot::Closed));
+        tracing::info!(workspace = %workspace.display(), "graph service invalidated");
+    }
+
+    /// Rebuild the snapshot eagerly (used by `SyncManager` schema change).
     pub async fn reload(&self, workspace: &Path) -> Result<(), QueryError> {
         let snap = tokio::task::spawn_blocking({
             let paths = self.paths.clone();
@@ -157,7 +167,7 @@ impl GraphService {
 
 | Trigger | Action |
 |---|---|
-| `clear_cache(workspace)` | `SearchService::reload`, `GraphService::reload`, `IdeService::evict`. Returns `IndexBusy` if a writer is mid-batch. |
+| `clear_cache(workspace, scope)` | (1) Refuse with `IndexBusy` if a writer holds the lock. (2) `rm -rf` the on-disk paths for the scope. (3) Call `SearchService::invalidate`, `GraphService::invalidate`, `IdeService::evict` (NOT reload — handles drop, next op rebuilds via fingerprint mismatch). |
 | Workspace fingerprint mismatch on graph query | Transparent rebuild via `build_and_persist` (already in `rcm-graph`). |
 | `SyncManager` schema change | `SearchService::reload(workspace)`. |
 | `track_directory(new)` | No reload; `SearchService` opens lazily on first `search`. |
@@ -171,15 +181,21 @@ async fn clear_cache(
     p: ClearCacheParams,
 ) -> Result<CallToolResult, McpError> {
     let workspace = validate_workspace(&p.directory)?;
-    state.search.reload(&workspace).await
-        .map_err(|e| match e {
-            SearchError::IndexBusy => McpError::invalid_params(
-                "indexing in progress; retry shortly", None),
-            other => internal_error(other),
-        })?;
-    state.graph.reload(&workspace).await.map_err(internal_error)?;
-    state.ide.evict(&workspace).await;
-    Ok(CallToolResult::success(Content::text("cache cleared and reloaded")))
+    let paths = ProjectPaths::resolve(&workspace, &state.storage_root)?;
+
+    // 1. Refuse if a writer is mid-batch.
+    state.search.guard_writer_idle(&workspace)
+        .map_err(|_| McpError::invalid_params("indexing in progress; retry shortly", None))?;
+
+    // 2. Delete on-disk artifacts (scope-aware; default is the whole workspace).
+    delete_scope(&paths, p.scope.unwrap_or(ClearScope::Workspace))?;
+
+    // 3. Drop in-memory handles. Next access rebuilds via fingerprint mismatch.
+    state.search.invalidate(&workspace);
+    state.graph.invalidate(&workspace);
+    state.ide.evict(&workspace);
+
+    Ok(CallToolResult::success(Content::text("cache cleared")))
 }
 ```
 
@@ -293,8 +309,13 @@ async fn clear_cache_then_search_succeeds() {
     assert!(!hits1.is_empty());
 
     clear_cache_tool(&state, fixture.path()).await.unwrap();
+    // After clear_cache, on-disk data is gone and handles are invalidated.
+    // The next `search` must trigger a transparent rebuild via the
+    // fingerprint-mismatch path — the existing UnifiedIndexer.ensure_indexed
+    // recovery in query_tools::search. This is NOT auto-reindex on clear;
+    // it's lazy rebuild on the next read.
     let hits2 = state.search.search("alpha", 5).await.unwrap();
-    assert!(!hits2.is_empty(), "search after clear must transparently reindex");
+    assert!(!hits2.is_empty(), "search must lazily rebuild after clear_cache");
 }
 
 #[tokio::test(flavor = "multi_thread")]

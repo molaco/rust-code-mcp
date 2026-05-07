@@ -6,7 +6,7 @@ This is the largest refactor in the plan in terms of surface area, but the small
 
 ## Strategy overview
 
-- **Legacy as private path dep.** Each capability crate adds `file-search-mcp-legacy = { path = "../../legacy", package = "file-search-mcp" }` to `[dependencies]`. The dep is private — capability crates do **not** re-export legacy types.
+- **Legacy as private path dep.** Each capability crate adds `file-search-mcp-legacy = { path = "../file-search-mcp-legacy", package = "file-search-mcp" }` to `[dependencies]`. The dep is private — capability crates do **not** re-export legacy types.
 - **Public API == DECISIONS.** Each capability crate's `lib.rs` exposes exactly the items frozen in `DECISIONS.md` §"Crates — frozen contracts". Nothing more.
 - **Adapter modules.** Conversions `legacy::Foo ↔ rcm_x::Foo` live in a `pub(crate) mod legacy_adapter` per crate. Always `From`/`TryFrom`, never bare `fn convert`.
 - **Server-only dependency edges.** `rcm-server` depends on `rcm-search`, `rcm-graph`, `rcm-ide`, `rcm-paths`, `rcm-embedding` — and **not** `file-search-mcp-legacy`. The `legacy` crate becomes lib-only; its `bin/server.rs` is removed.
@@ -214,7 +214,7 @@ pub use ra_ap_syntax::ast::{
 
 ```toml
 [dependencies]
-file-search-mcp-legacy = { path = "../../legacy" }
+file-search-mcp-legacy = { path = "../file-search-mcp-legacy" }
 rcm-ra-syntax = { path = "../rcm-ra-syntax" }
 ra_ap_ide = { workspace = true }
 ra_ap_hir = { workspace = true }
@@ -309,7 +309,7 @@ embeddings = ["dep:file-search-mcp-legacy"]
 test-fakes = []
 
 [dependencies]
-file-search-mcp-legacy = { path = "../../legacy", optional = true }
+file-search-mcp-legacy = { path = "../file-search-mcp-legacy", optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 ```
@@ -383,7 +383,7 @@ pub use test_fakes::DeterministicEmbedder;
 
 ```toml
 [dependencies]
-file-search-mcp-legacy = { path = "../../legacy" }
+file-search-mcp-legacy = { path = "../file-search-mcp-legacy" }
 rcm-ra-syntax            = { path = "../rcm-ra-syntax" }
 rcm-paths                = { path = "../rcm-paths" }
 rcm-embedding            = { path = "../rcm-embedding", optional = true }
@@ -481,7 +481,7 @@ default            = []
 semantic-overlaps  = ["dep:rcm-embedding"]
 
 [dependencies]
-file-search-mcp-legacy = { path = "../../legacy" }
+file-search-mcp-legacy = { path = "../file-search-mcp-legacy" }
 rcm-ra-host             = { path = "../rcm-ra-host" }
 rcm-paths               = { path = "../rcm-paths" }
 rcm-embedding           = { path = "../rcm-embedding", optional = true }
@@ -543,7 +543,7 @@ The `semantic_overlaps` query returns `Err(QueryError::EmbedderUnavailable)` whe
 
 ```toml
 [dependencies]
-file-search-mcp-legacy = { path = "../../legacy" }
+file-search-mcp-legacy = { path = "../file-search-mcp-legacy" }
 rcm-ra-host             = { path = "../rcm-ra-host" }
 rcm-paths               = { path = "../rcm-paths" }
 thiserror               = { workspace = true }
