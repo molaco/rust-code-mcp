@@ -457,7 +457,7 @@ Before adding a new external crate, reviewer confirms:
 | `unreachable_pub` everywhere except xtask   | `cargo clippy --workspace -- -D warnings` (lint configured per §2)     | block     |
 | `rustdoc::broken_intra_doc_links`           | Same `cargo doc` job above                                             | block     |
 | `cargo-deny` advisories + licenses + bans   | `cargo deny check advisories licenses bans sources`                    | block     |
-| `clippy::disallowed_methods` (RaHost allow-list)| `cargo clippy --workspace -- -D warnings`                          | block     |
+| `clippy::disallowed_methods` (RaHost deny-list + per-site `#[allow]` exceptions enforced by CI grep) | `cargo clippy --workspace -- -D warnings` plus the grep in §2 | block     |
 | `unsafe_op_in_unsafe_fn = "deny"`           | `cargo build --workspace` (deny lint = compile error)                  | block     |
 | Smoke checklist (10 MCP calls vs. fixture)  | `cargo xtask smoke` against `fixtures/sample-workspace`                | block     |
 | `cargo test --workspace`                    | nextest                                                                | block     |

@@ -39,8 +39,10 @@ The plan converts single-crate `file-search-mcp` into a virtual workspace of
    Phase 1 created.
 3. **Phases 2 ‖ 3 parallelize.** Singleton removal touches `rcm-ide` and
    the rmcp router state; error split touches each service's error module.
-4. **Phase 4 depends on Phase 3** (`IndexBusy`/`ReloadInProgress`/
-   `ShutdownInProgress` need scoped enums).
+4. **Phase 4 depends on Phase 3** (`IndexBusy` and `ShutdownInProgress`
+   need scoped enums; the `ArcSwap`-driven swap-and-drop path is
+   silent — no error variant — so there is no separate
+   "reload-in-progress" error).
 5. **Phase 5 ‖ Phase 4.** Only touches `rcm-embedding` and `rcm-graph`
    features; lifetime contract is orthogonal.
 6. **Phase 6 follows 4 + 5.** Routing structural tools through the
@@ -70,10 +72,11 @@ checklist") passing. Per-phase emphasis:
   without global-mutex serialization.
 - **Phase 3.** Full checklist; exercise error paths (unindexed workspace,
   missing file) and confirm JSON shape unchanged.
-- **Phase 4.** `clear_cache(workspace)` then `search`; concurrent
-  `index_codebase` during `search` verifies
-  `IndexBusy`/`ReloadInProgress`. SIGINT mid-`build_hypergraph` drains in
-  30s.
+- **Phase 4.** `clear_cache(workspace)` then `search` — first call must
+  trigger lazy rebuild via the fingerprint-mismatch path (no
+  auto-reindex); subsequent calls hit the rebuilt index. Concurrent
+  `index_codebase` during `clear_cache` returns `IndexBusy` (writer
+  mid-batch). SIGINT mid-`build_hypergraph` drains in 30s.
 - **Phase 5.** `semantic_overlaps`, `get_similar_code`, `similar_to_item`
   with default features; with `--no-default-features --features
   test-fakes`, `semantic_overlaps` returns `EmbedderUnavailable` when
@@ -93,7 +96,8 @@ checklist") passing. Per-phase emphasis:
 | ID | Description | Prob | Impact | Phase | Mitigation | Rollback trigger |
 |---|---|---|---|---|---|---|
 | R1 | HIR-backed structural tools slower than ra-syntax on first call. | med | high | 6 | Bench before/after; persist HIR eagerly on `build_hypergraph`; warm cache on `index_codebase`. | p95 first-call >2× Phase 5 baseline. |
-| R2 | `ArcSwap` reload contention spikes search latency under reload+query bursts. | low | med | 4 | Swap then drop old after grace; never blocks queries. Bench concurrent read+reload. | p99 search >2× baseline during `clear_cache`. |
+| R2 | First `search` after `clear_cache` is slow (lazy rebuild via fingerprint-mismatch path on a cold workspace blocks the requesting task). | med | med | 4 | Document the cold-rebuild as expected; `SyncManager` may opportunistically pre-warm on `track_directory`; bench p95 first-search-after-clear vs. cold `index_codebase`. | First-call p95 >2× baseline cold-index; or users mistake the rebuild for a hang and abort. |
+| R2b | `ArcSwap` swap contention spikes search latency under the LEGITIMATE `SyncManager::reload` path (schema-version bump). | low | med | 4 | Swap then drop old after grace; never blocks queries. Bench concurrent read+reload. | p99 search >2× baseline during a forced `SyncManager::reload`. |
 | R3 | Storage v2 migration loses data (interrupted mid-rename). | low | high | 7 | `--dry-run` mandatory; `.layout-version` sentinel only after fsync; v1 paths kept until next run confirms read-back. | `health_check` fails post-migration; sled/heed open error on prior-good workspace. |
 | R4 | Phase 1 adapter conversions dominate ingestion time. | med | med | 1 | `From`/`TryFrom` over moves, not clones; bench `index_codebase` end-to-end. | wall-time >1.3× legacy baseline. |
 | R5 | `forbidden_dependency_check` too strict; blocks legitimate refactors. | med | low | 0 | Policy file checked in; PRs may adjust with review. | Reviewer cannot recall the rationale. |

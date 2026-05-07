@@ -26,7 +26,7 @@ Goal: make capability services long-lived, drop per-call `VectorStore::open` / `
 | `graph_tools::*` (every snapshot tool) | `open_workspace_snapshot(directory)` → `OpenedSnapshot::open(...)` | `GraphService::current_snapshot: ArcSwap<OpenedSnapshot>` |
 | `analysis_tools::find_definition` / `find_references` | `SEMANTIC.lock()` then per-file `RaHost`-equivalent | `IdeService::cache: ArcSwap<HashMap<PathBuf, Arc<RaHost>>>` |
 | `health_tool::health_check` | `Bm25Search::new`, `VectorStore::new_embedded` (read-only probes) | borrow `SearchService` handles |
-| `clear_cache_tool::clear_cache` | rm-rf of paths + nothing else | becomes a service-level `reload(...)` orchestrator |
+| `clear_cache_tool::clear_cache` | rm-rf of paths + nothing else | becomes a delete-then-invalidate orchestrator: refuse on `IndexBusy`, then `rm -rf` scope paths, then call `SearchService::invalidate(workspace)` / `GraphService::invalidate(workspace)` / `IdeService::evict(workspace)`. No reload, no auto-reindex; the next read triggers lazy rebuild via fingerprint mismatch. |
 
 **Files touched.** Read-only: `src/legacy/tools/{query_tools,index_tool,analysis_tools,graph_tools,health_tool,clear_cache_tool}.rs`. Output: the inventory doc.
 
