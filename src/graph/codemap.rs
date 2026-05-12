@@ -39,6 +39,11 @@ pub struct CodemapNode {
     pub item_kind: Option<ItemKind>,
     pub file: Option<String>,
     pub span: Option<(u32, u32)>,
+    /// 1-indexed source line of the node's `span.0` byte offset. Matches the
+    /// `ChunkContext.line_start` convention. `None` when the file isn't on
+    /// disk, when the span is absent, or when the line→byte table lookup
+    /// fails for any reason.
+    pub line: Option<u32>,
     pub relevance: f32,
     pub is_seed: bool,
     pub snippet: Option<String>,
@@ -236,7 +241,14 @@ pub(crate) async fn build_codemap(
             } else {
                 hs
             };
-            resolve_search_seeds(snap, slice, &ws_root, opts)?
+            let resolved = resolve_search_seeds(snap, slice, &ws_root, opts, &mut diagnostics)?;
+            // Item 1: if the caller supplied hits but none resolved, surface
+            // a diagnostic so the caller can distinguish "no hits" from
+            // "hits all dropped".
+            if hits.is_some() && resolved.is_empty() {
+                diagnostics.push("no search hits resolved to graph items".to_string());
+            }
+            resolved
         }
     };
 
@@ -456,15 +468,34 @@ pub(crate) async fn build_codemap(
         sorted_seeds.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
     }
 
-    // Build CodemapNode entries — sorted by qualified_name.
+    // Build CodemapNode entries — sorted by qualified_name. Populates the
+    // line number (item 3) and, when `opts.include_snippets`, the snippet
+    // text (item 4). File reads are cached so each file is touched at most
+    // once per call regardless of how many retained nodes live in it.
     let mut nodes_out: Vec<CodemapNode> = Vec::with_capacity(final_set.len());
     {
         let rtxn = snap.read_txn()?;
         let mut ordered: Vec<NodeId> = final_set.iter().copied().collect();
         ordered.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
+        let ws_root_path = PathBuf::from(&snap.manifest.workspace_root);
+        let mut file_cache: HashMap<String, String> = HashMap::new();
         for nid in ordered {
             let Some(node) = snap.node(&rtxn, nid)? else {
                 continue;
+            };
+            let line = match (&node.file, node.span) {
+                (Some(file), Some((byte_start, _))) => line_of_byte(snap, file, byte_start),
+                _ => None,
+            };
+            let snippet = if opts.include_snippets {
+                match (&node.file, node.span) {
+                    (Some(file), Some((byte_start, _))) => {
+                        extract_snippet(&ws_root_path, file, byte_start, &mut file_cache)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
             };
             nodes_out.push(CodemapNode {
                 id: nid,
@@ -473,10 +504,10 @@ pub(crate) async fn build_codemap(
                 item_kind: node.item_kind,
                 file: node.file.clone(),
                 span: node.span,
+                line,
                 relevance: relevance.get(&nid).copied().unwrap_or(0.0),
                 is_seed: seeds.contains(&nid),
-                // Snippet extraction is deferred — see Phase 5 plan §"Snippet extraction (defer)".
-                snippet: None,
+                snippet,
             });
         }
     }
@@ -548,13 +579,20 @@ fn resolve_override_seeds(
 /// Resolve search-hit seeds via the span index + line→byte bridge. Items
 /// that are not callable or type-shaped are filtered out (a const-literal hit
 /// is not a useful codemap seed).
+///
+/// Tracks three drop counters and pushes a single summary diagnostic if the
+/// total is > 0 (item 2 of pass-1 polish).
 fn resolve_search_seeds(
     snap: &OpenedSnapshot,
     hits: &[crate::search::SearchResult],
     ws_root: &Path,
     opts: &CodemapOptions,
+    diagnostics: &mut Vec<String>,
 ) -> anyhow::Result<HashSet<NodeId>> {
     let mut seeds: HashSet<NodeId> = HashSet::new();
+    let mut dropped_path_norm: usize = 0;
+    let mut dropped_line_resolve: usize = 0;
+    let mut dropped_kind_filter: usize = 0;
     let rtxn = snap.read_txn()?;
     for hit in hits {
         if seeds.len() >= opts.top_k_seeds {
@@ -562,23 +600,33 @@ fn resolve_search_seeds(
         }
         let ctx = &hit.chunk.context;
         let Some(rel) = canonicalize_and_strip(&ctx.file_path, ws_root) else {
+            dropped_path_norm += 1;
             continue;
         };
         let ls = ctx.line_start as u32;
         let le = ctx.line_end as u32;
         let Some(nid) = enclosing_item_for_line_range(snap, &rel, ls, le) else {
+            dropped_line_resolve += 1;
             continue;
         };
         let Some(node) = snap.node(&rtxn, nid)? else {
+            dropped_line_resolve += 1;
             continue;
         };
-        let Some(kind) = node.item_kind else {
-            continue;
-        };
-        if !(kind.is_callable() || kind.is_type()) {
+        let kind_ok = node
+            .item_kind
+            .map_or(false, |k| k.is_callable() || k.is_type());
+        if !kind_ok {
+            dropped_kind_filter += 1;
             continue;
         }
         seeds.insert(nid);
+    }
+    let total = dropped_path_norm + dropped_line_resolve + dropped_kind_filter;
+    if total > 0 {
+        diagnostics.push(format!(
+            "{total} search hits dropped: {dropped_path_norm} path-norm, {dropped_line_resolve} line-resolve, {dropped_kind_filter} kind-filter"
+        ));
     }
     Ok(seeds)
 }
@@ -639,6 +687,82 @@ fn node_qualified_name(
         .flatten()
         .map(|n| n.qualified_name)
         .unwrap_or_default()
+}
+
+/// Resolve a byte offset within `workspace_relative_file` to a 1-indexed
+/// source-line number. Uses `OpenedSnapshot::line_to_byte`, then binary-
+/// searches for the largest offset `<= byte_start`. Returns `None` if the
+/// offset table can't be built (file unreadable, etc.).
+fn line_of_byte(
+    snap: &OpenedSnapshot,
+    workspace_relative_file: &str,
+    byte_start: u32,
+) -> Option<u32> {
+    let table = snap.line_to_byte(workspace_relative_file).ok()?;
+    // Largest index `i` such that `table[i] <= byte_start`.
+    // `partition_point` returns the first index where the predicate is false,
+    // so subtract one to get the last matching index.
+    let pp = table.partition_point(|&off| off <= byte_start);
+    if pp == 0 {
+        // No entry satisfied the predicate, which only happens if `table` is
+        // empty (line_to_byte always inserts a 0 first, so this is a
+        // pathological fallthrough).
+        None
+    } else {
+        Some(pp as u32) // (idx + 1) where idx = pp - 1.
+    }
+}
+
+/// Extract a short snippet for a node from its source file.
+///
+/// Reads at most **5 lines or 400 bytes (whichever comes first)** starting
+/// at `byte_start` and strips trailing whitespace. `file_cache` is keyed on
+/// the workspace-relative path so each file is read at most once per call.
+/// Returns `None` if the file can't be read or the byte offset is outside
+/// the file.
+fn extract_snippet(
+    ws_root: &Path,
+    workspace_relative_file: &str,
+    byte_start: u32,
+    file_cache: &mut HashMap<String, String>,
+) -> Option<String> {
+    let key = workspace_relative_file.to_string();
+    if !file_cache.contains_key(&key) {
+        let abs = ws_root.join(workspace_relative_file);
+        let s = std::fs::read_to_string(&abs).ok()?;
+        file_cache.insert(key.clone(), s);
+    }
+    let content = file_cache.get(&key)?;
+    let start = byte_start as usize;
+    if start > content.len() || !content.is_char_boundary(start) {
+        return None;
+    }
+    let tail = &content[start..];
+    // Cap at 5 lines or 400 bytes — whichever boundary is hit first.
+    let byte_cap = tail.len().min(400);
+    let mut end = byte_cap;
+    let mut lines_seen: usize = 0;
+    for (i, b) in tail.as_bytes().iter().take(byte_cap).enumerate() {
+        if *b == b'\n' {
+            lines_seen += 1;
+            if lines_seen >= 5 {
+                end = i + 1;
+                break;
+            }
+        }
+    }
+    // Ensure we slice on a char boundary (we capped by byte index above; if
+    // the cap landed mid-codepoint, walk back).
+    while end > 0 && !content.is_char_boundary(start + end) {
+        end -= 1;
+    }
+    let slice = tail.get(..end)?;
+    let trimmed = slice.trim_end();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Project a hierarchy `ModuleTreeNode` over the retained set.
@@ -741,6 +865,14 @@ fn filter_module_tree(
 // ---------------------------------------------------------------------------
 
 /// Render a `Codemap` as a Mermaid `flowchart LR` graph.
+///
+/// **Snippets are intentionally not rendered here.** Mermaid node labels are
+/// short identifiers (the trailing `::` segment of each qualified name).
+/// Embedding 5-line code snippets inside `["..."]` labels would bloat the
+/// diagram beyond readability and trigger Mermaid's quoted-label escaping
+/// edge cases. The JSON `Codemap` payload still carries `CodemapNode.snippet`
+/// when `include_snippets=true`; the outline renderer prints it. Consumers
+/// that want code alongside the diagram can read it from there.
 ///
 /// Layout choices:
 /// - Nodes are grouped into per-module `subgraph` blocks (flat, not nested),
@@ -874,13 +1006,20 @@ pub(crate) fn render_mermaid(cm: &Codemap) -> String {
 /// space indent. Each line:
 ///
 /// ```text
-/// <indent><qualified_name>  [<item_kind>]  <file:line_start>
+/// <indent><qualified_name>  [<item_kind>]  <file>:<line>
 /// ```
 ///
 /// `item_kind` falls back to the higher-level `NodeKind` string when the
-/// `Option<ItemKind>` is None; `file:line_start` is omitted entirely when
-/// no file or span is recorded. Lines are derived from the byte `span`
-/// only when the file is on disk; if not, just `<file>` is shown.
+/// `Option<ItemKind>` is None. The trailing `<file>:<line>` is omitted
+/// entirely when neither a file nor a span is recorded. When the line
+/// number is available (resolved during `build_codemap` via
+/// `OpenedSnapshot::line_to_byte`) the form is `<file>:<line>`. If the
+/// node has a span but no line (snapshot-less render, file unreadable,
+/// etc.) the form falls back to `<file>@<byte_offset>`.
+///
+/// When `CodemapNode.snippet` is `Some`, each snippet line is appended
+/// under the item, prefixed with `        | ` (8 spaces + `| `) to make
+/// the snippet visually distinct from the structural outline.
 pub(crate) fn render_outline(cm: &Codemap) -> String {
     let mut nodes: Vec<&CodemapNode> = cm.nodes.iter().collect();
     nodes.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
@@ -910,17 +1049,10 @@ pub(crate) fn render_outline(cm: &Codemap) -> String {
             indent
         };
 
-        let location = match (&node.file, node.span) {
-            (Some(file), Some((start_byte, _))) => {
-                // We don't have a cheap line lookup here without going
-                // through the snapshot; report the byte offset alongside
-                // the file. This is a deviation from the file:line format
-                // suggested in the plan because the snapshot isn't in
-                // scope at render time — leaving line lookup to consumers
-                // that already have read access to the file.
-                format!("  {file}@{start_byte}")
-            }
-            (Some(file), None) => format!("  {file}"),
+        let location = match (&node.file, node.span, node.line) {
+            (Some(file), _, Some(line)) => format!("  {file}:{line}"),
+            (Some(file), Some((start_byte, _)), None) => format!("  {file}@{start_byte}"),
+            (Some(file), None, None) => format!("  {file}"),
             _ => String::new(),
         };
 
@@ -931,6 +1063,15 @@ pub(crate) fn render_outline(cm: &Codemap) -> String {
                 node.qualified_name
             ),
         );
+
+        if let Some(snippet) = &node.snippet {
+            for line in snippet.lines() {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut out,
+                    format_args!("        | {line}\n"),
+                );
+            }
+        }
     }
     out
 }

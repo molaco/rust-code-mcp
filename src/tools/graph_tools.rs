@@ -3800,4 +3800,96 @@ mod tests {
         let clusters = build_clusters(&edges, 50, lookup);
         assert!(clusters.is_empty());
     }
+
+    // -----------------------------------------------------------------
+    // Pass-1 polish: `handle_build_codemap` MCP parameter validation.
+    //
+    // Validation runs before `open_workspace_snapshot`, so these tests
+    // don't need a real snapshot fixture — `/tmp` is a stand-in that
+    // will never be touched by the failing branches.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn build_codemap_requires_prompt_or_seeds() {
+        let result = handle_build_codemap(
+            "/tmp", // never opened — validation fails first
+            None,   // task_prompt
+            None,   // seed_qualified_names
+            None,   // max_nodes
+            None,   // depth
+            None,   // max_incoming_per_node
+            None,   // embedding_policy
+            None,   // format
+            None,   // include_snippets
+        )
+        .await;
+        let err = result.expect_err("missing prompt and seeds should reject");
+        let msg = err.message.as_ref();
+        assert!(
+            msg.contains("task_prompt") && msg.contains("seed_qualified_names"),
+            "error message should mention both knobs, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_codemap_rejects_bad_format() {
+        let result = handle_build_codemap(
+            "/tmp",
+            Some("anything"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("weird"),
+            None,
+        )
+        .await;
+        let err = result.expect_err("unknown format should reject");
+        assert_eq!(
+            err.code,
+            rmcp::model::ErrorCode::INVALID_PARAMS,
+            "expected INVALID_PARAMS"
+        );
+        let msg = err.message.as_ref();
+        assert!(msg.contains("json"), "message should list valid options: {msg}");
+        assert!(msg.contains("mermaid"), "message should list valid options: {msg}");
+        assert!(msg.contains("outline"), "message should list valid options: {msg}");
+        assert!(msg.contains("all"), "message should list valid options: {msg}");
+    }
+
+    #[tokio::test]
+    async fn build_codemap_rejects_bad_embedding_policy() {
+        let result = handle_build_codemap(
+            "/tmp",
+            Some("anything"),
+            None,
+            None,
+            None,
+            None,
+            Some("turbo"),
+            None,
+            None,
+        )
+        .await;
+        let err = result.expect_err("unknown embedding_policy should reject");
+        assert_eq!(
+            err.code,
+            rmcp::model::ErrorCode::INVALID_PARAMS,
+            "expected INVALID_PARAMS"
+        );
+        let msg = err.message.as_ref();
+        assert!(
+            msg.contains("no_rerank"),
+            "message should list valid options: {msg}"
+        );
+        assert!(
+            msg.contains("cached_only"),
+            "message should list valid options: {msg}"
+        );
+        assert!(
+            msg.contains("compute_missing"),
+            "message should list valid options: {msg}"
+        );
+    }
 }

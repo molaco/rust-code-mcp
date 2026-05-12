@@ -507,7 +507,7 @@ pub struct BuildCodemapParams {
     #[schemars(description = "Output format: `json` (default) | `mermaid` | `outline` | `all`.")]
     #[serde(default)]
     pub format: Option<String>,
-    #[schemars(description = "Include node snippets in JSON output. Default false. (Snippet extraction is deferred; this knob is reserved.)")]
+    #[schemars(description = "Include the first ~5 lines of source per node in the JSON/outline output. Default false.")]
     #[serde(default)]
     pub include_snippets: Option<bool>,
 }
