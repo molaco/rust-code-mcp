@@ -717,15 +717,6 @@ pub async fn similar_to_item(
 pub async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
-    /// Stable identifier for the embedding model + dimension. Cache entries
-    /// whose `embedder_version` does not match this string are treated as
-    /// misses and refreshed. Bump when the embedder model or dimension
-    /// changes.
-    const EMBEDDER_VERSION: &str = "fastembed:all-MiniLM-L6-v2:dim384:v1";
-    /// Max texts per `embed_batch_async` call. Keeps memory bounded when the
-    /// workspace has thousands of seeds.
-    const EMBED_CHUNK: usize = 64;
-
     let directory = params.directory.clone();
     let threshold = params.threshold.unwrap_or(0.85);
     let max_pairs = params.max_pairs.unwrap_or(50);
@@ -826,166 +817,39 @@ pub async fn semantic_overlaps(
         }
     }
 
-    // 4. v1.1: per-Item embedding cache + pairwise cosine.
-    //
-    // Per-seed context: id, node, content_hash, optional cached vector,
-    // optional source text (Some only when the cache missed and we still
-    // need to embed it). After the embedding pass, every retained ctx has
-    // `cached_vec = Some(_)` and `source = None`.
+    // 4. Resolve embeddings via the shared helper. It performs the read
+    //    pass (hash + cache lookup), the async batched embed, and the
+    //    write pass for fresh vectors. After the call, `embeddings`
+    //    contains one entry per seed whose source was readable +
+    //    non-empty + spannable.
+    let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
+    let embeddings = ensure_embeddings_for(&snap, &seed_nids)
+        .await
+        .map_err(internal_error("ensure_embeddings_for"))?;
+
+    // Per-seed context retained for the pairwise pass: id, node, hash,
+    // vector. Items the helper skipped (unreadable file, empty source,
+    // out-of-range span) are dropped here.
     struct SeedCtx {
         id: NodeId,
         node: Node,
         content_hash: [u8; 16],
         cached_vec: Option<Vec<f32>>,
-        source: Option<String>,
     }
 
-    let mut seeds_ctx: Vec<SeedCtx> = Vec::new();
-    let mut file_cache: HashMap<String, String> = HashMap::new();
-
-    // First pass: read each seed's source, hash it, and check the cache.
-    {
-        use sha2::{Digest, Sha256};
-        let rtxn = snap
-            .env
-            .read_txn()
-            .map_err(|e| McpError::internal_error(format!("read_txn: {e}"), None))?;
-        for (seed_id, seed_node) in seeds.drain(..) {
-            let seed_file = seed_node.file.as_deref().expect("filtered above");
-            let seed_span = seed_node.span.expect("filtered above");
-            let abs_seed_path = PathBuf::from(&directory).join(seed_file);
-            let abs_seed_str = abs_seed_path.to_string_lossy().to_string();
-
-            if !file_cache.contains_key(&abs_seed_str) {
-                match std::fs::read_to_string(&abs_seed_path) {
-                    Ok(s) => {
-                        file_cache.insert(abs_seed_str.clone(), s);
-                    }
-                    Err(_) => continue,
-                }
-            }
-            let content = file_cache
-                .get(&abs_seed_str)
-                .expect("inserted above");
-            let (start, end) = (seed_span.0 as usize, seed_span.1 as usize);
-            let Some(seed_source_slice) = content.get(start..end) else {
-                continue;
-            };
-            let trimmed = seed_source_slice.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            // SHA-256(source) truncated to 16 bytes.
-            let mut hasher = Sha256::new();
-            hasher.update(trimmed.as_bytes());
-            let full = hasher.finalize();
-            let mut content_hash = [0u8; 16];
-            content_hash.copy_from_slice(&full[..16]);
-
-            // Cache lookup. Hit only if content_hash AND embedder_version match.
-            let cached: Option<Vec<f32>> = match snap
-                .dbs
-                .embeddings_by_target
-                .get(&rtxn, seed_id.as_bytes())
-                .map_err(|e| {
-                    McpError::internal_error(
-                        format!("embeddings_by_target.get: {e}"),
-                        None,
-                    )
-                })? {
-                Some(rec)
-                    if rec.content_hash == content_hash
-                        && rec.embedder_version == EMBEDDER_VERSION =>
-                {
-                    Some(rec.vector)
-                }
-                _ => None,
-            };
-
-            let needs_embed = cached.is_none();
+    let mut seeds_ctx: Vec<SeedCtx> = Vec::with_capacity(seeds.len());
+    for (seed_id, seed_node) in seeds.drain(..) {
+        if let Some(emb) = embeddings.get(&seed_id) {
             seeds_ctx.push(SeedCtx {
                 id: seed_id,
                 node: seed_node,
-                content_hash,
-                cached_vec: cached,
-                source: if needs_embed {
-                    Some(trimmed.to_string())
-                } else {
-                    None
-                },
+                content_hash: emb.content_hash,
+                cached_vec: Some(emb.vector.clone()),
             });
         }
     }
 
-    // 5. Batch-embed cache misses (v1.1b) and persist each fresh vector.
-    let mut miss_indices: Vec<usize> = Vec::new();
-    let mut miss_texts: Vec<String> = Vec::new();
-    for (idx, ctx) in seeds_ctx.iter().enumerate() {
-        if let Some(ref src) = ctx.source {
-            miss_indices.push(idx);
-            miss_texts.push(src.clone());
-        }
-    }
-
-    if !miss_texts.is_empty() {
-        let embedder = crate::embeddings::EmbeddingGenerator::new()
-            .map_err(|e| {
-                McpError::internal_error(
-                    format!("EmbeddingGenerator init: {e}"),
-                    None,
-                )
-            })?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let mut wtxn = snap
-            .env
-            .write_txn()
-            .map_err(|e| McpError::internal_error(format!("write_txn: {e}"), None))?;
-
-        for chunk_start in (0..miss_texts.len()).step_by(EMBED_CHUNK) {
-            let chunk_end = (chunk_start + EMBED_CHUNK).min(miss_texts.len());
-            let texts: Vec<String> = miss_texts[chunk_start..chunk_end].to_vec();
-            let vectors = embedder
-                .embed_batch_async(texts)
-                .await
-                .map_err(|e| {
-                    McpError::internal_error(
-                        format!("embed_batch_async: {e}"),
-                        None,
-                    )
-                })?;
-
-            for (offset, vector) in vectors.into_iter().enumerate() {
-                let idx = miss_indices[chunk_start + offset];
-                let ctx = &mut seeds_ctx[idx];
-                let rec = EmbeddingRecord {
-                    content_hash: ctx.content_hash,
-                    vector: vector.clone(),
-                    embedder_version: EMBEDDER_VERSION.to_string(),
-                    generated_at_unix: now,
-                };
-                snap.dbs
-                    .embeddings_by_target
-                    .put(&mut wtxn, ctx.id.as_bytes(), &rec)
-                    .map_err(|e| {
-                        McpError::internal_error(
-                            format!("embeddings_by_target.put: {e}"),
-                            None,
-                        )
-                    })?;
-                ctx.cached_vec = Some(vector);
-                ctx.source = None;
-            }
-        }
-
-        wtxn.commit()
-            .map_err(|e| McpError::internal_error(format!("wtxn.commit: {e}"), None))?;
-    }
-
-    // 6. Edge accumulator. For symmetric dedup we use a canonical
+    // 5. Edge accumulator. For symmetric dedup we use a canonical
     //    (smaller-id-first) key.
     type EdgeKey = (NodeId, NodeId);
     let mut edges: HashMap<EdgeKey, Vec<f32>> = HashMap::new();
@@ -998,7 +862,7 @@ pub async fn semantic_overlaps(
         }
     };
 
-    // 7. v1.1c — identical-source short-circuit. Items sharing a content_hash
+    // 6. v1.1c — identical-source short-circuit. Items sharing a content_hash
     //    get score=1.0 directly (subject to existing filters); skip the
     //    cosine pass for those pairs.
     let mut by_hash: HashMap<[u8; 16], Vec<usize>> = HashMap::new();
@@ -1025,7 +889,7 @@ pub async fn semantic_overlaps(
         }
     }
 
-    // 8. In-memory pairwise cosine. O(N²) on 384-dim vectors. Identical-hash
+    // 7. In-memory pairwise cosine. O(N²) on 384-dim vectors. Identical-hash
     //    pairs are skipped here (already handled above with score=1.0).
     for i in 0..seeds_ctx.len() {
         let Some(va) = seeds_ctx[i].cached_vec.as_ref() else {
@@ -1052,7 +916,7 @@ pub async fn semantic_overlaps(
         }
     }
 
-    // 9. Symmetric dedup: average the per-direction scores.
+    // 8. Symmetric dedup: average the per-direction scores.
     let mut pairs: Vec<(NodeId, NodeId, f32)> = edges
         .into_iter()
         .map(|((a, b), scores)| {
@@ -1063,9 +927,9 @@ pub async fn semantic_overlaps(
     pairs.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal));
     let pair_count = pairs.len();
 
-    // 10. Build response. v1.1 only ever produces edges between seeds, so
-    //     the lookup table is the seeds themselves — no fallback `node_by_id`
-    //     read needed.
+    // 9. Build response. v1.1 only ever produces edges between seeds, so
+    //    the lookup table is the seeds themselves — no fallback `node_by_id`
+    //    read needed.
     let seed_count = seeds_ctx.len();
     let seed_index: HashMap<NodeId, &Node> =
         seeds_ctx.iter().map(|c| (c.id, &c.node)).collect();
@@ -1114,6 +978,221 @@ pub async fn semantic_overlaps(
         pairs: None,
         clusters: Some(clusters),
     })
+}
+
+/// Stable identifier for the embedding model + dimension. Cache entries
+/// whose `embedder_version` does not match this string are treated as
+/// misses and refreshed. Bump when the embedder model or dimension
+/// changes.
+///
+/// Single source of truth shared by `semantic_overlaps` and
+/// `ensure_embeddings_for`; previously duplicated as a fn-local `const`.
+pub(crate) const EMBEDDER_VERSION: &str = "fastembed:all-MiniLM-L6-v2:dim384:v1";
+
+/// Max texts per `embed_batch_async` call. Keeps memory bounded when the
+/// workspace has thousands of items.
+pub(crate) const EMBED_CHUNK: usize = 64;
+
+/// Per-NodeId embedding payload returned by [`ensure_embeddings_for`].
+///
+/// `content_hash` is exposed so callers that need to detect
+/// identical-source items (e.g. `semantic_overlaps`'s short-circuit
+/// pass) don't have to re-read the file and re-hash. Codemap-style
+/// callers can ignore the hash.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedEmbedding {
+    pub vector: Vec<f32>,
+    pub content_hash: [u8; 16],
+}
+
+/// Resolve embeddings for the given NodeIds, hitting the cache where
+/// possible and computing-and-persisting where not.
+///
+/// Used by both `semantic_overlaps` and (Phase 5+) the codemap builder.
+///
+/// Behaviour:
+/// - Cache hit with matching `content_hash` AND matching
+///   `embedder_version` -> reused as-is.
+/// - Cache hit with mismatched hash or version -> re-computed, cache
+///   overwritten.
+/// - Cache miss -> computed, inserted.
+/// - Nodes missing a `file` or `span`, nodes whose file cannot be read,
+///   and nodes whose `span` slices a non-UTF8 boundary / empty/whitespace
+///   region are silently skipped (no entry returned). The caller decides
+///   what to do about the resulting absence.
+///
+/// Async hygiene: opens its own short read/write transactions
+/// internally. Callers MUST NOT hold a `heed::RoTxn` across this call.
+/// The split is:
+///   - Phase A (sync): one read txn to classify nids into cached / needs-
+///     compute and extract the source slice for the needs-compute set.
+///   - Phase B (async, no txn held): batched `embed_batch_async` over
+///     the missing set, in `EMBED_CHUNK`-sized chunks.
+///   - Phase C (sync): one write txn to persist the new
+///     `EmbeddingRecord`s. Skipped entirely when there are no misses.
+///
+/// `EmbeddingGenerator::new()` is invoked lazily, only when at least one
+/// NodeId actually needs computing. The all-cache-hit (and empty-input)
+/// path therefore avoids loading the embedding model.
+pub(crate) async fn ensure_embeddings_for(
+    snap: &OpenedSnapshot,
+    nids: &[NodeId],
+) -> anyhow::Result<HashMap<NodeId, ResolvedEmbedding>> {
+    use sha2::{Digest, Sha256};
+
+    let mut out: HashMap<NodeId, ResolvedEmbedding> = HashMap::new();
+    if nids.is_empty() {
+        return Ok(out);
+    }
+
+    // The workspace root from the snapshot manifest is the base for the
+    // workspace-relative `Node.file` strings.
+    let ws_root = PathBuf::from(&snap.manifest.workspace_root);
+
+    // Phase A: classify nids using one short read txn.
+    //
+    // For every NodeId we either fill `out` directly (cache hit) or push
+    // an entry into `pending` carrying the source text to embed. We
+    // drop the rtxn before phase B (async).
+    struct Pending {
+        nid: NodeId,
+        content_hash: [u8; 16],
+        source: String,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut file_cache: HashMap<String, String> = HashMap::new();
+
+    {
+        let rtxn = snap.env.read_txn()?;
+        // De-duplicate so the same NodeId appearing twice in the input
+        // slice does not cause duplicate work or duplicate writes.
+        let mut seen: std::collections::HashSet<NodeId> =
+            std::collections::HashSet::with_capacity(nids.len());
+        for &nid in nids {
+            if !seen.insert(nid) {
+                continue;
+            }
+            let Some(node) = snap.node_by_id(&rtxn, nid)? else {
+                continue;
+            };
+            let Some(file_rel) = node.file.as_deref() else {
+                continue;
+            };
+            let Some(span) = node.span else {
+                continue;
+            };
+
+            let abs_path = ws_root.join(file_rel);
+            let abs_key = abs_path.to_string_lossy().to_string();
+            if !file_cache.contains_key(&abs_key) {
+                match std::fs::read_to_string(&abs_path) {
+                    Ok(s) => {
+                        file_cache.insert(abs_key.clone(), s);
+                    }
+                    Err(_) => continue,
+                }
+            }
+            let content = file_cache.get(&abs_key).expect("inserted above");
+            let (start, end) = (span.0 as usize, span.1 as usize);
+            let Some(slice) = content.get(start..end) else {
+                continue;
+            };
+            let trimmed = slice.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let mut hasher = Sha256::new();
+            hasher.update(trimmed.as_bytes());
+            let full = hasher.finalize();
+            let mut content_hash = [0u8; 16];
+            content_hash.copy_from_slice(&full[..16]);
+
+            // Cache lookup. Hit only if content_hash AND embedder_version match.
+            match snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())? {
+                Some(rec)
+                    if rec.content_hash == content_hash
+                        && rec.embedder_version == EMBEDDER_VERSION =>
+                {
+                    out.insert(
+                        nid,
+                        ResolvedEmbedding {
+                            vector: rec.vector,
+                            content_hash,
+                        },
+                    );
+                }
+                _ => {
+                    pending.push(Pending {
+                        nid,
+                        content_hash,
+                        source: trimmed.to_string(),
+                    });
+                }
+            }
+        }
+        // rtxn dropped here.
+    }
+
+    if pending.is_empty() {
+        return Ok(out);
+    }
+
+    // Phase B: batched async embedding. No transaction held across the
+    // await. Model is loaded lazily, only because we have work to do.
+    let embedder = crate::embeddings::EmbeddingGenerator::new()
+        .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Pull texts out into their own Vec so we can pass owned Strings
+    // to embed_batch_async without cloning Pending entries.
+    let mut new_vectors: Vec<Vec<f32>> = Vec::with_capacity(pending.len());
+    for chunk_start in (0..pending.len()).step_by(EMBED_CHUNK) {
+        let chunk_end = (chunk_start + EMBED_CHUNK).min(pending.len());
+        let texts: Vec<String> = pending[chunk_start..chunk_end]
+            .iter()
+            .map(|p| p.source.clone())
+            .collect();
+        let vectors = embedder
+            .embed_batch_async(texts)
+            .await
+            .map_err(|e| anyhow::anyhow!("embed_batch_async: {e}"))?;
+        new_vectors.extend(vectors);
+    }
+
+    // Phase C: persist with one short write txn.
+    {
+        let mut wtxn = snap.env.write_txn()?;
+        for (p, vector) in pending.iter().zip(new_vectors.iter()) {
+            let rec = EmbeddingRecord {
+                content_hash: p.content_hash,
+                vector: vector.clone(),
+                embedder_version: EMBEDDER_VERSION.to_string(),
+                generated_at_unix: now,
+            };
+            snap.dbs
+                .embeddings_by_target
+                .put(&mut wtxn, p.nid.as_bytes(), &rec)?;
+        }
+        wtxn.commit()?;
+    }
+
+    // Assemble: move vectors into `out`.
+    for (p, vector) in pending.into_iter().zip(new_vectors.into_iter()) {
+        out.insert(
+            p.nid,
+            ResolvedEmbedding {
+                vector,
+                content_hash: p.content_hash,
+            },
+        );
+    }
+
+    Ok(out)
 }
 
 pub async fn functions_with_filter(
