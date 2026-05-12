@@ -45,6 +45,21 @@ pub enum ItemKind {
     EnumVariant,
 }
 
+impl ItemKind {
+    /// Returns `true` for variants that can be invoked: `Function`, `Method`, `AssocFunction`.
+    pub fn is_callable(self) -> bool {
+        matches!(self, Self::Function | Self::Method | Self::AssocFunction)
+    }
+
+    /// Returns `true` for variants that name a type: `Struct`, `Enum`, `Union`, `Trait`, `TypeAlias`.
+    pub fn is_type(self) -> bool {
+        matches!(
+            self,
+            Self::Struct | Self::Enum | Self::Union | Self::Trait | Self::TypeAlias
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Namespace {
     Type,
