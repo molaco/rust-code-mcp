@@ -540,9 +540,20 @@ max_incoming_per_node=8, embedding_policy='no_rerank', format='json'.
 
 Seed source: pass `task_prompt` for HybridSearch-driven seeds (requires
 `index_codebase` to have populated the vector store / tantivy index), OR
-`seed_qualified_names` for direct lookup (names that fail to resolve are
-returned in `Codemap.diagnostics` rather than erroring out). At least one
-of the two must be supplied.
+`seed_qualified_names` for direct lookup. At least one of the two must
+be supplied.
+
+Choosing between them: `task_prompt` is best for exploratory queries
+against documented APIs; the underlying hybrid search (BM25 + vector
+embeddings against doc comments) favors public surfaces with rich
+docstrings, and many search hits fail to snap to an indexed Item span
+(reported in `Codemap.diagnostics`). For pinpoint navigation to a
+specific implementation, prefer `seed_qualified_names`. Note that the
+hypergraph indexes only `pub` and `pub(crate)` items — module-local
+private functions can't be referenced by qualified name. Unresolved
+names go to `Codemap.diagnostics`; if the leaf fails but its parent
+module resolves, the diagnostic notes 'likely private or not indexed'
+to distinguish that from a typo.
 
 Output: `format='json'` returns the full `Codemap` JSON (nodes, edges,
 hierarchy, stats, diagnostics). `format='mermaid'` returns a
