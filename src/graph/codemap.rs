@@ -6,7 +6,7 @@
 //! workspace-relative file + line range into an enclosing Item NodeId,
 //! and a small path-normalization helper.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -177,46 +177,12 @@ pub(crate) fn canonicalize_and_strip(path: &Path, workspace_root: &Path) -> Opti
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Bounded BFS over outgoing `callees_of` edges from `node`. Returns the
-/// shortest distance to any `NodeId` in `seeds`, or `u32::MAX` if none is
-/// reachable within `max_depth`. `0` means `node` itself is a seed.
-///
-/// Mirrors the frontier+visited pattern of `recursive_callers_count`
-/// (src/graph/queries.rs:852+), but in the forward direction (callees,
-/// not callers) and returning depth rather than count.
-pub(crate) fn min_call_distance(
-    snap: &OpenedSnapshot,
-    node: NodeId,
-    seeds: &HashSet<NodeId>,
-    max_depth: u32,
-) -> u32 {
-    if seeds.contains(&node) {
-        return 0;
-    }
-    let mut visited: HashSet<NodeId> = HashSet::new();
-    visited.insert(node);
-    let mut frontier: VecDeque<(NodeId, u32)> = VecDeque::new();
-    frontier.push_back((node, 0));
-    while let Some((cur, d)) = frontier.pop_front() {
-        if d >= max_depth {
-            continue;
-        }
-        let callees = match snap.callees_of(cur) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for next in callees {
-            if !visited.insert(next) {
-                continue;
-            }
-            if seeds.contains(&next) {
-                return d + 1;
-            }
-            frontier.push_back((next, d + 1));
-        }
-    }
-    u32::MAX
-}
+// `min_call_distance` previously walked outgoing callees from a candidate
+// looking for a seed. That direction was wrong: `build_codemap`'s BFS
+// expands from seeds outward (both directions), so the *correct* distance
+// is the BFS depth at which the candidate was discovered. We track that
+// directly during EXPAND in a `dist_from_seed: HashMap<NodeId, u32>` and
+// read it in SCORE. No separate distance walk is needed.
 
 // ---------------------------------------------------------------------------
 // Phase 5 — `build_codemap` algorithm core.
@@ -277,15 +243,23 @@ pub(crate) async fn build_codemap(
     // ---------- 2. EXPAND (bounded BFS) ----------
     let mut retained: HashSet<NodeId> = seeds.clone();
     let mut frontier: HashSet<NodeId> = seeds.clone();
+    // Distance from the nearest seed, in BFS-discovery order. Seeds are 0.
+    // Populated as nodes enter `retained` so SCORE can read it without a
+    // second graph walk.
+    let mut dist_from_seed: HashMap<NodeId, u32> = HashMap::new();
+    for &s in &seeds {
+        dist_from_seed.insert(s, 0);
+    }
     // `(from, to, kind)` -> weight. EdgeKind is Copy.
     let mut edges: HashMap<(NodeId, NodeId, EdgeKind), u32> = HashMap::new();
 
     {
         let rtxn = snap.read_txn()?;
-        for _ in 0..opts.depth {
+        for d in 0..opts.depth {
             if frontier.is_empty() {
                 break;
             }
+            let next_dist = (d as u32) + 1;
             let mut next: HashSet<NodeId> = HashSet::new();
             // Deterministic iteration order over `frontier`.
             let mut ordered: Vec<NodeId> = frontier.iter().copied().collect();
@@ -308,6 +282,7 @@ pub(crate) async fn build_codemap(
                     };
                     *edges.entry((n, target_id, kind)).or_insert(0) += 1;
                     if retained.insert(target_id) {
+                        dist_from_seed.entry(target_id).or_insert(next_dist);
                         next.insert(target_id);
                     }
                 }
@@ -329,6 +304,7 @@ pub(crate) async fn build_codemap(
                     for r in refs.into_iter().take(opts.max_incoming_per_node) {
                         *edges.entry((r, n, record_kind)).or_insert(0) += 1;
                         if retained.insert(r) {
+                            dist_from_seed.entry(r).or_insert(next_dist);
                             next.insert(r);
                         }
                     }
@@ -360,7 +336,9 @@ pub(crate) async fn build_codemap(
             };
             bm25_norm.insert(nid, norm);
 
-            let dist = min_call_distance(snap, nid, &seeds, opts.depth as u32);
+            // BFS distance was recorded during EXPAND. Missing entries
+            // (shouldn't happen for retained nodes) clamp to u32::MAX → 0.
+            let dist = dist_from_seed.get(&nid).copied().unwrap_or(u32::MAX);
             let prox = if dist == u32::MAX {
                 0.0
             } else {
@@ -1194,20 +1172,6 @@ pub fn caller() {
             "referrers_of(callee) should include caller, got {:?}",
             referrers
         );
-    }
-
-    #[test]
-    fn min_call_distance_zero_when_seed_is_self() {
-        let fixture = shared_fixture();
-        let (caller_id, _) = fixture
-            .snap
-            .lookup_by_qualified_name("synthetic_codemap_crate::caller")
-            .expect("lookup_by_qualified_name caller")
-            .expect("caller resolves");
-        let mut seeds: HashSet<NodeId> = HashSet::new();
-        seeds.insert(caller_id);
-        let d = min_call_distance(&fixture.snap, caller_id, &seeds, 3);
-        assert_eq!(d, 0, "node is itself a seed → distance 0");
     }
 
     #[test]
