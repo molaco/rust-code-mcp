@@ -1438,14 +1438,13 @@ mod tests {
         }
     }
 
-    // ===== fixture-dependent tests (currently `#[ignore]`'d) =====
+    // ===== fixture-dependent tests =====
     //
     // Anything that needs `build_and_persist` / `shared_fixture`. The
-    // synthetic-RA fixture's `cargo metadata` invocation fails in the
-    // nix devshell — a pre-existing issue inherited from Phase 2, not a
-    // regression — so each test in here is marked `#[ignore]` with a
-    // reason pointing at the report. Names are preserved so `git blame`
-    // continuity is not lost.
+    // synthetic-RA fixture builds a tempdir crate and loads it through
+    // rust-analyzer's workspace loader; the manifest declares an empty
+    // `[workspace]` table so `cargo metadata` does not walk up the
+    // directory tree and latch onto an unrelated parent `Cargo.toml`.
     mod fixture_dependent {
         use super::*;
         use std::path::PathBuf;
@@ -1502,6 +1501,11 @@ mod tests {
             snap: OpenedSnapshot,
         }
 
+        // The empty `[workspace]` table makes this manifest a self-contained
+        // workspace root. Without it, `cargo metadata` walks up the directory
+        // tree looking for an enclosing `[workspace]` and can latch onto an
+        // unrelated `Cargo.toml` (e.g. a stray `/tmp/Cargo.toml`), causing the
+        // RA load to fail with "no targets specified in the manifest".
         const FIXTURE_CARGO_TOML: &str = r#"
 [package]
 name = "synthetic_codemap_crate"
@@ -1510,6 +1514,8 @@ edition = "2021"
 
 [lib]
 path = "src/lib.rs"
+
+[workspace]
 "#;
 
         // Notably outer() and inner() both exist; the line-range lookup for
@@ -1536,7 +1542,6 @@ pub fn caller() {
 "#;
 
         #[test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         fn line_to_byte_correct_for_lf_file() {
             // We don't need a real snapshot for this test — just need the
             // line_to_byte function to read a real on-disk file. Build a
@@ -1573,7 +1578,6 @@ pub fn caller() {
         }
 
         #[test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         fn enclosing_item_returns_none_for_unknown_file() {
             let fixture = shared_fixture();
             let got = enclosing_item_for_line_range(
@@ -1586,7 +1590,6 @@ pub fn caller() {
         }
 
         #[test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         fn enclosing_item_returns_none_for_invalid_range() {
             let fixture = shared_fixture();
             let got = enclosing_item_for_line_range(
@@ -1607,7 +1610,6 @@ pub fn caller() {
         }
 
         #[test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         fn callees_of_includes_called_function() {
             let fixture = shared_fixture();
             let (caller_id, _) = fixture
@@ -1633,7 +1635,6 @@ pub fn caller() {
         }
 
         #[test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         fn referrers_of_includes_caller() {
             let fixture = shared_fixture();
             let (caller_id, _) = fixture
@@ -1659,7 +1660,6 @@ pub fn caller() {
         }
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn build_codemap_override_seeds_resolves_deterministically() {
             let fixture = shared_fixture();
             let names = vec![
@@ -1705,7 +1705,6 @@ pub fn caller() {
         }
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn build_codemap_depth_zero_returns_only_seeds() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::caller".to_string()];
@@ -1728,7 +1727,6 @@ pub fn caller() {
         }
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn build_codemap_unresolved_seed_records_diagnostic() {
             let fixture = shared_fixture();
             let names = vec![
@@ -1750,7 +1748,6 @@ pub fn caller() {
         }
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn render_mermaid_smoke() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::caller".to_string()];
@@ -1771,7 +1768,6 @@ pub fn caller() {
         }
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn render_outline_smoke() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::caller".to_string()];
@@ -1797,7 +1793,6 @@ pub fn caller() {
         // direction and these would fail.
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn graph_prox_positive_for_direct_callee_of_seed() {
             // Seed = caller; direct callee is `callee`. BFS reaches
             // `callee` at distance 1, so graph_prox = 1/(1+1) = 0.5 and
@@ -1823,7 +1818,6 @@ pub fn caller() {
         }
 
         #[tokio::test]
-        #[ignore = "synthetic-RA fixture fails in nix devshell; see .docs/codemap-final-report.md"]
         async fn graph_prox_positive_for_direct_caller_of_seed() {
             // Seed = callee; direct caller is `caller`. BFS expands
             // incoming `referrers_of` for callable seeds, so `caller`

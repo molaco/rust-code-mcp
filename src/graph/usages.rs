@@ -251,6 +251,11 @@ pub fn caller() {
 }
 "#;
 
+    // The empty `[workspace]` table makes this manifest a self-contained
+    // workspace root. Without it, `cargo metadata` walks up the directory
+    // tree looking for an enclosing `[workspace]` and can latch onto an
+    // unrelated `Cargo.toml` (e.g. a stray `/tmp/Cargo.toml`), causing the
+    // RA load to fail with "no targets specified in the manifest".
     const FIXTURE_CARGO_TOML: &str = r#"
 [package]
 name = "synthetic_crate"
@@ -259,6 +264,8 @@ edition = "2021"
 
 [lib]
 path = "src/lib.rs"
+
+[workspace]
 "#;
 
     struct SharedSnap {
