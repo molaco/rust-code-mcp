@@ -54,6 +54,10 @@ pub struct CodemapEdge {
     pub from: NodeId,
     pub to: NodeId,
     pub kind: EdgeKind,
+    /// Edge multiplicity. v1: always 1, since the raw-ID graph adapters
+    /// (callees_of / referrers_of) deduplicate by NodeId and the BFS
+    /// dedups re-visits. Future versions may carry call-site multiplicity
+    /// once the adapters expose counts.
     pub weight: u32,
 }
 
@@ -292,7 +296,7 @@ pub(crate) async fn build_codemap(
                     } else {
                         EdgeKind::Uses
                     };
-                    *edges.entry((n, target_id, kind)).or_insert(0) += 1;
+                    edges.entry((n, target_id, kind)).or_insert(1);
                     if retained.insert(target_id) {
                         dist_from_seed.entry(target_id).or_insert(next_dist);
                         next.insert(target_id);
@@ -314,7 +318,7 @@ pub(crate) async fn build_codemap(
                     let mut refs = snap.referrers_of(n).unwrap_or_default();
                     refs.sort_by_key(|r| rank_referrer(*r, &bm25_by_node, snap, &rtxn));
                     for r in refs.into_iter().take(opts.max_incoming_per_node) {
-                        *edges.entry((r, n, record_kind)).or_insert(0) += 1;
+                        edges.entry((r, n, record_kind)).or_insert(1);
                         if retained.insert(r) {
                             dist_from_seed.entry(r).or_insert(next_dist);
                             next.insert(r);
@@ -777,6 +781,15 @@ fn extract_snippet(
     if start > content.len() || !content.is_char_boundary(start) {
         return None;
     }
+    // Snap `start` back to the beginning of its containing line so doc-comment-
+    // adjacent items don't emit snippets that begin mid-line (pass-2 #A1).
+    let file_bytes = content.as_bytes();
+    let line_start = file_bytes[..start]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let start = line_start;
     let tail = &content[start..];
     // Cap at 5 lines or 400 bytes — whichever boundary is hit first.
     let byte_cap = tail.len().min(400);
@@ -1061,58 +1074,74 @@ pub(crate) fn render_mermaid(cm: &Codemap) -> String {
 /// under the item, prefixed with `        | ` (8 spaces + `| `) to make
 /// the snippet visually distinct from the structural outline.
 pub(crate) fn render_outline(cm: &Codemap) -> String {
-    let mut nodes: Vec<&CodemapNode> = cm.nodes.iter().collect();
-    nodes.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+    // Build a qualified-name -> &CodemapNode lookup so the recursive walk
+    // can decide which `ModuleTreeNode`s correspond to retained items.
+    let retained_by_qn: HashMap<&str, &CodemapNode> = cm
+        .nodes
+        .iter()
+        .map(|n| (n.qualified_name.as_str(), n))
+        .collect();
 
-    let mut out = String::new();
-    for node in nodes {
-        let depth = node.qualified_name.matches("::").count();
-        let kind_label = node
-            .item_kind
-            .map(|k| format!("{k:?}"))
-            .unwrap_or_else(|| format!("{:?}", node.kind));
+    // Recurse the hierarchy tree; indent is derived from traversal depth so
+    // items at the same logical hierarchy level always align (pass-2 #A2).
+    // Modules that contain no retained descendants are already filtered out
+    // by `project_hierarchy`, so a plain pre-order walk is sufficient.
+    fn emit(
+        node: &ModuleTreeNode,
+        depth: usize,
+        out: &mut String,
+        retained_by_qn: &HashMap<&str, &CodemapNode>,
+    ) {
+        if let Some(cn) = retained_by_qn.get(node.qualified_name.as_str()).copied() {
+            let kind_label = cn
+                .item_kind
+                .map(|k| format!("{k:?}"))
+                .unwrap_or_else(|| format!("{:?}", cn.kind));
 
-        // Indent: 2 spaces per depth level. Seed marker replaces leading
-        // two spaces with "* "; non-seeds get a plain "  " prefix at every
-        // level. For the leading-indent of seeds, we want the marker to
-        // align with the rest of the indent rather than shift content.
-        let indent = "  ".repeat(depth);
-        let prefix = if node.is_seed {
-            // Use "* " in place of last two spaces (or, if depth == 0,
-            // prepend "* ").
-            if depth == 0 {
-                "* ".to_string()
+            // Indent: 2 spaces per depth level. Seed marker replaces the
+            // final two spaces with "* " (or prepends "* " at depth 0).
+            let indent = "  ".repeat(depth);
+            let prefix = if cn.is_seed {
+                if depth == 0 {
+                    "* ".to_string()
+                } else {
+                    format!("{}* ", &indent[..indent.len() - 2])
+                }
             } else {
-                format!("{}* ", &indent[..indent.len() - 2])
-            }
-        } else {
-            indent
-        };
+                indent
+            };
 
-        let location = match (&node.file, node.span, node.line) {
-            (Some(file), _, Some(line)) => format!("  {file}:{line}"),
-            (Some(file), Some((start_byte, _)), None) => format!("  {file}@{start_byte}"),
-            (Some(file), None, None) => format!("  {file}"),
-            _ => String::new(),
-        };
+            let location = match (&cn.file, cn.span, cn.line) {
+                (Some(file), _, Some(line)) => format!("  {file}:{line}"),
+                (Some(file), Some((start_byte, _)), None) => format!("  {file}@{start_byte}"),
+                (Some(file), None, None) => format!("  {file}"),
+                _ => String::new(),
+            };
 
-        let _ = std::fmt::Write::write_fmt(
-            &mut out,
-            format_args!(
-                "{prefix}{}  [{kind_label}]{location}\n",
-                node.qualified_name
-            ),
-        );
+            let _ = std::fmt::Write::write_fmt(
+                out,
+                format_args!(
+                    "{prefix}{}  [{kind_label}]{location}\n",
+                    cn.qualified_name
+                ),
+            );
 
-        if let Some(snippet) = &node.snippet {
-            for line in snippet.lines() {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut out,
-                    format_args!("        | {line}\n"),
-                );
+            if let Some(snippet) = &cn.snippet {
+                for line in snippet.lines() {
+                    let _ = std::fmt::Write::write_fmt(
+                        out,
+                        format_args!("        | {line}\n"),
+                    );
+                }
             }
         }
+        for child in &node.children {
+            emit(child, depth + 1, out, retained_by_qn);
+        }
     }
+
+    let mut out = String::new();
+    emit(&cm.hierarchy, 0, &mut out, &retained_by_qn);
     out
 }
 
@@ -1228,7 +1257,24 @@ mod tests {
                     kind: "Crate".to_string(),
                     item_kind: None,
                     visibility: None,
-                    children: vec![],
+                    children: vec![
+                        ModuleTreeNode {
+                            qualified_name: "demo_crate::callee".to_string(),
+                            display_name: "callee".to_string(),
+                            kind: "Item".to_string(),
+                            item_kind: Some("Function".to_string()),
+                            visibility: None,
+                            children: vec![],
+                        },
+                        ModuleTreeNode {
+                            qualified_name: "demo_crate::caller".to_string(),
+                            display_name: "caller".to_string(),
+                            kind: "Item".to_string(),
+                            item_kind: Some("Function".to_string()),
+                            visibility: None,
+                            children: vec![],
+                        },
+                    ],
                 },
                 stats: CodemapStats {
                     seed_count: 1,
@@ -1370,6 +1416,25 @@ mod tests {
                 !kept.contains(&extra_a) && !kept.contains(&extra_b),
                 "non-seed extras must be dropped when budget is exhausted by seeds"
             );
+        }
+
+        #[test]
+        fn edge_recording_dedups_repeats() {
+            // After A5: recording the same (from, to, kind) edge multiple times
+            // should yield weight = 1, not weight = N. This guards against
+            // accidental += 1 reintroduction.
+            let mut edges: HashMap<(NodeId, NodeId, EdgeKind), u32> = HashMap::new();
+            let a = NodeId([0xAA; 32]);
+            let b = NodeId([0xBB; 32]);
+            edges.entry((a, b, EdgeKind::Calls)).or_insert(1);
+            edges.entry((a, b, EdgeKind::Calls)).or_insert(1);
+            edges.entry((a, b, EdgeKind::Calls)).or_insert(1);
+            assert_eq!(
+                edges[&(a, b, EdgeKind::Calls)],
+                1,
+                "set semantics required after A5"
+            );
+            assert_eq!(edges.len(), 1);
         }
     }
 
