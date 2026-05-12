@@ -14,7 +14,7 @@ Reusing the existing module layout — no new crates, no workspace migration.
 | New code                              | Location                                                                                  | Purpose                                                                                          |
 |---------------------------------------|-------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
 | `Codemap*` response types             | `src/graph/codemap.rs` (new module, re-exported from `src/graph/mod.rs`)                  | `Codemap`, `CodemapNode`, `CodemapEdge`, `EdgeKind`, `CodemapStats`, `CodemapOptions` — all fields `pub`. `ModuleTreeNode` stays in `queries.rs`. |
-| Span index + line↔byte cache          | `src/graph/snapshot.rs` (extend `OpenedSnapshot`)                                          | Lazy per-handle `HashMap<String /* file */, IntervalTree<u32 /* byte */, NodeId>>` plus per-file line→byte offset cache. |
+| Span index + line↔byte cache          | `src/graph/snapshot.rs` (extend `OpenedSnapshot`)                                          | Lazy per-handle `HashMap<String /* file */, Vec<(start_byte, end_byte, NodeId)>>` plus per-file line→byte offset cache. |
 | Raw-ID graph adapters                 | `src/graph/queries.rs` (append, `pub(crate)`)                                              | `callees_of(NodeId) -> Vec<NodeId>`, `referrers_of(NodeId) -> Vec<NodeId>`. Wrap existing private `usages_for_consumer_function` / `usages_for_target`. **No `EdgeKind` here** — classification lives in `codemap.rs` to keep the query layer feature-agnostic. |
 | Item-kind helpers                     | `src/graph/queries.rs` (append)                                                            | `is_callable(NodeId)`, `is_type(NodeId)`, `crate_of(NodeId)`, `enclosing_item_for_line_range(workspace_relative_file, line_start, line_end)`. Inputs are workspace-relative paths — normalization happens at the call site. |
 | Algorithm                             | `src/graph/codemap.rs`                                                                     | `build_codemap`, scoring, projection, Mermaid/outline renderers.                                  |
@@ -114,7 +114,7 @@ Implementation notes:
 inputs:
   snap:            &OpenedSnapshot
   prompt:          &str
-  override_seeds:  Option<Vec<String>>                  // qualified names → find_definition
+  override_seeds:  Option<Vec<String>>                  // qualified names → lookup_by_qualified_name, RA fallback
   opts:            CodemapOptions {
       max_nodes: 80, depth: 3, top_k_seeds: 20,
       max_incoming_per_node: 8,
@@ -206,7 +206,9 @@ inputs:
    drop edges whose endpoints aren't both retained.
 
 5. PROJECT
-   module_subtree = filter(snap.module_tree(workspace_root)) keeping branches containing retained items.
+   for each crate represented by retained nodes:
+       tree = snap.module_tree(crate_qualified_name, None)
+       module_subtree = filter(tree) keeping branches containing retained items.
 
 6. ASSEMBLE Codemap, fill diagnostics (incl. trait_dispatch_unresolved counter), return.
 ```
@@ -254,7 +256,7 @@ impl OpenedSnapshot {
 
 - **`max_incoming_per_node` replaces the same-crate filter.** Picks the most prompt-relevant callers regardless of crate; avoids amplifying noise from "everything calls `log::info`".
 - **`embedding_policy` is explicit.** `NoRerank` (latency-first default), `UseCachedOnly` (use whatever `semantic_overlaps` warmed), `ComputeMissing` (best quality, slower). Scoring formula branches on whether embeddings exist rather than smuggling a zero into a fixed formula.
-- **Seed override in v1.** Skips search; resolves names via existing `find_definition` path.
+- **Seed override in v1.** Skips search; resolves names via `lookup_by_qualified_name` first, with RA `find_definition` as a fallback for unresolved names.
 
 ## 6. MCP tool surface
 
@@ -327,7 +329,7 @@ Outline format: indented module → item tree from the filtered `ModuleTreeNode`
 |---------------------------------------------------------------------------------------------------|-----------|
 | Response types in `src/graph/codemap.rs`                                                          | 80        |
 | Span index + line→byte cache on `OpenedSnapshot`                                                  | 140       |
-| Raw-ID adapters (`callees_of`, `callers_of`, `users_of_type`)                                     | 80        |
+| Raw-ID adapters (`callees_of`, `referrers_of`)                                                    | 80        |
 | Item-kind / crate / `enclosing_item_for_line_range` / `min_call_distance` helpers                 | 100       |
 | `src/graph/codemap.rs` core (BFS + scoring + prune + projection)                                  | 400       |
 | Renderers (Mermaid + outline)                                                                     | 120       |
@@ -346,13 +348,13 @@ Realistic time: **3 working days** for v1. Drift from the v1 draft comes from li
 4. **Span index and line→byte cache are per-request in v1** because `OpenedSnapshot` is reopened per tool call. A snapshot-handle cache is a separate change; not blocking.
 5. **`max_nodes` is a hard budget.** Seeds always survive; non-seeds may be pruned aggressively. `stats.node_count` exposes whether the budget bit.
 
-## 11. Decisions needed before implementation
+## 11. V1 implementation decisions
 
-- **(a) Embedding policy default.** Recommendation: `no_rerank` (latency-first), with the tool description noting `cached_only` and `compute_missing` improve quality.
-- **(b) Format default.** Recommendation: `json` only. Mermaid and outline are derivable client-side; defaulting to `all` triples token cost.
-- **(c) v1 = no persistence, embeddings cached as side-effects.** Defer `codemaps_by_key` sub-DB unless a repeat-prompt workflow shows up.
-- **(d) Trait-dispatch resolution is out of scope for codemap.** Separate, larger workstream against `who_uses` itself.
-- **(e) Snapshot-handle reuse.** Out of scope for v1; revisit if span-index build time shows up in profiles.
+- **(a) Embedding policy default:** `no_rerank`. The tool description will call out `cached_only` and `compute_missing` as quality/latency tradeoffs.
+- **(b) Format default:** `json`. Mermaid and outline remain opt-in because they are derivable from JSON and increase token cost.
+- **(c) Persistence:** no `codemaps_by_key` sub-DB in v1. Only node embeddings are cached as side effects in `embeddings_by_target`.
+- **(d) Trait-dispatch resolution:** out of scope for codemap. That belongs in a separate `who_uses`/usage-extraction workstream.
+- **(e) Snapshot-handle reuse:** out of scope for v1. Revisit only if span-index construction shows up in profiles.
 
 ## Appendix: changes from prior drafts
 
