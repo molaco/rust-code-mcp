@@ -1,7 +1,7 @@
 # Proposal: task-conditioned codemap tool for `file-search-mcp`
 
 **Target:** single-crate workspace at `/home/molaco/Documents/rust-code-mcp-final` (crate `file-search-mcp`, modules under `src/`).
-**Status:** v2.1. Revises an earlier draft after two rounds of code review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightens four remaining details (incoming-edge classification, file-path normalization, query/feature layer separation, qualified-name resolution). Each issue is addressed in §3–§5.
+**Status:** v2.2. Revises an earlier draft after three rounds of review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightened four details; v2.2 audits every new piece against existing infrastructure to remove duplication. See §12 "Reuse map" for the explicit reuse contract and the appendix for revision history.
 
 ## 1. Goal
 
@@ -16,7 +16,8 @@ Reusing the existing module layout — no new crates, no workspace migration.
 | `Codemap*` response types             | `src/graph/codemap.rs` (new module, re-exported from `src/graph/mod.rs`)                  | `Codemap`, `CodemapNode`, `CodemapEdge`, `EdgeKind`, `CodemapStats`, `CodemapOptions` — all fields `pub`. `ModuleTreeNode` stays in `queries.rs`. |
 | Span index + line↔byte cache          | `src/graph/snapshot.rs` (extend `OpenedSnapshot`)                                          | Lazy per-handle `HashMap<String /* file */, Vec<(start_byte, end_byte, NodeId)>>` plus per-file line→byte offset cache. |
 | Raw-ID graph adapters                 | `src/graph/queries.rs` (append, `pub(crate)`)                                              | `callees_of(NodeId) -> Vec<NodeId>`, `referrers_of(NodeId) -> Vec<NodeId>`. Wrap existing private `usages_for_consumer_function` / `usages_for_target`. **No `EdgeKind` here** — classification lives in `codemap.rs` to keep the query layer feature-agnostic. |
-| Item-kind helpers                     | `src/graph/queries.rs` (append)                                                            | `is_callable(NodeId)`, `is_type(NodeId)`, `crate_of(NodeId)`, `enclosing_item_for_line_range(workspace_relative_file, line_start, line_end)`. Inputs are workspace-relative paths — normalization happens at the call site. |
+| `ItemKind` predicates                 | `src/graph/model.rs` (append methods to the enum)                                          | `ItemKind::is_callable(self) -> bool` (Function \| Method \| AssocFunction), `ItemKind::is_type(self) -> bool` (Struct \| Enum \| Union \| Trait \| TypeAlias). Three-line predicates on the enum itself — no new `OpenedSnapshot` helpers. `crate_of`/`item_kind_of` are *not* added: `snap.node(rtxn, id)?.item_kind` and `Node.crate_id` are already accessible. |
+| Span-resolution helper                | `src/graph/queries.rs` (append)                                                            | `enclosing_item_for_line_range(workspace_relative_file, line_start, line_end) -> Option<NodeId>`. Internally uses the span index + line→byte cache from `OpenedSnapshot`. Input is workspace-relative; normalization is the caller's job. |
 | Algorithm                             | `src/graph/codemap.rs`                                                                     | `build_codemap`, scoring, projection, Mermaid/outline renderers.                                  |
 | MCP tool                              | `src/tools/search_tool_router.rs` (append a `#[tool]` method) + `src/tools/graph_tools.rs` (extract helper) | Wires prompt → search → optional embed → `build_codemap` → response.                          |
 | Optional persistence (v2+)            | `src/graph/storage.rs` — new `codemaps` sub-DB + `SCHEMA_VERSION` bump 11 → 12             | `key = blake3(prompt ‖ snapshot_id)[..16]`, value = `bincode(Codemap)`. **Deferred.**             |
@@ -70,18 +71,19 @@ pub struct CodemapStats {
     pub seed_count: usize,
     pub node_count: usize,
     pub edge_count: usize,
-    pub embedded_nodes: usize,
-    pub embeddings_computed: usize,
-    pub trait_dispatch_unresolved: usize,
+    pub embedded_nodes: usize,        // retained nodes that had a cached embedding
+    pub embeddings_computed: usize,   // generated on-the-fly (ComputeMissing policy)
     pub total_ms: u64,
 }
 ```
 
-Counters for the *failure modes* — trait dispatch, cold embedding cache — are exposed so consumers and later tuning passes can see them.
+Counters for the embedding-cache cold start are exposed so consumers and later tuning passes can see them. (Earlier drafts proposed a `trait_dispatch_unresolved` counter; dropped because the underlying `Usage` table only contains *resolved* references — RA's `Definition::usages` filters unresolved sites before they reach the snapshot. The trait-dispatch blind spot is still documented in the tool description.)
 
 ## 4. Span index + line↔byte bridge
 
 `Node.file` is `Option<String>` (workspace-relative) and `Node.span` is `Option<(u32, u32)>` (byte offsets) per `src/graph/model.rs:90-91`. But the search side (`CodeChunk` + `ChunkContext` at `src/chunker/mod.rs:38-58`) only carries `line_start`/`line_end`. So seeds need a line↔byte bridge.
+
+**Why not reuse `src/semantic/position.rs`?** That module's `to_offset`/`line_col` go through RA's `LineIndex`, which needs an `AnalysisHost`. Building one at query time re-parses the workspace and runs RA — appropriate for the `find_definition`/`goto_definition` paths but heavy for a per-codemap line lookup. A plain `\n`-scan of the file is cheaper for the codemap's bounded use (≤20 files per query).
 
 Two indexes attached lazily to `OpenedSnapshot`:
 
@@ -133,67 +135,85 @@ inputs:
                               .or_else(|| ra_find_definition_fallback(snap, qn)))
            .collect();
    else:
-       hits = HybridSearch::query(prompt, k = opts.top_k_seeds * 3)  // BM25 + LanceDB + RRF
-       for hit in hits:                                              // hit gives raw file_path + line_start..line_end
-           // normalize: CodeChunk.file_path is the original disk path (may be absolute);
-           // Node.file is workspace-relative. Canonicalize then strip the snapshot root.
-           let Some(rel) = normalize_to_workspace_relative(&hit.file_path, snap.workspace_root())
+       // existing API: src/search/mod.rs:98-138
+       hits = hybrid.search(prompt, opts.top_k_seeds * 3)?              // Vec<SearchResult> w/ chunk.context
+       let ws_root = PathBuf::from(&snap.manifest.workspace_root)       // src/graph/storage.rs:460
+                       .canonicalize()?;
+       for hit in hits:
+           // normalize: chunk.context.file_path is the indexer-time path (typically absolute);
+           // Node.file is workspace-relative. Canonicalize, then strip ws_root.
+           let Some(rel) = canonicalize_and_strip(&hit.chunk.context.file_path, &ws_root)
                else { continue };
-           if let Some(nid) = snap.enclosing_item_for_line_range(&rel, hit.line_start, hit.line_end):
-               if snap.is_callable(nid) || snap.is_type(nid):
-                   if seeds.insert(nid) && seeds.len() == opts.top_k_seeds:
-                       break;
+           let (ls, le) = (hit.chunk.context.line_start as u32, hit.chunk.context.line_end as u32);
+           if let Some(nid) = snap.enclosing_item_for_line_range(&rel, ls, le)? {
+               // ItemKind methods (added in src/graph/model.rs) — no OpenedSnapshot helpers needed
+               let kind = snap.node(&rtxn, nid)?.and_then(|n| n.item_kind);
+               if matches!(kind, Some(k) if k.is_callable() || k.is_type()) {
+                   if seeds.insert(nid) && seeds.len() == opts.top_k_seeds { break; }
+               }
+           }
 
 2. EXPAND  (bounded BFS, both directions, degree-capped, ID-level)
    //
-   // Edge classification lives here (not in queries.rs). We read target/source
-   // Node.item_kind once per edge and map: Function|Method|AssocFunction → Calls, else Uses.
+   // Edge classification lives here (not in queries.rs). The classification
+   // is a one-liner using ItemKind::is_callable() — no dedicated helper:
+   //     let kind = if target_item_kind.map_or(false, |k| k.is_callable())
+   //                { EdgeKind::Calls } else { EdgeKind::Uses };
    //
-   fn classify_outgoing(snap, n /* source */, t /* target */) -> EdgeKind {
-       match snap.item_kind_of(t) {
-           Some(Function | Method | AssocFunction) => EdgeKind::Calls,
-           _                                       => EdgeKind::Uses,
-       }
-   }
-
    retained = seeds.clone()
    frontier = seeds.clone()
    for _ in 0..opts.depth:
        next = HashSet::new()
        for n in &frontier:
-           // outgoing — raw adapter returns NodeIds; classify here
+           // outgoing — raw adapter returns NodeIds; classify by target ItemKind
            for target_id in snap.callees_of(n)?:
-               let kind = classify_outgoing(snap, n, target_id);
+               let tk = snap.node(&rtxn, target_id)?.and_then(|nd| nd.item_kind);
+               let kind = if tk.map_or(false, |k| k.is_callable()) { EdgeKind::Calls }
+                          else                                     { EdgeKind::Uses };
                record_edge(n, target_id, kind);
                if retained.insert(target_id) { next.insert(target_id); }
 
            // incoming — branch on what `n` is, since the *same* underlying iterator
            // (referrers_of) means different things depending on n's kind.
-           if snap.is_callable(n):
-               // callers of a fn — record as Calls, degree-cap by prompt relevance
-               let mut callers = snap.referrers_of(n)?;
-               callers.sort_by_key(|c| -score_caller_against_prompt(c));
-               for caller in callers.into_iter().take(opts.max_incoming_per_node):
-                   record_edge(caller, n, EdgeKind::Calls);
-                   if retained.insert(caller) { next.insert(caller); }
-           else if snap.is_type(n):
-               // consumers of a type — record as Uses, degree-cap too
-               let mut users = snap.referrers_of(n)?;
-               users.sort_by_key(|c| -score_caller_against_prompt(c));
-               for user in users.into_iter().take(opts.max_incoming_per_node):
-                   record_edge(user, n, EdgeKind::Uses);
-                   if retained.insert(user) { next.insert(user); }
-           // else: other kinds (const/static/module) get no incoming expansion in v1
+           let nk = snap.node(&rtxn, n)?.and_then(|nd| nd.item_kind);
+           let (record_kind, expand_incoming) = match nk {
+               Some(k) if k.is_callable() => (Some(EdgeKind::Calls), true),
+               Some(k) if k.is_type()     => (Some(EdgeKind::Uses),  true),
+               _                          => (None,                  false),  // const/static/module: skip
+           };
+           if expand_incoming {
+               let mut refs = snap.referrers_of(n)?;
+               refs.sort_by_key(|c| -score_caller_against_prompt(c));
+               for r in refs.into_iter().take(opts.max_incoming_per_node) {
+                   record_edge(r, n, record_kind.unwrap());
+                   if retained.insert(r) { next.insert(r); }
+               }
+           }
        frontier = next
 
 3. SCORE
+   //
+   // Reuse:
+   //   - cosine():                       src/tools/graph_tools.rs:2361
+   //   - EmbeddingGenerator::embed_async: src/embeddings/mod.rs:126  (for prompt + missing nodes)
+   //   - embeddings_by_target read API:  dbs.embeddings_by_target.get(rtxn, NodeId.as_bytes())
+   //   - compute-and-cache helper:        extract from semantic_overlaps body (src/tools/graph_tools.rs:717-1100)
+   //                                       into `ensure_node_embedding(snap, rtxn, rwxn, nid) -> Result<Vec<f32>>`
+   //                                       and reuse from both call sites.
+   //   - min_call_distance(node, &seeds): reverse BFS over referrers_of, modelled on
+   //                                       recursive_callers_count (src/graph/queries.rs:847-943).
+   //   - bm25 score normalization:        SearchResult.score is post-RRF and not pre-normalized
+   //                                       (src/search/mod.rs:50-51); codemap maps hits' scores
+   //                                       to 0..1 via max-normalization across the hit set.
+   //
    for node in &retained:
-       let bm25_norm = normalized_search_score(node);            // 0..1 from hybrid hits, 0 if absent
-       let graph_prox = 1.0 / (1.0 + min_call_distance(node, &seeds));
-       let emb_sim = match opts.embedding_policy:
+       let bm25_norm  = normalized_search_score(node);           // 0..1 across this query's hits, 0 if absent
+       let graph_prox = 1.0 / (1.0 + min_call_distance(node, &seeds) as f32);
+       let emb_sim = match opts.embedding_policy {
            NoRerank        => None,
-           UseCachedOnly   => cached_cosine(node, prompt_emb),
-           ComputeMissing  => Some(compute_and_cache_cosine(node, prompt_emb)),
+           UseCachedOnly   => cached_cosine(node, &prompt_emb),   // reads embeddings_by_target; None on miss
+           ComputeMissing  => Some(cosine(&ensure_node_embedding(snap, node)?, &prompt_emb)),
+       };
 
        node.relevance = match emb_sim {
            Some(s) => 0.40*s + 0.35*bm25_norm + 0.25*graph_prox,
@@ -275,14 +295,21 @@ trait dispatch — this is surfaced in stats.trait_dispatch_unresolved.
 Tunable defaults: max_nodes=80, depth=3, embedding_policy='no_rerank'.
 ")]
 async fn build_codemap(&self, params: Parameters<BuildCodemapParams>) -> ... {
-    // 1. open_workspace_snapshot(directory) -> OpenedSnapshot
-    // 2. if seed_qualified_names: lookup_by_qualified_name per name; for each
-    //    miss, optionally try the existing RA find_definition path as fallback
-    //    else: run HybridSearch::query(prompt, top_k_seeds * 3) and resolve hits
-    //    via normalize_to_workspace_relative + enclosing_item_for_line_range
-    // 3. (optional) compute prompt embedding via existing fastembed pipeline
+    // 1. open_workspace_snapshot(directory) -> OpenedSnapshot       (src/tools/graph_tools.rs:2064)
+    // 2. if seed_qualified_names: snap.lookup_by_qualified_name per name
+    //                              (src/graph/queries.rs:439, already handles re-export hops);
+    //                              for unresolved names, fall back to RA goto_definition
+    //                              via src/semantic/position.rs:79+ and map (file, span) back
+    //                              through enclosing_item_for_line_range.
+    //    else:                     hybrid.search(prompt, top_k_seeds * 3)   (src/search/mod.rs:98)
+    //                              resolve hits: canonicalize file_path, strip snap.manifest.workspace_root,
+    //                              call enclosing_item_for_line_range with line range.
+    // 3. (if embedding_policy != NoRerank) EmbeddingGenerator::embed_async(prompt)
+    //                              (src/embeddings/mod.rs:126)
     // 4. graph::codemap::build_codemap(&snap, prompt, seeds, prompt_emb, opts)
     // 5. format JSON / Mermaid / outline per `format` arg
+    // Errors: map via internal_error("label") (src/tools/graph_tools.rs:2210)
+    //         and McpError::invalid_params for validation.
 }
 ```
 
@@ -325,30 +352,65 @@ Outline format: indented module → item tree from the filtered `ModuleTreeNode`
 
 ## 9. LOC and time estimate
 
-| Piece                                                                                             | LOC       |
-|---------------------------------------------------------------------------------------------------|-----------|
-| Response types in `src/graph/codemap.rs`                                                          | 80        |
-| Span index + line→byte cache on `OpenedSnapshot`                                                  | 140       |
-| Raw-ID adapters (`callees_of`, `referrers_of`)                                                    | 80        |
-| Item-kind / crate / `enclosing_item_for_line_range` / `min_call_distance` helpers                 | 100       |
-| `src/graph/codemap.rs` core (BFS + scoring + prune + projection)                                  | 400       |
-| Renderers (Mermaid + outline)                                                                     | 120       |
-| MCP tool wiring + param struct + error mapping                                                    | 150       |
-| Unit tests (seed resolution incl. line→byte bridge, BFS termination, edge classification, prune)  | 400       |
-| One end-to-end test against the local snapshot (golden node-set qualified names)                  | 80        |
-| **Total**                                                                                         | **~1,550** |
+| Piece                                                                                              | LOC       |
+|----------------------------------------------------------------------------------------------------|-----------|
+| Response types in `src/graph/codemap.rs`                                                           | 70        |
+| Span index + line→byte cache on `OpenedSnapshot`                                                   | 140       |
+| Raw-ID adapters (`callees_of`, `referrers_of`)                                                     | 80        |
+| `ItemKind::is_callable` / `is_type` predicates (`src/graph/model.rs`) + `enclosing_item_for_line_range` + `min_call_distance` (mirrors `recursive_callers_count` BFS template) | 100 |
+| Extract `ensure_node_embedding` helper out of `semantic_overlaps` body + call from both sites      | 80        |
+| Tiny `canonicalize_and_strip(path, ws_root)` helper (PathBuf-based; *not* the VFS-based `resolve_workspace_relative`) | 20 |
+| `src/graph/codemap.rs` core (BFS + scoring + prune + projection)                                   | 350       |
+| Renderers (Mermaid + outline)                                                                      | 120       |
+| MCP tool wiring + param struct + error mapping (uses existing `open_workspace_snapshot`, `internal_error`) | 130 |
+| Unit tests (seed resolution incl. line→byte bridge, BFS termination, edge classification, prune)   | 400       |
+| One end-to-end test against the local snapshot (golden node-set qualified names)                   | 80        |
+| **Total new LOC**                                                                                  | **~1,570** |
+| **Of which reused (zero new LOC):** `cosine`, `EmbeddingGenerator::embed_async`, `HybridSearch::search`, `lookup_by_qualified_name`, `module_tree`, `open_workspace_snapshot`, `internal_error`, `read_file_content`, private `usages_for_*` iterators, `embeddings_by_target` read/write API | — |
 
-Realistic time: **3 working days** for v1. Drift from the v1 draft comes from line↔byte bridging, raw-ID adapters, and edge classification — all forced by the actual data shapes.
+Realistic time: **3 working days** for v1. The reuse audit shifted LOC slightly (added `ensure_node_embedding` extraction; removed redundant `is_callable`/`is_type`/`crate_of`/`item_kind_of` helpers; trimmed `classify_outgoing`).
 
 ## 10. Known limitations (call out in the tool description)
 
-1. **Trait dispatch / `dyn Trait` / generic `F: Fn(..)` are invisible.** Usage edges resolve syntactic call sites, not virtual dispatch. `stats.trait_dispatch_unresolved` counts unresolved sites in the seed neighborhood so consumers can judge trust.
+1. **Trait dispatch / `dyn Trait` / generic `F: Fn(..)` are invisible** *and unmeasurable*. RA's `Definition::usages` filters unresolved references before they reach the `Usage` table, so the codemap cannot count them as a diagnostic — only document the blind spot in the tool description.
 2. **Macro-expanded items may lack spans.** Span lookup falls back to module-level; items still appear but aren't reachable from search-hit line ranges.
-3. **First call against a fresh snapshot is slow** when `embedding_policy = compute_missing`. The cache fills as a side effect.
+3. **First call against a fresh snapshot is slow** when `embedding_policy = compute_missing`. The cache fills as a side effect via the shared `ensure_node_embedding` helper.
 4. **Span index and line→byte cache are per-request in v1** because `OpenedSnapshot` is reopened per tool call. A snapshot-handle cache is a separate change; not blocking.
 5. **`max_nodes` is a hard budget.** Seeds always survive; non-seeds may be pruned aggressively. `stats.node_count` exposes whether the budget bit.
 
-## 11. V1 implementation decisions
+## 11. Infrastructure reuse map
+
+Every external dependency the codemap module takes on, with the existing call site and whether v1 must touch it.
+
+| Capability                          | Reuses                                                                                    | Touch?     |
+|-------------------------------------|-------------------------------------------------------------------------------------------|------------|
+| Open snapshot from a directory      | `open_workspace_snapshot` (`src/tools/graph_tools.rs:2064`)                               | No         |
+| Workspace root from snapshot        | `snap.manifest.workspace_root: String` (`src/graph/storage.rs:460`) → parse to `PathBuf`  | No         |
+| Hybrid retrieval (BM25 + LanceDB + RRF) | `HybridSearch::search(query, limit)` / `search_with_k` (`src/search/mod.rs:98-138`)   | No         |
+| Search-hit shape                    | `SearchResult { chunk: CodeChunk, score, bm25_score, vector_score, ranks }`               | No (read it directly) |
+| Qualified-name → NodeId             | `OpenedSnapshot::lookup_by_qualified_name` (`src/graph/queries.rs:439`) — handles re-export hops | No   |
+| RA goto-definition fallback         | `src/semantic/position.rs:79+` `goto_definition` — only on `lookup_by_qualified_name` miss | No (call as-is) |
+| Module hierarchy                    | `OpenedSnapshot::module_tree(crate_name: &str, depth: Option<usize>)` (`src/graph/queries.rs:1994`) | No |
+| Outgoing references from a fn body  | New `pub(crate) callees_of` wrapping private `usages_for_consumer_function` (`src/graph/queries.rs:2305`) | Yes (~40 LOC) |
+| Incoming references to an item      | New `pub(crate) referrers_of` wrapping private `usages_for_target` (`src/graph/queries.rs:2257`) | Yes (~40 LOC) |
+| BFS distance to a seed set          | Mirror the frontier+visited loop from `recursive_callers_count` (`src/graph/queries.rs:847-943`) | Yes (~40 LOC) |
+| Item-kind predicates                | New `ItemKind::is_callable()` / `is_type()` methods on the enum (`src/graph/model.rs`) — 2 three-line impls | Yes (~10 LOC) |
+| Item-kind getter                    | Read `snap.node(rtxn, id)?.item_kind` directly — no wrapper                               | No         |
+| Cosine similarity                   | `cosine(a: &[f32], b: &[f32]) -> f32` (`src/tools/graph_tools.rs:2361`)                   | No         |
+| Per-item embedding cache            | `dbs.embeddings_by_target` heed sub-DB (`src/graph/storage.rs:115`); read with `get(rtxn, NodeId.as_bytes())` | No |
+| Ad-hoc text embedding (prompt)      | `EmbeddingGenerator::embed_async(text)` (`src/embeddings/mod.rs:126`)                     | No         |
+| Compute-and-cache for a NodeId      | Extract `ensure_node_embedding(snap, rtxn, rwxn, nid)` out of `semantic_overlaps` body (`src/tools/graph_tools.rs:717-1100`) and call from both sites | Yes (~80 LOC factoring) |
+| Source-text reading (for snippets)  | `read_file_content` (`src/tools/query_tools.rs:20`) + byte-slice the span                 | No         |
+| Path normalization at query time    | Tiny new helper `canonicalize_and_strip(&Path, &Path) -> Option<String>` — `resolve_workspace_relative` (`src/graph/usages.rs:167`) is build-time only because it requires `&Vfs` | Yes (~20 LOC) |
+| Line→byte conversion at query time  | Tiny new `\n`-scan per file; `src/semantic/position.rs:34-52` LineIndex path would need a heavy `AnalysisHost` at query time | Yes (~60 LOC) |
+| MCP tool wiring                     | `#[tool_router]` / `#[tool]` macros in `src/tools/search_tool_router.rs`                  | Yes (one method) |
+| MCP error mapping                   | `internal_error(label)` closure (`src/tools/graph_tools.rs:2210`), `McpError::invalid_params(msg, None)` for validation | No |
+
+The two genuinely new pieces of plumbing (span index + line→byte cache, raw-ID graph adapters) are the only places where the codemap adds something that doesn't already exist in some form. Every other capability calls existing code unchanged.
+
+**Score-normalization note.** `SearchResult.score` is post-RRF but not pre-normalized into [0,1] (`src/search/mod.rs:50-51`). The codemap normalizes per-query by dividing by the max score in the hit set. This is a one-liner local to `codemap.rs`, not new infrastructure.
+
+## 12. V1 implementation decisions
 
 - **(a) Embedding policy default:** `no_rerank`. The tool description will call out `cached_only` and `compute_missing` as quality/latency tradeoffs.
 - **(b) Format default:** `json`. Mermaid and outline remain opt-in because they are derivable from JSON and increase token cost.
@@ -372,3 +434,17 @@ Realistic time: **3 working days** for v1. Drift from the v1 draft comes from li
 - **File-path normalization**: `CodeChunk.file_path` holds the disk path passed to `Chunker::chunk_file` (`src/chunker/mod.rs:169-200`) — typically absolute. `Node.file` is workspace-relative. Seed step now canonicalizes and strips the snapshot workspace root before calling `enclosing_item_for_line_range`.
 - **Query/feature layer separation**: v2 had `callees_of` returning `(NodeId, EdgeKind)`, coupling the generic query layer back to the codemap feature. Now `callees_of` and `referrers_of` return plain `Vec<NodeId>`; `codemap.rs` classifies by reading endpoint `Node.item_kind` via the existing `OpenedSnapshot::node` lookup.
 - **Seed-override resolution**: v2 said "resolve via `find_definition`". The right primitive for qualified-name → NodeId is `lookup_by_qualified_name` (`src/graph/queries.rs:439`), which already handles re-export hops. Use it first; fall back to RA `find_definition` + span-index mapping only for names that don't resolve directly.
+
+### v2.1 → v2.2 (infrastructure reuse audit)
+
+- **Wrong search API name.** v2.1 said `HybridSearch::query`; actual API is `HybridSearch::search(query, limit)` / `search_with_k` (`src/search/mod.rs:98-138`). Fixed in §5 and §6.
+- **Cosine reuse.** Existing `cosine(a, b)` lives at `src/tools/graph_tools.rs:2361`. v2.1 implied a fresh implementation; v2.2 names it and calls it directly.
+- **Prompt-embedding reuse.** `EmbeddingGenerator::embed_async(text)` (`src/embeddings/mod.rs:126`) is the existing entry point. v2.2 names it explicitly in §5 SCORE and the MCP tool body.
+- **Compute-and-cache extraction.** The lazy-populate logic in `semantic_overlaps` (`src/tools/graph_tools.rs:717-1100`) duplicates exactly what `ComputeMissing` needs. v2.2 factors it into a reusable `ensure_node_embedding(snap, rtxn, rwxn, nid)` helper called from both sites.
+- **BFS reuse.** `min_call_distance(node, &seeds)` now explicitly mirrors the frontier+visited template of `recursive_callers_count` (`src/graph/queries.rs:847-943`) instead of being described as fresh code.
+- **`ItemKind` predicates moved.** `is_callable`/`is_type` are now methods on the `ItemKind` enum in `src/graph/model.rs`, not new helpers on `OpenedSnapshot`. `crate_of` and `item_kind_of` helpers are dropped entirely — callers use `snap.node(rtxn, id)?.item_kind` and `Node.crate_id` directly.
+- **`trait_dispatch_unresolved` counter dropped.** RA's `Definition::usages` filters unresolved references before they reach the `Usage` table; we cannot count what isn't in the snapshot. The blind spot remains documented in the tool description but is no longer claimed to be quantifiable.
+- **Path normalization clarified.** `resolve_workspace_relative` (`src/graph/usages.rs:167`) takes `(&Vfs, FileId, &Path)` — VFS is build-time only. The codemap layer needs a tiny `canonicalize_and_strip(path, ws_root)` over `PathBuf` because no VFS exists at query time. Flagged so it doesn't look like a 6th copy of an existing function.
+- **Line→byte rationale.** `src/semantic/position.rs` already converts line/col via RA's `LineIndex`, but that needs an `AnalysisHost`. v2.2 documents *why* the codemap keeps its own `\n`-scan: query-time AnalysisHost construction is overkill for ≤20 files per call.
+- **Workspace root accessor.** v2 / v2.1 said `snap.workspace_root()`. There is no such method. v2.2 uses `snap.manifest.workspace_root: String` (parsed to `PathBuf`).
+- **Reuse map added (§11).** Every external dependency the codemap takes on is now listed with file:line and whether v1 touches it.
