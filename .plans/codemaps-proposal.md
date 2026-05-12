@@ -1,7 +1,7 @@
 # Proposal: task-conditioned codemap tool for `file-search-mcp`
 
 **Target:** single-crate workspace at `/home/molaco/Documents/rust-code-mcp-final` (crate `file-search-mcp`, modules under `src/`).
-**Status:** v2.2. Revises an earlier draft after three rounds of review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightened four details; v2.2 audits every new piece against existing infrastructure to remove duplication. See §12 "Reuse map" for the explicit reuse contract and the appendix for revision history.
+**Status:** v2.3. Revises an earlier draft after four rounds of review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightened four details; v2.2 audited every new piece against existing infrastructure to remove duplication; v2.3 cross-validates every cited API against the live workspace index and addresses async-hygiene + `#[non_exhaustive]` concerns surfaced by the Rust-idioms review. See §11 "Reuse map" for the explicit reuse contract and the appendix for revision history.
 
 ## 1. Goal
 
@@ -64,6 +64,7 @@ pub struct CodemapNode {
 pub struct CodemapEdge { pub from: NodeId, pub to: NodeId, pub kind: EdgeKind, pub weight: u32 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[non_exhaustive]   // future variants (Implements, Inherits, …) should not be semver-breaking
 pub enum EdgeKind { Calls, Uses, Imports, Contains }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,7 +82,7 @@ Counters for the embedding-cache cold start are exposed so consumers and later t
 
 ## 4. Span index + line↔byte bridge
 
-`Node.file` is `Option<String>` (workspace-relative) and `Node.span` is `Option<(u32, u32)>` (byte offsets) per `src/graph/model.rs:90-91`. But the search side (`CodeChunk` + `ChunkContext` at `src/chunker/mod.rs:38-58`) only carries `line_start`/`line_end`. So seeds need a line↔byte bridge.
+`Node.file` is `Option<String>` (workspace-relative) and `Node.span` is `Option<(u32, u32)>` (byte offsets) per `src/graph/model.rs`. But the search side (`ChunkContext` at `src/chunker/mod.rs:40`, `CodeChunk` at `src/chunker/mod.rs:62`) only carries `line_start`/`line_end`. So seeds need a line↔byte bridge.
 
 **Why not reuse `src/semantic/position.rs`?** That module's `to_offset`/`line_col` go through RA's `LineIndex`, which needs an `AnalysisHost`. Building one at query time re-parses the workspace and runs RA — appropriate for the `find_definition`/`goto_definition` paths but heavy for a per-codemap line lookup. A plain `\n`-scan of the file is cheaper for the codemap's bounded use (≤20 files per query).
 
@@ -108,7 +109,7 @@ Implementation notes:
 - `line_to_byte` is built on demand: when an `enclosing_item_for_line_range(file, ls, le)` lookup arrives, read the file from disk *once* and remember its `\n`-offset prefix table. Bounded by number of files containing search hits (typically <20 per query).
 - `enclosing_item_for_line_range` resolves `(file, line_start, line_end)` → `(byte_start, byte_end)` then queries `span_index` for the smallest enclosing item.
 
-**Important caveat:** today the MCP server opens a fresh `OpenedSnapshot` per tool call (`src/tools/graph_tools.rs:2064`). So both caches are **per request**, not per process. The cost is bounded (one full scan of nodes for the span index, plus a few file reads), but a future optimization is a snapshot-handle cache keyed on `(canonical_dir, manifest_mtime)`. Not blocking for v1.
+**Important caveat:** today the MCP server opens a fresh `OpenedSnapshot` (`src/graph/snapshot.rs:363`) per tool call (`src/tools/graph_tools.rs:2064`). So both caches are **per request**, not per process. The cost is bounded (one full scan of nodes for the span index, plus a few file reads), but a future optimization is a snapshot-handle cache keyed on `(canonical_dir, manifest_mtime)`. Not blocking for v1.
 
 ## 5. Algorithm
 
@@ -194,31 +195,48 @@ inputs:
 3. SCORE
    //
    // Reuse:
-   //   - cosine():                       src/tools/graph_tools.rs:2361
-   //   - EmbeddingGenerator::embed_async: src/embeddings/mod.rs:126  (for prompt + missing nodes)
-   //   - embeddings_by_target read API:  dbs.embeddings_by_target.get(rtxn, NodeId.as_bytes())
+   //   - cosine():                        src/tools/graph_tools.rs (free fn, signature: `fn cosine(a: &[f32], b: &[f32]) -> f32`)
+   //   - EmbeddingGenerator::embed_async: src/embeddings/mod.rs    (signature: `async fn embed_async(&self, text: String) -> Result<Vec<f32>, EmbeddingError>` — takes OWNED String)
+   //   - embed_batch_async:               src/embeddings/         (batch path used by semantic_overlaps; amortizes fastembed call)
+   //   - embeddings_by_target read API:   dbs.embeddings_by_target.get(rtxn, NodeId.as_bytes())
    //   - compute-and-cache helper:        extract from semantic_overlaps body (src/tools/graph_tools.rs:717-1100)
-   //                                       into `ensure_node_embedding(snap, rtxn, rwxn, nid) -> Result<Vec<f32>>`
-   //                                       and reuse from both call sites.
+   //                                       into `ensure_embeddings_for(snap, nids: &[NodeId]) -> Result<HashMap<NodeId, Vec<f32>>>`
+   //                                       — batched, not single-NodeId; reuse from both call sites.
    //   - min_call_distance(node, &seeds): reverse BFS over referrers_of, modelled on
-   //                                       recursive_callers_count (src/graph/queries.rs:847-943).
+   //                                       recursive_callers_count (src/graph/queries.rs:852+).
    //   - bm25 score normalization:        SearchResult.score is post-RRF and not pre-normalized
-   //                                       (src/search/mod.rs:50-51); codemap maps hits' scores
-   //                                       to 0..1 via max-normalization across the hit set.
+   //                                       (src/search/mod.rs:47); codemap max-normalizes across this query's hit set.
    //
-   for node in &retained:
-       let bm25_norm  = normalized_search_score(node);           // 0..1 across this query's hits, 0 if absent
+   // ASYNC HYGIENE (heed RoTxn is Send under WithoutTls, but holding it across an
+   //                async fastembed call is poor practice and slow). The structure is:
+   //
+   //   PHASE A — pure sync (one read txn):
+   //     for each retained node, collect bm25 score + graph_prox.
+   //     if ComputeMissing / UseCachedOnly:
+   //         look up cached EmbeddingRecord per node; collect (cached_nodes, missing_nodes).
+   //     drop rtxn here.
+   //
+   //   PHASE B — async (no txn held):
+   //     if ComputeMissing && !missing_nodes.is_empty():
+   //         let new_vecs = ensure_embeddings_for(snap, &missing_nodes).await?;
+   //         (this opens its own short rtxn+rwxn internally to read source + write cache)
+   //
+   //   PHASE C — pure sync (no txn needed; vectors are in memory):
+   //     for each retained node, finalize emb_sim and combine into node.relevance.
+   //
+   for node in &retained {
+       let bm25_norm  = normalized_search_score(node);            // 0..1 across this query's hits, 0 if absent
        let graph_prox = 1.0 / (1.0 + min_call_distance(node, &seeds) as f32);
        let emb_sim = match opts.embedding_policy {
            NoRerank        => None,
-           UseCachedOnly   => cached_cosine(node, &prompt_emb),   // reads embeddings_by_target; None on miss
-           ComputeMissing  => Some(cosine(&ensure_node_embedding(snap, node)?, &prompt_emb)),
+           UseCachedOnly   => cached_cosine(node, &prompt_emb),   // from PHASE A; None on miss
+           ComputeMissing  => Some(cosine(emb_for(node), &prompt_emb)),  // from PHASE A∪B
        };
-
        node.relevance = match emb_sim {
            Some(s) => 0.40*s + 0.35*bm25_norm + 0.25*graph_prox,
            None    =>          0.60*bm25_norm + 0.40*graph_prox,
        };
+   }
 
 4. PRUNE
    keep all seeds.
@@ -304,8 +322,8 @@ async fn build_codemap(&self, params: Parameters<BuildCodemapParams>) -> ... {
     //    else:                     hybrid.search(prompt, top_k_seeds * 3)   (src/search/mod.rs:98)
     //                              resolve hits: canonicalize file_path, strip snap.manifest.workspace_root,
     //                              call enclosing_item_for_line_range with line range.
-    // 3. (if embedding_policy != NoRerank) EmbeddingGenerator::embed_async(prompt)
-    //                              (src/embeddings/mod.rs:126)
+    // 3. (if embedding_policy != NoRerank) EmbeddingGenerator::embed_async(prompt.to_owned())
+    //                              (src/embeddings/mod.rs — takes OWNED String, not &str)
     // 4. graph::codemap::build_codemap(&snap, prompt, seeds, prompt_emb, opts)
     // 5. format JSON / Mermaid / outline per `format` arg
     // Errors: map via internal_error("label") (src/tools/graph_tools.rs:2210)
@@ -358,14 +376,14 @@ Outline format: indented module → item tree from the filtered `ModuleTreeNode`
 | Span index + line→byte cache on `OpenedSnapshot`                                                   | 140       |
 | Raw-ID adapters (`callees_of`, `referrers_of`)                                                     | 80        |
 | `ItemKind::is_callable` / `is_type` predicates (`src/graph/model.rs`) + `enclosing_item_for_line_range` + `min_call_distance` (mirrors `recursive_callers_count` BFS template) | 100 |
-| Extract `ensure_node_embedding` helper out of `semantic_overlaps` body + call from both sites      | 80        |
+| Extract `ensure_embeddings_for` (batched) out of `semantic_overlaps` body + call from both sites   | 120       |
 | Tiny `canonicalize_and_strip(path, ws_root)` helper (PathBuf-based; *not* the VFS-based `resolve_workspace_relative`) | 20 |
 | `src/graph/codemap.rs` core (BFS + scoring + prune + projection)                                   | 350       |
 | Renderers (Mermaid + outline)                                                                      | 120       |
 | MCP tool wiring + param struct + error mapping (uses existing `open_workspace_snapshot`, `internal_error`) | 130 |
 | Unit tests (seed resolution incl. line→byte bridge, BFS termination, edge classification, prune)   | 400       |
 | One end-to-end test against the local snapshot (golden node-set qualified names)                   | 80        |
-| **Total new LOC**                                                                                  | **~1,570** |
+| **Total new LOC**                                                                                  | **~1,610** |
 | **Of which reused (zero new LOC):** `cosine`, `EmbeddingGenerator::embed_async`, `HybridSearch::search`, `lookup_by_qualified_name`, `module_tree`, `open_workspace_snapshot`, `internal_error`, `read_file_content`, private `usages_for_*` iterators, `embeddings_by_target` read/write API | — |
 
 Realistic time: **3 working days** for v1. The reuse audit shifted LOC slightly (added `ensure_node_embedding` extraction; removed redundant `is_callable`/`is_type`/`crate_of`/`item_kind_of` helpers; trimmed `classify_outgoing`).
@@ -374,9 +392,10 @@ Realistic time: **3 working days** for v1. The reuse audit shifted LOC slightly 
 
 1. **Trait dispatch / `dyn Trait` / generic `F: Fn(..)` are invisible** *and unmeasurable*. RA's `Definition::usages` filters unresolved references before they reach the `Usage` table, so the codemap cannot count them as a diagnostic — only document the blind spot in the tool description.
 2. **Macro-expanded items may lack spans.** Span lookup falls back to module-level; items still appear but aren't reachable from search-hit line ranges.
-3. **First call against a fresh snapshot is slow** when `embedding_policy = compute_missing`. The cache fills as a side effect via the shared `ensure_node_embedding` helper.
+3. **First call against a fresh snapshot is slow** when `embedding_policy = compute_missing`. The cache fills as a side effect via the shared `ensure_embeddings_for` helper, which uses `embed_batch_async` to amortize one fastembed call across all missing items.
 4. **Span index and line→byte cache are per-request in v1** because `OpenedSnapshot` is reopened per tool call. A snapshot-handle cache is a separate change; not blocking.
 5. **`max_nodes` is a hard budget.** Seeds always survive; non-seeds may be pruned aggressively. `stats.node_count` exposes whether the budget bit.
+6. **Algorithm core is parameterized by `&OpenedSnapshot`, not a trait.** Means unit tests need a real heed env (the existing test pattern in `src/graph/queries.rs` does this via `tempdir`). A future `SnapshotView` trait abstracting `callees_of`/`referrers_of`/`node`/`module_tree` would enable in-memory fakes per architecture guide §10, but is out of scope for v1.
 
 ## 11. Infrastructure reuse map
 
@@ -393,13 +412,13 @@ Every external dependency the codemap module takes on, with the existing call si
 | Module hierarchy                    | `OpenedSnapshot::module_tree(crate_name: &str, depth: Option<usize>)` (`src/graph/queries.rs:1994`) | No |
 | Outgoing references from a fn body  | New `pub(crate) callees_of` wrapping private `usages_for_consumer_function` (`src/graph/queries.rs:2305`) | Yes (~40 LOC) |
 | Incoming references to an item      | New `pub(crate) referrers_of` wrapping private `usages_for_target` (`src/graph/queries.rs:2257`) | Yes (~40 LOC) |
-| BFS distance to a seed set          | Mirror the frontier+visited loop from `recursive_callers_count` (`src/graph/queries.rs:847-943`) | Yes (~40 LOC) |
+| BFS distance to a seed set          | Mirror the frontier+visited loop from `recursive_callers_count` (`src/graph/queries.rs:852+`) | Yes (~40 LOC) |
 | Item-kind predicates                | New `ItemKind::is_callable()` / `is_type()` methods on the enum (`src/graph/model.rs`) — 2 three-line impls | Yes (~10 LOC) |
 | Item-kind getter                    | Read `snap.node(rtxn, id)?.item_kind` directly — no wrapper                               | No         |
 | Cosine similarity                   | `cosine(a: &[f32], b: &[f32]) -> f32` (`src/tools/graph_tools.rs:2361`)                   | No         |
 | Per-item embedding cache            | `dbs.embeddings_by_target` heed sub-DB (`src/graph/storage.rs:115`); read with `get(rtxn, NodeId.as_bytes())` | No |
-| Ad-hoc text embedding (prompt)      | `EmbeddingGenerator::embed_async(text)` (`src/embeddings/mod.rs:126`)                     | No         |
-| Compute-and-cache for a NodeId      | Extract `ensure_node_embedding(snap, rtxn, rwxn, nid)` out of `semantic_overlaps` body (`src/tools/graph_tools.rs:717-1100`) and call from both sites | Yes (~80 LOC factoring) |
+| Ad-hoc text embedding (prompt)      | `EmbeddingGenerator::embed_async(text: String)` (`src/embeddings/mod.rs`) — takes owned `String`; caller `prompt.to_owned()` | No |
+| Compute-and-cache for many NodeIds  | Extract `ensure_embeddings_for(snap, nids: &[NodeId]) -> HashMap<NodeId, Vec<f32>>` out of `semantic_overlaps` body (`src/tools/graph_tools.rs:717-1100`) using its existing `embed_batch_async` path. Batched, not single-NodeId. Reused from both `semantic_overlaps` and codemap. | Yes (~120 LOC factoring) |
 | Source-text reading (for snippets)  | `read_file_content` (`src/tools/query_tools.rs:20`) + byte-slice the span                 | No         |
 | Path normalization at query time    | Tiny new helper `canonicalize_and_strip(&Path, &Path) -> Option<String>` — `resolve_workspace_relative` (`src/graph/usages.rs:167`) is build-time only because it requires `&Vfs` | Yes (~20 LOC) |
 | Line→byte conversion at query time  | Tiny new `\n`-scan per file; `src/semantic/position.rs:34-52` LineIndex path would need a heavy `AnalysisHost` at query time | Yes (~60 LOC) |
@@ -448,3 +467,15 @@ The two genuinely new pieces of plumbing (span index + line→byte cache, raw-ID
 - **Line→byte rationale.** `src/semantic/position.rs` already converts line/col via RA's `LineIndex`, but that needs an `AnalysisHost`. v2.2 documents *why* the codemap keeps its own `\n`-scan: query-time AnalysisHost construction is overkill for ≤20 files per call.
 - **Workspace root accessor.** v2 / v2.1 said `snap.workspace_root()`. There is no such method. v2.2 uses `snap.manifest.workspace_root: String` (parsed to `PathBuf`).
 - **Reuse map added (§11).** Every external dependency the codemap takes on is now listed with file:line and whether v1 touches it.
+
+### v2.2 → v2.3 (cross-validation against live index + idioms review)
+
+Every cited API and type was checked via `function_signature` / `find_definition` against the indexed workspace (1,526 items). All citations resolved. Adjustments:
+
+- **`EmbeddingGenerator::embed_async` takes owned `String`, not `&str`.** Verified signature: `async fn embed_async(&self, text: String) -> Result<Vec<f32>, EmbeddingError>`. The MCP-tool layer must call `.to_owned()` on the prompt. Reflected in §6 and the reuse map.
+- **`ensure_node_embedding` → `ensure_embeddings_for(snap, &[NodeId])` (batched).** The existing `semantic_overlaps` body uses `embed_batch_async` to amortize the fastembed call across many items. Per-NodeId async calls in a loop is the slow path. The extracted helper now takes a slice and returns a `HashMap<NodeId, Vec<f32>>`. Reuse-map row and LOC table updated.
+- **Async hygiene in SCORE.** Heed `RoTxn` is `Send` under `WithoutTls`, but holding it across `embed_batch_async` is poor practice. §5 SCORE now splits into three phases: pure-sync data collection (txn held), async batched embedding (no txn), pure-sync finalization. Mirrors the existing `semantic_overlaps` structure.
+- **`#[non_exhaustive]` on `EdgeKind`.** Per rusty checklist §4 — `EdgeKind` is serialized into the MCP JSON; future variants (`Implements`, `Inherits`, …) should not be semver-breaking. Added.
+- **Line-number drift fixed.** `OpenedSnapshot` is at `src/graph/snapshot.rs:363` (was 362); `ChunkContext` at `src/chunker/mod.rs:40` (was "38-58"); `recursive_callers_count` fn declaration at `src/graph/queries.rs:852` (range still ~852–943).
+- **`SnapshotView` trait flagged for the future.** §10 acknowledges that the v1 algorithm core takes `&OpenedSnapshot` directly, which keeps unit tests bound to a real heed env (the existing test pattern). A trait abstraction is the right sans-I/O refactor but is out of v1 scope.
+- **`read_file_content` is not duplicated.** The second occurrence (`src/tools/search_tool_router.rs:116`) is the `#[tool]` wrapper that delegates to `src/tools/query_tools.rs:20`. The proposal already cites the implementation site, not the wrapper.
