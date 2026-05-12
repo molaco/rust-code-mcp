@@ -2437,7 +2437,7 @@ fn line_range_overlaps(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bo
 /// `semantic_overlaps` v1.1 for the in-memory pairwise pass. Returns 0.0
 /// when either vector has zero norm (instead of NaN); slices of unequal
 /// length are silently truncated to the shorter length via `zip`.
-fn cosine(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let mut dot = 0f32;
     let mut na = 0f32;
     let mut nb = 0f32;
