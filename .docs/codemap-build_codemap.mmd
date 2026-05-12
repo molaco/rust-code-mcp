@@ -1,0 +1,96 @@
+flowchart LR
+  subgraph m_file_search_mcp__embeddings ["mod file_search_mcp::embeddings"]
+    n_9a2cdbec["EmbeddingGenerator"]
+  end
+  subgraph m_file_search_mcp__embeddings__EmbeddingGenerator ["mod file_search_mcp::embeddings::EmbeddingGenerator"]
+    n_1f0ebe02["embed_async"]
+    n_c0cfad30["new"]
+  end
+  subgraph m_file_search_mcp__graph__codemap ["mod file_search_mcp::graph::codemap"]
+    n_a7d4fcb2["Codemap"]
+    n_26f6f0a2["CodemapEdge"]
+    n_c6aec59b["CodemapNode"]
+    n_8a8b3949["CodemapStats"]
+    n_04602f4a["EdgeKind"]
+    n_2acbc5f8["EmbeddingPolicy"]
+    n_47940814["build_bm25_by_node"]
+    n_0af479ba["build_codemap"]:::seed
+    n_f9144487["node_qualified_name"]
+    n_ce55eec6["project_hierarchy"]
+    n_fcaa29b7["rank_referrer"]
+    n_49076261["resolve_override_seeds"]
+    n_90fc707a["resolve_search_seeds"]
+  end
+  subgraph m_file_search_mcp__graph__codemap__tests ["mod file_search_mcp::graph::codemap::tests"]
+    n_9d52741d["build_codemap_depth_zero_returns_only_seeds"]
+    n_ca24ae3d["build_codemap_override_seeds_resolves_deterministically"]
+    n_761169b7["build_codemap_unresolved_seed_records_diagnostic"]
+    n_044ba717["render_mermaid_smoke"]
+    n_fb3ce488["render_outline_smoke"]
+  end
+  subgraph m_file_search_mcp__graph__ids ["mod file_search_mcp::graph::ids"]
+    n_2b0d5784["NodeId"]
+  end
+  subgraph m_file_search_mcp__graph__ids__NodeId ["mod file_search_mcp::graph::ids::NodeId"]
+    n_9495e5ab["as_bytes"]
+  end
+  subgraph m_file_search_mcp__graph__model__ItemKind ["mod file_search_mcp::graph::model::ItemKind"]
+    n_abd0c5e5["is_callable"]
+    n_8dcae8c0["is_type"]
+  end
+  subgraph m_file_search_mcp__graph__snapshot__OpenedSnapshot ["mod file_search_mcp::graph::snapshot::OpenedSnapshot"]
+    n_40b39891["callees_of"]
+    n_d7877c4a["node"]
+    n_f3f5e593["read_txn"]
+    n_8783e0a4["referrers_of"]
+  end
+  subgraph m_file_search_mcp__search ["mod file_search_mcp::search"]
+    n_cb548a39["SearchResult"]
+  end
+  n_47940814 -.->|uses| n_2b0d5784
+  n_0af479ba -.->|uses| n_9a2cdbec
+  n_0af479ba -->|calls| n_1f0ebe02
+  n_0af479ba -->|calls| n_c0cfad30
+  n_0af479ba -.->|uses| n_a7d4fcb2
+  n_0af479ba -.->|uses| n_26f6f0a2
+  n_0af479ba -.->|uses| n_c6aec59b
+  n_0af479ba -.->|uses| n_8a8b3949
+  n_0af479ba -.->|uses| n_04602f4a
+  n_0af479ba -.->|uses| n_2acbc5f8
+  n_0af479ba -->|calls| n_47940814
+  n_0af479ba -->|calls| n_f9144487
+  n_0af479ba -->|calls| n_ce55eec6
+  n_0af479ba -->|calls| n_fcaa29b7
+  n_0af479ba -->|calls| n_49076261
+  n_0af479ba -->|calls| n_90fc707a
+  n_0af479ba -.->|uses| n_2b0d5784
+  n_0af479ba -->|calls| n_9495e5ab
+  n_0af479ba -->|calls| n_abd0c5e5
+  n_0af479ba -->|calls| n_8dcae8c0
+  n_0af479ba -->|calls| n_40b39891
+  n_0af479ba -->|calls| n_d7877c4a
+  n_0af479ba -->|calls| n_f3f5e593
+  n_0af479ba -->|calls| n_8783e0a4
+  n_0af479ba -.->|uses| n_cb548a39
+  n_f9144487 -->|calls| n_d7877c4a
+  n_ce55eec6 -.->|uses| n_2b0d5784
+  n_ce55eec6 -->|calls| n_d7877c4a
+  n_ce55eec6 -->|calls| n_f3f5e593
+  n_fcaa29b7 -->|calls| n_d7877c4a
+  n_49076261 -.->|uses| n_2b0d5784
+  n_90fc707a -.->|uses| n_2b0d5784
+  n_90fc707a -->|calls| n_abd0c5e5
+  n_90fc707a -->|calls| n_8dcae8c0
+  n_90fc707a -->|calls| n_d7877c4a
+  n_90fc707a -->|calls| n_f3f5e593
+  n_9d52741d -->|calls| n_0af479ba
+  n_ca24ae3d -->|calls| n_0af479ba
+  n_ca24ae3d -->|calls| n_d7877c4a
+  n_ca24ae3d -->|calls| n_f3f5e593
+  n_761169b7 -->|calls| n_0af479ba
+  n_044ba717 -->|calls| n_0af479ba
+  n_fb3ce488 -->|calls| n_0af479ba
+  n_40b39891 -.->|uses| n_2b0d5784
+  n_d7877c4a -->|calls| n_9495e5ab
+  n_8783e0a4 -.->|uses| n_2b0d5784
+  classDef seed fill:#fde68a,stroke:#92400e
