@@ -1,7 +1,7 @@
 # Proposal: task-conditioned codemap tool for `file-search-mcp`
 
 **Target:** single-crate workspace at `/home/molaco/Documents/rust-code-mcp-final` (crate `file-search-mcp`, modules under `src/`).
-**Status:** v2. Revises an earlier draft after a code review found five issues that broke the algorithm as written. Each issue is addressed in §3–§5.
+**Status:** v2.1. Revises an earlier draft after two rounds of code review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightens four remaining details (incoming-edge classification, file-path normalization, query/feature layer separation, qualified-name resolution). Each issue is addressed in §3–§5.
 
 ## 1. Goal
 
@@ -15,8 +15,8 @@ Reusing the existing module layout — no new crates, no workspace migration.
 |---------------------------------------|-------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
 | `Codemap*` response types             | `src/graph/codemap.rs` (new module, re-exported from `src/graph/mod.rs`)                  | `Codemap`, `CodemapNode`, `CodemapEdge`, `EdgeKind`, `CodemapStats`, `CodemapOptions` — all fields `pub`. `ModuleTreeNode` stays in `queries.rs`. |
 | Span index + line↔byte cache          | `src/graph/snapshot.rs` (extend `OpenedSnapshot`)                                          | Lazy per-handle `HashMap<String /* file */, IntervalTree<u32 /* byte */, NodeId>>` plus per-file line→byte offset cache. |
-| Raw-ID graph adapters                 | `src/graph/queries.rs` (append, `pub(crate)`)                                              | `callees_of(NodeId) -> Vec<(NodeId, EdgeKind)>`, `callers_of(NodeId) -> Vec<NodeId>`, `users_of_type(NodeId) -> Vec<NodeId>`. Wrap existing private `usages_for_consumer_function` / `usages_for_target`. |
-| Item-kind helpers                     | `src/graph/queries.rs` (append)                                                            | `is_callable(NodeId)`, `is_type(NodeId)`, `crate_of(NodeId)`, `enclosing_item_for_line_range(file, line_start, line_end)`. |
+| Raw-ID graph adapters                 | `src/graph/queries.rs` (append, `pub(crate)`)                                              | `callees_of(NodeId) -> Vec<NodeId>`, `referrers_of(NodeId) -> Vec<NodeId>`. Wrap existing private `usages_for_consumer_function` / `usages_for_target`. **No `EdgeKind` here** — classification lives in `codemap.rs` to keep the query layer feature-agnostic. |
+| Item-kind helpers                     | `src/graph/queries.rs` (append)                                                            | `is_callable(NodeId)`, `is_type(NodeId)`, `crate_of(NodeId)`, `enclosing_item_for_line_range(workspace_relative_file, line_start, line_end)`. Inputs are workspace-relative paths — normalization happens at the call site. |
 | Algorithm                             | `src/graph/codemap.rs`                                                                     | `build_codemap`, scoring, projection, Mermaid/outline renderers.                                  |
 | MCP tool                              | `src/tools/search_tool_router.rs` (append a `#[tool]` method) + `src/tools/graph_tools.rs` (extract helper) | Wires prompt → search → optional embed → `build_codemap` → response.                          |
 | Optional persistence (v2+)            | `src/graph/storage.rs` — new `codemaps` sub-DB + `SCHEMA_VERSION` bump 11 → 12             | `key = blake3(prompt ‖ snapshot_id)[..16]`, value = `bincode(Codemap)`. **Deferred.**             |
@@ -124,39 +124,66 @@ inputs:
 
 1. SEEDS
    if override_seeds.is_some():
-       seeds = resolve_each_via_find_definition(override_seeds)
+       // primary path: direct qualified-name lookup (uses queries::lookup_by_qualified_name)
+       // fallback: if a name doesn't resolve, try RA find_definition and then map
+       //           the resulting (file, byte_span) through the span index
+       seeds = override_seeds.iter()
+           .filter_map(|qn| snap.lookup_by_qualified_name(qn).ok().flatten()
+                              .map(|(nid, _)| nid)
+                              .or_else(|| ra_find_definition_fallback(snap, qn)))
+           .collect();
    else:
        hits = HybridSearch::query(prompt, k = opts.top_k_seeds * 3)  // BM25 + LanceDB + RRF
-       for hit in hits:                                              // hit gives file + line_start..line_end
-           if let Some(nid) = snap.enclosing_item_for_line_range(
-                                  &hit.file_path, hit.line_start, hit.line_end):
+       for hit in hits:                                              // hit gives raw file_path + line_start..line_end
+           // normalize: CodeChunk.file_path is the original disk path (may be absolute);
+           // Node.file is workspace-relative. Canonicalize then strip the snapshot root.
+           let Some(rel) = normalize_to_workspace_relative(&hit.file_path, snap.workspace_root())
+               else { continue };
+           if let Some(nid) = snap.enclosing_item_for_line_range(&rel, hit.line_start, hit.line_end):
                if snap.is_callable(nid) || snap.is_type(nid):
                    if seeds.insert(nid) && seeds.len() == opts.top_k_seeds:
                        break;
 
 2. EXPAND  (bounded BFS, both directions, degree-capped, ID-level)
+   //
+   // Edge classification lives here (not in queries.rs). We read target/source
+   // Node.item_kind once per edge and map: Function|Method|AssocFunction → Calls, else Uses.
+   //
+   fn classify_outgoing(snap, n /* source */, t /* target */) -> EdgeKind {
+       match snap.item_kind_of(t) {
+           Some(Function | Method | AssocFunction) => EdgeKind::Calls,
+           _                                       => EdgeKind::Uses,
+       }
+   }
+
    retained = seeds.clone()
    frontier = seeds.clone()
    for _ in 0..opts.depth:
        next = HashSet::new()
        for n in &frontier:
-           // outgoing — raw ID adapter classifies by target ItemKind
-           for (target_id, kind) in snap.callees_of(n)?:
-               record_edge(n, target_id, kind);                  // Calls if target is callable, else Uses
+           // outgoing — raw adapter returns NodeIds; classify here
+           for target_id in snap.callees_of(n)?:
+               let kind = classify_outgoing(snap, n, target_id);
+               record_edge(n, target_id, kind);
                if retained.insert(target_id) { next.insert(target_id); }
 
-           // incoming — degree-capped by per-prompt score
-           let mut callers = snap.callers_of(n)?;                // Vec<NodeId>
-           callers.sort_by_key(|c| -score_caller_against_prompt(c));
-           for caller in callers.into_iter().take(opts.max_incoming_per_node):
-               record_edge(caller, n, EdgeKind::Calls);
-               if retained.insert(caller) { next.insert(caller); }
-
-           // type/data — only for type seeds, pulls consumer functions
-           if snap.is_type(n):
-               for consumer_fn in snap.users_of_type(n)?:        // dedup'd Vec<NodeId>
-                   record_edge(consumer_fn, n, EdgeKind::Uses);
-                   if retained.insert(consumer_fn) { next.insert(consumer_fn); }
+           // incoming — branch on what `n` is, since the *same* underlying iterator
+           // (referrers_of) means different things depending on n's kind.
+           if snap.is_callable(n):
+               // callers of a fn — record as Calls, degree-cap by prompt relevance
+               let mut callers = snap.referrers_of(n)?;
+               callers.sort_by_key(|c| -score_caller_against_prompt(c));
+               for caller in callers.into_iter().take(opts.max_incoming_per_node):
+                   record_edge(caller, n, EdgeKind::Calls);
+                   if retained.insert(caller) { next.insert(caller); }
+           else if snap.is_type(n):
+               // consumers of a type — record as Uses, degree-cap too
+               let mut users = snap.referrers_of(n)?;
+               users.sort_by_key(|c| -score_caller_against_prompt(c));
+               for user in users.into_iter().take(opts.max_incoming_per_node):
+                   record_edge(user, n, EdgeKind::Uses);
+                   if retained.insert(user) { next.insert(user); }
+           // else: other kinds (const/static/module) get no incoming expansion in v1
        frontier = next
 
 3. SCORE
@@ -186,53 +213,42 @@ inputs:
 
 ### Raw-ID graph adapters (the missing piece)
 
-These wrap the existing private iterators (`src/graph/queries.rs:2257,2305`) and return NodeIds directly, classifying edges by target `ItemKind`:
+These wrap the existing private iterators (`src/graph/queries.rs:2257,2305`) and return distinct NodeIds. **The query layer stays feature-agnostic**: it does not know about `EdgeKind`. Edge classification (Calls vs Uses) happens in `codemap.rs` by reading `Node.item_kind` of the endpoint.
 
 ```rust
 // src/graph/queries.rs (appended)
 
 impl OpenedSnapshot {
-    /// Outgoing references from `caller_fn`, classified by target ItemKind.
-    /// Wraps `usages_for_consumer_function`. Dedupes by target.
-    pub(crate) fn callees_of(&self, caller_fn: NodeId)
-        -> Result<Vec<(NodeId, EdgeKind)>>
-    {
-        let rtxn = self.env.read_txn()?;
-        let mut out: HashMap<NodeId, EdgeKind> = HashMap::new();
-        for entry in self.usages_for_consumer_function(&rtxn, caller_fn)? {
-            let u = entry?;
-            let kind = match self.node(&rtxn, u.target)?.and_then(|n| n.item_kind) {
-                Some(ItemKind::Function | ItemKind::Method | ItemKind::AssocFunction)
-                    => EdgeKind::Calls,
-                _   => EdgeKind::Uses,
-            };
-            out.entry(u.target).or_insert(kind);
-        }
-        Ok(out.into_iter().collect())
-    }
-
-    /// Incoming-call sites for `target_fn`. Filters to usages whose
-    /// `consumer_function.is_some()` (mirrors `who_calls`). Dedupes by caller.
-    pub(crate) fn callers_of(&self, target_fn: NodeId) -> Result<Vec<NodeId>> {
+    /// Distinct outgoing references from `caller_fn`'s body. Includes calls,
+    /// type references, const reads — anything `usages_for_consumer_function`
+    /// produces. Caller classifies by reading targets' item_kind.
+    pub(crate) fn callees_of(&self, caller_fn: NodeId) -> Result<Vec<NodeId>> {
         let rtxn = self.env.read_txn()?;
         let mut seen = HashSet::new();
-        for entry in self.usages_for_target(&rtxn, target_fn)? {
-            if let Some(caller) = entry?.consumer_function {
-                seen.insert(caller);
-            }
+        for entry in self.usages_for_consumer_function(&rtxn, caller_fn)? {
+            seen.insert(entry?.target);
         }
         Ok(seen.into_iter().collect())
     }
 
-    /// Distinct functions that reference `type_id` from inside their body.
-    pub(crate) fn users_of_type(&self, type_id: NodeId) -> Result<Vec<NodeId>> {
-        // identical shape to callers_of but kept separate for intent / future tuning.
-        self.callers_of(type_id)
+    /// Distinct functions whose body contains a reference to `target`. Mirrors
+    /// the `consumer_function.is_some()` filter used by `who_calls`. Semantics
+    /// of each edge depend on `target`'s item_kind (callable → caller, type →
+    /// consumer) — that's the caller's concern.
+    pub(crate) fn referrers_of(&self, target: NodeId) -> Result<Vec<NodeId>> {
+        let rtxn = self.env.read_txn()?;
+        let mut seen = HashSet::new();
+        for entry in self.usages_for_target(&rtxn, target)? {
+            if let Some(referrer) = entry?.consumer_function {
+                seen.insert(referrer);
+            }
+        }
+        Ok(seen.into_iter().collect())
     }
 }
 ```
 
-`pub(crate)` keeps these internal; `codemap.rs` is a sibling under `src/graph/` so it can use them.
+`pub(crate)` keeps these internal; `codemap.rs` is a sibling under `src/graph/` so it can use them without widening the public API.
 
 ### Three concrete differences from the v1 draft
 
@@ -258,8 +274,10 @@ Tunable defaults: max_nodes=80, depth=3, embedding_policy='no_rerank'.
 ")]
 async fn build_codemap(&self, params: Parameters<BuildCodemapParams>) -> ... {
     // 1. open_workspace_snapshot(directory) -> OpenedSnapshot
-    // 2. if seed_qualified_names: resolve via find_definition path
-    //    else: run HybridSearch::query(prompt, top_k_seeds * 3)
+    // 2. if seed_qualified_names: lookup_by_qualified_name per name; for each
+    //    miss, optionally try the existing RA find_definition path as fallback
+    //    else: run HybridSearch::query(prompt, top_k_seeds * 3) and resolve hits
+    //    via normalize_to_workspace_relative + enclosing_item_for_line_range
     // 3. (optional) compute prompt embedding via existing fastembed pipeline
     // 4. graph::codemap::build_codemap(&snap, prompt, seeds, prompt_emb, opts)
     // 5. format JSON / Mermaid / outline per `format` arg
@@ -336,10 +354,19 @@ Realistic time: **3 working days** for v1. Drift from the v1 draft comes from li
 - **(d) Trait-dispatch resolution is out of scope for codemap.** Separate, larger workstream against `who_uses` itself.
 - **(e) Snapshot-handle reuse.** Out of scope for v1; revisit if span-index build time shows up in profiles.
 
-## Appendix: changes from v1 draft
+## Appendix: changes from prior drafts
+
+### v1 → v2 (algorithm-breaking fixes)
 
 - **Seed extraction**: v1 assumed search hits carried byte ranges. They don't (`src/chunker/mod.rs:38`). Now bridges `line_start`/`line_end` → bytes via a per-file line offset cache before querying the span index.
 - **BFS over IDs**: v1 said `snap.calls_from(n) -> NodeId`. The real `calls_from`/`who_calls` return `EnrichedCallSite` with qualified names (`src/graph/queries.rs:633,675`). Added raw-ID `pub(crate)` adapters over the existing private `usages_for_*` iterators.
 - **Edge classification**: v1 labelled every outgoing edge `Calls`. `calls_from` actually returns *all* non-import refs from a fn body (`src/graph/queries.rs:671`). Now classified by target `ItemKind`: callable → `Calls`, else `Uses`.
 - **Span-index lifetime**: v1 said "built once per process per snapshot". Tools open a fresh `OpenedSnapshot` per request (`src/tools/graph_tools.rs:2064`). Restated as per-handle; snapshot-reuse listed as deferred optimization.
 - **Type placement**: v1 placed `Codemap` in `model.rs`, but it references `ModuleTreeNode` from `queries.rs`. Moved to a new `src/graph/codemap.rs`; all fields explicitly `pub`.
+
+### v2 → v2.1 (detail tightening)
+
+- **Incoming-edge classification**: v2 unconditionally labelled incoming references as `EdgeKind::Calls`, which mislabels type consumers. Now the incoming-expansion branch reads `n`'s kind and picks `Calls` (if `n` is callable) or `Uses` (if `n` is a type). The dedicated `users_of_type` adapter is dropped; both branches share `referrers_of`.
+- **File-path normalization**: `CodeChunk.file_path` holds the disk path passed to `Chunker::chunk_file` (`src/chunker/mod.rs:169-200`) — typically absolute. `Node.file` is workspace-relative. Seed step now canonicalizes and strips the snapshot workspace root before calling `enclosing_item_for_line_range`.
+- **Query/feature layer separation**: v2 had `callees_of` returning `(NodeId, EdgeKind)`, coupling the generic query layer back to the codemap feature. Now `callees_of` and `referrers_of` return plain `Vec<NodeId>`; `codemap.rs` classifies by reading endpoint `Node.item_kind` via the existing `OpenedSnapshot::node` lookup.
+- **Seed-override resolution**: v2 said "resolve via `find_definition`". The right primitive for qualified-name → NodeId is `lookup_by_qualified_name` (`src/graph/queries.rs:439`), which already handles re-export hops. Use it first; fall back to RA `find_definition` + span-index mapping only for names that don't resolve directly.
