@@ -1,7 +1,7 @@
 # Proposal: task-conditioned codemap tool for `file-search-mcp`
 
 **Target:** single-crate workspace at `/home/molaco/Documents/rust-code-mcp-final` (crate `file-search-mcp`, modules under `src/`).
-**Status:** v2.3. Revises an earlier draft after four rounds of review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightened four details; v2.2 audited every new piece against existing infrastructure to remove duplication; v2.3 cross-validates every cited API against the live workspace index and addresses async-hygiene + `#[non_exhaustive]` concerns surfaced by the Rust-idioms review. See §11 "Reuse map" for the explicit reuse contract and the appendix for revision history.
+**Status:** v2.4. Revises an earlier draft after five rounds of review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightened four details; v2.2 audited every new piece against existing infrastructure to remove duplication; v2.3 cross-validated every cited API against the live workspace index and addressed async-hygiene + `#[non_exhaustive]` concerns; v2.4 scrubs stale `trait_dispatch_unresolved` references, narrows the trait-dispatch limitation to reflect what `Usage` extraction actually captures, drops the unimplementable RA fallback for seed override, defines the incoming-degree ranking, and pins the line-indexing convention. See §11 "Reuse map" for the explicit reuse contract and the appendix for revision history.
 
 ## 1. Goal
 
@@ -107,6 +107,7 @@ Implementation notes:
 
 - `span_index` is built once per `OpenedSnapshot` handle by scanning `dbs.nodes_by_id` once and grouping by file. At ~1,500 items the flat sorted `Vec` + binary search is faster than a tree.
 - `line_to_byte` is built on demand: when an `enclosing_item_for_line_range(file, ls, le)` lookup arrives, read the file from disk *once* and remember its `\n`-offset prefix table. Bounded by number of files containing search hits (typically <20 per query).
+- **Line indexing convention.** `ChunkContext.line_start`/`line_end` are **1-indexed and inclusive** (per `src/parser/mod.rs:100,205`). Conversion: `byte_start = line_to_byte[line_start - 1]`; `byte_end = if line_end < line_count { line_to_byte[line_end] - 1 } else { file_size - 1 }` — i.e. the byte just before the next line's `\n`. Helper functions take 1-indexed lines as input; the off-by-one happens once at the conversion boundary.
 - `enclosing_item_for_line_range` resolves `(file, line_start, line_end)` → `(byte_start, byte_end)` then queries `span_index` for the smallest enclosing item.
 
 **Important caveat:** today the MCP server opens a fresh `OpenedSnapshot` (`src/graph/snapshot.rs:363`) per tool call (`src/tools/graph_tools.rs:2064`). So both caches are **per request**, not per process. The cost is bounded (one full scan of nodes for the span index, plus a few file reads), but a future optimization is a snapshot-handle cache keyed on `(canonical_dir, manifest_mtime)`. Not blocking for v1.
@@ -127,14 +128,21 @@ inputs:
 
 1. SEEDS
    if override_seeds.is_some():
-       // primary path: direct qualified-name lookup (uses queries::lookup_by_qualified_name)
-       // fallback: if a name doesn't resolve, try RA find_definition and then map
-       //           the resulting (file, byte_span) through the span index
-       seeds = override_seeds.iter()
-           .filter_map(|qn| snap.lookup_by_qualified_name(qn).ok().flatten()
-                              .map(|(nid, _)| nid)
-                              .or_else(|| ra_find_definition_fallback(snap, qn)))
-           .collect();
+       // Qualified-name lookup only. `lookup_by_qualified_name` already
+       // handles re-export hops (src/graph/queries.rs:439). Names that fail to
+       // resolve are reported back in `diagnostics` ("unresolved seed: <name>").
+       //
+       // No RA `goto_definition` fallback in v1: that API is position-based
+       // (`(file, line, column)` per src/semantic/position.rs:79), not
+       // qualified-name based — turning a name into a position requires a
+       // separate symbol search + disambiguation step that's out of scope here.
+       seeds = HashSet::new();
+       for qn in &override_seeds {
+           match snap.lookup_by_qualified_name(qn)? {
+               Some((nid, _node)) => { seeds.insert(nid); }
+               None               => diagnostics.push(format!("unresolved seed: {qn}")),
+           }
+       }
    else:
        // existing API: src/search/mod.rs:98-138
        hits = hybrid.search(prompt, opts.top_k_seeds * 3)?              // Vec<SearchResult> w/ chunk.context
@@ -161,6 +169,21 @@ inputs:
    //     let kind = if target_item_kind.map_or(false, |k| k.is_callable())
    //                { EdgeKind::Calls } else { EdgeKind::Uses };
    //
+   // Incoming-degree ranking (used to take only the top `max_incoming_per_node`):
+   //
+   //   fn rank_referrer(nid: NodeId) -> (i32, &str) {
+   //       // primary: was this referrer also in the prompt's HybridSearch hits?
+   //       //          if yes, rank by hit score descending (higher = better).
+   //       //          if no, score = 0.
+   //       // tiebreak: qualified name ascending (deterministic across runs).
+   //       let s = bm25_hit_score_for(nid).unwrap_or(0.0);
+   //       (-(s * 1000.0) as i32, qualified_name_of(nid))
+   //   }
+   //
+   // Cheap (no DB I/O beyond the existing hit-score map + a node fetch for the
+   // qualified name), deterministic, and biases incoming neighbors toward
+   // prompt-relevant callers when there are many.
+   //
    retained = seeds.clone()
    frontier = seeds.clone()
    for _ in 0..opts.depth:
@@ -184,7 +207,7 @@ inputs:
            };
            if expand_incoming {
                let mut refs = snap.referrers_of(n)?;
-               refs.sort_by_key(|c| -score_caller_against_prompt(c));
+               refs.sort_by(|a, b| rank_referrer(*a).cmp(&rank_referrer(*b)));
                for r in refs.into_iter().take(opts.max_incoming_per_node) {
                    record_edge(r, n, record_kind.unwrap());
                    if retained.insert(r) { next.insert(r); }
@@ -248,7 +271,7 @@ inputs:
        tree = snap.module_tree(crate_qualified_name, None)
        module_subtree = filter(tree) keeping branches containing retained items.
 
-6. ASSEMBLE Codemap, fill diagnostics (incl. trait_dispatch_unresolved counter), return.
+6. ASSEMBLE Codemap, populate diagnostics (e.g. seed names that failed to resolve), return.
 ```
 
 ### Raw-ID graph adapters (the missing piece)
@@ -305,23 +328,26 @@ Add one method to the `#[tool_router]` impl in `src/tools/search_tool_router.rs`
 Build a task-conditioned subgraph (codemap) of the indexed workspace.
 
 Returns nodes/edges/hierarchy focused on the prompt. Edges come from the
-HIR-driven hypergraph: direct calls and non-import uses. NOTE: method
-calls dispatched through trait objects or generic Fn bounds are NOT in
-the underlying usage edges, so codemaps may miss callers that go through
-trait dispatch — this is surfaced in stats.trait_dispatch_unresolved.
+HIR-driven hypergraph: direct calls and non-import uses. Local trait
+dispatch (`x.method()` where `method` is declared in a trait in this
+workspace) IS captured — the call resolves back to the trait declaration's
+Item. NOT captured: callers reaching an impl method through `dyn Trait`
+over external traits, generic `F: Fn(..)` indirect calls, and resolution
+to specific impl-method NodeIds via fully-qualified `<T as Trait>::m()`.
+These blind spots are inherent to the underlying Usage extraction.
 
 Tunable defaults: max_nodes=80, depth=3, embedding_policy='no_rerank'.
 ")]
 async fn build_codemap(&self, params: Parameters<BuildCodemapParams>) -> ... {
     // 1. open_workspace_snapshot(directory) -> OpenedSnapshot       (src/tools/graph_tools.rs:2064)
     // 2. if seed_qualified_names: snap.lookup_by_qualified_name per name
-    //                              (src/graph/queries.rs:439, already handles re-export hops);
-    //                              for unresolved names, fall back to RA goto_definition
-    //                              via src/semantic/position.rs:79+ and map (file, span) back
-    //                              through enclosing_item_for_line_range.
-    //    else:                     hybrid.search(prompt, top_k_seeds * 3)   (src/search/mod.rs:98)
-    //                              resolve hits: canonicalize file_path, strip snap.manifest.workspace_root,
-    //                              call enclosing_item_for_line_range with line range.
+    //                              (src/graph/queries.rs:439, already handles re-export hops).
+    //                              Unresolved names go into Codemap.diagnostics, not an error.
+    //                              (No RA fallback in v1: goto_definition is position-based.)
+    //    else:                     hybrid.search(prompt, top_k_seeds * 3)
+    //                              (src/search/mod.rs HybridSearch::search). Resolve hits:
+    //                              canonicalize file_path, strip snap.manifest.workspace_root,
+    //                              call enclosing_item_for_line_range with line range (1-indexed, inclusive).
     // 3. (if embedding_policy != NoRerank) EmbeddingGenerator::embed_async(prompt.to_owned())
     //                              (src/embeddings/mod.rs — takes OWNED String, not &str)
     // 4. graph::codemap::build_codemap(&snap, prompt, seeds, prompt_emb, opts)
@@ -386,11 +412,11 @@ Outline format: indented module → item tree from the filtered `ModuleTreeNode`
 | **Total new LOC**                                                                                  | **~1,610** |
 | **Of which reused (zero new LOC):** `cosine`, `EmbeddingGenerator::embed_async`, `HybridSearch::search`, `lookup_by_qualified_name`, `module_tree`, `open_workspace_snapshot`, `internal_error`, `read_file_content`, private `usages_for_*` iterators, `embeddings_by_target` read/write API | — |
 
-Realistic time: **3 working days** for v1. The reuse audit shifted LOC slightly (added `ensure_node_embedding` extraction; removed redundant `is_callable`/`is_type`/`crate_of`/`item_kind_of` helpers; trimmed `classify_outgoing`).
+Realistic time: **4–5 focused working days** for v1. ~1,600 LOC plus tests and the async-embedding refactor (extracting `ensure_embeddings_for` out of `semantic_overlaps` is the most fiddly piece — it touches a long function with established locking semantics). Earlier "3 days" estimates were optimistic.
 
 ## 10. Known limitations (call out in the tool description)
 
-1. **Trait dispatch / `dyn Trait` / generic `F: Fn(..)` are invisible** *and unmeasurable*. RA's `Definition::usages` filters unresolved references before they reach the `Usage` table, so the codemap cannot count them as a diagnostic — only document the blind spot in the tool description.
+1. **Indirect dispatch coverage is partial.** Local trait dispatch IS captured: `x.method()` where `method` comes from a workspace-local trait resolves back to the trait declaration's Item (see `src/graph/usages.rs:354`, `pattern2_trait_dispatch_captured`). NOT captured: (a) callers reaching a *specific impl method* through `dyn ExternalTrait` over a foreign trait, (b) generic `F: Fn(..)` indirect calls, (c) some `<T as Trait>::method()` paths that don't reach the impl's own NodeId. RA's `Definition::usages` filters these unresolved sites before they reach the `Usage` table — the codemap can't count what isn't there, so no diagnostic counter; the limitation is documented in the tool description only.
 2. **Macro-expanded items may lack spans.** Span lookup falls back to module-level; items still appear but aren't reachable from search-hit line ranges.
 3. **First call against a fresh snapshot is slow** when `embedding_policy = compute_missing`. The cache fills as a side effect via the shared `ensure_embeddings_for` helper, which uses `embed_batch_async` to amortize one fastembed call across all missing items.
 4. **Span index and line→byte cache are per-request in v1** because `OpenedSnapshot` is reopened per tool call. A snapshot-handle cache is a separate change; not blocking.
@@ -479,3 +505,12 @@ Every cited API and type was checked via `function_signature` / `find_definition
 - **Line-number drift fixed.** `OpenedSnapshot` is at `src/graph/snapshot.rs:363` (was 362); `ChunkContext` at `src/chunker/mod.rs:40` (was "38-58"); `recursive_callers_count` fn declaration at `src/graph/queries.rs:852` (range still ~852–943).
 - **`SnapshotView` trait flagged for the future.** §10 acknowledges that the v1 algorithm core takes `&OpenedSnapshot` directly, which keeps unit tests bound to a real heed env (the existing test pattern). A trait abstraction is the right sans-I/O refactor but is out of v1 scope.
 - **`read_file_content` is not duplicated.** The second occurrence (`src/tools/search_tool_router.rs:116`) is the `#[tool]` wrapper that delegates to `src/tools/query_tools.rs:20`. The proposal already cites the implementation site, not the wrapper.
+
+### v2.3 → v2.4 (consistency + implementability sweep)
+
+- **Stale `trait_dispatch_unresolved` references scrubbed.** v2.2 removed the field from `CodemapStats`, but two references survived (§5 ASSEMBLE step, §6 tool description). Both now consistent: the field does not exist; the limitation is documented in prose only.
+- **Trait-dispatch limitation narrowed.** Earlier wording ("trait dispatch invisible") is wrong as a blanket. `src/graph/usages.rs:354` and the `pattern2_trait_dispatch_captured` test confirm local `x.method()` dispatch resolves back to the trait declaration's Item. The §10 wording now specifies what is *not* captured: dispatch through `dyn ExternalTrait` over foreign traits, generic `F: Fn(..)` indirect calls, and `<T as Trait>::method()` paths that don't land on a specific impl-method NodeId.
+- **RA `goto_definition` fallback dropped.** That API is position-based (`(file, line, column)` per `src/semantic/position.rs:79`), not qualified-name based. A real fallback would require name-based symbol search plus disambiguation against multiple matches — too much work for v1. Unresolved seeds now go into `Codemap.diagnostics` as `"unresolved seed: <name>"` strings, returned to the caller for inspection.
+- **Incoming-degree ranking defined.** v2.3 used an undefined `score_caller_against_prompt`. v2.4 specifies `rank_referrer(nid)` deterministically: primary key is the referrer's BM25 hit score (if it appeared in the prompt's search hits, else 0), tiebreak is the qualified name. No DB I/O beyond a node fetch.
+- **Line-indexing convention pinned.** `ChunkContext.line_start`/`line_end` are 1-indexed and inclusive (`src/parser/mod.rs:100,205`). §4 now spells out the conversion: `byte_start = line_to_byte[ls - 1]`; `byte_end` is the byte before the next line's `\n` (or end of file). Eliminates the off-by-one risk the algorithm text left open.
+- **Time estimate corrected.** 3 → **4–5 focused working days** for v1. The async-embedding refactor (extracting `ensure_embeddings_for` out of `semantic_overlaps`) is the most time-consuming piece and was undercounted earlier.
