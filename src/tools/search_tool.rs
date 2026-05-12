@@ -482,6 +482,36 @@ pub struct SemanticOverlapsParams {
     pub cross_crate_only: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BuildCodemapParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Natural-language task description. Required unless seed_qualified_names is supplied.")]
+    #[serde(default)]
+    pub task_prompt: Option<String>,
+    #[schemars(description = "Override seeds by qualified name. Unresolved names go into Codemap.diagnostics rather than erroring out.")]
+    #[serde(default)]
+    pub seed_qualified_names: Option<Vec<String>>,
+    #[schemars(description = "Maximum number of retained nodes. Default 80; capped at 500.")]
+    #[serde(default)]
+    pub max_nodes: Option<usize>,
+    #[schemars(description = "BFS expansion depth from each seed. Default 3; capped at 5.")]
+    #[serde(default)]
+    pub depth: Option<u8>,
+    #[schemars(description = "Per-node incoming-edge cap during BFS expansion. Default 8.")]
+    #[serde(default)]
+    pub max_incoming_per_node: Option<usize>,
+    #[schemars(description = "Embedding-rerank policy: `no_rerank` (default) | `cached_only` | `compute_missing`.")]
+    #[serde(default)]
+    pub embedding_policy: Option<String>,
+    #[schemars(description = "Output format: `json` (default) | `mermaid` | `outline` | `all`.")]
+    #[serde(default)]
+    pub format: Option<String>,
+    #[schemars(description = "Include node snippets in JSON output. Default false. (Snippet extraction is deferred; this knob is reserved.)")]
+    #[serde(default)]
+    pub include_snippets: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
