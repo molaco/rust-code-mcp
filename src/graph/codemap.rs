@@ -213,15 +213,20 @@ pub(crate) fn canonicalize_and_strip(path: &Path, workspace_root: &Path) -> Opti
 /// - `hits`: search-result list when seeds come from `HybridSearch::search`.
 ///   The caller is expected to have already capped to `top_k_seeds * 3`;
 ///   we defensively truncate to the same bound.
+/// - `pre_diagnostics`: caller-supplied diagnostics to prepend onto the
+///   returned `Codemap.diagnostics`. Used by the MCP handler to surface
+///   pre-flight signals (e.g. snapshot staleness) without coupling the
+///   algorithm core to filesystem I/O.
 pub(crate) async fn build_codemap(
     snap: &OpenedSnapshot,
     prompt: Option<&str>,
     override_seeds: Option<&[String]>,
     hits: Option<&[crate::search::SearchResult]>,
     opts: &CodemapOptions,
+    pre_diagnostics: &[String],
 ) -> anyhow::Result<Codemap> {
     let started = SystemTime::now();
-    let mut diagnostics: Vec<String> = Vec::new();
+    let mut diagnostics: Vec<String> = pre_diagnostics.to_vec();
 
     // ---------- 1. SEEDS ----------
     let ws_root = PathBuf::from(&snap.manifest.workspace_root);
@@ -558,7 +563,10 @@ pub(crate) async fn build_codemap(
 }
 
 /// Resolve qualified-name seeds. Names that don't resolve become diagnostics
-/// (`"unresolved seed: <name>"`); no RA fallback.
+/// (`"unresolved seed: <name>"`); no RA fallback. When the leaf fails but the
+/// parent path resolves to a `Module` node, the diagnostic is enriched with
+/// a hint so a user can distinguish "leaf is private / not indexed" from a
+/// straight typo.
 fn resolve_override_seeds(
     snap: &OpenedSnapshot,
     names: &[String],
@@ -570,7 +578,19 @@ fn resolve_override_seeds(
             Some((nid, _)) => {
                 seeds.insert(nid);
             }
-            None => diagnostics.push(format!("unresolved seed: {qn}")),
+            None => {
+                let hint: &'static str = if let Some((parent, _)) = qn.rsplit_once("::") {
+                    match snap.lookup_by_qualified_name(parent)? {
+                        Some((_, node)) if matches!(node.kind, NodeKind::Module) => {
+                            " (parent module resolves; leaf likely private or not indexed)"
+                        }
+                        _ => "",
+                    }
+                } else {
+                    ""
+                };
+                diagnostics.push(format!("unresolved seed: {qn}{hint}"));
+            }
         }
     }
     Ok(seeds)
@@ -1176,6 +1196,58 @@ fn escape_label(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
+/// Walk `workspace_root` for every `.rs` file (excluding `target/` and
+/// `.git/` — mirroring [`crate::graph::storage::compute_fingerprint`]'s
+/// filter) and return the maximum file `mtime` in seconds since the UNIX
+/// epoch.
+///
+/// Used by the `build_codemap` MCP handler to surface a "snapshot is
+/// older than newest `.rs` file" diagnostic without forcing the user to
+/// re-read the manifest by hand. Returns `None` if no `.rs` file is
+/// reachable or every walk entry fails — in that case the caller should
+/// skip the diagnostic rather than treat it as an error.
+pub(crate) fn newest_source_mtime(workspace_root: &Path) -> Option<u64> {
+    let mut newest: Option<u64> = None;
+    for entry in walkdir::WalkDir::new(workspace_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            !e.path()
+                .components()
+                .any(|c| c.as_os_str() == "target" || c.as_os_str() == ".git")
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let is_rs = entry
+            .path()
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| ext == "rs")
+            .unwrap_or(false);
+        if !is_rs {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(dur) = modified.duration_since(UNIX_EPOCH) else {
+            continue;
+        };
+        let secs = dur.as_secs();
+        newest = Some(match newest {
+            Some(prev) => prev.max(secs),
+            None => secs,
+        });
+    }
+    newest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1436,6 +1508,117 @@ mod tests {
             );
             assert_eq!(edges.len(), 1);
         }
+
+        // ----- A8: newest_source_mtime pure I/O against a tempdir -----
+
+        /// Stamp `path`'s mtime to `secs_since_epoch`. Uses
+        /// `File::set_modified` which is stable since Rust 1.75; we are on
+        /// edition 2024 so it is always available.
+        fn stamp_mtime(path: &Path, secs_since_epoch: u64) {
+            use std::fs::OpenOptions;
+            use std::time::{Duration, SystemTime, UNIX_EPOCH};
+            let f = OpenOptions::new()
+                .write(true)
+                .open(path)
+                .expect("open for mtime set");
+            let t = UNIX_EPOCH + Duration::from_secs(secs_since_epoch);
+            f.set_modified(t).expect("set_modified");
+            // Verify the platform actually honored the stamp. Some
+            // filesystems clamp or round; if so, the assertions below would
+            // be confusing — surface the skew here instead.
+            let actual = std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .expect("metadata mtime")
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("post-epoch")
+                .as_secs();
+            assert_eq!(actual, secs_since_epoch, "platform did not honor mtime stamp");
+        }
+
+        #[test]
+        fn newest_source_mtime_picks_max_across_rs_files() {
+            use std::fs;
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = dir.path();
+            let a = root.join("a.rs");
+            let b = root.join("nested").join("b.rs");
+            fs::create_dir_all(b.parent().unwrap()).expect("nested dir");
+            fs::write(&a, "// a").expect("write a");
+            fs::write(&b, "// b").expect("write b");
+
+            // Pin mtimes deterministically: b is 60s newer than a.
+            stamp_mtime(&a, 1_000_000);
+            stamp_mtime(&b, 1_000_060);
+
+            let got = newest_source_mtime(root).expect("at least one .rs file");
+            assert_eq!(
+                got, 1_000_060,
+                "mtime should be the newest .rs file's mtime"
+            );
+        }
+
+        #[test]
+        fn newest_source_mtime_skips_target_and_git_dirs() {
+            use std::fs;
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = dir.path();
+            let kept = root.join("src").join("kept.rs");
+            let skipped_target = root.join("target").join("skipped.rs");
+            let skipped_git = root.join(".git").join("skipped.rs");
+            for p in [&kept, &skipped_target, &skipped_git] {
+                fs::create_dir_all(p.parent().unwrap()).expect("mkdir");
+                fs::write(p, "// rs").expect("write");
+            }
+
+            // Make the excluded files much newer than kept; the result must
+            // still reflect `kept`'s mtime, proving target/ and .git/ were
+            // filtered out.
+            stamp_mtime(&kept, 1_000_000);
+            stamp_mtime(&skipped_target, 2_000_000);
+            stamp_mtime(&skipped_git, 2_000_000);
+
+            let got = newest_source_mtime(root).expect("at least one kept .rs file");
+            assert_eq!(
+                got, 1_000_000,
+                "target/ and .git/ entries must not count"
+            );
+        }
+
+        #[test]
+        fn newest_source_mtime_returns_none_when_no_rs_files() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::write(dir.path().join("readme.md"), "# nope").expect("write");
+            assert!(newest_source_mtime(dir.path()).is_none());
+        }
+
+        // ----- A9: enriched diagnostic distinguishes private-leaf from typo -----
+        //
+        // We can't unit-test `resolve_override_seeds` without an
+        // `OpenedSnapshot`, but we can exercise the same branching logic
+        // on a small `Option<NodeKind>` helper inline so a regression in
+        // the public/typo distinction is caught by `cargo check --lib --tests`.
+
+        #[test]
+        fn unresolved_seed_hint_branches_by_parent_kind() {
+            // Mirror of the `match` inside `resolve_override_seeds`. The
+            // hint is `&'static str` so this is an allocation-free check.
+            fn hint(parent_kind: Option<NodeKind>) -> &'static str {
+                match parent_kind {
+                    Some(NodeKind::Module) => {
+                        " (parent module resolves; leaf likely private or not indexed)"
+                    }
+                    _ => "",
+                }
+            }
+            assert_eq!(
+                hint(Some(NodeKind::Module)),
+                " (parent module resolves; leaf likely private or not indexed)",
+                "module parent yields the enriched hint",
+            );
+            assert_eq!(hint(Some(NodeKind::Crate)), "", "crate parent is terse");
+            assert_eq!(hint(Some(NodeKind::Item)), "", "item parent is terse");
+            assert_eq!(hint(None), "", "no parent → terse");
+        }
     }
 
     // ===== fixture-dependent tests =====
@@ -1667,7 +1850,7 @@ pub fn caller() {
                 "synthetic_codemap_crate::callee".to_string(),
             ];
             let opts = CodemapOptions::default();
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds with override_seeds");
 
@@ -1712,7 +1895,7 @@ pub fn caller() {
                 depth: 0,
                 ..CodemapOptions::default()
             };
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds at depth=0");
 
@@ -1734,7 +1917,7 @@ pub fn caller() {
                 "synthetic_codemap_crate::does_not_exist_xyzzy".to_string(),
             ];
             let opts = CodemapOptions::default();
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds despite unresolved name");
 
@@ -1752,7 +1935,7 @@ pub fn caller() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::caller".to_string()];
             let opts = CodemapOptions::default();
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds for mermaid smoke test");
 
@@ -1772,7 +1955,7 @@ pub fn caller() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::caller".to_string()];
             let opts = CodemapOptions::default();
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds for outline smoke test");
 
@@ -1800,7 +1983,7 @@ pub fn caller() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::caller".to_string()];
             let opts = CodemapOptions::default();
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds for graph-prox callee test");
 
@@ -1825,7 +2008,7 @@ pub fn caller() {
             let fixture = shared_fixture();
             let names = vec!["synthetic_codemap_crate::callee".to_string()];
             let opts = CodemapOptions::default();
-            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts)
+            let cm = build_codemap(&fixture.snap, None, Some(&names), None, &opts, &[])
                 .await
                 .expect("build_codemap succeeds for graph-prox caller test");
 

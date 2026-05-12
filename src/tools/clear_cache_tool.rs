@@ -1,7 +1,9 @@
 //! Cache clearing tool for fixing corrupted metadata cache
 //!
 //! Provides a way to clear corrupted sled database files that cause
-//! "Failed to open MetadataCache" errors.
+//! "Failed to open MetadataCache" errors. Optionally also wipes the
+//! persisted hypergraph snapshot so the next `build_hypergraph` call
+//! does a full re-index.
 
 use directories::ProjectDirs;
 use rmcp::{
@@ -18,6 +20,16 @@ pub struct ClearCacheParams {
         description = "Optional: project directory to clear cache for. If not provided, clears all caches."
     )]
     pub directory: Option<String>,
+    /// When `true`, also wipe the persisted hypergraph snapshot for the
+    /// targeted workspace (or all workspaces, when `directory` is
+    /// `None`). Defaults to `false` for backward compatibility. Wiping
+    /// the hypergraph forces the next `build_hypergraph` call to do a
+    /// full re-index.
+    #[schemars(
+        description = "When true, also wipe the persisted hypergraph snapshot directory at <data_dir>/graphs/<workspace_hash>/. Defaults to false. Forces the next build_hypergraph call to do a full re-index."
+    )]
+    #[serde(default)]
+    pub include_hypergraph: Option<bool>,
 }
 
 /// Get the path for storing persistent index and cache
@@ -37,7 +49,9 @@ fn compute_dir_hash(dir_path: &std::path::Path) -> String {
 /// Clear cache, index, and vector store for a project or all projects
 ///
 /// This tool fixes "Failed to open MetadataCache" errors by removing
-/// corrupted sled database files.
+/// corrupted sled database files. When `include_hypergraph` is set, the
+/// persisted workspace hypergraph snapshot is also wiped so the next
+/// `build_hypergraph` call performs a full re-index.
 pub async fn clear_cache(
     params: ClearCacheParams,
 ) -> Result<CallToolResult, McpError> {
@@ -45,6 +59,7 @@ pub async fn clear_cache(
     let mut errors = Vec::new();
 
     let data_dir = data_dir();
+    let include_hypergraph = params.include_hypergraph.unwrap_or(false);
 
     if let Some(ref directory) = params.directory {
         // Clear cache for specific project
@@ -78,6 +93,26 @@ pub async fn clear_cache(
                 Err(e) => errors.push(format!("Failed to clear vector store: {}", e)),
             }
         }
+
+        // 4. Optionally clear the persisted hypergraph snapshot. Resolve
+        // the per-workspace path via the same primitive `build_hypergraph`
+        // uses (`GraphPaths::for_workspace`) so the canonicalization and
+        // hash logic stay in one place.
+        if include_hypergraph {
+            let canonical = std::fs::canonicalize(dir_path).unwrap_or_else(|_| dir_path.into());
+            let paths = crate::graph::GraphPaths::for_workspace(&canonical);
+            if paths.root_dir.exists() {
+                match std::fs::remove_dir_all(&paths.root_dir) {
+                    Ok(_) => cleared.push(format!(
+                        "Hypergraph snapshot: {}",
+                        paths.root_dir.display()
+                    )),
+                    Err(e) => {
+                        errors.push(format!("Failed to clear hypergraph snapshot: {}", e))
+                    }
+                }
+            }
+        }
     } else {
         // Clear all caches
         let cache_dir = data_dir.join("cache");
@@ -95,6 +130,24 @@ pub async fn clear_cache(
                 Err(e) => errors.push(format!("Failed to clear index directory: {}", e)),
             }
         }
+
+        // All-projects hypergraph wipe: nuke the entire `graphs/` dir
+        // under the data dir. That's `default_data_dir()` from
+        // `graph::storage` — same parent that `GraphPaths::for_workspace`
+        // hashes underneath.
+        if include_hypergraph {
+            let graphs_dir = crate::graph::storage::default_data_dir();
+            if graphs_dir.exists() {
+                match std::fs::remove_dir_all(&graphs_dir) {
+                    Ok(_) => cleared.push(format!(
+                        "All hypergraph snapshots: {}",
+                        graphs_dir.display()
+                    )),
+                    Err(e) => errors
+                        .push(format!("Failed to clear hypergraph snapshots: {}", e)),
+                }
+            }
+        }
     }
 
     // Build response
@@ -104,14 +157,14 @@ pub async fn clear_cache(
         response.push_str("No cache files found to clear.\n");
     } else {
         if !cleared.is_empty() {
-            response.push_str("✓ Successfully cleared:\n");
+            response.push_str("Successfully cleared:\n");
             for item in &cleared {
                 response.push_str(&format!("  - {}\n", item));
             }
         }
 
         if !errors.is_empty() {
-            response.push_str("\n✗ Errors:\n");
+            response.push_str("\nErrors:\n");
             for error in &errors {
                 response.push_str(&format!("  - {}\n", error));
             }
@@ -122,6 +175,9 @@ pub async fn clear_cache(
         response.push_str("\nThe project will be re-indexed on next search.\n");
     } else {
         response.push_str("\nAll projects will be re-indexed on next search.\n");
+    }
+    if include_hypergraph {
+        response.push_str("The next build_hypergraph call will do a full re-index.\n");
     }
 
     Ok(CallToolResult::success(vec![Content::text(response)]))
@@ -142,9 +198,23 @@ mod tests {
         // Clearing a non-existent directory should succeed with "nothing to clear"
         let result = clear_cache(ClearCacheParams {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
+            include_hypergraph: None,
         })
         .await;
 
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_clear_cache_include_hypergraph_param_compiles() {
+        // Smoke: the new flag deserializes via the public schema and
+        // reaches the body without panicking. We use a path that doesn't
+        // exist so no real state is touched.
+        let result = clear_cache(ClearCacheParams {
+            directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
+            include_hypergraph: Some(true),
+        })
+        .await;
         assert!(result.is_ok());
     }
 }

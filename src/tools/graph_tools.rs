@@ -3096,9 +3096,28 @@ pub(crate) async fn handle_build_codemap(
     // ---------- open snapshot ----------
     let snap = open_workspace_snapshot(directory)?;
 
+    // ---------- pre-flight staleness check ----------
+    // Compare the snapshot's `created_at_unix` against the newest `.rs`
+    // mtime under the workspace. If sources are newer, surface a
+    // diagnostic in the resulting Codemap so the caller knows to
+    // re-run `build_hypergraph(force_rebuild=true)`.
+    let mut pre_diagnostics: Vec<String> = Vec::new();
+    {
+        let workspace_root = std::path::Path::new(&snap.manifest.workspace_root);
+        if let Some(newest) = crate::graph::codemap::newest_source_mtime(workspace_root) {
+            let created = snap.manifest.created_at_unix;
+            if newest > created {
+                let age = newest - created;
+                pre_diagnostics.push(format!(
+                    "snapshot is older than newest .rs file; consider build_hypergraph(force_rebuild=true) (snapshot is {age} seconds older)"
+                ));
+            }
+        }
+    }
+
     // ---------- build ----------
     let codemap = if let Some(names) = seed_qualified_names.filter(|s| !s.is_empty()) {
-        build_codemap(&snap, trimmed_prompt, Some(names), None, &opts)
+        build_codemap(&snap, trimmed_prompt, Some(names), None, &opts, &pre_diagnostics)
             .await
             .map_err(internal_error("build_codemap"))?
     } else {
@@ -3122,7 +3141,7 @@ pub(crate) async fn handle_build_codemap(
             .search(prompt, opts.top_k_seeds.saturating_mul(3))
             .await
             .map_err(|e| McpError::internal_error(format!("hybrid search: {e}"), None))?;
-        build_codemap(&snap, Some(prompt), None, Some(&hits), &opts)
+        build_codemap(&snap, Some(prompt), None, Some(&hits), &opts, &pre_diagnostics)
             .await
             .map_err(internal_error("build_codemap"))?
     };

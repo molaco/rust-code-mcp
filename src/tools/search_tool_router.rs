@@ -218,7 +218,7 @@ impl SearchToolRouter {
     }
 
     /// Clear corrupted cache, index, and vector store files
-    #[tool(description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store.")]
+    #[tool(description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store. Pass include_hypergraph=true to ALSO wipe the persisted hypergraph snapshot at <data_dir>/graphs/<workspace_hash>/ — forces the next build_hypergraph call to do a full re-index. The response lists exactly which directories were cleared.")]
     async fn clear_cache(
         &self,
         Parameters(params): Parameters<crate::tools::clear_cache_tool::ClearCacheParams>,
