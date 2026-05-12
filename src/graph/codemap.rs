@@ -6,6 +6,7 @@
 //! workspace-relative file + line range into an enclosing Item NodeId,
 //! and a small path-normalization helper.
 
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -174,6 +175,47 @@ pub(crate) fn canonicalize_and_strip(path: &Path, workspace_root: &Path) -> Opti
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Bounded BFS over outgoing `callees_of` edges from `node`. Returns the
+/// shortest distance to any `NodeId` in `seeds`, or `u32::MAX` if none is
+/// reachable within `max_depth`. `0` means `node` itself is a seed.
+///
+/// Mirrors the frontier+visited pattern of `recursive_callers_count`
+/// (src/graph/queries.rs:852+), but in the forward direction (callees,
+/// not callers) and returning depth rather than count.
+pub(crate) fn min_call_distance(
+    snap: &OpenedSnapshot,
+    node: NodeId,
+    seeds: &HashSet<NodeId>,
+    max_depth: u32,
+) -> u32 {
+    if seeds.contains(&node) {
+        return 0;
+    }
+    let mut visited: HashSet<NodeId> = HashSet::new();
+    visited.insert(node);
+    let mut frontier: VecDeque<(NodeId, u32)> = VecDeque::new();
+    frontier.push_back((node, 0));
+    while let Some((cur, d)) = frontier.pop_front() {
+        if d >= max_depth {
+            continue;
+        }
+        let callees = match snap.callees_of(cur) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for next in callees {
+            if !visited.insert(next) {
+                continue;
+            }
+            if seeds.contains(&next) {
+                return d + 1;
+            }
+            frontier.push_back((next, d + 1));
+        }
+    }
+    u32::MAX
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +284,9 @@ path = "src/lib.rs"
 "#;
 
     // Notably outer() and inner() both exist; the line-range lookup for
-    // inner()'s body should resolve to inner, not outer.
+    // inner()'s body should resolve to inner, not outer. The top-level
+    // caller()/callee() pair gives the raw-ID adapter tests a clean
+    // pair of qualified names to look up.
     const FIXTURE_LIB_RS: &str = r#"
 pub fn outer() {
     fn inner() {
@@ -253,6 +297,12 @@ pub fn outer() {
 
 pub fn other() {
     let _y = 2;
+}
+
+pub fn callee() {}
+
+pub fn caller() {
+    callee();
 }
 "#;
 
@@ -322,6 +372,70 @@ pub fn other() {
             2,
         );
         assert!(got2.is_none(), "end before start is invalid");
+    }
+
+    #[test]
+    fn callees_of_includes_called_function() {
+        let fixture = shared_fixture();
+        let (caller_id, _) = fixture
+            .snap
+            .lookup_by_qualified_name("synthetic_codemap_crate::caller")
+            .expect("lookup_by_qualified_name caller")
+            .expect("caller resolves");
+        let (callee_id, _) = fixture
+            .snap
+            .lookup_by_qualified_name("synthetic_codemap_crate::callee")
+            .expect("lookup_by_qualified_name callee")
+            .expect("callee resolves");
+
+        let callees = fixture
+            .snap
+            .callees_of(caller_id)
+            .expect("callees_of caller succeeds");
+        assert!(
+            callees.contains(&callee_id),
+            "callees_of(caller) should include callee, got {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn referrers_of_includes_caller() {
+        let fixture = shared_fixture();
+        let (caller_id, _) = fixture
+            .snap
+            .lookup_by_qualified_name("synthetic_codemap_crate::caller")
+            .expect("lookup_by_qualified_name caller")
+            .expect("caller resolves");
+        let (callee_id, _) = fixture
+            .snap
+            .lookup_by_qualified_name("synthetic_codemap_crate::callee")
+            .expect("lookup_by_qualified_name callee")
+            .expect("callee resolves");
+
+        let referrers = fixture
+            .snap
+            .referrers_of(callee_id)
+            .expect("referrers_of callee succeeds");
+        assert!(
+            referrers.contains(&caller_id),
+            "referrers_of(callee) should include caller, got {:?}",
+            referrers
+        );
+    }
+
+    #[test]
+    fn min_call_distance_zero_when_seed_is_self() {
+        let fixture = shared_fixture();
+        let (caller_id, _) = fixture
+            .snap
+            .lookup_by_qualified_name("synthetic_codemap_crate::caller")
+            .expect("lookup_by_qualified_name caller")
+            .expect("caller resolves");
+        let mut seeds: HashSet<NodeId> = HashSet::new();
+        seeds.insert(caller_id);
+        let d = min_call_distance(&fixture.snap, caller_id, &seeds, 3);
+        assert_eq!(d, 0, "node is itself a seed → distance 0");
     }
 
     #[test]
