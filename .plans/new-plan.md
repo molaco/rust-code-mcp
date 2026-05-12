@@ -50,6 +50,7 @@ src/graph/
 │   ├── reexports.rs
 │   ├── crate_graph.rs
 │   ├── workspace.rs
+│   ├── audit.rs
 │   ├── cursors.rs
 │   └── labels.rs
 ├── test_support.rs
@@ -170,9 +171,14 @@ At this checkpoint, the code should still behave exactly as before, and
 
 Edit `src/graph/queries/mod.rs` so it becomes the stable facade for the split.
 
-1. Add private submodule declarations at the top:
+1. Add private submodule declarations incrementally, not all at once.
+   When a group is moved, add only that group's `mod ...;` line and any
+   corresponding `pub use`. This keeps each checkpoint compile-checkable.
+
+   The final private submodule list should be:
 
    ```rust
+   mod audit;
    mod call_graph;
    mod crate_graph;
    mod cursors;
@@ -185,7 +191,8 @@ Edit `src/graph/queries/mod.rs` so it becomes the stable facade for the split.
    mod workspace;
    ```
 
-2. Keep public type re-exports in `queries/mod.rs`, for example:
+2. Keep public type re-exports in `queries/mod.rs`, adding each re-export when
+   the declaring item is moved. For example, the final facade should include:
 
    ```rust
    pub use call_graph::{CallGraphNode, EnrichedCallSite, RecursiveCallersCount};
@@ -426,6 +433,23 @@ Dependencies:
 
 - `labels`
 
+### 5.9 `audit.rs`
+
+Move:
+
+- `unsafe_audit`
+
+Dependencies:
+
+- `super::loader::LoadedWorkspace`
+- `super::unsafe_audit::unsafe_audit_impl`
+- `super::unsafe_audit::UnsafeFinding`
+
+This method is only a query wrapper around `crate::graph::unsafe_audit`; do not
+leave it behind in `queries/mod.rs` unless `mod.rs` explicitly documents that it
+is keeping wrapper methods. The preferred end state is that `queries/mod.rs`
+contains module declarations and facade re-exports only.
+
 ## Phase 6: update hard-coded canonical paths in tests
 
 Some tests currently assume declarations live directly in
@@ -518,6 +542,43 @@ crate::graph::ForbiddenDependencyRule
 crate::graph::OpenedSnapshot
 ```
 
+Also verify the complete public query surface re-exported by `src/graph/mod.rs`
+remains available through both the `queries` facade and the flat `graph`
+facade. Use the current `pub use queries::{ ... }` list in `src/graph/mod.rs`
+as the source of truth. For each name below, confirm both
+`crate::graph::queries::<Name>` and `crate::graph::<Name>` compile:
+
+```rust
+crate::graph::queries::CallGraphNode
+crate::graph::queries::CommonFnName
+crate::graph::queries::CrateDeadPub
+crate::graph::queries::CrateEdge
+crate::graph::queries::CrateMetric
+crate::graph::queries::DeadPubFinding
+crate::graph::queries::EdgeSymbol
+crate::graph::queries::EnrichedCallSite
+crate::graph::queries::ForbiddenDependencyRule
+crate::graph::queries::ForbiddenDependencyViolation
+crate::graph::queries::FunctionFilter
+crate::graph::queries::FunctionWithSignature
+crate::graph::queries::ModuleShadow
+crate::graph::queries::ModuleTreeNode
+crate::graph::queries::MutStaticFinding
+crate::graph::queries::NodeKindCounts
+crate::graph::queries::OverlapsReport
+crate::graph::queries::PubTypeAliasMasqueradingAsReexport
+crate::graph::queries::ReExportChain
+crate::graph::queries::ReExportLink
+crate::graph::queries::RecursiveCallersCount
+crate::graph::queries::SelfKindFilter
+crate::graph::queries::TypeCollision
+crate::graph::queries::TypeLocation
+crate::graph::queries::UsageSummaryRow
+crate::graph::queries::VisibilityCounts
+crate::graph::queries::WithinCrateDuplicate
+crate::graph::queries::WorkspaceStats
+```
+
 Concrete check:
 
 ```sh
@@ -592,8 +653,9 @@ review and test pass.
 
 - `src/graph/queries.rs` no longer exists.
 - `src/graph/queries/mod.rs` is a small facade.
-- No query submodule is larger than roughly 500 lines unless there is a clear
-  reason.
+- No query submodule's production code is larger than roughly 500 lines unless
+  there is a clear reason. Colocated tests can make a file exceed this limit,
+  but large test modules should still be split by topic where practical.
 - `crate::graph::queries::*` compatibility is preserved.
 - Shared snapshot setup lives in `src/graph/test_support.rs`.
 - Tests that relied on old canonical `graph::queries` declaration paths have
