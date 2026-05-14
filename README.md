@@ -45,6 +45,48 @@ See [.docs/ARCHITECTURE.md](.docs/ARCHITECTURE.md) for the per-module breakdown,
 | Semantic | `similar_to_item`, `semantic_overlaps` |
 | Codemap | `build_codemap` |
 
+## Skills
+
+The [`skills/`](./skills) directory ships 26 [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills) that compose these MCP tools into ready-made audit recipes. Each skill is a self-contained `SKILL.md` with prerequisites, step-by-step prompts, and hand-offs to related skills — invoke them in Claude Code as `/<skill-name>` once installed.
+
+| Scope | Skill | Purpose |
+|-------|-------|---------|
+| Workspace | `rmc-workspace-overview` | First-look audit of a Rust workspace |
+| Workspace | `rmc-architecture-rules` | Enforce crate-edge rules |
+| Workspace | `rmc-dependency-metric` | Rank crates by Robert Martin instability / abstractness |
+| Workspace | `rmc-imports-exports` | Cross-crate imports and exports audit |
+| Workspace | `rmc-type-overlaps` | Name collisions and module shadows |
+| Workspace | `rmc-semantic-overlaps` | Duplicate logic detection by embedding similarity |
+| Workspace | `rmc-snapshot-diff` | Compare two workspace snapshots (e.g. across branches) |
+| Crate | `rmc-crate-audit` | Audit one crate end-to-end |
+| Crate | `rmc-api-surface` | Audit a crate's public API |
+| Crate | `rmc-module-audit` | Audit a single module |
+| Symbol | `rmc-find-symbol` | Resolve a symbol's qualified name |
+| Symbol | `rmc-symbol-forensics` | Deep dive on one symbol (refs, callers, attrs) |
+| Symbol | `rmc-method-api` | Audit a type's methods |
+| Symbol | `rmc-trait-audit` | Audit a trait and its impls |
+| Symbol | `rmc-enum-variants` | Inspect an enum's variants |
+| Symbol | `rmc-rename-symbol` | Preview a rename — exact reference set & refactor probe |
+| Symbol | `rmc-signature-search` | Find fns by signature shape |
+| Quality | `rmc-unsafe-audit` | Audit `unsafe` blocks |
+| Quality | `rmc-mut-static-audit` | Audit global mutable state |
+| Quality | `rmc-attribute-audit` | Audit attributes and doc-comments |
+| Quality | `rmc-complexity` | Complexity hotspots by blast radius |
+| Quality | `rmc-test-vs-prod` | Test vs production split |
+| Quality | `rmc-call-graph` | Fn-level call graphs |
+| Quality | `rmc-reexport-chain` | Trace `pub use` re-export chains |
+| Planning | `rmc-codemap` | Task-conditioned workspace subgraph (nodes / edges / hierarchy) |
+| Planning | `rmc-refactor-plan` | Plan a refactor with evidence from the hypergraph |
+
+**Install** by symlinking (or copying) the directories into your Claude Code skills folder:
+
+```bash
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/skills/"rmc-* ~/.claude/skills/
+```
+
+Then in Claude Code, type `/rmc-` to discover them, or `/rmc-workspace-overview` to kick off a tour of a new repo.
+
 ## Installation
 
 ### 1. Build the binary
