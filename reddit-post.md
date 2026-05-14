@@ -1,99 +1,136 @@
-**Title:** Updates to `rust-code-mcp`: 25+ new tools, safety audits, codemap, rename-preview — and how `THEORY.md` backs every one
+**Title:** `rust-code-mcp` now makes Rust agents show their work: call graphs, safety audits, rename previews
 
 **Body:**
 
-Follow-up to the previous [`rust-code-mcp`](https://rust-code-mcp.pages.dev/) post. Since then the project has roughly doubled in tool surface (from ~20 to **45+** MCP tools), shipped **26 Claude Code skills** that compose them into audit recipes, and — most importantly — picked up a `THEORY.md` that names the structural principles each tool exists to check.
+Follow-up to my previous `rust-code-mcp` post.
 
-This post is two halves: **what's new**, then **why** — the principles that justify each addition.
+I got tired of agents ending Rust refactor suggestions with "this looks cleaner."
 
----
+That is not enough. If an agent wants to split a module, extract a trait, make something `pub(crate)`, move code between crates, or touch unsafe-adjacent code, I want it to show its work.
 
-## Part 1 — What's new
+So the latest update is focused on evidence. `rust-code-mcp` now exposes **45+ rust-analyzer-backed MCP tools**, ships **26 Claude Code skills**, and builds a persisted HIR-driven workspace hypergraph that can be reused across tool calls. The goal is to let an agent answer structural questions with actual references, imports, call edges, visibility, attributes, docs, and file spans.
 
-### New safety / quality audits
+Concrete example:
 
-| Tool | What it does |
-|---|---|
-| `unsafe_audit` | Every `unsafe { ... }` block in local crates, with SAFETY-comment presence check |
-| `mut_static_audit` | `static mut` / `LazyLock` / `OnceLock` / `OnceCell` inventory |
-| `recursion_check` | Direct & mutual recursion cycles in fn-body call edges |
-| `channel_capacity_audit` | Channel construction call sites — bounded vs unbounded |
-| `fn_body_audit` | Walks fn bodies for unwrap / panic / lock-across-await / loop patterns |
-| `missing_docs_audit` | Pure-`pub` items lacking `///` doc-comments |
-| `derive_audit` | `pub` items missing required derive macros (configurable expectations) |
+> "Can this module become its own crate?"
 
-### Call graph (new Layer 10)
+The agent can now check:
 
-`who_calls`, `calls_from`, `call_graph` (bounded recursive descent), `callers_in_crate`, `recursive_callers_count` — fn-body reference graph, not just import edges.
+- `build_hypergraph` once, then reuse the fingerprinted snapshot.
+- `get_imports` / `crate_edges` to see what crosses the proposed boundary.
+- `who_calls`, `calls_from`, and `recursive_callers_count` to estimate function-level blast radius.
+- `dead_pub_report` to find `pub` items that are not actually cross-crate API.
+- `build_codemap` to return a small graph of the relevant symbols instead of dumping the whole repo.
+- `rename_symbol` as a dry-run probe when the change implies API renames or module moves.
 
-### Workspace metrics & rules
+The answer should stop being:
 
-- `crate_dependency_metric` — Robert Martin instability (Ce / (Ca + Ce)) and abstractness per crate
-- `forbidden_dependency_check` — assertion-style enforcement of crate-edge rules
-- `overlaps` — name collisions, module shadowing, within-crate duplicates
-- `re_export_chain`, `pub_use_pub_type_audit`, `get_declared_reexports` — re-export hygiene
+> "This seems cleaner."
 
-### Signatures & attributes
+And start looking more like:
 
-- `function_signature`, `functions_with_filter` — HIR signatures, shape-based search
-- `enum_variants` — variant inventory with payload shapes
-- `item_attributes`, `items_with_attribute` — outer attributes + doc-comment lines
+> "This boundary is expensive because these imports and call edges cross it. Moving it would introduce this crate edge. These three `pub` items can stay internal. This rename would touch 17 references across 4 files. Here is the exact preview."
 
-### Semantic neighbors
+That is the direction I am trying to push.
 
-- `similar_to_item` — vector-embedding nearest neighbors for a hypergraph item
-- `semantic_overlaps` — workspace-wide clustering of semantically-similar items (with cached embeddings, configurable threshold + max cluster size)
+## What changed
 
-### `rename_symbol`
+**Safety and review audits**
 
-rust-analyzer rename, but returns a **preview** (`RenamePreview`) — exact reference set, exact text edits, exact file-move list. **No files are modified.** Use it as a refactor probe before committing.
+New tools include `unsafe_audit`, `mut_static_audit`, `fn_body_audit`, `channel_capacity_audit`, `recursion_check`, `missing_docs_audit`, and `derive_audit`.
 
-### `build_codemap`
+They find things like:
 
-Task-conditioned subgraph. Seed with symbols, get back a pruned Mermaid + outline showing the relevant neighborhood — call edges, type uses, module hierarchy. Useful for handing context to an agent without dumping the whole repo.
+- `unsafe { ... }` blocks, including whether a nearby `SAFETY` comment exists.
+- `static mut`, `LazyLock`, `OnceLock`, and `OnceCell`.
+- `unwrap`, `expect`, panic macros, unchecked unwraps, self-recursion, suspicious loops, and lock-across-await patterns.
+- bounded vs unbounded channel construction.
+- public items missing docs or expected derives.
 
-### Infrastructure
+These are review triggers, not formal proofs. The useful part is that they return exact files, spans, and enclosing functions.
 
-- **Persisted hypergraph** (`build_hypergraph`) — fingerprinted, reused across calls. ~10× cheaper than re-walking HIR every time.
-- **`clear_cache` with `include_hypergraph`** — wipes the LMDB store when fingerprints get stale
-- **stdio-safe metrics** — `tracing::info!` only, never `println!` (the MCP transport reserves stdout for JSON-RPC)
+**Function-level call graph**
 
-### 26 skills
+The new call graph layer includes `who_calls`, `calls_from`, `call_graph`, `callers_in_crate`, and `recursive_callers_count`.
 
-The whole tool surface composed into invokable Claude Code skills: `/rmc-workspace-overview`, `/rmc-crate-audit`, `/rmc-unsafe-audit`, `/rmc-mut-static-audit`, `/rmc-refactor-plan`, `/rmc-rename-symbol`, `/rmc-codemap`, `/rmc-architecture-rules`, `/rmc-dependency-metric`, `/rmc-symbol-forensics`, `/rmc-trait-audit`, `/rmc-call-graph`, `/rmc-semantic-overlaps`, … 26 total. Each is a self-contained `SKILL.md` with prereqs, prompts, and hand-offs to related skills.
+Import graphs are not enough for refactoring. Sometimes the real question is not "which module imports this type?" but "which call paths reach this function if I change its signature?"
 
----
+**Architecture and workspace checks**
 
-## Part 2 — Why these tools? `THEORY.md`
+There are new tools for crate-level instability metrics, forbidden dependency rules, name collisions, re-export chains, and dead public API:
 
-The new `THEORY.md` names **15 structural principles** that justify every tool above. The point: when an agent suggests a refactor, it cites a principle, not a vibe. Each principle pins to a check the agent can run.
+- `crate_dependency_metric`
+- `forbidden_dependency_check`
+- `overlaps`
+- `re_export_chain`
+- `get_reexports`
+- `get_declared_reexports`
+- `pub_use_pub_type_audit`
+- `dead_pub_in_crate`
+- `dead_pub_report`
 
-The framework is a ladder: **files → modules → signatures → crates → workspaces**. Each rung has a unit, a morphism, and an rmc tool that returns the rung's structure (`get_imports` at the file level, `module_tree` at the module level, `crate_edges` at the crate level, `workspace_stats` at the top).
+**Refactor probes**
 
-Here's how the new tools map back to principles:
+`rename_symbol` is rust-analyzer rename exposed as a read-only preview. It returns the exact reference set, exact text edits, and any file moves rust-analyzer would perform. No files are modified.
 
-- **P1 Boundary cost** — "a boundary is expensive proportional to morphism density × instability" → `crate_edges`, `get_imports`. Why `crate_dependency_metric` exists: it quantifies the density side.
-- **P3 Acyclicity** — "units in an SCC cannot be partitioned across containers" → `forbidden_dependency_check` is the assertion form; `recursion_check` is the fn-level analog.
-- **P6 Callsite-usage set** — "the honest trait surface = union of methods actually invoked at observed call sites, not the full type" → `who_uses`, `function_signature`, `similar_to_item`. This is why the call-graph layer (`who_calls`, `calls_from`) matters — you can't extract an honest trait without it.
-- **P8 Bridge unit** — "a unit whose removal disconnects the graph is the highest-leverage refactor target" → `who_imports`, `recursive_callers_count`. The new call-graph tools surface bridges at the fn level.
-- **P10 Hub / leaf / midstream** — classifying units by fan-in/fan-out shape → `recursive_callers_count` plus `call_graph`. Renaming a hub fans out; `rename_symbol` previews exactly that fan-out before you commit.
-- **P13 Visibility as projection** — "`pub` is a structural decision, not a style decision" → `dead_pub_in_crate`, `dead_pub_report`. Items used cross-module but not cross-crate are `pub(crate)` candidates.
-- **P14 Re-export transparency** — "`pub use` chains are syntactic redirection; treat re-export and original as the same morphism target" → `re_export_chain`, `get_reexports`, `pub_use_pub_type_audit`.
-- **P15 Trait coherence as ordering** — "supertrait hierarchies must be a partial order" → cross-check against P6 callsite-usage. `function_signature` + `who_calls` is the diagnostic pair.
+That makes it useful even when you do not plan to rename anything. You can use it to ask whether a symbol is reachable, how big the blast radius is, whether macro-expanded references show up, or whether a module rename would move files.
 
-The safety audits (`unsafe_audit`, `mut_static_audit`, `fn_body_audit`, `channel_capacity_audit`) sit slightly outside the structural ladder — they're about *invariants*, not *boundaries* — but the framework's diagnostic style (named check + pinned tool + failure mode) carries over cleanly.
+**Codemap**
 
-`semantic_overlaps` and `similar_to_item` are the embedding-based complement to the structural tools: where the hypergraph misses duplicate *logic* (because two impls don't share a type or a call edge), embedding clustering catches it. Treat the output as a candidate set for P6 (extract trait) or P5 (named-surface test on the surrounding container).
+`build_codemap` creates a task-conditioned subgraph. Seed it with symbols or a task prompt, and it returns the relevant neighborhood as JSON, Mermaid, or outline: call edges, type uses, module hierarchy, and diagnostics.
 
----
+The goal is to give an agent enough context to reason locally without pasting a whole workspace into the prompt.
 
-**Why the theory layer matters.** Without it, an MCP server is `grep` + LSP wrapped in JSON. The named-principle framing makes the agent's reasoning checkable — you can ask *which principle was cited* and *which tool produced the evidence*. That's harder to fake than "this looks cleaner."
+**Semantic neighbors**
 
-**Links:**
+`similar_to_item` and `semantic_overlaps` are for duplicate-logic hunting. They use embeddings to find code that looks semantically similar even when it does not share a type, import, or call edge.
+
+**Claude Code skills**
+
+The repo now includes **26 skills** under `skills/`, including `/rmc-workspace-overview`, `/rmc-crate-audit`, `/rmc-unsafe-audit`, `/rmc-refactor-plan`, `/rmc-rename-symbol`, `/rmc-codemap`, `/rmc-architecture-rules`, `/rmc-call-graph`, and `/rmc-semantic-overlaps`.
+
+Each skill is a small `SKILL.md` recipe: prerequisites, tool calls, expected evidence, and hand-offs to related skills.
+
+## The theory layer
+
+The part I am most interested in is the new `THEORY.md`.
+
+It names **15 structural principles** for agent-driven refactoring and maps each one to checks the MCP server can run. The point is not to make the tool sound academic. The point is to make the agent's reasoning inspectable.
+
+Examples:
+
+- **Boundary cost**: do not split code across a boundary if imports and references across that boundary are dense and unstable. Check with `get_imports`, `crate_edges`, and call graph tools.
+- **Acyclicity**: do not pretend two containers are separate if they form a cycle. Check with `crate_edges` and `forbidden_dependency_check`.
+- **Callsite-usage set**: if you extract a trait, the honest trait surface is the set of methods actually used at call sites, not every method the concrete type happens to have. Check with `who_uses`, `who_calls`, and `function_signature`.
+- **Visibility as projection**: `pub` is not style. It is a structural claim. Check with `dead_pub_report`.
+- **Re-export transparency**: a `pub use` chain should not hide where the real API surface lives. Check with `re_export_chain` and `get_reexports`.
+
+So when an agent suggests a refactor, I want it to cite both:
+
+1. The principle it is applying.
+2. The tool output that supports it.
+
+That is much harder to fake than "this is cleaner."
+
+## What this is not
+
+It is not an auto-refactorer that should blindly change your workspace. Most of the interesting tools are read-only. The rename tool previews edits instead of applying them. The semantic tools return candidates, not verdicts. The safety audits are review triggers, not formal verification.
+
+The design goal is narrower: give coding agents better evidence before they recommend or perform changes in Rust projects.
+
+## Known gaps
+
+- Co-change locality needs git-log integration.
+- The signature-rung theory needs a one-shot diagnostic.
+- Some `THEORY.md` sections are still stubs, especially the worked walkthrough.
+- Dynamic behavior, runtime performance, and team ownership boundaries are intentionally out of scope for now.
+
+## Links
 
 - Website: https://rust-code-mcp.pages.dev/
-- Discord: https://discord.com/invite/dENhfbtCa — drop in and tell us what your workflow looks like; we genuinely want to know what people are doing with this
-- Repo: (link your GitHub here)
-- `THEORY.md` is in the repo root if you want to read the principles directly
+- Repo: https://github.com/molaco/rust-code-mcp
+- Discord: https://discord.com/invite/dENhfbtCa
+- Full tool reference: `TOOLS.md`
+- Principles: `THEORY.md`
 
-Open questions / known gaps from `THEORY.md` §9: P11 co-change locality needs git-log integration (not wired up yet), §3 signature-rung inference has no one-shot tool, and §5–§9 (operations catalog, diagnostics drill, composition, worked walkthrough) are still stubs. Feedback on the principle set very welcome.
+I would especially like feedback on the evidence model: before you trusted an agent to refactor a Rust workspace, what would you want it to prove first?
