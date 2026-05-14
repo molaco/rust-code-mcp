@@ -168,6 +168,53 @@ pub async fn find_references(
     }
 }
 
+/// Preview a rename of a symbol across the project (does not modify files).
+pub async fn rename_symbol(
+    symbol_name: &str,
+    new_name: &str,
+    directory: &str,
+) -> Result<CallToolResult, McpError> {
+    use std::path::Path;
+
+    let project_path = Path::new(directory);
+
+    tracing::debug!("Previewing rename '{}' → '{}'", symbol_name, new_name);
+
+    let preview = SEMANTIC
+        .lock()
+        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
+        .rename_by_name(project_path, symbol_name, new_name)
+        .map_err(|e| McpError::internal_error(format!("Rename failed: {}", e), None))?;
+
+    if preview.edits.is_empty() && preview.file_moves.is_empty() {
+        return Ok(CallToolResult::success(vec![Content::text(format!(
+            "Rename '{}' → '{}' produced no edits.",
+            symbol_name, new_name
+        ))]));
+    }
+
+    let mut out = format!(
+        "Rename preview for '{}' → '{}' (no files modified):\n\n",
+        symbol_name, new_name
+    );
+
+    if !preview.edits.is_empty() {
+        out.push_str(&format!("Text edits ({}):\n", preview.edits.len()));
+        for edit in &preview.edits {
+            out.push_str(&format!("  {}\n", edit));
+        }
+    }
+
+    if !preview.file_moves.is_empty() {
+        out.push_str(&format!("\nFile system changes ({}):\n", preview.file_moves.len()));
+        for mv in &preview.file_moves {
+            out.push_str(&format!("  {}\n", mv));
+        }
+    }
+
+    Ok(CallToolResult::success(vec![Content::text(out)]))
+}
+
 /// Get dependencies for a file (imports and files that depend on it)
 pub async fn get_dependencies(file_path: &str) -> Result<CallToolResult, McpError> {
     let file_path_obj = Path::new(file_path);
@@ -420,6 +467,12 @@ mod tests {
     #[tokio::test]
     async fn test_analyze_complexity_nonexistent_file() {
         let result = analyze_complexity("/nonexistent/file.rs").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_symbol_invalid_project() {
+        let result = rename_symbol("nonexistent_symbol_xyz", "new_name", "/tmp").await;
         assert!(result.is_err());
     }
 }

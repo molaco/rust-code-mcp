@@ -11,6 +11,7 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`read_file_content`](#read_file_content) | Query | Read file contents |
 | [`find_definition`](#find_definition) | Analysis | Locate symbol definitions by name |
 | [`find_references`](#find_references) | Analysis | Find all usages of a symbol by name |
+| [`rename_symbol`](#rename_symbol) | Analysis | Preview renaming a symbol project-wide (no files modified) |
 | [`get_dependencies`](#get_dependencies) | Analysis | List imports for a file |
 | [`get_call_graph`](#get_call_graph) | Analysis | Show function call relationships |
 | [`analyze_complexity`](#analyze_complexity) | Analysis | Calculate code complexity metrics |
@@ -187,6 +188,43 @@ Found 21 reference(s) for 'RustParser':
 /path/to/project/src/indexing/indexer_core.rs:88:13 (reference)
 /path/to/project/src/parser/mod.rs:121:12 (RustParser)
 ...
+```
+
+---
+
+### rename_symbol
+
+Preview a project-wide rename of a Rust symbol using rust-analyzer. **Read-only** — returns the set of edits and file moves that *would* be applied, without modifying any files. Apply the edits yourself if the preview looks correct.
+
+The symbol is resolved by exact name. If multiple symbols share the name, the call fails with an "Ambiguous symbol" error and lists the candidates — disambiguate by using a more specific name. rust-analyzer may also refuse the rename (e.g. for keywords, fields of trait impls in foreign crates, or names that would conflict).
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `symbol_name` | string | Yes | Symbol to rename — must match exactly, ambiguous names are rejected |
+| `new_name` | string | Yes | New name (must be a valid Rust identifier) |
+| `directory` | string | Yes | Project root directory containing Cargo.toml |
+
+**Example:**
+```json
+{
+  "symbol_name": "parse_file",
+  "new_name": "parse_source_file",
+  "directory": "/path/to/project"
+}
+```
+
+**Returns:** A list of text edits (file:start_line:start_col-end_line:end_col → new_text) and any file system moves rust-analyzer would perform (e.g. when renaming a module that owns its own file).
+
+**Example output:**
+```
+Rename preview for 'parse_file' → 'parse_source_file' (no files modified):
+
+Text edits (4):
+  /path/to/project/src/parser/mod.rs:121:12-121:22 → "parse_source_file"
+  /path/to/project/src/parser/mod.rs:148:9-148:19 → "parse_source_file"
+  /path/to/project/src/indexing/indexer_core.rs:64:30-64:40 → "parse_source_file"
+  /path/to/project/src/indexing/indexer_core.rs:88:23-88:33 → "parse_source_file"
 ```
 
 ---

@@ -2,6 +2,7 @@
 
 mod loader;
 mod position;
+mod rename;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use ra_ap_vfs::Vfs;
 use anyhow::Result;
 
 pub use position::Location;
+pub use rename::{RenameEdit, RenameFileMove, RenamePreview};
 
 /// Global semantic service instance (Mutex because AnalysisHost is not Sync)
 pub static SEMANTIC: LazyLock<Mutex<SemanticService>> = LazyLock::new(|| {
@@ -80,5 +82,21 @@ impl SemanticService {
             .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
 
         position::find_references_by_name(&ctx.host, &ctx.vfs, symbol_name)
+    }
+
+    /// Preview rename of a symbol by name. Does not modify any files.
+    pub fn rename_by_name(
+        &mut self,
+        project_path: &Path,
+        symbol_name: &str,
+        new_name: &str,
+    ) -> Result<RenamePreview> {
+        self.get_or_load(project_path)?;
+
+        let canonical = project_path.canonicalize()?;
+        let ctx = self.projects.get(&canonical)
+            .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
+
+        rename::rename_by_name(&ctx.host, &ctx.vfs, symbol_name, new_name)
     }
 }
