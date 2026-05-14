@@ -8,9 +8,9 @@
 /RESULTS/
 /DOCS/
 *.sh
-*.md
 !README.md
 !TOOLS.md
-.docs/
-.plan/
+!docs/HYPERGRAPH_SCHEMA.md
 .claude
+.codex
+.test/

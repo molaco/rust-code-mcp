@@ -155,7 +155,7 @@ async fn ensure_indexed(
 }
 
 /// Create a HybridSearch with a pre-validated BM25 search
-async fn create_hybrid_search(
+pub(crate) async fn create_hybrid_search(
     paths: &ProjectPaths,
     bm25_search: Option<crate::search::bm25::Bm25Search>,
 ) -> Result<HybridSearch, McpError> {

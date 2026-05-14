@@ -94,54 +94,57 @@ impl IndexingMetrics {
         *self.errors_by_type.entry(error_type).or_insert(0) += 1;
     }
 
-    /// Print a detailed summary of metrics
-    pub fn print_summary(&self) {
-        println!("\n=== Indexing Metrics ===");
-        println!("Files: {}/{} indexed ({} skipped, {} unchanged)",
-            self.indexed_files,
-            self.total_files,
-            self.skipped_files,
-            self.unchanged_files
-        );
-        println!("Chunks: {}", self.total_chunks);
-        println!("Duration: {:.2}s", self.total_duration.as_secs_f64());
-        println!("Throughput: {:.1} files/sec", self.throughput());
-
-        if !self.file_latencies.is_empty() {
-            println!("\nLatency:");
-            println!("  p50: {:?}", self.p50());
-            println!("  p95: {:?}", self.p95());
-            println!("  p99: {:?}", self.p99());
-        }
-
-        println!("\nPhase breakdown:");
+    /// Log a detailed summary of metrics.
+    pub fn log_summary(&self) {
         let total_secs = self.total_duration.as_secs_f64();
-        if total_secs > 0.0 {
-            println!("  Parse:  {:.2}s ({:.1}%)",
-                self.parse_duration.as_secs_f64(),
-                self.parse_duration.as_secs_f64() / total_secs * 100.0
-            );
-            println!("  Embed:  {:.2}s ({:.1}%)",
-                self.embed_duration.as_secs_f64(),
-                self.embed_duration.as_secs_f64() / total_secs * 100.0
-            );
-            println!("  Index:  {:.2}s ({:.1}%)",
-                self.index_duration.as_secs_f64(),
-                self.index_duration.as_secs_f64() / total_secs * 100.0
-            );
-        }
+        let parse_percent = if total_secs > 0.0 {
+            self.parse_duration.as_secs_f64() / total_secs * 100.0
+        } else {
+            0.0
+        };
+        let embed_percent = if total_secs > 0.0 {
+            self.embed_duration.as_secs_f64() / total_secs * 100.0
+        } else {
+            0.0
+        };
+        let index_percent = if total_secs > 0.0 {
+            self.index_duration.as_secs_f64() / total_secs * 100.0
+        } else {
+            0.0
+        };
 
-        println!("\nMemory: {:.2} MB peak", self.peak_memory_bytes as f64 / 1_000_000.0);
-        println!("Cache hit rate: {:.1}%", self.cache_hit_rate * 100.0);
-        println!("Errors: {} ({:.2}%)", self.error_count, self.error_rate() * 100.0);
+        tracing::info!(
+            indexed_files = self.indexed_files,
+            total_files = self.total_files,
+            skipped_files = self.skipped_files,
+            unchanged_files = self.unchanged_files,
+            total_chunks = self.total_chunks,
+            duration_secs = total_secs,
+            throughput_files_per_sec = self.throughput(),
+            p50_latency_ms = self.p50().as_secs_f64() * 1000.0,
+            p95_latency_ms = self.p95().as_secs_f64() * 1000.0,
+            p99_latency_ms = self.p99().as_secs_f64() * 1000.0,
+            parse_duration_secs = self.parse_duration.as_secs_f64(),
+            parse_percent,
+            embed_duration_secs = self.embed_duration.as_secs_f64(),
+            embed_percent,
+            index_duration_secs = self.index_duration.as_secs_f64(),
+            index_percent,
+            peak_memory_mb = self.peak_memory_bytes as f64 / 1_000_000.0,
+            cache_hit_rate_percent = self.cache_hit_rate * 100.0,
+            error_count = self.error_count,
+            error_rate_percent = self.error_rate() * 100.0,
+            errors_by_type = ?self.errors_by_type,
+            "Indexing metrics summary"
+        );
+    }
 
-        if !self.errors_by_type.is_empty() {
-            println!("\nErrors by type:");
-            for (error_type, count) in &self.errors_by_type {
-                println!("  {}: {}", error_type, count);
-            }
-        }
-        println!("========================\n");
+    /// Log a detailed summary of metrics.
+    ///
+    /// Kept for callers that still use the old name. This must not write to
+    /// stdout because MCP stdio reserves stdout for JSON-RPC frames.
+    pub fn print_summary(&self) {
+        self.log_summary();
     }
 }
 

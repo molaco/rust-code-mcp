@@ -109,17 +109,26 @@ impl Config {
         self.data_dir.join("cache")
     }
 
-    /// Print configuration summary
+    /// Log configuration summary.
+    ///
+    /// MCP stdio servers must keep stdout reserved for JSON-RPC frames.
     pub fn print_summary(&self) {
-        println!("\n=== Configuration ===");
-        println!("Server Port:     {}", self.server_port);
-        println!("Data Directory:  {}", self.data_dir.display());
-        println!("Max File Size:   {} MB", self.max_file_size / 1_000_000);
-        println!("Threads:         {}", if self.num_threads == 0 { "auto".to_string() } else { self.num_threads.to_string() });
-        println!("Debug:           {}", self.debug);
-        println!("Retry Attempts:  {}", self.retry_attempts);
-        println!("Retry Delay:     {}ms", self.retry_delay_ms);
-        println!("====================\n");
+        let threads = if self.num_threads == 0 {
+            "auto".to_string()
+        } else {
+            self.num_threads.to_string()
+        };
+
+        tracing::info!(
+            server_port = self.server_port,
+            data_dir = %self.data_dir.display(),
+            max_file_size_mb = self.max_file_size / 1_000_000,
+            threads = %threads,
+            debug = self.debug,
+            retry_attempts = self.retry_attempts,
+            retry_delay_ms = self.retry_delay_ms,
+            "Configuration summary"
+        );
     }
 }
 

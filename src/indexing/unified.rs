@@ -581,7 +581,7 @@ impl UnifiedIndexer {
             self.metrics.cache_hit_rate = stats.unchanged_files as f64 / stats.total_files as f64;
         }
 
-        self.metrics.print_summary();
+        self.metrics.log_summary();
     }
 }
 
