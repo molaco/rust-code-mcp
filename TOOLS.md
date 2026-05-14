@@ -198,6 +198,17 @@ Preview a project-wide rename of a Rust symbol using rust-analyzer. **Read-only*
 
 The symbol is resolved by exact name. If multiple symbols share the name, the call fails with an "Ambiguous symbol" error and lists the candidates — disambiguate by using a more specific name. rust-analyzer may also refuse the rename (e.g. for keywords, fields of trait impls in foreign crates, or names that would conflict).
 
+**Also useful as a dry-run probe** (beyond actually renaming):
+
+- **Exact reference inventory.** Pass `new_name = symbol_name` to get every byte-precise reference RA can resolve — including method calls, trait-impl headers, `use` paths, and macro-expanded refs RA can trace. Stricter than `who_uses`, narrower than `find_references` (which also catches comments / docs).
+- **Refactor legality check.** RA refuses keywords, foreign-crate items, and identifier conflicts. The refusal reason tells you whether a refactor is even possible before you commit.
+- **Dead-symbol verification.** If the only edit is the definition site, the symbol is truly unreferenced — even by macro-expanded callers that `who_uses` may miss.
+- **Cross-crate blast radius.** Group edits by crate path prefix to see whether a change is internal or touches a public API.
+- **Trait dispatch enumeration.** Renaming a trait method returns every `impl` method and every dispatch site, including RA-resolvable `dyn T` calls.
+- **Module / file rename preview.** `file_moves` shows the required filesystem reorganization for module-level renames.
+
+See `skills/rmc-rename-symbol/SKILL.md` for the full workflow.
+
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
