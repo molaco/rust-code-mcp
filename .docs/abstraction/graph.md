@@ -1,18 +1,34 @@
 # graph — Abstract Logic
 
+## Module: mod (graph::mod)
+**Purpose:** Module file declaring the `pub mod` set and re-exporting the graph crate's public API surface.
+
+1. **Declare every sub-module and re-export ids, model types, query result structs, snapshot/storage handles, and the audit findings** -> module declarations only
+
+---
+
+## Module: model
+**Purpose:** Define the in-memory ExtractionModel and its node/binding/usage/signature/static record types.
+
+1. **Type definitions for every node kind, item kind, binding kind, visibility, namespace, function-signature shape, and embedding record** -> `NodeKind`, `ItemKind`, `Namespace`, `BindingKind`, `BindingVisibility`, `Node`, `Binding`, `UsageCategory`, `Usage`, `FunctionSignature`, `SelfKind`, `Param`, `GenericBound`, `StaticMetadata`, `EmbeddingRecord`, `ExtractionModel`
+2. **Classify ItemKind for callability / type-ness** -> `ItemKind::is_callable()`, `ItemKind::is_type()`
+3. **Insert nodes idempotently and append contains-edges** -> `ExtractionModel::insert_node()`, `ExtractionModel::insert_contains()`
+
+---
+
+## Module: ids
+**Purpose:** Stable SHA-256-based identifiers for nodes, bindings, and usages, plus a workspace-root hash.
+
+1. **Build IDs by hashing a NUL-separated component list and render hex / debug forms** -> `BindingId::from_components()`, `UsageId::from_components()`, `NodeId::from_components()`, `BindingId::to_hex()`, `BindingId::as_bytes()`, `BindingId::fmt()`, `UsageId::to_hex()`, `UsageId::as_bytes()`, `UsageId::fmt()`, `NodeId::to_hex()`, `NodeId::as_bytes()`, `NodeId::fmt()`
+2. **Hash a workspace root path into a stable hex digest** -> `workspace_hash()`, `hex_encode()`
+3. **Round-trip 32-byte arrays through serde** -> `serde_bytes_32::serialize()`, `serde_bytes_32::deserialize()`
+
+---
+
 ## Module: ast_resolve
 **Purpose:** Resolve AST call expressions to HIR functions in a turbofish-safe way.
 
 1. **Resolve a call expression's callee to a HIR function, filtering out closures, fn pointers, and tuple constructors** -> `resolve_call_to_function()`
-
----
-
-## Module: attributes
-**Purpose:** Walk every local item and attach its outer attributes and doc comments to its graph node.
-
-1. **Attach DB, build Semantics, and recursively visit every reachable module per local crate** -> `extract_attributes()`, `visit_module()`
-2. **Dispatch on item kind (ADT, trait, assoc item) and fetch source AST per declaration** -> `visit_adt()`, `visit_assoc_item()`
-3. **Read outer attributes and normalize doc comments onto the target node** -> `set_attrs_for()`
 
 ---
 
@@ -27,12 +43,125 @@
 
 ---
 
+## Module: extract
+**Purpose:** Top-level orchestration that produces the full `ExtractionModel` from a loaded workspace.
+
+1. **Drive the extraction pipeline: workspace node, crates/modules, then bindings, impls, attributes, signatures, statics, usages** -> `extract()`
+2. **Emit Crate and Module nodes with contains-edges per local crate** -> `emit_crate()`
+3. **Compute crate display name and module path segments** -> `crate_display_name()`, `module_path_segments()`
+
+---
+
+## Module: impls
+**Purpose:** Emit Method, AssocConst, AssocType, and EnumVariant Item nodes from inherent impls, traits, and enums.
+
+1. **Walk inherent impls, traits, and enums per local crate; emit assoc items and variants** -> `extract_impl_items()`
+2. **Emit one assoc-item node with kind label, file/span, and contains-edge to the host** -> `emit_assoc_item()`
+3. **Emit one enum-variant Item node parented to the enum** -> `emit_enum_variant()`
+4. **Resolve workspace-relative file paths** -> `resolve_workspace_relative()`
+
+---
+
+## Module: usages
+**Purpose:** Emit a Usage row for every reference to every Item, classified by category and attributed to a consumer module/function.
+
+1. **Iterate Item defs, collect `Definition::usages` references, and emit per-reference Usage records with consumer-function attribution** -> `extract_usages()`
+2. **Map `ReferenceCategory` bitflags into a single `UsageCategory` by precedence** -> `classify_category()`
+3. **Resolve workspace-relative file paths** -> `resolve_workspace_relative()`
+
+---
+
+## Module: signatures
+**Purpose:** Build per-function structured signatures (async flag, self-kind, params, return type, generic bounds).
+
+1. **Iterate FunctionId defs, cache crate display targets, build and store one signature per fn** -> `extract_signatures()`
+2. **Assemble a `FunctionSignature` from HIR queries with type-string trimming** -> `build_signature()`
+
+---
+
+## Module: attributes
+**Purpose:** Walk every local item and attach its outer attributes and doc comments to its graph node.
+
+1. **Attach DB, build Semantics, and recursively visit every reachable module per local crate** -> `extract_attributes()`, `visit_module()`
+2. **Dispatch on item kind (ADT, trait, assoc item) and fetch source AST per declaration** -> `visit_adt()`, `visit_assoc_item()`
+3. **Read outer attributes and normalize doc comments onto the target node** -> `set_attrs_for()`
+
+---
+
+## Module: statics
+**Purpose:** Capture each `static`'s type string and `is_mut` flag for downstream audits.
+
+1. **Iterate StaticId defs, render trimmed type strings, and store metadata records** -> `extract_statics()`
+
+---
+
+## Module: snapshot
+**Purpose:** Persist an `ExtractionModel` to a content-addressed LMDB graph and open existing snapshots for read.
+
+1. **Build/persist a graph from a workspace directory, with reuse short-circuit on fingerprint match** -> `build_and_persist()`
+2. **Persist an already-loaded workspace, always rewriting the snapshot** -> `persist_loaded()`
+3. **Write all sub-DB rows (nodes, bindings, contains, usages, signatures, statics, meta) inside one txn** -> `write_model()`
+4. **Hash a binding/usage into a stable id** -> `binding_id_for()`, `usage_id_for()`
+5. **Atomically publish a new graph id via the `CURRENT` pointer** -> `publish_current()`, `now_unix()`
+6. **Open a stored snapshot via the `CURRENT` pointer or by explicit graph id** -> `open_current()`, `open_specific()`
+7. **Provide read/write transactions and direct node lookups** -> `OpenedSnapshot::read_txn()`, `OpenedSnapshot::write_txn()`, `OpenedSnapshot::node()`
+8. **Lazily build per-file span and line→byte caches used by codemap** -> `OpenedSnapshot::span_index()`, `OpenedSnapshot::line_to_byte()`
+
+---
+
+## Module: storage
+**Purpose:** Filesystem layout, env options, fingerprinting, manifest IO, and LMDB sub-DB creation/opening.
+
+1. **Constants and tunable env options for the heed environment** -> `SCHEMA_VERSION`, `CURRENT_POINTER_FILENAME`, `SNAPSHOTS_DIRNAME`, `MANIFEST_FILENAME`, `GraphEnvOptions`, `GraphEnvOptions::to_open_options()`
+2. **Resolve workspace-keyed paths for the snapshot tree** -> `GraphPaths::for_workspace()`, `GraphPaths::for_workspace_in()`, `GraphPaths::snapshot_dir()`, `GraphPaths::manifest_path()`, `GraphPaths::ensure_dirs()`, `default_data_dir()`
+3. **Compute content fingerprints and graph ids** -> `compute_fingerprint()`, `graph_id_for()`
+4. **Create or open the suite of typed LMDB sub-databases** -> `GraphDatabases::create()`, `GraphDatabases::open()`, `open_or_create_str_bytes()`, `open_or_create_bytes_bincode()`, `open_or_create_bytes_bytes()`
+5. **Read/write the JSON manifest with strict and permissive variants** -> `write_manifest()`, `read_manifest()`, `read_manifest_compatible()`
+6. **Internal dead-code marker keeping `BindingId` import alive** -> `_binding_id_marker()`
+
+---
+
+## Module: loader
+**Purpose:** Load a Cargo workspace into a populated `RootDatabase` + `Vfs` and filter to local crates.
+
+1. **Canonicalize the directory and run `ra_ap_load_cargo` with the standard config** -> `load()`
+2. **Filter the resulting crate list to those with local origin** -> `filter_local_crates()`
+
+---
+
+## Module: hir_trim
+**Purpose:** Clean noisy default type parameters out of HIR-display strings (e.g., `, Global>`, `RandomState`, `BuildHasherDefault`, `LazyLock` init fn).
+
+1. **Apply the full chain of trims to a HIR-display string** -> `trim_hir_display()`
+2. **Strip `BuildHasherDefault` and redundant `LazyLock` init-fn type args via depth-tracking scans** -> `strip_build_hasher_default()`, `strip_lazy_lock_init_fn()`
+
+---
+
+## Module: queries
+**Purpose:** Read-side query layer over the persisted snapshot — name lookup, imports/exports, dead-pub, call graph, audits, overlaps, module tree, workspace stats.
+
+1. **Type definitions for every query result row and audit record** -> `DeadPubFinding`, `CrateDeadPub`, `CrateEdge`, `EdgeSymbol`, `ForbiddenDependencyRule`, `ForbiddenDependencyViolation`, `OverlapsReport`, `TypeCollision`, `TypeLocation`, `ModuleShadow`, `WithinCrateDuplicate`, `CommonFnName`, `EnrichedCallSite`, `CallGraphNode`, `RecursiveCallersCount`, `UsageSummaryRow`, `ModuleTreeNode`, `WorkspaceStats`, `NodeKindCounts`, `VisibilityCounts`, `ItemWithAttribute`, `FunctionFilter`, `SelfKindFilter`, `FunctionWithSignature`, `PubTypeAliasMasqueradingAsReexport`, `ReExportLink`, `ReExportChain`, `CrateMetric`, `MutStaticFinding`
+2. **Resolve a qualified name to a node, following re-export hops up to a budget** -> `OpenedSnapshot::lookup_by_qualified_name()`, `OpenedSnapshot::lookup_by_qualified_name_inner()`
+3. **Direct LMDB lookups for nodes, signatures, statics, attributes, root modules** -> `OpenedSnapshot::node_by_id()`, `OpenedSnapshot::find_root_module_of()`, `OpenedSnapshot::function_signature()`, `OpenedSnapshot::static_metadata()`, `OpenedSnapshot::item_attributes()`
+4. **Module-scoped import/export queries with visibility filtering** -> `OpenedSnapshot::imports_of()`, `OpenedSnapshot::exports_of()`, `OpenedSnapshot::reexports_of()`, `OpenedSnapshot::declared_reexports_of()`
+5. **Reverse-import and usage queries** -> `OpenedSnapshot::who_imports()`, `OpenedSnapshot::usages_of()`, `OpenedSnapshot::usages_in()`, `OpenedSnapshot::who_uses_summary()`
+6. **Call-graph queries (forward, backward, recursive, scoped)** -> `OpenedSnapshot::who_calls()`, `OpenedSnapshot::calls_from()`, `OpenedSnapshot::call_graph()`, `OpenedSnapshot::call_graph_rec()`, `OpenedSnapshot::callers_in_crate()`, `OpenedSnapshot::recursive_callers_count()`
+7. **Callee/referrer edge primitives used by codemap** -> `OpenedSnapshot::callees_of()`, `OpenedSnapshot::referrers_of()`
+8. **Workspace audits: dead-pub, mut-static, missing-docs (via filter), attribute search, function filtering, pub-use-as-type-alias** -> `OpenedSnapshot::dead_pub_in_crate()`, `OpenedSnapshot::dead_pub_report()`, `OpenedSnapshot::mut_static_audit()`, `classify_metadata()`, `OpenedSnapshot::items_with_attribute()`, `OpenedSnapshot::functions_with_filter()`, `OpenedSnapshot::pub_use_pub_type_audit()`
+9. **Cross-crate edges and metrics** -> `OpenedSnapshot::crate_edges()`, `OpenedSnapshot::forbidden_dependency_check()`, `OpenedSnapshot::crate_dependency_metric()`
+10. **Re-export chain BFS and overlaps/collision report** -> `OpenedSnapshot::re_export_chain()`, `OpenedSnapshot::overlaps()`
+11. **Module-tree dump and workspace counters** -> `OpenedSnapshot::module_tree()`, `OpenedSnapshot::build_module_tree()`, `OpenedSnapshot::workspace_stats()`
+12. **Enum variants and unsafe-audit dispatch** -> `OpenedSnapshot::enum_variants()`, `OpenedSnapshot::unsafe_audit()`
+13. **Internal DUP_SORT iterators and label/format helpers** -> `bindings_for_from_module()`, `bindings_for_target()`, `usages_for_target()`, `usages_for_consumer()`, `usages_for_consumer_function()`, `module_ancestors()`, `label_node_kind()`, `label_item_kind()`, `label_binding_kind()`, `glob_match()`, `usage_category_label()`, `match_attribute()`, `format_binding_visibility()`, `filter_matches()`, `is_visible_from()`
+
+---
+
 ## Module: channel_audit
 **Purpose:** Detect and classify channel-constructor call sites (tokio/std/crossbeam/flume) with capacity extraction.
 
 1. **Classify a canonical path as a known channel constructor and parse capacity literals** -> `classify_channel_path()`, `parse_capacity_arg()`, `extract_int_literal()`
-2. **Walk every local file's AST, resolve call expressions, classify, and emit findings** -> `channel_audit()`
-3. **Resolve enclosing fn and skip cfg(test)-gated sites; resolve workspace-relative paths** -> `resolve_enclosing_function()`, `enclosed_by_cfg_test()`, `item_has_cfg_test()`, `resolve_workspace_relative()`, `canonical_function_path()`
+2. **Walk every local file's AST, resolve call expressions, classify, and emit findings** -> `channel_capacity_audit()`
+3. **Resolve enclosing fn, skip cfg(test)-gated sites, and resolve workspace-relative paths** -> `resolve_enclosing_function()`, `enclosed_by_cfg_test()`, `item_has_cfg_test()`, `resolve_workspace_relative()`, `canonical_function_path()`
 
 ---
 
@@ -53,15 +182,6 @@
 
 ---
 
-## Module: extract
-**Purpose:** Top-level orchestration that produces the full `ExtractionModel` from a loaded workspace.
-
-1. **Drive the extraction pipeline: workspace node, crates/modules, then bindings, impls, attributes, signatures, statics, usages** -> `extract()`
-2. **Emit Crate and Module nodes with contains-edges per local crate** -> `emit_crate()`
-3. **Compute crate display name and module path segments** -> `crate_display_name()`, `module_path_segments()`
-
----
-
 ## Module: fn_body_audit
 **Purpose:** Pattern-match function bodies for risky idioms (unwrap, panic macros, unbounded loops, await-while-holding-guard, transmute, self-recursion).
 
@@ -69,74 +189,6 @@
 2. **Per-pattern matchers that walk a fn body's syntax to record raw findings** -> `match_unwrap()`, `match_expect()`, `match_panic_macros()`, `match_unwrap_unchecked()`, `match_unbounded_loop()`, `match_await_in_guard_scope()`, `match_transmute()`, `match_self_recursion()`
 3. **Drive the audit: parse files, walk fn bodies, run enabled matchers, attach context strings** -> `fn_body_audit()`, `build_context()`
 4. **Resolve enclosing fn and helpers shared with channel_audit** -> `enclosing_fn_for_body_offset()`, `canonical_function_path()`, `enclosed_by_cfg_test()`, `item_has_cfg_test()`, `resolve_workspace_relative()`
-
----
-
-## Module: hir_trim
-**Purpose:** Clean noisy default type parameters out of HIR-display strings (e.g., `, Global>`, `RandomState`, `BuildHasherDefault`, `LazyLock` init fn).
-
-1. **Apply the full chain of trims to a HIR-display string** -> `trim_hir_display()`
-2. **Strip `BuildHasherDefault` and redundant `LazyLock` init-fn type args via depth-tracking scans** -> `strip_build_hasher_default()`, `strip_lazy_lock_init_fn()`
-
----
-
-## Module: ids
-**Purpose:** Stable SHA-256-based identifiers for nodes, bindings, and usages, plus a workspace-root hash.
-
-1. **Build IDs by hashing a NUL-separated component list and render hex / debug forms** -> `BindingId::from_components()`, `UsageId::from_components()`, `NodeId::from_components()`, `BindingId::to_hex()`, `BindingId::as_bytes()`, `BindingId::fmt()`, `UsageId::to_hex()`, `UsageId::as_bytes()`, `UsageId::fmt()`, `NodeId::to_hex()`, `NodeId::as_bytes()`, `NodeId::fmt()`
-2. **Hash a workspace root path into a stable hex digest** -> `workspace_hash()`, `hex_encode()`
-3. **Round-trip 32-byte arrays through serde** -> `serde_bytes_32::serialize()`, `serde_bytes_32::deserialize()`
-
----
-
-## Module: impls
-**Purpose:** Emit Method, AssocConst, AssocType, and EnumVariant Item nodes from inherent impls, traits, and enums.
-
-1. **Walk inherent impls, traits, and enums per local crate; emit assoc items and variants** -> `extract_impl_items()`
-2. **Emit one assoc-item node with kind label, file/span, and contains-edge to the host** -> `emit_assoc_item()`
-3. **Emit one enum-variant Item node parented to the enum** -> `emit_enum_variant()`
-4. **Resolve workspace-relative file paths** -> `resolve_workspace_relative()`
-
----
-
-## Module: loader
-**Purpose:** Load a Cargo workspace into a populated `RootDatabase` + `Vfs` and filter to local crates.
-
-1. **Canonicalize the directory and run `ra_ap_load_cargo` with the standard config** -> `load()`
-2. **Filter the resulting crate list to those with local origin** -> `filter_local_crates()`
-
----
-
-## Module: model
-**Purpose:** Define the in-memory ExtractionModel and its node/binding/usage/signature/static record types.
-
-1. **Type definitions for every node kind, item kind, binding kind, visibility, namespace, and metadata struct** -> `NodeKind`, `ItemKind`, `Namespace`, `BindingKind`, `BindingVisibility`, `Node`, `Binding`, `UsageCategory`, `Usage`, `FunctionSignature`, `SelfKind`, `Param`, `GenericBound`, `StaticMetadata`, `EmbeddingRecord`, `ExtractionModel`
-2. **Insert nodes idempotently and append contains-edges** -> `ExtractionModel::insert_node()`, `ExtractionModel::insert_contains()`
-
----
-
-## Module: mod (graph::mod)
-**Purpose:** Module file declaring the `pub mod` set and re-exporting the graph crate's public API surface.
-
-1. **Re-export `extract`, `ids`, `loader`, `model`, `queries`, `snapshot`, `storage`, `unsafe_audit` etc.** -> module declarations only
-
----
-
-## Module: queries
-**Purpose:** Read-side query layer over the persisted snapshot — name lookup, imports/exports, dead-pub, call graph, audits, overlaps, module tree, workspace stats.
-
-1. **Type definitions for every query result row and audit record** -> `DeadPubFinding`, `CrateDeadPub`, `CrateEdge`, `EdgeSymbol`, `ForbiddenDependencyRule`, `ForbiddenDependencyViolation`, `OverlapsReport`, `TypeCollision`, `TypeLocation`, `ModuleShadow`, `WithinCrateDuplicate`, `CommonFnName`, `EnrichedCallSite`, `CallGraphNode`, `RecursiveCallersCount`, `UsageSummaryRow`, `ModuleTreeNode`, `WorkspaceStats`, `NodeKindCounts`, `VisibilityCounts`, `ItemWithAttribute`, `FunctionFilter`, `SelfKindFilter`, `FunctionWithSignature`, `PubTypeAliasMasqueradingAsReexport`, `ReExportLink`, `ReExportChain`, `CrateMetric`, `MutStaticFinding`
-2. **Resolve a qualified name to a node, following re-export hops up to a budget** -> `OpenedSnapshot::lookup_by_qualified_name()`, `OpenedSnapshot::lookup_by_qualified_name_inner()`
-3. **Direct LMDB lookups for nodes, signatures, statics, attributes, root modules** -> `OpenedSnapshot::node_by_id()`, `OpenedSnapshot::find_root_module_of()`, `OpenedSnapshot::function_signature()`, `OpenedSnapshot::static_metadata()`, `OpenedSnapshot::item_attributes()`
-4. **Module-scoped import/export queries with visibility filtering** -> `OpenedSnapshot::imports_of()`, `OpenedSnapshot::exports_of()`, `OpenedSnapshot::reexports_of()`, `OpenedSnapshot::declared_reexports_of()`
-5. **Reverse-import and usage queries** -> `OpenedSnapshot::who_imports()`, `OpenedSnapshot::usages_of()`, `OpenedSnapshot::usages_in()`, `OpenedSnapshot::who_uses_summary()`
-6. **Call-graph queries (forward, backward, recursive, scoped)** -> `OpenedSnapshot::who_calls()`, `OpenedSnapshot::calls_from()`, `OpenedSnapshot::call_graph()`, `OpenedSnapshot::call_graph_rec()`, `OpenedSnapshot::callers_in_crate()`, `OpenedSnapshot::recursive_callers_count()`
-7. **Workspace audits: dead-pub, mut-static, missing-docs, attribute search, function filtering, pub-use-as-type-alias** -> `OpenedSnapshot::dead_pub_in_crate()`, `OpenedSnapshot::dead_pub_report()`, `OpenedSnapshot::mut_static_audit()`, `classify_metadata()`, `OpenedSnapshot::items_with_attribute()`, `OpenedSnapshot::functions_with_filter()`, `OpenedSnapshot::pub_use_pub_type_audit()`
-8. **Cross-crate edges and metrics** -> `OpenedSnapshot::crate_edges()`, `OpenedSnapshot::forbidden_dependency_check()`, `OpenedSnapshot::crate_dependency_metric()`
-9. **Re-export chain BFS and overlaps/collision report** -> `OpenedSnapshot::re_export_chain()`, `OpenedSnapshot::overlaps()`
-10. **Module-tree dump and workspace counters** -> `OpenedSnapshot::module_tree()`, `OpenedSnapshot::build_module_tree()`, `OpenedSnapshot::workspace_stats()`
-11. **Enum variants and unsafe-audit dispatch** -> `OpenedSnapshot::enum_variants()`, `OpenedSnapshot::unsafe_audit()`
-12. **Internal DUP_SORT iterator and label/format helpers** -> `bindings_for_from_module()`, `bindings_for_target()`, `usages_for_target()`, `usages_for_consumer()`, `usages_for_consumer_function()`, `module_ancestors()`, `label_node_kind()`, `label_item_kind()`, `label_binding_kind()`, `glob_match()`, `usage_category_label()`, `match_attribute()`, `format_binding_visibility()`, `filter_matches()`, `is_visible_from()`
 
 ---
 
@@ -149,46 +201,6 @@
 
 ---
 
-## Module: signatures
-**Purpose:** Build per-function structured signatures (async flag, self-kind, params, return type, generic bounds).
-
-1. **Iterate FunctionId defs, cache crate display targets, build and store one signature per fn** -> `extract_signatures()`
-2. **Assemble a `FunctionSignature` from HIR queries with type-string trimming** -> `build_signature()`
-
----
-
-## Module: snapshot
-**Purpose:** Persist an `ExtractionModel` to a content-addressed LMDB graph and open existing snapshots for read.
-
-1. **Build/persist a graph from a workspace directory, with reuse short-circuit on fingerprint match** -> `build_and_persist()`
-2. **Persist an already-loaded workspace, always rewriting the snapshot** -> `persist_loaded()`
-3. **Write all sub-DB rows (nodes, bindings, contains, usages, signatures, statics, meta) inside one txn** -> `write_model()`
-4. **Hash a binding/usage into a stable id** -> `binding_id_for()`, `usage_id_for()`
-5. **Atomically publish a new graph id via the `CURRENT` pointer** -> `publish_current()`, `now_unix()`
-6. **Open a stored snapshot via the `CURRENT` pointer or by explicit graph id** -> `open_current()`, `open_specific()`
-7. **Provide read/write transactions and direct node lookups** -> `OpenedSnapshot::read_txn()`, `OpenedSnapshot::write_txn()`, `OpenedSnapshot::node()`
-
----
-
-## Module: statics
-**Purpose:** Capture each `static`'s type string and `is_mut` flag for downstream audits.
-
-1. **Iterate StaticId defs, render trimmed type strings, and store metadata records** -> `extract_statics()`
-
----
-
-## Module: storage
-**Purpose:** Filesystem layout, env options, fingerprinting, manifest IO, and LMDB sub-DB creation/opening.
-
-1. **Constants and tunable env options for the heed environment** -> `SCHEMA_VERSION`, `CURRENT_POINTER_FILENAME`, `SNAPSHOTS_DIRNAME`, `MANIFEST_FILENAME`, `GraphEnvOptions`, `GraphEnvOptions::to_open_options()`
-2. **Resolve workspace-keyed paths for the snapshot tree** -> `GraphPaths::for_workspace()`, `GraphPaths::for_workspace_in()`, `GraphPaths::snapshot_dir()`, `GraphPaths::manifest_path()`, `GraphPaths::ensure_dirs()`, `default_data_dir()`
-3. **Compute content fingerprints and graph ids** -> `compute_fingerprint()`, `graph_id_for()`
-4. **Create or open the suite of typed LMDB sub-databases** -> `GraphDatabases::create()`, `GraphDatabases::open()`, `open_or_create_str_bytes()`, `open_or_create_bytes_bincode()`, `open_or_create_bytes_bytes()`
-5. **Read/write the JSON manifest with strict and permissive variants** -> `write_manifest()`, `read_manifest()`, `read_manifest_compatible()`
-6. **Internal dead-code marker keeping `BindingId` import alive** -> `_binding_id_marker()`
-
----
-
 ## Module: unsafe_audit
 **Purpose:** Find every `unsafe { }` block, attribute span/line metadata, SAFETY-comment heuristic, and enclosing fn.
 
@@ -198,9 +210,16 @@
 
 ---
 
-## Module: usages
-**Purpose:** Emit a Usage row for every reference to every Item, classified by category and attributed to a consumer module/function.
+## Module: codemap
+**Purpose:** Build a task-conditioned subgraph (seeds, BFS-expanded neighborhood, scored/pruned nodes, projected module hierarchy) and render it as JSON, Mermaid, or outline text.
 
-1. **Iterate Item defs, collect `Definition::usages` references, and emit per-reference Usage records** -> `extract_usages()`
-2. **Map `ReferenceCategory` bitflags into a single `UsageCategory` by precedence** -> `classify_category()`
-3. **Resolve workspace-relative file paths** -> `resolve_workspace_relative()`
+1. **Type definitions for the codemap payload, node/edge records, options, and embedding policy** -> `Codemap`, `CodemapNode`, `CodemapEdge`, `EdgeKind`, `CodemapStats`, `CodemapOptions`, `EmbeddingPolicy`
+2. **Locate the narrowest enclosing Item for a workspace-relative line range and canonicalize file paths to match `Node.file`** -> `enclosing_item_for_line_range()`, `canonicalize_and_strip()`
+3. **Top-level pipeline: resolve seeds, BFS-expand, score (BM25 + proximity + cosine), prune to budget, project hierarchy, assemble nodes/edges** -> `build_codemap()`
+4. **Seed resolution from override names or search hits, and BM25 score accumulation per node** -> `resolve_override_seeds()`, `resolve_search_seeds()`, `build_bm25_by_node()`
+5. **Rank incoming-edge referrers and look up qualified names** -> `rank_referrer()`, `node_qualified_name()`
+6. **Cap retained nodes to the configured budget while preserving seeds** -> `prune_to_budget()`
+7. **Convert byte offsets to lines and extract bounded source snippets** -> `line_of_byte()`, `extract_snippet()`
+8. **Project the retained node set into a filtered module-tree hierarchy** -> `project_hierarchy()`, `filter_module_tree()`
+9. **Render the assembled codemap as Mermaid flowchart or indented outline text** -> `render_mermaid()`, `render_outline()`, `short_node_id()`, `sanitize_mermaid_id()`, `escape_label()`
+10. **Compute the newest `.rs` file mtime for snapshot-freshness diagnostics** -> `newest_source_mtime()`

@@ -4,6 +4,7 @@
 
 The crate root `src/lib.rs` is a thin module-declaration manifest. It contains no executable logic of its own; it only declares the public modules that compose the crate and sets a crate-wide lint configuration.
 
+- Doc comment: `//! Rust Code MCP - Scalable code search for large Rust codebases` with the sub-line `//! Library modules for the MCP server`.
 - Lint attribute: `#![warn(unreachable_pub, dead_code)]`.
 - Public modules declared (in order): `chunker`, `config`, `embeddings`, `indexing`, `mcp`, `metadata_cache`, `metrics`, `monitoring`, `parser`, `schema`, `search`, `security`, `tools`, `vector_store`, `semantic`, `graph`.
 - A commented-out reservation exists for `pub mod watcher;` (planned future module).
@@ -20,7 +21,7 @@ The binary entrypoint for the MCP server. Wires up tracing, constructs the backg
 **Annotations:** Decorated with `#[tokio::main]`, so the async function is wrapped in a Tokio multi-thread runtime by the macro at compile time.
 
 **Steps:**
-1. Build a `tracing` `EnvFilter`. Try to parse the filter from the `RUST_LOG` environment variable via `EnvFilter::try_from_default_env`; on error fall back to a hard-coded default `"warn,file_search_mcp=info"` (WARN globally, INFO for the crate). The hand-written rationale comment notes that rust-analyzer floods debug logs and that keeping global level at WARN avoids a 7s -> 7+ minute regression in `build_hypergraph` caused purely by log formatting overhead.
+1. Build a `tracing` `EnvFilter`. Try to parse the filter from the `RUST_LOG` environment variable via `EnvFilter::try_from_default_env`; on error fall back to a hard-coded default `"warn,file_search_mcp=info"` (WARN globally, INFO for the crate). The in-source rationale comment notes that rust-analyzer floods debug logs and that keeping the global level at WARN avoids a 7s -> 7+ minute regression in `build_hypergraph` caused purely by log formatting overhead.
 2. Initialize the global tracing subscriber: `tracing_subscriber::fmt()` with the chosen `EnvFilter`, writer set to `std::io::stderr` (stdout is reserved for the MCP stdio protocol), and ANSI escapes disabled (`with_ansi(false)`); call `.init()` to install it as the global default.
 3. Emit `tracing::info!("Starting MCP Server...")`.
 4. Construct the background sync manager: `SyncManager::with_defaults(300)` (5-minute interval) wrapped in an `Arc` so it can be shared with the spawned task and the `SearchTool`. Log `"Created background sync manager (5-minute interval)"`.
@@ -29,6 +30,77 @@ The binary entrypoint for the MCP server. Wires up tracing, constructs the backg
 7. If `serve(...).await` returns an error, `inspect_err` logs it via `tracing::error!("serving error: {:?}", e)` before propagating the error with `?`.
 8. On success, call `service.waiting().await` to block the task until the rmcp service finishes (typically when stdin closes or the client disconnects). Propagate any error via `?`.
 9. Return `Ok(())`.
+
+## Module: config.rs
+
+The top-level configuration module. It re-exports two submodule namespaces (`errors`, `indexer`) and defines the global `Config` struct populated either from defaults or from environment variables. This is the server's process-wide knob panel (port, data directory, file-size limit, threading, retry policy, debug flag).
+
+The file also declares the two submodules with `pub mod errors;` and `pub mod indexer;`.
+
+### Re-exports
+- `pub use errors::{Error, ErrorContextExt, Result};` — the crate-wide error type, the `?`-friendly `Result` alias, and the `ErrorContextExt` trait for attaching context to errors.
+- `pub use indexer::{IndexerConfig, IndexerCoreConfig, TantivyConfig};` — indexer-specific config types.
+
+### `struct Config`
+Derives `Debug, Clone`. Public fields:
+- `server_port: u16` — MCP server port (default `3000`).
+- `data_dir: PathBuf` — root directory for indexes and cache.
+- `max_file_size: u64` — maximum file size to index, in bytes (default `10_000_000`).
+- `num_threads: usize` — parallel worker count, `0` means auto-detect.
+- `debug: bool` — extra logging flag.
+- `retry_attempts: u32` — retry budget for transient failures (default `3`).
+- `retry_delay_ms: u64` — initial retry delay in milliseconds (default `100`).
+
+### `impl Default for Config`
+#### `default() -> Self`
+**Call graph:** `Config::default` -> `default_data_dir`, `PathBuf::from`
+
+**Steps:**
+1. Construct a `Config` literal with `server_port: 3000`, `data_dir: default_data_dir()`, `max_file_size: 10_000_000` (10 MB), `num_threads: 0` (auto-detect), `debug: false`, `retry_attempts: 3`, `retry_delay_ms: 100`.
+2. Return it.
+
+### `Config::from_env() -> Self`
+**Call graph:** `Config::from_env` -> `Config::default`, `std::env::var`, `str::parse::<u16>`, `PathBuf::from`, `str::parse::<u64>`, `str::parse::<usize>`, `str::eq_ignore_ascii_case`, `str::parse::<u32>`
+
+**Steps:**
+1. Start from `Self::default()`.
+2. If `SERVER_PORT` is set and parses as `u16`, overwrite `config.server_port`. A parse failure is silently ignored, leaving the default.
+3. If `DATA_DIR` is set, overwrite `config.data_dir` with `PathBuf::from(dir)`.
+4. If `MAX_FILE_SIZE` is set and parses as `u64`, multiply by `1_000_000` (interpret env value as megabytes) and store in `config.max_file_size`.
+5. If `NUM_THREADS` is set and parses as `usize`, overwrite `config.num_threads`.
+6. If `DEBUG` is set, treat it as truthy when it equals `"true"` (case-insensitive) or `"1"`.
+7. If `RETRY_ATTEMPTS` is set and parses as `u32`, overwrite `config.retry_attempts`.
+8. If `RETRY_DELAY_MS` is set and parses as `u64`, overwrite `config.retry_delay_ms`.
+9. Return the populated `config`. Parse failures on any var are silently ignored; the prior (default or previously-overridden) value is kept.
+
+### `Config::tantivy_dir(&self) -> PathBuf`
+**Call graph:** `Config::tantivy_dir` -> `PathBuf::join`
+
+**Steps:**
+1. Return `self.data_dir.join("tantivy")`.
+
+### `Config::cache_dir(&self) -> PathBuf`
+**Call graph:** `Config::cache_dir` -> `PathBuf::join`
+
+**Steps:**
+1. Return `self.data_dir.join("cache")`.
+
+### `Config::print_summary(&self)`
+**Call graph:** `Config::print_summary` -> `usize::to_string`, `tracing::info!`, `Path::display`
+
+**Steps:**
+1. Compute a human-readable threads value: `"auto"` if `self.num_threads == 0`, else `self.num_threads.to_string()`.
+2. Emit one structured `tracing::info!` event tagged `"Configuration summary"` with fields `server_port`, `data_dir` (via `Display`), `max_file_size_mb` (= `self.max_file_size / 1_000_000`), `threads`, `debug`, `retry_attempts`, `retry_delay_ms`.
+
+The doc comment explicitly warns that MCP stdio servers must keep stdout for JSON-RPC; that is why this method logs via `tracing` (stderr) instead of `println!`.
+
+### `default_data_dir() -> PathBuf` (private)
+**Call graph:** `default_data_dir` -> `directories::ProjectDirs::from`, `ProjectDirs::data_dir`, `Path::to_path_buf`, `PathBuf::from`
+
+**Steps:**
+1. Call `directories::ProjectDirs::from("com", "rust-code-mcp", "rust-code-mcp")` to discover the OS-appropriate data directory.
+2. If `Some(dirs)`: return `dirs.data_dir().to_path_buf()` (e.g. `~/.local/share/rust-code-mcp` on Linux).
+3. If `None`: fall back to `PathBuf::from("./data")` (current working directory).
 
 ## Module: schema.rs
 

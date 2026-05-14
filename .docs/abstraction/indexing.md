@@ -1,43 +1,43 @@
 # indexing — Abstract Logic
 
 ## Module: mod
-**Purpose:** Declares submodules and re-exports the public indexing surface.
+**Purpose:** Declares the submodules and re-exports the public indexing surface.
 
 1. **Expose submodules and public types** -> `consistency`, `embedding_batcher`, `error`, `errors`, `file_processor`, `incremental`, `indexer_core`, `merkle`, `retry`, `tantivy_adapter`, `unified`
 
 ## Module: consistency
-**Purpose:** Cross-checks Tantivy and vector-store contents to detect divergence.
+**Purpose:** Cross-checks Tantivy and the vector store to detect index divergence.
 
-1. **Build a checker bundling Tantivy, vector store, and schema** -> `ConsistencyChecker::new()`
+1. **Build a checker bundling the Tantivy index, vector store, and schema** -> `ConsistencyChecker::new()`
 2. **Run a count-based consistency comparison and produce a report** -> `ConsistencyChecker::check()`
-3. **Enumerate stored chunk IDs from Tantivy segments** -> `ConsistencyChecker::get_tantivy_chunk_ids()`
-4. **Log a structured summary of the report** -> `ConsistencyReport::print_summary()`
-5. **Stub for future divergence repair** -> `ConsistencyChecker::repair()`
+3. **Enumerate every stored chunk ID across Tantivy segments** -> `ConsistencyChecker::get_tantivy_chunk_ids()`
+4. **Emit a structured summary log of the report** -> `ConsistencyReport::print_summary()`
+5. **Placeholder for future divergence repair** -> `ConsistencyChecker::repair()`
 
 ## Module: embedding_batcher
 **Purpose:** Batches chunk embedding generation under memory- and GPU-aware limits.
 
 1. **Construct the batcher with a generator and GPU batch size** -> `EmbeddingBatcher::new()`
-2. **Embed code chunks in fixed-size GPU batches** -> `EmbeddingBatcher::generate_embeddings_batched()`
-3. **Compute a memory-/CPU-aware safe batch size** -> `EmbeddingBatcher::calculate_safe_batch_size()`
+2. **Embed chunks in fixed-size GPU windows** -> `EmbeddingBatcher::generate_embeddings_batched()`
+3. **Compute a memory- and CPU-aware safe batch size** -> `EmbeddingBatcher::calculate_safe_batch_size()`
 4. **Expose memory-monitor diagnostics** -> `EmbeddingBatcher::memory_usage_percent()`, `EmbeddingBatcher::refresh_memory_monitor()`, `EmbeddingBatcher::memory_used_bytes()`
 5. **Provide access to the underlying embedding generator** -> `EmbeddingBatcher::embedding_generator()`
 
 ## Module: error
 **Purpose:** Defines the unified indexing error type.
 
-1. **Enumerate I/O, embedding, vector-store, parser, and cache failure variants** -> `IndexingError`
+1. **Enumerate I/O, embedding, vector-store, parser, and cache failure variants with transparent `From` conversions** -> `IndexingError`
 
 ## Module: errors
-**Purpose:** Collects, categorizes, and queries per-file indexing errors.
+**Purpose:** Collects, categorizes, and queries per-file indexing errors across worker threads.
 
 1. **Construct an empty thread-safe error collector** -> `ErrorCollector::new()`, `ErrorCollector::default()`
 2. **Record and clear collected errors** -> `ErrorCollector::record()`, `ErrorCollector::clear()`
-3. **Query collected errors by count, total list, or category** -> `ErrorCollector::error_count()`, `ErrorCollector::get_errors()`, `ErrorCollector::errors_by_category()`
+3. **Query collected errors by count, list, or category** -> `ErrorCollector::error_count()`, `ErrorCollector::get_errors()`, `ErrorCollector::errors_by_category()`
 4. **Classify an error as permanent or transient by message keywords** -> `categorize_error()`
 
 ## Module: file_processor
-**Purpose:** Filters, change-detects, and persists per-file metadata before indexing.
+**Purpose:** Filters, change-detects, and persists per-file metadata before parsing.
 
 1. **Initialize cache, secrets scanner, and sensitive-file filter** -> `FileProcessor::new()`
 2. **Decide whether a file should be processed by sensitivity and size** -> `FileProcessor::should_process_file()`
@@ -47,20 +47,20 @@
 6. **Expose and clear the underlying metadata cache** -> `FileProcessor::metadata_cache()`, `FileProcessor::clear_metadata_cache()`
 
 ## Module: incremental
-**Purpose:** Drives Merkle-snapshot–based incremental reindexing of a codebase.
+**Purpose:** Drives Merkle-snapshot-based incremental reindexing of a codebase.
 
 1. **Resolve the per-codebase snapshot path under the data directory** -> `get_snapshot_path()`
 2. **Build the incremental wrapper around an embedded `UnifiedIndexer`** -> `IncrementalIndexer::new()`
-3. **Run change-detected indexing using saved vs. fresh Merkle trees** -> `IncrementalIndexer::index_with_change_detection()`
-4. **Compute and apply per-file diffs (added/modified/deleted)** -> `IncrementalIndexer::incremental_update()`, `IncrementalIndexer::process_changes()`
-5. **Expose the inner unified indexer and clear-all passthrough** -> `IncrementalIndexer::indexer()`, `IncrementalIndexer::indexer_mut()`, `IncrementalIndexer::clear_all_data()`
+3. **Run change-detected indexing using saved vs fresh Merkle trees** -> `IncrementalIndexer::index_with_change_detection()`
+4. **Compute and apply per-file diffs (added, modified, deleted)** -> `IncrementalIndexer::incremental_update()`, `IncrementalIndexer::process_changes()`
+5. **Expose the inner unified indexer and forward bulk clears** -> `IncrementalIndexer::indexer()`, `IncrementalIndexer::indexer_mut()`, `IncrementalIndexer::clear_all_data()`
 
 ## Module: indexer_core
 **Purpose:** Bundles file processing, parsing, chunking, and embedding into a single per-file pipeline.
 
 1. **Assemble file processor, chunker, and embedding batcher from config** -> `IndexerCore::new()`
 2. **Forward file gating and change-detection to the file processor** -> `IndexerCore::should_process_file()`, `IndexerCore::has_stat_changed()`, `IndexerCore::has_file_changed()`, `IndexerCore::update_file_metadata()`, `IndexerCore::metadata_cache()`, `IndexerCore::clear_metadata_cache()`
-3. **Parse and chunk a single file synchronously with timing** -> `IndexerCore::process_file_sync()`
+3. **Parse and chunk one file synchronously with timing** -> `IndexerCore::process_file_sync()`
 4. **Forward batched embedding and memory diagnostics** -> `IndexerCore::generate_embeddings_batched()`, `IndexerCore::calculate_safe_batch_size()`, `IndexerCore::memory_usage_percent()`, `IndexerCore::refresh_memory_monitor()`, `IndexerCore::memory_used_bytes()`, `IndexerCore::embedding_generator()`
 
 ## Module: merkle
@@ -86,21 +86,21 @@
 1. **Open or create a Tantivy index sized to the configured memory budget** -> `TantivyAdapter::new()`
 2. **Insert one or many chunks as Tantivy documents** -> `TantivyAdapter::index_chunk()`, `TantivyAdapter::index_chunks()`
 3. **Delete chunks by file path or wipe the index** -> `TantivyAdapter::delete_file_chunks()`, `TantivyAdapter::delete_all()`
-4. **Commit or roll back pending writes** -> `TantivyAdapter::commit()`, `TantivyAdapter::rollback()`, `TantivyAdapter::drop()`
+4. **Commit, roll back, or release the writer on drop** -> `TantivyAdapter::commit()`, `TantivyAdapter::rollback()`, `TantivyAdapter::drop()`
 5. **Expose the underlying index, schema, and BM25 searcher** -> `TantivyAdapter::index()`, `TantivyAdapter::schema()`, `TantivyAdapter::create_bm25_search()`
 
 ## Module: unified
-**Purpose:** Top-level indexer that coordinates parsing, embedding, Tantivy, and the vector store across files and directories.
+**Purpose:** Top-level indexer coordinating parsing, embedding, Tantivy, and the vector store across files and directories.
 
-1. **Provide a default-zero stats sentinel** -> `IndexStats::unchanged()`
+1. **Provide a default-zero stats sentinel for unchanged runs** -> `IndexStats::unchanged()`
 2. **Construct the embedded indexer wiring all subsystems** -> `UnifiedIndexer::for_embedded()`
 3. **Index one file end-to-end through both stores** -> `UnifiedIndexer::index_file()`
 4. **Index a directory sequentially or with periodic backups** -> `UnifiedIndexer::index_directory()`, `UnifiedIndexer::index_directory_with_backup()`
 5. **Index a directory in parallel batches with memory throttling** -> `UnifiedIndexer::index_directory_parallel()`
 6. **Walk a directory to enumerate `.rs` files** -> `UnifiedIndexer::collect_rust_files()`
-7. **Drain and account for batch parse errors** -> `UnifiedIndexer::process_batch_errors()`
-8. **Embed and write a parsed batch into Tantivy and the vector store** -> `UnifiedIndexer::process_and_index_batch()`
+7. **Drain and account for batch parse errors by category** -> `UnifiedIndexer::process_batch_errors()`
+8. **Embed and dual-write a parsed batch into Tantivy and the vector store** -> `UnifiedIndexer::process_and_index_batch()`
 9. **Aggregate and log run metrics at the end of an indexing pass** -> `UnifiedIndexer::finalize_metrics()`
-10. **Delete a file's chunks, commit, or wipe everything** -> `UnifiedIndexer::delete_file_chunks()`, `UnifiedIndexer::commit()`, `UnifiedIndexer::clear_all_data()`
+10. **Delete one file's chunks, commit, or wipe all stored data** -> `UnifiedIndexer::delete_file_chunks()`, `UnifiedIndexer::commit()`, `UnifiedIndexer::clear_all_data()`
 11. **Expose Tantivy index, schema, vector store, embedder, metrics, and BM25 searcher** -> `UnifiedIndexer::tantivy_index()`, `UnifiedIndexer::tantivy_schema()`, `UnifiedIndexer::vector_store_cloned()`, `UnifiedIndexer::embedding_generator_cloned()`, `UnifiedIndexer::metrics()`, `UnifiedIndexer::create_bm25_search()`
 12. **Log indexer teardown** -> `UnifiedIndexer::drop()`

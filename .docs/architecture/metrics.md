@@ -2,96 +2,88 @@
 
 ## Overview
 
-The `metrics` module aggregates indexing-time observability data: file/error counters, per-phase durations, latency samples, and host memory snapshots. It exposes pure, single-threaded value types (`IndexingMetrics`, `PhaseTimer`, `MemoryMonitor`) that callers populate during indexing and then query for derived statistics (throughput, p50/p95/p99, error rate, memory percent), with a single structured `tracing::info!` event as the only external sink.
+The `metrics` module is the indexing pipeline's observability layer: it aggregates file/error counters, per-phase durations, per-file latency samples, and host memory snapshots into plain owned value types, then derives throughput/percentile/error-rate statistics on demand. Its single export path is a structured `tracing::info!` event — never `println!`/stdout, which the MCP stdio transport reserves for JSON-RPC frames.
 
 ## Mermaid diagram
 
 ```mermaid
 graph TD
-    subgraph caller["Indexer / pipeline (external)"]
+    subgraph collectors["Collectors (caller-driven)"]
         IDX[indexing pipeline]
-        PARSE[parse phase]
-        EMBED[embed phase]
-        INDEX[index phase]
+        PT[PhaseTimer<br/>Instant stopwatch]
+        REC[record_error]
+        SAMP[file_latencies push]
+        MM[MemoryMonitor<br/>sysinfo::System]
     end
 
-    subgraph metrics["metrics (src/metrics/mod.rs)"]
-        IM[IndexingMetrics<br/>counters · latencies · phase Durations · errors_by_type]
-        PT[PhaseTimer<br/>start: Instant]
-        IM_NEW[new / Default]
-        IM_TP[throughput]
-        IM_PCT[percentile / p50 / p95 / p99]
-        IM_ERR[record_error / error_rate]
-        IM_LOG[log_summary / print_summary]
-        PT_NEW[new / elapsed / Default]
+    subgraph state["State (owned value types)"]
+        IM[IndexingMetrics<br/>counters · Durations · latencies<br/>errors_by_type · peak_memory_bytes]
     end
 
-    subgraph mem["metrics::memory (src/metrics/memory.rs)"]
-        MM[MemoryMonitor<br/>system: sysinfo::System]
-        MM_NEW[new / refresh / Default]
-        MM_BYTES[used_bytes / total_bytes / available_bytes]
-        MM_PCT[usage_percent]
+    subgraph readers["Readers (pure derivations)"]
+        TP[throughput]
+        PCT[percentile / p50 / p95 / p99]
+        ER[error_rate]
     end
 
-    SYSINFO[(sysinfo::System<br/>OS memory counters)]
-    TRACING[[tracing::info! event<br/>structured fields]]
+    subgraph export["Export (tracing-only)"]
+        LOG[log_summary / print_summary]
+        TRACING[[tracing::info!<br/>structured key=value event]]
+        SUBS[(subscribers:<br/>stderr · file · JSON layer)]
+    end
 
-    IDX --> PT_NEW
-    PARSE --> PT
-    EMBED --> PT
-    INDEX --> PT
-    PT --> PT_NEW
-    PT_NEW --> PT
-    PT --> IM
-    IDX --> IM_NEW
-    IM_NEW --> IM
-    IDX --> IM_ERR
-    IM_ERR --> IM
-    IDX --> IM
-    IDX --> MM_NEW
-    MM_NEW --> MM
+    SYSINFO[(sysinfo OS counters)]
+
+    IDX --> PT
+    IDX --> REC
+    IDX --> SAMP
+    IDX --> MM
     MM --> SYSINFO
-    MM_BYTES --> MM
-    MM_PCT --> MM_BYTES
-    IDX --> MM_PCT
 
-    IM --> IM_TP
-    IM --> IM_PCT
-    IM --> IM_ERR
-    IM_LOG --> IM_TP
-    IM_LOG --> IM_PCT
-    IM_LOG --> IM_ERR
-    IM_LOG --> TRACING
-    IDX --> IM_LOG
+    PT -- "elapsed() Duration" --> IM
+    REC -- "&mut self" --> IM
+    SAMP -- "Duration push" --> IM
+    MM -- "used_bytes peak" --> IM
+
+    IM --> TP
+    IM --> PCT
+    IM --> ER
+
+    IDX --> LOG
+    TP --> LOG
+    PCT --> LOG
+    ER --> LOG
+    LOG --> TRACING
+    TRACING --> SUBS
+
+    NOTE["MCP stdio mode:<br/>stdout is JSON-RPC only.<br/>log_summary uses tracing::info!,<br/>print_summary forwards to log_summary."]:::note
+    LOG -.-> NOTE
+
+    classDef note fill:#fff3cd,stroke:#856404,color:#856404
 ```
 
 ## Module responsibilities
 
 | Module | Role | Key types |
 |---|---|---|
-| `metrics` (`src/metrics/mod.rs`) | Aggregate indexing counters, per-phase durations, latency samples, and error tallies; derive throughput / percentile / error-rate stats; emit a structured summary via `tracing`. Provides a monotonic phase timer for callers. | `IndexingMetrics`, `PhaseTimer` |
-| `metrics::memory` (`src/metrics/memory.rs`) | Wrap `sysinfo::System` to expose current host memory in bytes (used / total / available) and as a utilization percentage. | `MemoryMonitor` |
+| `metrics` (`src/metrics/mod.rs`) | Aggregate indexing counters, per-phase `Duration`s, latency samples, and error tallies; derive throughput / percentile / error-rate; emit a single structured `tracing::info!` summary. Owns the monotonic `PhaseTimer` stopwatch. | `IndexingMetrics`, `PhaseTimer` |
+| `metrics::memory` (`src/metrics/memory.rs`) | Wrap `sysinfo::System` to expose host memory counters (used / total / available bytes) and a utilization percentage, used to populate `IndexingMetrics::peak_memory_bytes`. | `MemoryMonitor` |
 
 ## Data flow
 
-1. **Construction.** The indexing pipeline builds an `IndexingMetrics` via `IndexingMetrics::new()` (delegates to `Default`, zeroed counters, empty `file_latencies`, empty `errors_by_type`, `Duration::ZERO` for all phase timers). It optionally builds a `MemoryMonitor::new()`, which calls `System::new_all()` and an initial `refresh_memory()`.
-2. **Phase timing.** For each phase (parse, embed, index, total), the caller creates a `PhaseTimer::new()` (captures `Instant::now()`) at phase entry and reads `PhaseTimer::elapsed()` at phase exit, writing the resulting `Duration` into the corresponding field on `IndexingMetrics`.
-3. **Per-file sampling.** As files are processed, the caller pushes per-file `Duration` values into `IndexingMetrics::file_latencies` and increments `total_files` / `indexed_files`.
-4. **Error accounting.** On failure, the caller invokes `IndexingMetrics::record_error(error_type)`, which bumps the global `error_count` and the `errors_by_type` `HashMap` entry (via `Entry::or_insert(0)` then `+= 1`).
-5. **Memory sampling.** Periodically (or at peak detection points) the caller invokes `MemoryMonitor::refresh()` and reads `used_bytes` / `total_bytes` / `available_bytes` / `usage_percent`, copying the peak into `IndexingMetrics::peak_memory_bytes`.
-6. **Derivation.** On demand, `IndexingMetrics` computes:
-   - `throughput()` = `indexed_files / total_duration.as_secs_f64()` (guarded against zero).
-   - `percentile(p)` clones `file_latencies`, sorts, and indexes at `(len * p).min(len - 1)`; `p50/p95/p99` are thin wrappers.
-   - `error_rate()` = `error_count / total_files` (guarded against zero).
-7. **Reporting.** `IndexingMetrics::log_summary()` computes per-phase percentage shares of `total_duration`, then emits one `tracing::info!` event carrying counts, throughput, p50/p95/p99 in ms, per-phase durations and percentages, peak memory in MB, cache hit rate, error count and rate, and the `errors_by_type` map. `print_summary()` simply forwards to `log_summary()` so legacy callers do not write to stdout — important under the MCP stdio transport, where stdout is reserved for JSON-RPC frames.
+1. **Construction.** The pipeline builds `IndexingMetrics::new()` (zeroed counters, empty `file_latencies`, empty `errors_by_type`, `Duration::ZERO` for all phase fields) and optionally a `MemoryMonitor::new()` (calls `System::new_all()` then an initial `refresh_memory()`).
+2. **Phase timing.** Each phase (parse, embed, index, total) is bracketed by a `PhaseTimer::new()` / `PhaseTimer::elapsed()` pair; the resulting `Duration` is written into the matching `IndexingMetrics` field. `PhaseTimer` is a passive `Instant`-based stopwatch — no background ticking.
+3. **Per-file sampling.** As files are processed, the caller pushes `Duration` samples into `file_latencies` and bumps `total_files` / `indexed_files` / `skipped_files` / `unchanged_files` / `total_chunks`.
+4. **Error accounting.** `record_error(error_type)` increments the global `error_count` and the `errors_by_type` `HashMap` entry (via `Entry::or_insert(0)` then `+= 1`), giving both a total and a per-type histogram.
+5. **Memory sampling.** The caller polls `MemoryMonitor::refresh()` between phases and reads `used_bytes` (or `usage_percent`), copying the high-water mark into `IndexingMetrics::peak_memory_bytes`.
+6. **Lazy derivation.** Readers compute on demand without caching: `throughput()` = `indexed_files / total_duration` (zero-guarded); `percentile(p)` clones `file_latencies`, sorts, and indexes at `(len * p) as usize` clamped by `min(len - 1)`; `p50/p95/p99` are thin wrappers; `error_rate()` = `error_count / total_files` (zero-guarded). Percentile clones the latency vec per call, so it is not for hot loops.
+7. **Export.** `log_summary()` computes per-phase percentage shares of `total_duration`, then emits exactly one `tracing::info!("Indexing metrics summary", …)` event carrying counts, throughput, p50/p95/p99 (ms), per-phase `_secs`+`_percent` pairs, peak memory in MB, `cache_hit_rate_percent`, `error_count`, `error_rate_percent`, and `errors_by_type`. `print_summary()` forwards unconditionally to `log_summary()`.
 
 ## Concurrency / integration model
 
-- **Single-threaded value types.** `IndexingMetrics`, `PhaseTimer`, and `MemoryMonitor` hold no locks, atomics, channels, or interior mutability. Mutation goes through `&mut self` on `IndexingMetrics` (e.g. `record_error`) and `MemoryMonitor` (`refresh`). Concurrency is the caller's responsibility — typically the indexing driver owns the `IndexingMetrics` and either keeps it on a single task or wraps it in an external `Mutex`/`RwLock`.
-- **No background tasks.** The module spawns no Tokio tasks, threads, or timers. `PhaseTimer` is a passive `Instant`-based stopwatch; sampling cadence (memory refresh, latency push) is driven entirely by external callers.
-- **Shared state.** There is no module-level static state. Each `IndexingMetrics` / `MemoryMonitor` is independently owned. `errors_by_type` (`HashMap<String, u64>`) and `file_latencies` (`Vec<Duration>`) live inside `IndexingMetrics` and are accessed only through its methods.
-- **External boundaries.**
-  - **`sysinfo` crate** — `MemoryMonitor` is the sole boundary; `System::new_all` / `refresh_memory` / `used_memory` / `total_memory` / `available_memory` are the only foreign calls.
-  - **`tracing` crate** — `IndexingMetrics::log_summary` emits exactly one structured `tracing::info!` event per call. This is the module's only output side effect; it intentionally avoids `println!` / stdout to remain compatible with the MCP stdio JSON-RPC transport.
-  - **`std::time`** — `Instant` (in `PhaseTimer`) and `Duration` (throughout) are the only timing primitives; no wall-clock / `SystemTime` dependency.
-- **Integration points.** The indexing pipeline is the sole expected consumer: it constructs the metrics container, drives `PhaseTimer`s around each phase, samples `MemoryMonitor` for peak memory, calls `record_error` on failures, populates `file_latencies`, and finally invokes `log_summary()` to publish results to subscribers of the `tracing` infrastructure (which include the MCP server's stderr log sink).
+- **No atomic counters, no locks.** Despite the term "counters," `IndexingMetrics` fields are plain `u64`/`Duration`/`Vec`/`HashMap` mutated through `&mut self`. There are no `AtomicU64`s, `Mutex`es, channels, or interior mutability inside the module. Concurrency is delegated to the caller: typically the indexing driver owns the `IndexingMetrics` on a single task, or wraps it in an external `Mutex`/`RwLock` when sharing across tasks.
+- **MemoryMonitor sampling is pull-based.** `MemoryMonitor::refresh()` calls `sysinfo::System::refresh_memory()` synchronously in the caller's thread; no background sampler thread is spawned. Cadence (per-phase, per-N-files, peak-detection) is the caller's choice. Reads (`used_bytes` / `total_bytes` / `available_bytes` / `usage_percent`) return whatever the last refresh captured.
+- **Log-only summary export.** `log_summary` is the module's only output side effect. It emits one structured event via `tracing::info!` and routes it through whatever subscriber stack the binary installs (stderr layer, file layer, JSON layer). This is deliberate: under the MCP stdio transport, stdout is reserved for JSON-RPC frames, so the summary must never reach stdout. `print_summary` exists only for back-compat and forwards to `log_summary` — since commit `d43671be` it no longer touches stdout.
+- **No module-level static state.** Each `IndexingMetrics` and `MemoryMonitor` is independently owned; there are no globals, no `OnceLock`s, no shared registries. Two concurrent indexing runs produce two independent summary events.
+- **External boundaries.** `sysinfo` is reached only through `MemoryMonitor` (`System::new_all` / `refresh_memory` / `used_memory` / `total_memory` / `available_memory`). `tracing::info!` is the sole sink for `log_summary`. `std::time::Instant` (via `PhaseTimer`) and `std::time::Duration` are the only timing primitives — no `SystemTime`, no wall-clock dependency.
+- **Integration point.** The indexing pipeline is the sole expected consumer: it constructs the container, drives the `PhaseTimer`s, polls `MemoryMonitor`, calls `record_error` on failures, pushes per-file latencies, and finally invokes `log_summary()` so the MCP server's `tracing` subscribers (notably its stderr log sink) can record the run.

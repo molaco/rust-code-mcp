@@ -2,12 +2,24 @@
 
 ## Module: mod.rs
 
-Pure module declaration file: `pub mod clear_cache_tool`, `pub mod health_tool`, `pub mod index_tool`, `pub mod project_paths`, `pub mod search_tool`, `pub mod indexing_tools`, `pub mod query_tools`, `pub mod analysis_tools`, `pub mod search_tool_router`, `pub mod graph_tools`. No functions or impl blocks.
+Pure module declaration file. Declares the public sub-modules in this order:
+`pub mod clear_cache_tool`, `pub mod health_tool`, `pub mod index_tool`,
+`pub mod project_paths`, `pub mod search_tool`, `pub mod indexing_tools`,
+`pub mod query_tools`, `pub mod analysis_tools`, `pub mod search_tool_router`,
+`pub mod graph_tools`. No functions or impl blocks.
+
+The first five are the legacy split (pre-Phase 1 refactor) covering cache
+maintenance, health monitoring, indexing, derived path helpers, and the
+search-tool compatibility wrapper. `indexing_tools` / `query_tools` /
+`analysis_tools` / `search_tool_router` are the Phase 1 modular structure.
+`graph_tools` is the Layer 7 facade for the persisted hypergraph snapshot.
 
 ## Module: project_paths
 
 ### `pub struct ProjectPaths`
-Fields: `dir_hash: String`, `cache_path: PathBuf`, `tantivy_path: PathBuf`, `collection_name: String`, `vector_path: PathBuf` — bundled per-project derived paths used by the BM25 index, metadata cache, and vector store.
+Fields: `dir_hash: String`, `cache_path: PathBuf`, `tantivy_path: PathBuf`,
+`collection_name: String`, `vector_path: PathBuf` — bundled per-project
+derived paths used by the BM25 index, metadata cache, and vector store.
 
 ### `ProjectPaths::from_directory(dir: &Path) -> Self`
 **Call graph:** Sha256::new -> Sha256::update -> Sha256::finalize -> indexing_tools::data_dir -> PathBuf::join
@@ -16,7 +28,9 @@ Fields: `dir_hash: String`, `cache_path: PathBuf`, `tantivy_path: PathBuf`, `col
 2. Format the digest as a hex string and store as `dir_hash`.
 3. Read the XDG-compliant base data directory via `data_dir()`.
 4. Build `collection_name = "code_chunks_<first 8 hex chars>"`.
-5. Compose `cache_path = base/cache/<dir_hash>`, `tantivy_path = base/index/<dir_hash>`, `vector_path = base/cache/vectors/<collection_name>`.
+5. Compose `cache_path = base/cache/<dir_hash>`,
+   `tantivy_path = base/index/<dir_hash>`,
+   `vector_path = base/cache/vectors/<collection_name>`.
 6. Return the populated `ProjectPaths`.
 
 ## Module: indexing_tools
@@ -43,55 +57,6 @@ Fields: `dir_hash: String`, `cache_path: PathBuf`, `tantivy_path: PathBuf`, `col
 1. Compute `cache_path = data_dir().join("cache")`.
 2. Construct a `MetadataCache` rooted at that path, mapping errors to `String`.
 
-## Module: health_tool
-
-### `pub struct HealthCheckParams`
-Field: `directory: Option<String>` — optional project directory to scope the health check.
-
-### Private `fn data_dir() -> PathBuf`
-Same XDG-fallback logic as `indexing_tools::data_dir`; returns the `dev/rust-code-mcp/search` data directory or `.rust-code-mcp`.
-
-### `pub async fn health_check(Parameters(HealthCheckParams)) -> Result<CallToolResult, McpError>`
-**MCP tool — `health_check`**: Returns BM25 / vector store / Merkle tree status as JSON plus a human-readable interpretation.
-**Call graph:** Sha256::new/update/finalize -> data_dir -> get_snapshot_path -> Bm25Search::new -> VectorStore::new_embedded -> HealthMonitor::new -> HealthMonitor::check_health -> serde_json::to_string_pretty
-**Steps:**
-1. Log the health-check intent.
-2. If `directory` is provided, hash it with SHA-256 and derive `bm25_path = data_dir/index/<hash>`, `merkle_path = get_snapshot_path(dir)`, `collection_name = "code_chunks_<first 8 hex>"`.
-3. Otherwise, fall back to a system-wide check using `data_dir/index`, a sentinel non-existent merkle path, and the default collection name.
-4. Try to open the Tantivy index via `Bm25Search::new(&bm25_path)` (wrapped in `Arc` if successful).
-5. Try to open the LanceDB vector store at `data_dir/cache/vectors/<collection_name>` with dimension 384.
-6. Construct a `HealthMonitor` and run `check_health().await`.
-7. Pretty-serialize the report as JSON.
-8. Append a status banner (`Healthy`/`Degraded`/`Unhealthy`), the JSON, an explanatory guide, and the directory context.
-9. Return the response as `CallToolResult::success`.
-
-## Module: clear_cache_tool
-
-### `pub struct ClearCacheParams`
-Field: `directory: Option<String>` — optional project directory to scope the clear; absent means clear all caches.
-
-### Private `fn data_dir() -> PathBuf`
-Same XDG-fallback logic as `indexing_tools::data_dir`.
-
-### Private `fn compute_dir_hash(dir_path: &Path) -> String`
-**Call graph:** Sha256::new -> Sha256::update -> Sha256::finalize
-**Steps:**
-1. Hash `dir_path.to_string_lossy()` bytes with SHA-256.
-2. Return the digest as a 64-char hex string.
-
-### `pub async fn clear_cache(params: ClearCacheParams) -> Result<CallToolResult, McpError>`
-**MCP tool — `clear_cache`**: Removes the metadata cache, Tantivy index, and vector-store directories for one or all projects.
-**Call graph:** data_dir -> compute_dir_hash -> std::fs::remove_dir_all -> PathBuf::join
-**Steps:**
-1. Initialize empty `cleared` and `errors` vectors.
-2. Compute the base `data_dir`.
-3. If a directory is supplied, hash it and derive `cache_path`, `tantivy_path`, and `vector_path` (with `collection_name`).
-4. For each derived path that exists, attempt `remove_dir_all`, recording success or failure.
-5. Otherwise, recursively remove the global `cache` and `index` subdirectories under `data_dir`.
-6. Build a response string listing cleared paths and errors (or "No cache files found" when both lists empty).
-7. Append a "will be re-indexed" hint scoped to the project or workspace.
-8. Return `CallToolResult::success` with the response text.
-
 ## Module: index_tool
 
 ### `pub struct IndexCodebaseParams`
@@ -105,26 +70,34 @@ Fields: `directory: String` (absolute path), `force_reindex: Option<bool>` (defa
 2. Validate that the directory exists and is a directory; otherwise return `invalid_params`.
 3. Log the operation and compute `ProjectPaths` for the workspace.
 4. If `force` is set, delete the Merkle snapshot at `get_snapshot_path(&dir)` if present.
-5. Construct an `IncrementalIndexer` with embedded LanceDB backend (cache, tantivy, collection, dim, no extra config).
+5. Construct an `IncrementalIndexer` with embedded LanceDB backend
+   (cache, tantivy, collection, dim, no extra config).
 6. If `force` is set, call `clear_all_data()` on the indexer.
 7. Time `indexer.index_with_change_detection(&dir).await` and capture `IndexStats`.
-8. If a sync manager is provided and any files were indexed/unchanged, call `sync_mgr.track_directory(dir.clone()).await`.
-9. Format a result string covering one of three branches: no Rust files, no changes, or new changes indexed (each branch reports indexed/unchanged/skipped/chunks/elapsed/sync state/collection).
+8. If a sync manager is provided and any files were indexed/unchanged, call
+   `sync_mgr.track_directory(dir.clone()).await`.
+9. Format a result string covering one of three branches: no Rust files,
+   no changes, or new changes indexed (each branch reports
+   indexed/unchanged/skipped/chunks/elapsed/sync state/collection).
 10. Return `CallToolResult::success(Content::text(result_text))`.
 
 ## Module: search_tool
 
-This module is a backward-compatibility wrapper. It re-exports `search_tool_router::SearchToolRouter` as `SearchTool` and defines the parameter structs consumed by the router methods. No `pub fn` items — only data definitions.
+This module is a backward-compatibility wrapper. It re-exports
+`search_tool_router::SearchToolRouter` as `SearchTool` and defines the
+parameter structs consumed by the router methods. No `pub fn` items — only
+data definitions.
 
 ### Re-export
 - `pub use crate::tools::search_tool_router::SearchToolRouter as SearchTool`.
 
-### Parameter Structs (each derives `Debug`, `serde::Deserialize`, `schemars::JsonSchema`)
+### Parameter Structs (each derives `Debug`, `serde::Deserialize`, `schemars::JsonSchema`; audit structs also derive `serde::Serialize`)
 
 - `SearchParams { directory, keyword }` — hybrid search input.
 - `FileContentParams { file_path }` — file read input.
 - `FindDefinitionParams { symbol_name, directory }` — definition lookup.
 - `FindReferencesParams { symbol_name, directory }` — reference lookup.
+- `RenameSymbolParams { symbol_name, new_name, directory }` — rust-analyzer-backed rename preview (no file edits).
 - `GetDependenciesParams { file_path }` — file imports lookup.
 - `GetCallGraphParams { file_path, symbol_name: Option<String> }` — call-graph query.
 - `AnalyzeComplexityParams { file_path }` — complexity-metric input.
@@ -167,6 +140,117 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 - `FunctionsWithFilterParams { directory, krate, min_param_count, has_param_type, returns_type_pattern, is_async, self_kind, limit, offset, summary }` — paginated function filter.
 - `SimilarToItemParams { directory, target, limit, threshold, item_kind }` — semantic neighbors of one item.
 - `SemanticOverlapsParams { directory, crate_name, item_kind, threshold, max_pairs, max_cluster_size, output_mode, skip_test_chunks, cross_crate_only }` — workspace-wide overlap audit.
+- `BuildCodemapParams { directory, task_prompt, seed_qualified_names, max_nodes, depth, max_incoming_per_node, embedding_policy, format, include_snippets }` — task-conditioned codemap input.
+
+## Module: indexing_tools
+
+(See above — same module, single source of truth for `data_dir` and Tantivy index/cache open helpers.)
+
+## Module: search_tool
+
+(See above — pure parameter-struct data module + `SearchTool` re-export.)
+
+## Module: search_tool_router
+
+### `pub struct SearchToolRouter`
+Fields: `tool_router: ToolRouter<Self>`, `sync_manager: Option<Arc<SyncManager>>`.
+The macro `#[tool_router]` registers every annotated method as an MCP tool
+through the rmcp tool registry; `#[tool_handler]` synthesizes the
+`ServerHandler` dispatch glue.
+
+### `SearchToolRouter::new() -> Self`
+**Steps:**
+1. Build a `ToolRouter` via `Self::tool_router()` (generated by macro).
+2. Set `sync_manager = None`.
+
+### `SearchToolRouter::with_sync_manager(sync_manager: Arc<SyncManager>) -> Self`
+**Steps:**
+1. Build a `ToolRouter` via `Self::tool_router()`.
+2. Wrap `sync_manager` in `Some(_)`.
+
+### Tool methods (all `async fn`, all delegate, all decorated with `#[tool(description = ...)]`)
+Each method below unwraps a `Parameters<...>` wrapper and calls into
+another module. The router itself adds no business logic.
+
+Indexing / cache / health:
+- `read_file_content(FileContentParams { file_path }) -> CallToolResult` — delegates to `query_tools::read_file_content(&file_path).await`.
+- `search(SearchParams { directory, keyword }) -> CallToolResult` — delegates to `query_tools::search(&directory, &keyword, self.sync_manager.as_ref()).await`.
+- `find_definition(FindDefinitionParams { symbol_name, directory }) -> CallToolResult` — delegates to `analysis_tools::find_definition`.
+- `find_references(FindReferencesParams) -> CallToolResult` — delegates to `analysis_tools::find_references`.
+- `rename_symbol(RenameSymbolParams { symbol_name, new_name, directory }) -> CallToolResult` — delegates to `analysis_tools::rename_symbol` (rust-analyzer preview only, never writes).
+- `get_dependencies(GetDependenciesParams { file_path }) -> CallToolResult` — delegates to `analysis_tools::get_dependencies`.
+- `get_call_graph(GetCallGraphParams { file_path, symbol_name }) -> CallToolResult` — delegates to `analysis_tools::get_call_graph(&file_path, symbol_name.as_deref())`.
+- `analyze_complexity(AnalyzeComplexityParams) -> CallToolResult` — delegates to `analysis_tools::analyze_complexity`.
+- `health_check(HealthCheckParams) -> CallToolResult` — re-wraps `Parameters` and delegates to `health_tool::health_check`.
+- `get_similar_code(GetSimilarCodeParams { query, directory, limit }) -> CallToolResult` — defaults `limit` to 5 and delegates to `query_tools::get_similar_code`.
+- `index_codebase(IndexCodebaseParams) -> CallToolResult` — delegates to `index_tool::index_codebase(params, self.sync_manager.as_ref())`.
+- `clear_cache(ClearCacheParams) -> CallToolResult` — delegates to `clear_cache_tool::clear_cache` (now also accepts `include_hypergraph`).
+
+Hypergraph extraction / module surface (Layer 7):
+- `build_hypergraph(BuildHypergraphParams) -> CallToolResult` — delegates to `graph_tools::build_hypergraph`.
+- `get_imports(GraphImportsParams) -> CallToolResult` — delegates to `graph_tools::get_imports`.
+- `get_exports(GraphExportsParams) -> CallToolResult` — delegates to `graph_tools::get_exports`.
+- `get_reexports(GraphReexportsParams) -> CallToolResult` — delegates to `graph_tools::get_reexports`.
+- `get_declared_reexports(GraphDeclaredReexportsParams) -> CallToolResult` — delegates to `graph_tools::get_declared_reexports`.
+
+Reverse lookups & usages:
+- `who_imports(WhoImportsParams) -> CallToolResult` — delegates to `graph_tools::who_imports`.
+- `who_uses(WhoUsesParams) -> CallToolResult` — delegates to `graph_tools::who_uses`.
+- `who_uses_summary(WhoUsesSummaryParams) -> CallToolResult` — delegates to `graph_tools::who_uses_summary`.
+
+Call graph (Layer 10):
+- `who_calls(WhoCallsParams) -> CallToolResult` — delegates to `graph_tools::who_calls`.
+- `calls_from(CallsFromParams) -> CallToolResult` — delegates to `graph_tools::calls_from`.
+- `call_graph(CallGraphParams) -> CallToolResult` — delegates to `graph_tools::call_graph`.
+- `callers_in_crate(CallersInCrateParams) -> CallToolResult` — delegates to `graph_tools::callers_in_crate`.
+- `recursive_callers_count(RecursiveCallersCountParams) -> CallToolResult` — delegates to `graph_tools::recursive_callers_count`.
+
+Dead-pub & cross-crate edges:
+- `dead_pub_in_crate(DeadPubParams) -> CallToolResult` — delegates to `graph_tools::dead_pub_in_crate`.
+- `dead_pub_report(DeadPubReportParams) -> CallToolResult` — delegates to `graph_tools::dead_pub_report`.
+- `crate_edges(CrateEdgesParams) -> CallToolResult` — delegates to `graph_tools::crate_edges`.
+- `forbidden_dependency_check(ForbiddenDependencyCheckParams) -> CallToolResult` — delegates to `graph_tools::forbidden_dependency_check`.
+- `crate_dependency_metric(CrateDependencyMetricParams) -> CallToolResult` — delegates to `graph_tools::crate_dependency_metric`.
+- `overlaps(OverlapsParams) -> CallToolResult` — delegates to `graph_tools::overlaps`.
+
+Tree / stats / signatures:
+- `module_tree(ModuleTreeParams) -> CallToolResult` — delegates to `graph_tools::module_tree`.
+- `workspace_stats(WorkspaceStatsParams) -> CallToolResult` — delegates to `graph_tools::workspace_stats`.
+- `function_signature(FunctionSignatureParams) -> CallToolResult` — delegates to `graph_tools::function_signature`.
+- `functions_with_filter(FunctionsWithFilterParams) -> CallToolResult` — delegates to `graph_tools::functions_with_filter`.
+- `enum_variants(EnumVariantsParams) -> CallToolResult` — delegates to `graph_tools::enum_variants`.
+
+Attribute & re-export audits:
+- `item_attributes(ItemAttributesParams) -> CallToolResult` — delegates to `graph_tools::item_attributes`.
+- `items_with_attribute(ItemsWithAttributeParams) -> CallToolResult` — delegates to `graph_tools::items_with_attribute`.
+- `pub_use_pub_type_audit(PubUsePubTypeAuditParams) -> CallToolResult` — delegates to `graph_tools::pub_use_pub_type_audit`.
+- `re_export_chain(ReExportChainParams) -> CallToolResult` — delegates to `graph_tools::re_export_chain`.
+
+Guideline / safety audits (Phases 6–8):
+- `unsafe_audit(UnsafeAuditParams) -> CallToolResult` — delegates to `graph_tools::unsafe_audit`.
+- `mut_static_audit(MutStaticAuditParams) -> CallToolResult` — delegates to `graph_tools::mut_static_audit`.
+- `missing_docs_audit(MissingDocsAuditParams) -> CallToolResult` — delegates to `graph_tools::missing_docs_audit`.
+- `derive_audit(DeriveAuditParams) -> CallToolResult` — delegates to `graph_tools::derive_audit`.
+- `recursion_check(RecursionCheckParams) -> CallToolResult` — delegates to `graph_tools::recursion_check`.
+- `channel_capacity_audit(ChannelCapacityAuditParams) -> CallToolResult` — delegates to `graph_tools::channel_capacity_audit`.
+- `fn_body_audit(FnBodyAuditParams) -> CallToolResult` — delegates to `graph_tools::fn_body_audit`.
+
+Semantic neighbors / codemap:
+- `similar_to_item(SimilarToItemParams) -> CallToolResult` — delegates to `graph_tools::similar_to_item`.
+- `semantic_overlaps(SemanticOverlapsParams) -> CallToolResult` — delegates to `graph_tools::semantic_overlaps`.
+- `build_codemap(BuildCodemapParams) -> CallToolResult` — destructures every BuildCodemapParams field and delegates to `graph_tools::handle_build_codemap`.
+
+### `impl ServerHandler for SearchToolRouter`
+The macro `#[tool_handler]` synthesizes the dispatch glue.
+
+#### `fn get_info(&self) -> ServerInfo`
+**Steps:**
+1. Build a `ServerInfo` with `ProtocolVersion::V_2024_11_05`.
+2. Enable prompts, resources, and tools capabilities via `ServerCapabilities::builder`.
+3. Set `server_info` from `Implementation::from_build_env()`.
+4. Attach a short `instructions` string summarizing the server surface
+   (per-tool documentation lives on each tool method via
+   `#[tool(description = ...)]`, used by the MCP client).
 
 ## Module: query_tools
 
@@ -177,7 +261,8 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 1. Validate the path exists and is a regular file; return `invalid_params` on failure.
 2. Try `fs::read_to_string`; on success, return the content (or "File is empty." for zero-length).
 3. On UTF-8 failure, fall back to `fs::read` to inspect raw bytes.
-4. If null bytes appear or >10% of bytes are non-printable controls, classify as binary and return `invalid_params`.
+4. If null bytes appear or >10% of bytes are non-printable controls,
+   classify as binary and return `invalid_params`.
 5. Otherwise, return the original UTF-8 error wrapped in `invalid_params`.
 
 ### Private `fn try_open_bm25(paths: &ProjectPaths) -> Option<Bm25Search>`
@@ -197,7 +282,8 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 ### Private `async fn ensure_indexed(dir_path, paths, sync_manager) -> Result<IndexStats, McpError>`
 **Call graph:** UnifiedIndexer::for_embedded -> UnifiedIndexer::index_directory -> SyncManager::track_directory
 **Steps:**
-1. Initialize a `UnifiedIndexer` with the embedded LanceDB backend, mapping any error to `invalid_params`.
+1. Initialize a `UnifiedIndexer` with the embedded LanceDB backend,
+   mapping any error to `invalid_params`.
 2. Run `index_directory(dir_path).await` to produce `IndexStats`.
 3. Log file/chunk counters.
 4. If a sync manager is provided and any files were indexed/unchanged, call `track_directory`.
@@ -208,13 +294,17 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 **Steps:**
 1. Construct an `EmbeddingGenerator`; map errors to `invalid_params`.
 2. Open the embedded vector store at `paths.vector_path` with `EMBEDDING_DIM`.
-3. Build a `HybridSearch::with_defaults` from the generator, vector store, and optional `Bm25Search`.
+3. Build a `HybridSearch::with_defaults` from the generator, vector store,
+   and optional `Bm25Search`.
 
 ### Private `fn format_results(results, keyword, stats, rebuilt) -> String`
 **Steps:**
-1. If results is empty, return a short "No results" message that optionally includes index stats.
-2. Otherwise, prefix with a "rebuilt" notice if the index was just regenerated, then the result count and keyword.
-3. For each result, append index, score, file, symbol name/kind, line range, optional doc, and a 3-line preview.
+1. If results is empty, return a short "No results" message that
+   optionally includes index stats.
+2. Otherwise, prefix with a "rebuilt" notice if the index was just
+   regenerated, then the result count and keyword.
+3. For each result, append index, score, file, symbol name/kind, line
+   range, optional doc, and a 3-line preview.
 4. Append final indexing-stats line if stats are available.
 
 ### `pub async fn search(directory: &str, keyword: &str, sync_manager: Option<&Arc<SyncManager>>) -> Result<CallToolResult, McpError>`
@@ -223,9 +313,13 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 **Steps:**
 1. Validate the directory and reject empty keywords.
 2. Compute `ProjectPaths` for the workspace.
-3. Try to open BM25; if it succeeds, optionally track the directory in the sync manager and skip indexing.
-4. If BM25 cannot be opened, set `rebuilt = true` if a stale tantivy path exists, clean stale indexes, run `ensure_indexed`, then re-open BM25.
-5. If first-time indexing produced no chunks AND no unchanged files, return early with a "no Rust files found" message.
+3. Try to open BM25; if it succeeds, optionally track the directory in
+   the sync manager and skip indexing.
+4. If BM25 cannot be opened, set `rebuilt = true` if a stale tantivy
+   path exists, clean stale indexes, run `ensure_indexed`, then re-open
+   BM25.
+5. If first-time indexing produced no chunks AND no unchanged files,
+   return early with a "no Rust files found" message.
 6. Build a `HybridSearch` and run `search(keyword, 10).await`.
 7. Format results via `format_results` and return them.
 
@@ -238,7 +332,8 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 3. Build a `HybridSearch` (no BM25).
 4. Call `vector_only_search(query, limit)`.
 5. If empty, return a "no similar code" message.
-6. Otherwise, format each result with score, file, symbol name/kind, line range, optional doc, and a 3-line preview.
+6. Otherwise, format each result with score, file, symbol name/kind,
+   line range, optional doc, and a 3-line preview.
 7. Return as `CallToolResult::success`.
 
 ## Module: analysis_tools
@@ -250,7 +345,8 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 1. Lock the global `SEMANTIC` index, mapping poisoned-lock to `internal_error`.
 2. Call `symbol_search(project_path, symbol_name, 50)`.
 3. If no locations, return a "No definition found" message.
-4. Otherwise, join each location's `to_string` with newlines and return a "Found N definition(s)" message.
+4. Otherwise, join each location's `to_string` with newlines and return
+   a "Found N definition(s)" message.
 
 ### `pub async fn find_references(symbol_name: &str, directory: &str) -> Result<CallToolResult, McpError>`
 **MCP tool delegate — `find_references`**: Lists all references to a symbol.
@@ -259,6 +355,18 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 1. Lock the global `SEMANTIC` index.
 2. Call `find_references_by_name(project_path, symbol_name)`.
 3. Return formatted output identical in shape to `find_definition`.
+
+### `pub async fn rename_symbol(symbol_name: &str, new_name: &str, directory: &str) -> Result<CallToolResult, McpError>`
+**MCP tool delegate — `rename_symbol`**: Previews a rust-analyzer-driven rename across the project; **never modifies files**.
+**Call graph:** Path::new -> SEMANTIC.lock -> SemanticIndex::rename_by_name
+**Steps:**
+1. Lock the global `SEMANTIC` index.
+2. Call `rename_by_name(project_path, symbol_name, new_name)`, propagating errors as `internal_error`.
+3. If the returned `RenamePreview { edits, file_moves }` is fully empty, return a "produced no edits" message and exit.
+4. Otherwise, build a banner string `"Rename preview for '<old>' → '<new>' (no files modified):"`.
+5. Append each `edit` under a `Text edits (N):` block (one bullet per edit).
+6. Append each `file_move` under a `File system changes (N):` block.
+7. Return the assembled text as `CallToolResult::success`.
 
 ### `pub async fn get_dependencies(file_path: &str) -> Result<CallToolResult, McpError>`
 **MCP tool delegate — `get_dependencies`**: Lists imports parsed from a single file.
@@ -275,8 +383,12 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 **Steps:**
 1. Validate the file path exists and is a file.
 2. Parse the file via `RustParser::parse_file_complete`.
-3. If a `symbol_name` is supplied, fetch its callees and callers; print arrows (`→` callees, `←` callers) with counts; print "No call relationships found" when both empty.
-4. Otherwise, list every function with its callees as `name → [a, b, c]`, prefaced by counts of functions and edges; print "No function calls found" when the graph has zero edges.
+3. If a `symbol_name` is supplied, fetch its callees and callers; print
+   arrows (`→` callees, `←` callers) with counts; print "No call
+   relationships found" when both empty.
+4. Otherwise, list every function with its callees as `name → [a, b, c]`,
+   prefaced by counts of functions and edges; print "No function calls
+   found" when the graph has zero edges.
 
 ### `pub async fn analyze_complexity(file_path: &str) -> Result<CallToolResult, McpError>`
 **MCP tool delegate — `analyze_complexity`**: Computes LOC, comment, symbol, cyclomatic, and call-graph metrics for one file.
@@ -285,104 +397,46 @@ This module is a backward-compatibility wrapper. It re-exports `search_tool_rout
 1. Validate the file path.
 2. Read the source via `fs::read_to_string`.
 3. Parse symbols via `RustParser::parse_file_complete`.
-4. Count total lines, non-empty lines, comment lines (`// ...`), function/struct/trait counts (filtering `parse_result.symbols`).
-5. Sum cyclomatic decision points across all lines using keywords `if`, `else if`, `while`, `for`, `match`, `&&`, `||`.
+4. Count total lines, non-empty lines, comment lines (`// ...`),
+   function/struct/trait counts (filtering `parse_result.symbols`).
+5. Sum cyclomatic decision points across all lines using keywords `if`,
+   `else if`, `while`, `for`, `match`, `&&`, `||`.
 6. Compute average complexity per function (zero when no functions).
-7. Format a multi-line report with code metrics, symbol counts, complexity, and call-graph edge count.
-
-## Module: search_tool_router
-
-### `pub struct SearchToolRouter`
-Fields: `tool_router: ToolRouter<Self>`, `sync_manager: Option<Arc<SyncManager>>`. Macro `#[tool_router]` registers all annotated methods with the rmcp tool registry.
-
-### `SearchToolRouter::new() -> Self`
-**Steps:**
-1. Build a `ToolRouter` via `Self::tool_router()` (generated by macro).
-2. Set `sync_manager = None`.
-
-### `SearchToolRouter::with_sync_manager(sync_manager: Arc<SyncManager>) -> Self`
-**Steps:**
-1. Build a `ToolRouter` via `Self::tool_router()`.
-2. Wrap `sync_manager` in `Some(_)`.
-
-### Tool methods (all `async fn`, all delegate, all decorated with `#[tool(description = ...)]`)
-Each method below unwraps a `Parameters<...>` wrapper and calls into another module. The router itself adds no business logic.
-
-- `read_file_content(FileContentParams { file_path }) -> CallToolResult` — delegates to `query_tools::read_file_content(&file_path).await`.
-- `search(SearchParams { directory, keyword }) -> CallToolResult` — delegates to `query_tools::search(&directory, &keyword, self.sync_manager.as_ref()).await`.
-- `find_definition(FindDefinitionParams { symbol_name, directory }) -> CallToolResult` — delegates to `analysis_tools::find_definition`.
-- `find_references(FindReferencesParams) -> CallToolResult` — delegates to `analysis_tools::find_references`.
-- `get_dependencies(GetDependenciesParams { file_path }) -> CallToolResult` — delegates to `analysis_tools::get_dependencies`.
-- `get_call_graph(GetCallGraphParams { file_path, symbol_name }) -> CallToolResult` — delegates to `analysis_tools::get_call_graph(&file_path, symbol_name.as_deref())`.
-- `analyze_complexity(AnalyzeComplexityParams) -> CallToolResult` — delegates to `analysis_tools::analyze_complexity`.
-- `health_check(HealthCheckParams) -> CallToolResult` — re-wraps `Parameters` and delegates to `health_tool::health_check`.
-- `get_similar_code(GetSimilarCodeParams { query, directory, limit }) -> CallToolResult` — defaults `limit` to 5 and delegates to `query_tools::get_similar_code`.
-- `index_codebase(IndexCodebaseParams) -> CallToolResult` — delegates to `index_tool::index_codebase(params, self.sync_manager.as_ref())`.
-- `clear_cache(ClearCacheParams) -> CallToolResult` — delegates to `clear_cache_tool::clear_cache`.
-- `build_hypergraph(BuildHypergraphParams) -> CallToolResult` — delegates to `graph_tools::build_hypergraph`.
-- `get_imports(GraphImportsParams) -> CallToolResult` — delegates to `graph_tools::get_imports`.
-- `get_exports(GraphExportsParams) -> CallToolResult` — delegates to `graph_tools::get_exports`.
-- `get_reexports(GraphReexportsParams) -> CallToolResult` — delegates to `graph_tools::get_reexports`.
-- `get_declared_reexports(GraphDeclaredReexportsParams) -> CallToolResult` — delegates to `graph_tools::get_declared_reexports`.
-- `who_imports(WhoImportsParams) -> CallToolResult` — delegates to `graph_tools::who_imports`.
-- `who_uses(WhoUsesParams) -> CallToolResult` — delegates to `graph_tools::who_uses`.
-- `who_uses_summary(WhoUsesSummaryParams) -> CallToolResult` — delegates to `graph_tools::who_uses_summary`.
-- `who_calls(WhoCallsParams) -> CallToolResult` — delegates to `graph_tools::who_calls`.
-- `calls_from(CallsFromParams) -> CallToolResult` — delegates to `graph_tools::calls_from`.
-- `call_graph(CallGraphParams) -> CallToolResult` — delegates to `graph_tools::call_graph`.
-- `callers_in_crate(CallersInCrateParams) -> CallToolResult` — delegates to `graph_tools::callers_in_crate`.
-- `recursive_callers_count(RecursiveCallersCountParams) -> CallToolResult` — delegates to `graph_tools::recursive_callers_count`.
-- `dead_pub_in_crate(DeadPubParams) -> CallToolResult` — delegates to `graph_tools::dead_pub_in_crate`.
-- `dead_pub_report(DeadPubReportParams) -> CallToolResult` — delegates to `graph_tools::dead_pub_report`.
-- `crate_edges(CrateEdgesParams) -> CallToolResult` — delegates to `graph_tools::crate_edges`.
-- `forbidden_dependency_check(ForbiddenDependencyCheckParams) -> CallToolResult` — delegates to `graph_tools::forbidden_dependency_check`.
-- `enum_variants(EnumVariantsParams) -> CallToolResult` — delegates to `graph_tools::enum_variants`.
-- `item_attributes(ItemAttributesParams) -> CallToolResult` — delegates to `graph_tools::item_attributes`.
-- `items_with_attribute(ItemsWithAttributeParams) -> CallToolResult` — delegates to `graph_tools::items_with_attribute`.
-- `pub_use_pub_type_audit(PubUsePubTypeAuditParams) -> CallToolResult` — delegates to `graph_tools::pub_use_pub_type_audit`.
-- `re_export_chain(ReExportChainParams) -> CallToolResult` — delegates to `graph_tools::re_export_chain`.
-- `crate_dependency_metric(CrateDependencyMetricParams) -> CallToolResult` — delegates to `graph_tools::crate_dependency_metric`.
-- `overlaps(OverlapsParams) -> CallToolResult` — delegates to `graph_tools::overlaps`.
-- `module_tree(ModuleTreeParams) -> CallToolResult` — delegates to `graph_tools::module_tree`.
-- `workspace_stats(WorkspaceStatsParams) -> CallToolResult` — delegates to `graph_tools::workspace_stats`.
-- `function_signature(FunctionSignatureParams) -> CallToolResult` — delegates to `graph_tools::function_signature`.
-- `functions_with_filter(FunctionsWithFilterParams) -> CallToolResult` — delegates to `graph_tools::functions_with_filter`.
-- `unsafe_audit(UnsafeAuditParams) -> CallToolResult` — delegates to `graph_tools::unsafe_audit`.
-- `mut_static_audit(MutStaticAuditParams) -> CallToolResult` — delegates to `graph_tools::mut_static_audit`.
-- `missing_docs_audit(MissingDocsAuditParams) -> CallToolResult` — delegates to `graph_tools::missing_docs_audit`.
-- `derive_audit(DeriveAuditParams) -> CallToolResult` — delegates to `graph_tools::derive_audit`.
-- `recursion_check(RecursionCheckParams) -> CallToolResult` — delegates to `graph_tools::recursion_check`.
-- `channel_capacity_audit(ChannelCapacityAuditParams) -> CallToolResult` — delegates to `graph_tools::channel_capacity_audit`.
-- `fn_body_audit(FnBodyAuditParams) -> CallToolResult` — delegates to `graph_tools::fn_body_audit`.
-- `similar_to_item(SimilarToItemParams) -> CallToolResult` — delegates to `graph_tools::similar_to_item`.
-- `semantic_overlaps(SemanticOverlapsParams) -> CallToolResult` — delegates to `graph_tools::semantic_overlaps`.
-
-### `impl ServerHandler for SearchToolRouter`
-The macro `#[tool_handler]` synthesizes the dispatch glue.
-
-#### `fn get_info(&self) -> ServerInfo`
-**Steps:**
-1. Build a `ServerInfo` with `ProtocolVersion::V_2024_11_05`.
-2. Enable prompts, resources, and tools capabilities via `ServerCapabilities::builder`.
-3. Set `server_info` from `Implementation::from_build_env()`.
-4. Attach a long human-readable `instructions` string enumerating every MCP tool the router exposes (used by the MCP client as per-tool documentation).
+7. Format a multi-line report with code metrics, symbol counts,
+   complexity, and call-graph edge count.
 
 ## Module: graph_tools
 
-All tool functions follow a shared shape: open the LMDB hypergraph snapshot, resolve user-supplied qualified names to `NodeId`s, dispatch to an `OpenedSnapshot` query method, and serialize the result as pretty JSON via `json_result`.
+All tool functions follow a shared shape: open the LMDB hypergraph snapshot
+via `open_workspace_snapshot`, resolve user-supplied qualified names to
+`NodeId`s (often via `resolve_required_node` or `lookup_by_qualified_name`),
+dispatch to an `OpenedSnapshot` query method (or a sibling crate audit
+module under `crate::graph::*`), and serialize the result as pretty JSON via
+`json_result`. Tools that perform a `loader::load` workspace load
+(`unsafe_audit`, `channel_capacity_audit`, `fn_body_audit`) wrap the heavy
+work in `tokio::task::spawn_blocking` so the runtime worker stays free.
 
-### `pub async fn build_hypergraph(params: BuildHypergraphParams) -> Result<CallToolResult, McpError>`
+NodeIds are never exposed as raw 32-byte arrays — they're rendered as
+64-char hex strings in every response (`.to_hex()` on `NodeId`).
+
+### Group: extraction / build
+
+#### `pub async fn build_hypergraph(params: BuildHypergraphParams) -> Result<CallToolResult, McpError>`
 **MCP tool — `build_hypergraph`**: Builds (or reuses) the persisted workspace hypergraph snapshot via `loader::load` + extract pass + LMDB writes, on a blocking thread.
 **Call graph:** PathBuf::from -> Path::exists -> tokio::task::spawn_blocking -> graph::build_and_persist -> json_result
 **Steps:**
 1. Convert `directory` to a `PathBuf` and ensure it exists.
 2. Build `BuildOptions { force_rebuild, .. }`.
-3. Spawn a blocking task running `build_and_persist(&dir, opts)`.
+3. Spawn a blocking task running `build_and_persist(&dir, opts)` (4–18s wall-clock).
 4. Await the join handle, mapping join errors to `internal_error`.
 5. Map build errors to `internal_error`.
-6. Serialize a `BuildHypergraphResponse { graph_id, workspace_root, fingerprint, node_count, binding_count, usage_count, reused, snapshot_path }`.
+6. Serialize a `BuildHypergraphResponse { graph_id, workspace_root,
+   fingerprint, node_count, binding_count, usage_count, reused,
+   snapshot_path }`.
 
-### `pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, McpError>`
+### Group: module-surface queries
+
+#### `pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> resolve_required_node -> OpenedSnapshot::imports_of -> OpenedSnapshot::lookup_by_qualified_name -> enrich_bindings -> json_result
 **Steps:**
 1. Open the snapshot for `directory`.
@@ -391,28 +445,28 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 4. Look up the canonical module name (fallback to user input if missing).
 5. Enrich bindings via `enrich_bindings` and serialize a `BindingsListResponse`.
 
-### `pub async fn get_exports(params: GraphExportsParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn get_exports(params: GraphExportsParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> resolve_required_node -> OpenedSnapshot::exports_of -> enrich_bindings -> json_result
 **Steps:**
 1. Open snapshot, resolve `module` and `consumer` Modules.
 2. Call `exports_of(module_id, consumer_id)`.
 3. Enrich and serialize as `BindingsListResponse`.
 
-### `pub async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> resolve_required_node -> OpenedSnapshot::reexports_of -> enrich_bindings -> json_result
 **Steps:**
 1. Open snapshot, resolve `module` and `consumer`.
 2. Call `reexports_of(module_id, consumer_id)`.
 3. Enrich and serialize as `BindingsListResponse`.
 
-### `pub async fn get_declared_reexports(params: GraphDeclaredReexportsParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn get_declared_reexports(params: GraphDeclaredReexportsParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> resolve_required_node -> OpenedSnapshot::declared_reexports_of -> enrich_bindings -> json_result
 **Steps:**
 1. Open snapshot and resolve `module` to a Module.
 2. Call `declared_reexports_of(module_id)`.
 3. Enrich and serialize as `BindingsListResponse`.
 
-### `pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::who_imports -> enrich_bindings -> json_result
 **Steps:**
 1. Open snapshot.
@@ -420,35 +474,37 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Run `who_imports(target_id)`.
 4. Enrich bindings and serialize as `BindingsListResponse { target: target_node.qualified_name, ... }`.
 
-### `pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::usages_of -> enrich_usages -> json_result
 **Steps:**
 1. Open snapshot, look up `target`.
 2. Call `usages_of(target_id)`.
 3. Enrich usages and serialize as `UsagesListResponse`.
 
-### `pub async fn who_uses_summary(params: WhoUsesSummaryParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn who_uses_summary(params: WhoUsesSummaryParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::who_uses_summary -> json_result
 **Steps:**
 1. Open snapshot, look up `target`.
 2. Call `who_uses_summary(target_id)`.
 3. Serialize as `UsageSummaryResponse { target, rows }`.
 
-### `pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpError>`
+### Group: call-graph queries (Layer 10)
+
+#### `pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::who_calls -> json_result
 **Steps:**
 1. Open snapshot, look up `target`.
 2. Call `who_calls(target_id)`.
 3. Serialize as `CallSitesResponse { target: Some(...), caller: None, call_sites }`.
 
-### `pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::calls_from -> json_result
 **Steps:**
 1. Open snapshot, look up `caller`.
 2. Call `calls_from(caller_id)`.
 3. Serialize as `CallSitesResponse { target: None, caller: Some(...), call_sites }`.
 
-### `pub async fn call_graph(params: CallGraphParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn call_graph(params: CallGraphParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::call_graph -> json_result
 **Steps:**
 1. Compute `depth = min(params.depth.unwrap_or(3), 8)`.
@@ -456,14 +512,14 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Call `call_graph(root_id, depth)` for a `CallGraphNode` tree.
 4. Serialize as `CallGraphResponse { root, depth, tree }`.
 
-### `pub async fn callers_in_crate(params: CallersInCrateParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn callers_in_crate(params: CallersInCrateParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::callers_in_crate -> json_result
 **Steps:**
 1. Open snapshot, look up `target`.
 2. Call `callers_in_crate(target_id, &params.krate)`.
 3. Serialize as `CallersInCrateResponse`.
 
-### `pub async fn recursive_callers_count(params: RecursiveCallersCountParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn recursive_callers_count(params: RecursiveCallersCountParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::recursive_callers_count -> json_result
 **Steps:**
 1. Compute `depth = min(params.depth.unwrap_or(3), 8)`.
@@ -471,7 +527,9 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Call `recursive_callers_count(target_id, depth)`.
 4. Serialize the resulting `RecursiveCallersCount` directly.
 
-### `pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, McpError>`
+### Group: dead-pub and cross-crate edges
+
+#### `pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::dead_pub_in_crate -> enrich_dead_pub -> json_result
 **Steps:**
 1. Open snapshot, look up `krate`.
@@ -479,7 +537,7 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Call `dead_pub_in_crate(crate_id)`.
 4. Enrich each finding via `enrich_dead_pub` and serialize as `DeadPubResponse`.
 
-### `pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::dead_pub_report -> enrich_crate_dead_pub -> json_result
 **Steps:**
 1. Open snapshot.
@@ -487,72 +545,60 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Map each to `EnrichedCrateDeadPub`, summing total findings.
 4. Serialize as `DeadPubReportResponse { workspace, total_findings, crates }`.
 
-### `pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::crate_edges -> json_result
 **Steps:**
 1. Open snapshot.
 2. Call `crate_edges()` and serialize as `CrateEdgesResponse { edges }`.
 
-### `pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::enum_variants -> json_result
+#### `pub async fn forbidden_dependency_check(params: ForbiddenDependencyCheckParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::forbidden_dependency_check -> json_result
 **Steps:**
-1. Open snapshot, look up `target`.
-2. Reject if `node.item_kind != Some(ItemKind::Enum)`.
-3. Call `enum_variants(enum_id)`.
-4. Map each variant to `EnrichedEnumVariant { display_name, qualified_name, file, span }`.
-5. Serialize as `EnumVariantsResponse`.
+1. Open snapshot.
+2. Map each input `ForbiddenDependencyRuleParam` to `ForbiddenDependencyRule`.
+3. Call `forbidden_dependency_check(&rules)`.
+4. Serialize as `ForbiddenDependencyCheckResponse { rule_count, violation_count, violations }`.
 
-### `pub async fn item_attributes(params: ItemAttributesParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::item_attributes -> item_kind_label -> json_result
+#### `pub async fn crate_dependency_metric(params: CrateDependencyMetricParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::crate_dependency_metric -> NodeId::to_hex -> json_result
 **Steps:**
-1. Open snapshot, look up `target`.
-2. Call `item_attributes(target_id)`.
-3. Serialize as `ItemAttributesResponse { target, item_kind, file, span, attribute_count, attributes }`.
+1. Open snapshot.
+2. Call `crate_dependency_metric()` for `Vec<CrateMetric>`.
+3. If `sort_by` is supplied, sort descending by `instability` / `abstractness` /
+   `item_count` / `afferent` / `efferent` (rejecting unknown keys).
+4. Apply `top_n` truncation.
+5. Map each `CrateMetric` to `CrateMetricRendered` (hex `crate_id`).
+6. Serialize as `CrateDependencyMetricResponse`.
 
-### `pub async fn items_with_attribute(params: ItemsWithAttributeParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::items_with_attribute -> item_kind_label -> json_result
+#### `pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::overlaps -> json_result
 **Steps:**
-1. Open snapshot, resolve `crate_name` (Crate or Module-with-crate fallback).
-2. Call `items_with_attribute(crate_id, &params.attribute_pattern)`.
-3. Map each `ItemWithAttribute` to `EnrichedItemWithAttribute` (string-form `item_kind`).
-4. Serialize as `ItemsWithAttributeResponse`.
+1. Open snapshot.
+2. Call `overlaps()` and serialize the `OverlapsReport` directly.
 
-### `pub async fn function_signature(params: FunctionSignatureParams) -> Result<CallToolResult, McpError>`
+### Group: module-tree, stats, signatures
+
+#### `pub async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::module_tree -> json_result
+**Steps:**
+1. Open snapshot.
+2. Call `module_tree(&params.krate, params.depth)`.
+3. Serialize as `ModuleTreeResponse { tree }`.
+
+#### `pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::workspace_stats -> json_result
+**Steps:**
+1. Open snapshot.
+2. Call `workspace_stats()` and serialize the resulting `WorkspaceStats` directly.
+
+#### `pub async fn function_signature(params: FunctionSignatureParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::function_signature -> json_result
 **Steps:**
 1. Open snapshot, look up `target`.
 2. Call `function_signature(target_id)`.
 3. Serialize as `FunctionSignatureResponse { target, signature }` (signature may be `None`).
 
-### `pub async fn similar_to_item(params: SimilarToItemParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> std::fs::read_to_string -> ProjectPaths::from_directory -> query_tools::create_hybrid_search -> HybridSearch::vector_only_search -> json_result
-**Steps:**
-1. Open snapshot and resolve seed `target`; require both `file` and `span`.
-2. Read `<directory>/<seed_file>` to a `String` and slice the `[start, end)` byte range as the seed source.
-3. Build a `HybridSearch` for the workspace via `create_hybrid_search`.
-4. Run `vector_only_search(seed_source, limit + 1)`.
-5. For each result: drop chunks whose file path ends with the seed's relative path AND whose line range overlaps the seed's line range; drop scores below threshold; apply optional `item_kind` filter.
-6. Build a 3-line preview from `chunk.content`; push as `SimilarMatch`; stop when `limit` reached.
-7. Serialize as `SimilarToItemResp { seed, limit, threshold, item_kind_filter, match_count, matches }`.
-
-### `pub async fn semantic_overlaps(params: SemanticOverlapsParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> parse_item_kind_filter -> Sha256::new/update/finalize -> embeddings_by_target.get -> EmbeddingGenerator::new -> EmbeddingGenerator::embed_batch_async -> embeddings_by_target.put -> cosine -> build_clusters -> node_to_item_ref -> json_result
-**Steps:**
-1. Validate `output_mode` is `pairs` or `clusters`; capture `threshold`, `max_pairs`, `max_cluster_size`, `skip_tests`, `cross_crate_only`, `crate_name`, `item_kind` defaults.
-2. Open snapshot.
-3. If `crate_name` provided, resolve to a Crate id (Module promoted to crate).
-4. Parse `item_kind` filter into an `Option<ItemKind>`.
-5. Iterate `nodes_by_id` LMDB cursor: keep only `NodeKind::Item` whose crate (optional) and item_kind (optional) match, with a real file+span, dropping any `::tests::` qualified names when `skip_tests`.
-6. For each seed: read its file (cached in `file_cache`), slice the byte range, trim, hash with SHA-256 truncated to 16 bytes, look up `embeddings_by_target` — reuse vector if `content_hash` AND `embedder_version` match, else queue for embedding.
-7. Batch-embed misses via `EmbeddingGenerator::embed_batch_async` in chunks of 64; persist each fresh `EmbeddingRecord { content_hash, vector, embedder_version, generated_at_unix }` and update the in-memory `cached_vec`.
-8. Identical-source short-circuit: items sharing a `content_hash` get score=1.0 (subject to `cross_crate_only`); use canonical (smaller-id-first) edge keys.
-9. In-memory pairwise cosine over remaining (cached_vec, cached_vec) pairs; skip same-hash pairs (already handled), skip same-crate pairs when `cross_crate_only`, drop scores below threshold; accumulate into a `HashMap<EdgeKey, Vec<f32>>`.
-10. Average per-direction scores per edge, sort by similarity descending; record `pair_count`.
-11. Build `seed_index` lookup table for response item refs.
-12. Pairs mode: take `max_pairs`, map to `SimilarityPair { a, b, similarity }`, return `SemanticOverlapsResp` with `pairs` populated.
-13. Clusters mode (default): call `build_clusters(&pairs, max_pairs, lookup)`, drop clusters with `size > max_cluster_size`, return `SemanticOverlapsResp` with `clusters` populated.
-
-### `pub async fn functions_with_filter(params: FunctionsWithFilterParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn functions_with_filter(params: FunctionsWithFilterParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::functions_with_filter -> json_result
 **Steps:**
 1. Open snapshot, resolve `krate` to a Crate id (Module promoted).
@@ -563,23 +609,43 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 6. Build `FunctionsWithFilterMatch` per row, dropping `signature` when `summary=true`.
 7. Serialize as `FunctionsWithFilterResponse { krate, total_match_count, offset, limit, match_count, matches }`.
 
-### `pub async fn forbidden_dependency_check(params: ForbiddenDependencyCheckParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::forbidden_dependency_check -> json_result
+#### `pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::enum_variants -> json_result
 **Steps:**
-1. Open snapshot.
-2. Map each input `ForbiddenDependencyRuleParam` to `ForbiddenDependencyRule`.
-3. Call `forbidden_dependency_check(&rules)`.
-4. Serialize as `ForbiddenDependencyCheckResponse { rule_count, violation_count, violations }`.
+1. Open snapshot, look up `target`.
+2. Reject if `node.item_kind != Some(ItemKind::Enum)`.
+3. Call `enum_variants(enum_id)`.
+4. Map each variant to `EnrichedEnumVariant { display_name, qualified_name, file, span }`.
+5. Serialize as `EnumVariantsResponse`.
 
-### `pub async fn pub_use_pub_type_audit(params: PubUsePubTypeAuditParams) -> Result<CallToolResult, McpError>`
+### Group: attribute audits and re-export walks
+
+#### `pub async fn item_attributes(params: ItemAttributesParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::item_attributes -> item_kind_label -> json_result
+**Steps:**
+1. Open snapshot, look up `target`.
+2. Call `item_attributes(target_id)`.
+3. Serialize as `ItemAttributesResponse { target, item_kind, file, span, attribute_count, attributes }`.
+
+#### `pub async fn items_with_attribute(params: ItemsWithAttributeParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::items_with_attribute -> item_kind_label -> json_result
+**Steps:**
+1. Open snapshot, resolve `crate_name` (Crate or Module-with-crate fallback).
+2. Call `items_with_attribute(crate_id, &params.attribute_pattern)`.
+3. Map each `ItemWithAttribute` to `EnrichedItemWithAttribute` (string-form
+   `item_kind`, carries `match_location` as `"attr"` or `"doc"`).
+4. Serialize as `ItemsWithAttributeResponse`.
+
+#### `pub async fn pub_use_pub_type_audit(params: PubUsePubTypeAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::pub_use_pub_type_audit -> OpenedSnapshot::node_by_id -> json_result
 **Steps:**
 1. Open snapshot, resolve `crate_name` to a Crate id.
 2. Call `pub_use_pub_type_audit(crate_id)`.
-3. For each finding, look up the `pub use` target's qualified name via `node_by_id` (best-effort).
+3. For each finding, look up the `pub use` target's qualified name via
+   `node_by_id` (best-effort).
 4. Serialize as `PubUsePubTypeAuditResponse`.
 
-### `pub async fn re_export_chain(params: ReExportChainParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn re_export_chain(params: ReExportChainParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> OpenedSnapshot::re_export_chain -> json_result
 **Steps:**
 1. Open snapshot, look up `target`.
@@ -587,36 +653,9 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Map each `ReExportLink` to `EnrichedReExportLink { from_module, visible_name, depth }`.
 4. Serialize as `ReExportChainResponse`.
 
-### `pub async fn crate_dependency_metric(params: CrateDependencyMetricParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::crate_dependency_metric -> NodeId::to_hex -> json_result
-**Steps:**
-1. Open snapshot.
-2. Call `crate_dependency_metric()` for `Vec<CrateMetric>`.
-3. If `sort_by` is supplied, sort descending by `instability` / `abstractness` / `item_count` / `afferent` / `efferent` (rejecting unknown keys).
-4. Apply `top_n` truncation.
-5. Map each `CrateMetric` to `CrateMetricRendered` (hex `crate_id`).
-6. Serialize as `CrateDependencyMetricResponse`.
+### Group: guideline / safety audits (Phases 6–8)
 
-### `pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::overlaps -> json_result
-**Steps:**
-1. Open snapshot.
-2. Call `overlaps()` and serialize the `OverlapsReport` directly.
-
-### `pub async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::module_tree -> json_result
-**Steps:**
-1. Open snapshot.
-2. Call `module_tree(&params.krate, params.depth)`.
-3. Serialize as `ModuleTreeResponse { tree }`.
-
-### `pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError>`
-**Call graph:** open_workspace_snapshot -> OpenedSnapshot::workspace_stats -> json_result
-**Steps:**
-1. Open snapshot.
-2. Call `workspace_stats()` and serialize the resulting `WorkspaceStats` directly.
-
-### `pub async fn unsafe_audit(params: UnsafeAuditParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn unsafe_audit(params: UnsafeAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** tokio::task::spawn_blocking -> open_workspace_snapshot -> Path::canonicalize -> graph::loader::load -> OpenedSnapshot::unsafe_audit -> NodeId::to_hex -> json_result
 **Steps:**
 1. Spawn a blocking task: open snapshot, canonicalize directory, run `loader::load`, and call `snap.unsafe_audit(&loaded)`.
@@ -624,7 +663,7 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Map each `UnsafeFinding` to a local `UnsafeFindingRendered` (hex `enclosing_function`).
 4. Serialize as `Resp { directory, finding_count, findings }`.
 
-### `pub async fn mut_static_audit(params: MutStaticAuditParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn mut_static_audit(params: MutStaticAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::mut_static_audit -> NodeId::to_hex -> json_result
 **Steps:**
 1. Open snapshot.
@@ -632,81 +671,196 @@ All tool functions follow a shared shape: open the LMDB hypergraph snapshot, res
 3. Map each finding to a local `MutStaticFindingRendered` (hex `item`).
 4. Serialize as `Resp { directory, finding_count, findings }`.
 
-### `pub async fn missing_docs_audit(params: MissingDocsAuditParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn missing_docs_audit(params: MissingDocsAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> docs_audit::default_kind_filter -> parse_item_kind_filter -> docs_audit::missing_docs_audit -> item_kind_label -> NodeId::to_hex -> json_result
 **Steps:**
 1. Open snapshot.
 2. Resolve optional `crate_name` to a Crate id (Module promoted) → `crate_id_filter`.
-3. Build the `kind_filter` set: default kinds when `item_kind` is `None`, else parse each label via `parse_item_kind_filter`.
+3. Build the `kind_filter` set: default kinds when `item_kind` is `None`,
+   else parse each label via `parse_item_kind_filter`.
 4. Build `AuditOpts { crate_id_filter, kind_filter, skip_test_items: default true }`.
 5. Call `docs_audit::missing_docs_audit(&snap, opts)`.
 6. Map each finding to a local `MissingDocsFindingRendered` (hex `target`).
 7. Serialize as `Resp { scope, finding_count, findings }`.
 
-### `pub async fn derive_audit(params: DeriveAuditParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn derive_audit(params: DeriveAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> derive_audit::default_kind_filter -> parse_item_kind_filter -> derive_audit::derive_audit -> item_kind_label -> NodeId::to_hex -> json_result
 **Steps:**
 1. Open snapshot.
 2. Resolve optional `crate_name` to Crate id.
-3. Build `kind_filter` from defaults or parsed labels (rejecting any kind outside Struct/Enum/Union).
+3. Build `kind_filter` from defaults or parsed labels (rejecting any kind
+   outside Struct/Enum/Union).
 4. Reject empty `required_derives` with `invalid_params`.
-5. Build `AuditOpts { crate_id_filter, kind_filter, required_derives, pub_only: default true, skip_test_items: default true }`.
+5. Build `AuditOpts { crate_id_filter, kind_filter, required_derives,
+   pub_only: default true, skip_test_items: default true }`.
 6. Call `derive_audit::derive_audit(&snap, opts)`.
-7. Map each finding to a local `DeriveFindingRendered` (hex `target`, list `current_derives` and `missing_derives`).
+7. Map each finding to a local `DeriveFindingRendered` (hex `target`, list
+   `current_derives` and `missing_derives`).
 8. Serialize as `Resp { scope, required_derives, finding_count, findings }`.
 
-### `pub async fn recursion_check(params: RecursionCheckParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn recursion_check(params: RecursionCheckParams) -> Result<CallToolResult, McpError>`
 **Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> recursion_check::clamp_cycle_length -> recursion_check::recursion_check -> recursion_check::enclosing_fn_qualified_names -> NodeId::to_hex -> json_result
 **Steps:**
 1. Open snapshot.
 2. Resolve optional `crate_name` to Crate id.
 3. Clamp `max_cycle_length` to [1, 12] via `clamp_cycle_length` (defaults to 5).
 4. Build `RecursionOpts { crate_id_filter, max_cycle_length }` and call `recursion_check`.
-5. For each cycle, resolve each member's qualified name, take the first member's hex as `starting_node_id`.
-6. Push to `Vec<RecursionCycleRendered>` and serialize as `Resp { scope, max_cycle_length, cycle_count, cycles }`.
+5. For each cycle, resolve each member's qualified name, take the first
+   member's hex as `starting_node_id`.
+6. Push to `Vec<RecursionCycleRendered>` and serialize as
+   `Resp { scope, max_cycle_length, cycle_count, cycles }`.
 
-### `struct RecursionCycleRendered`
-Fields: `fns: Vec<String>`, `cycle_length: usize`, `direct_recursion: bool`, `starting_node_id: String` — JSON-rendered cycle row.
+##### `struct RecursionCycleRendered`
+Fields: `fns: Vec<String>`, `cycle_length: usize`, `direct_recursion: bool`,
+`starting_node_id: String` — JSON-rendered cycle row.
 
-### `pub async fn channel_capacity_audit(params: ChannelCapacityAuditParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn channel_capacity_audit(params: ChannelCapacityAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** tokio::task::spawn_blocking -> open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> Path::canonicalize -> graph::loader::load -> channel_audit::channel_capacity_audit -> NodeId::to_hex -> json_result
 **Steps:**
 1. Capture `directory`, `crate_name`, `skip_test_fns` (default true) up front.
-2. Spawn a blocking task: open snapshot, resolve optional crate scope, canonicalize directory, run `loader::load`, build `ChannelAuditOpts`, run `channel_capacity_audit(&loaded, &snap, opts)`.
+2. Spawn a blocking task: open snapshot, resolve optional crate scope,
+   canonicalize directory, run `loader::load`, build `ChannelAuditOpts`,
+   run `channel_capacity_audit(&loaded, &snap, opts)`.
 3. Await with double-`?` to propagate errors.
 4. Map each `ChannelFinding` to `ChannelFindingRendered` (hex `enclosing_function`).
 5. Serialize as `Resp { scope, finding_count, findings }`.
 
-### `pub async fn fn_body_audit(params: FnBodyAuditParams) -> Result<CallToolResult, McpError>`
+#### `pub async fn fn_body_audit(params: FnBodyAuditParams) -> Result<CallToolResult, McpError>`
 **Call graph:** fn_body_audit::parse_pattern_filter -> tokio::task::spawn_blocking -> open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> Path::canonicalize -> graph::loader::load -> fn_body_audit::fn_body_audit -> NodeId::to_hex -> json_result
 **Steps:**
-1. Parse `patterns` via `parse_pattern_filter` (an empty/None defaults to all 8 built-in patterns; unknown labels return `invalid_params`).
+1. Parse `patterns` via `parse_pattern_filter` (an empty/None defaults to
+   all 8 built-in patterns: `unwrap`, `expect`, `panic_macros`,
+   `unwrap_unchecked`, `transmute`, `await_in_guard_scope`,
+   `self_recursion`, `unbounded_loop`; unknown labels return `invalid_params`).
 2. Sort the resulting label set into `patterns_used`.
-3. Spawn a blocking task: open snapshot, resolve optional crate scope, canonicalize directory, run `loader::load`, build `FnBodyAuditOpts`, run `fn_body_audit(&loaded, &snap, opts)`.
+3. Spawn a blocking task: open snapshot, resolve optional crate scope,
+   canonicalize directory, run `loader::load`, build `FnBodyAuditOpts`,
+   run `fn_body_audit(&loaded, &snap, opts)`.
 4. Await with double-`?`.
 5. Map each `FnBodyFinding` to `FnBodyFindingRendered` (hex `target` when present).
 6. Serialize as `Resp { scope, patterns_used, finding_count, findings }`.
 
-### Private helpers
+### Group: semantic neighbors
+
+#### `pub async fn similar_to_item(params: SimilarToItemParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> std::fs::read_to_string -> ProjectPaths::from_directory -> query_tools::create_hybrid_search -> HybridSearch::vector_only_search -> json_result
+**Steps:**
+1. Open snapshot and resolve seed `target`; require both `file` and `span`.
+2. Read `<directory>/<seed_file>` to a `String` and slice the `[start, end)`
+   byte range as the seed source.
+3. Build a `HybridSearch` for the workspace via `create_hybrid_search`.
+4. Run `vector_only_search(seed_source, limit + 1)`.
+5. For each result: drop chunks whose file path ends with the seed's
+   relative path AND whose line range overlaps the seed's line range; drop
+   scores below threshold; apply optional `item_kind` filter.
+6. Build a 3-line preview from `chunk.content`; push as `SimilarMatch`;
+   stop when `limit` reached.
+7. Serialize as `SimilarToItemResp { seed, limit, threshold,
+   item_kind_filter, match_count, matches }`.
+
+#### `pub async fn semantic_overlaps(params: SemanticOverlapsParams) -> Result<CallToolResult, McpError>`
+**Call graph:** open_workspace_snapshot -> OpenedSnapshot::lookup_by_qualified_name -> parse_item_kind_filter -> nodes_by_id LMDB cursor -> ensure_embeddings_for -> cosine -> build_clusters -> node_to_item_ref -> json_result
+**Steps:**
+1. Validate `output_mode` is `pairs` or `clusters`; capture `threshold`
+   (0.85), `max_pairs` (50), `max_cluster_size` (15), `skip_tests`,
+   `cross_crate_only`, `crate_name`, `item_kind` defaults.
+2. Open snapshot.
+3. If `crate_name` provided, resolve to a Crate id (Module promoted to crate).
+4. Parse `item_kind` filter into an `Option<ItemKind>`.
+5. Iterate `nodes_by_id` LMDB cursor: keep only `NodeKind::Item` whose
+   crate (optional) and item_kind (optional) match, with a real file+span,
+   dropping any `::tests::` qualified names when `skip_tests`.
+6. Call the shared `ensure_embeddings_for(&snap, &seed_nids)` helper. It
+   handles the cache lookup (`content_hash` + `embedder_version` match),
+   the async batched embed (`embed_batch_async` in 64-text chunks via
+   `EMBED_CHUNK`), and the LMDB write-back of fresh
+   `EmbeddingRecord { content_hash, vector, embedder_version,
+   generated_at_unix }`. Skipped seeds (unreadable file, empty source,
+   out-of-range span) are dropped.
+7. Re-attach embeddings to each surviving seed as `SeedCtx { id, node,
+   content_hash, cached_vec }`.
+8. Identical-source short-circuit: items sharing a `content_hash` get
+   score=1.0 (subject to `cross_crate_only`); use canonical
+   (smaller-id-first) edge keys.
+9. In-memory pairwise cosine over remaining (cached_vec, cached_vec)
+   pairs; skip same-hash pairs (already handled), skip same-crate pairs
+   when `cross_crate_only`, drop scores below threshold; accumulate into
+   a `HashMap<EdgeKey, Vec<f32>>`.
+10. Average per-direction scores per edge, sort by similarity descending;
+    record `pair_count`.
+11. Build `seed_index` lookup table for response item refs.
+12. Pairs mode: take `max_pairs`, map to `SimilarityPair { a, b,
+    similarity }`, return `SemanticOverlapsResp` with `pairs` populated.
+13. Clusters mode (default): call `build_clusters(&pairs, max_pairs,
+    lookup)`, drop clusters with `size > max_cluster_size`, return
+    `SemanticOverlapsResp` with `clusters` populated.
+
+### Group: embedding cache
+
+#### `pub(crate) const EMBEDDER_VERSION: &str`
+Stable identifier for the embedding model + dimension:
+`"fastembed:all-MiniLM-L6-v2:dim384:v1"`. Cache entries whose
+`embedder_version` does not match this string are treated as misses and
+refreshed. Single source of truth shared by `semantic_overlaps` and
+`ensure_embeddings_for`.
+
+#### `pub(crate) const EMBED_CHUNK: usize`
+`64` — max texts per `embed_batch_async` call. Keeps memory bounded when
+the workspace has thousands of items.
+
+#### `pub(crate) struct ResolvedEmbedding`
+Fields: `vector: Vec<f32>`, `content_hash: [u8; 16]` — per-NodeId embedding
+payload returned by `ensure_embeddings_for`.
+
+#### `pub(crate) async fn ensure_embeddings_for(snap: &OpenedSnapshot, nids: &[NodeId]) -> anyhow::Result<HashMap<NodeId, ResolvedEmbedding>>`
+**Call graph:** snap.env::read_txn -> snap.node_by_id -> Sha256::new/update/finalize -> snap.dbs.embeddings_by_target::get -> EmbeddingGenerator::new -> EmbeddingGenerator::embed_batch_async -> snap.env::write_txn -> snap.dbs.embeddings_by_target::put
+**Steps (Phase A — sync read txn):**
+1. Open a read txn on `snap.env`. Deduplicate the input `nids` slice via a `HashSet` so the same NodeId appearing twice causes no extra work.
+2. For each unique NodeId: look up the Node via `node_by_id`; require both `file` and `span`; build `abs_path = workspace_root/file`; cache file contents per `abs_path` to avoid re-reads.
+3. Slice the span bytes, trim; skip empty.
+4. SHA-256 the trimmed bytes and truncate the digest to 16 bytes → `content_hash`.
+5. Read `embeddings_by_target.get(nid)`: if cached record's `content_hash` AND `embedder_version` match, insert into `out` as a hit; else push to `pending` carrying the source text.
+
+**Steps (Phase B — async, no txn):**
+6. Drop the read txn. Bail early if `pending.is_empty()`.
+7. Lazily initialize `EmbeddingGenerator::new()` only when there is work to do.
+8. Capture `now = SystemTime::now().duration_since(UNIX_EPOCH).as_secs()`.
+9. For each `EMBED_CHUNK`-sized slice of `pending`, call `embed_batch_async(texts)` and extend `new_vectors`.
+
+**Steps (Phase C — sync write txn):**
+10. Open a write txn; for each `(pending_entry, vector)` pair, `put` an `EmbeddingRecord { content_hash, vector, embedder_version: EMBEDDER_VERSION, generated_at_unix: now }`.
+11. Commit. Move the vectors into `out` so the caller receives a single map.
+
+**Behaviour notes:**
+- Cache hit with matching hash AND version → reused as-is.
+- Cache hit with mismatched hash or version → re-computed, cache overwritten.
+- Cache miss → computed, inserted.
+- Nodes without `file`/`span`, unreadable files, out-of-range/non-UTF8 spans, empty/whitespace slices → silently skipped (no entry returned). Caller decides what to do about the absence.
+
+### Group: helpers
 
 #### `fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError>`
 **Steps:**
 1. Canonicalize `directory`, mapping I/O errors to `invalid_params`.
 2. Build `GraphPaths::for_workspace(&canonical)`.
-3. Call `open_current(&paths, GraphEnvOptions::default())` — return `invalid_params` when no snapshot exists with a hint to run `build_hypergraph`.
+3. Call `open_current(&paths, GraphEnvOptions::default())` — return
+   `invalid_params` when no snapshot exists with a hint to run
+   `build_hypergraph`.
 
 #### `fn resolve_required_node(snap, qualified_name, expect_kind) -> Result<NodeId, McpError>`
 **Steps:**
 1. Look up `qualified_name`, returning `invalid_params` when missing.
 2. Return the NodeId immediately if `node.kind == expect_kind`.
-3. Transparent fallback: when expecting a Module but receiving a Crate, call `find_root_module_of` and return that id.
+3. Transparent fallback: when expecting a Module but receiving a Crate,
+   call `find_root_module_of` and return that id.
 4. Otherwise return `invalid_params` with the actual node kind.
 
 #### `fn enrich_bindings(snap, bindings) -> Vec<EnrichedBinding>`
 **Steps:**
 1. Open a read txn (return empty vec on failure).
 2. For each binding, look up `target` and `from_module` nodes by id.
-3. Build an `EnrichedBinding` with namespace/kind/visibility labels and qualified-name strings.
+3. Build an `EnrichedBinding` with namespace/kind/visibility labels and
+   qualified-name strings.
 
 #### `fn enrich_usages(snap, usages) -> Vec<EnrichedUsage>`
 **Steps:**
@@ -732,7 +886,8 @@ Fields: `fns: Vec<String>`, `cycle_length: usize`, `direct_recursion: bool`, `st
 2. Wrap as `CallToolResult::success(vec![Content::text(json)])`.
 
 #### `fn internal_error(label: &'static str) -> impl Fn(anyhow::Error) -> McpError`
-Returns a closure that maps `anyhow::Error` to `McpError::internal_error` with the static `label` prefix and `{e:#}` debug formatting.
+Returns a closure that maps `anyhow::Error` to `McpError::internal_error`
+with the static `label` prefix and `{e:#}` debug formatting.
 
 #### `fn namespace_label(ns: Namespace) -> &'static str`
 Maps `Namespace::Type → "Type"`, `Namespace::Value → "Value"`.
@@ -741,16 +896,21 @@ Maps `Namespace::Type → "Type"`, `Namespace::Value → "Value"`.
 Maps `Read | Write | Test | Other` to their string forms.
 
 #### `fn item_kind_label(k: ItemKind) -> &'static str`
-Maps every `ItemKind` variant to its full PascalCase string form (e.g. `Function`, `Struct`, `Enum`, `EnumVariant`, `AssocFunction`, etc.).
+Maps every `ItemKind` variant to its full PascalCase string form (e.g.
+`Function`, `Struct`, `Enum`, `EnumVariant`, `AssocFunction`, etc.).
 
 #### `fn binding_kind_label(kind: BindingKind) -> &'static str`
 Maps `Declared | NamedImport | GlobImport | ExternCrateImport` to identical strings.
 
 #### `fn node_kind_label(node: &Node) -> String`
-Returns `"Workspace"`, `"Crate"`, `"Module"`, or `"ExternalSymbol"` directly. For `NodeKind::Item`, returns `Item.<short_label>` when `item_kind` is set, else `"Item"`.
+Returns `"Workspace"`, `"Crate"`, `"Module"`, or `"ExternalSymbol"` directly.
+For `NodeKind::Item`, returns `Item.<short_label>` when `item_kind` is set,
+else `"Item"`.
 
 #### `fn short_item_kind_label(k: ItemKind) -> &'static str`
-Like `item_kind_label` but emits the short forms `Fn` / `AssocFn` (instead of `Function` / `AssocFunction`); pairs with `node_kind_label` to produce `Item.Fn` etc.
+Like `item_kind_label` but emits the short forms `Fn` / `AssocFn` (instead
+of `Function` / `AssocFunction`); pairs with `node_kind_label` to produce
+`Item.Fn` etc.
 
 #### `fn visibility_label(snap, rtxn, vis: &BindingVisibility) -> String`
 **Steps:**
@@ -762,13 +922,18 @@ Like `item_kind_label` but emits the short forms `Fn` / `AssocFn` (instead of `F
 #### `fn parse_item_kind_filter(s: Option<&str>) -> Result<Option<ItemKind>, McpError>`
 **Steps:**
 1. Return `Ok(None)` for `None`.
-2. Lowercase the input and match against the full label set (`function|fn`, `struct`, `enum`, `union`, `trait`, `typealias|type_alias|type`, `const`, `static`, `assocfunction|assocfn|assoc_function`, `assocconst|assoc_const`, `assoctype|assoc_type`, `method`, `enumvariant|enum_variant|variant`).
+2. Lowercase the input and match against the full label set
+   (`function|fn`, `struct`, `enum`, `union`, `trait`,
+   `typealias|type_alias|type`, `const`, `static`,
+   `assocfunction|assocfn|assoc_function`, `assocconst|assoc_const`,
+   `assoctype|assoc_type`, `method`, `enumvariant|enum_variant|variant`).
 3. Return `invalid_params` for unknown labels.
 
 #### `fn line_range_overlaps(a_start, a_end, b_start, b_end) -> bool` (dead-code allowed)
-Returns `a_start <= b_end && a_end >= b_start`. Retained for future tools and unit tests.
+Returns `a_start <= b_end && a_end >= b_start`. Retained for future tools
+and unit tests.
 
-#### `fn cosine(a: &[f32], b: &[f32]) -> f32`
+#### `pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32`
 **Steps:**
 1. Iterate paired elements computing dot product and per-vector squared norms.
 2. Return `0.0` when either norm is zero (instead of `NaN`).
@@ -777,12 +942,14 @@ Returns `a_start <= b_end && a_end >= b_start`. Retained for future tools and un
 #### `fn resolve_chunk_to_item(snap, chunk_file, chunk_line_start, chunk_line_end, file_contents_cache) -> Option<(NodeId, Node)>` (dead-code allowed)
 **Steps:**
 1. Open a read txn and iterate `nodes_by_id`.
-2. For each Item with file+span, perform component-aware suffix match `chunk_file.ends_with(node.file)`.
+2. For each Item with file+span, perform component-aware suffix match
+   `chunk_file.ends_with(node.file)`.
 3. Read the file (cached) and convert byte spans to line numbers.
 4. Return the first item whose line range overlaps the chunk's range.
 
 #### `fn node_to_item_ref(node: &Node) -> ItemRef`
-Builds an `ItemRef { qualified_name, item_kind: short label, file, span }` (defaults file to empty / span to (0,0) when missing).
+Builds an `ItemRef { qualified_name, item_kind: short label, file, span }`
+(defaults file to empty / span to (0,0) when missing).
 
 #### `fn build_clusters<F>(edges, max_members, lookup) -> Vec<SimilarityCluster>`
 **Call graph:** find (inner closure) -> lookup -> SimilarityCluster::sort_by
@@ -790,13 +957,50 @@ Builds an `ItemRef { qualified_name, item_kind: short label, file, span }` (defa
 1. Collect the unique node set across all edges, mapping each `NodeId` to a dense index.
 2. Run union-find with path compression: every edge unions its two endpoints.
 3. Group node indices by representative root.
-4. For each group with at least 2 members, gather scores from edges whose endpoints both lie in the group.
+4. For each group with at least 2 members, gather scores from edges whose
+   endpoints both lie in the group.
 5. Compute `avg`, `min` similarity, drop groups whose score list is empty.
 6. Cap members at `max_members`, marking `truncated` when the cap kicks in.
 7. Sort clusters by `avg_similarity desc`, tie-break by `size desc`, then `min_similarity desc`.
 
 #### `fn _path_marker(_: &Path)` (dead-code allowed)
 No-op function preserved only to suppress dead-code warnings on the `Path` import.
+
+### Group: codemap
+
+#### `pub(crate) async fn handle_build_codemap(directory, task_prompt, seed_qualified_names, max_nodes, depth, max_incoming_per_node, embedding_policy, format, include_snippets) -> Result<CallToolResult, McpError>`
+**MCP tool — `build_codemap`**: Builds a task-conditioned subgraph (codemap) of the indexed workspace.
+**Call graph:** open_workspace_snapshot -> graph::codemap::newest_source_mtime -> ProjectPaths::from_directory -> TantivyAdapter::new -> TantivyAdapter::create_bm25_search -> query_tools::create_hybrid_search -> HybridSearch::search -> graph::codemap::build_codemap -> graph::codemap::render_mermaid -> graph::codemap::render_outline -> json_result
+**Steps:**
+1. **Validate inputs.** Trim `task_prompt` (drop empties); require *either*
+   a non-empty trimmed prompt OR a non-empty `seed_qualified_names` —
+   `invalid_params` if both absent.
+2. Parse `embedding_policy` into `EmbeddingPolicy::NoRerank` (default) /
+   `UseCachedOnly` / `ComputeMissing`; unknown → `invalid_params`.
+3. Validate `format ∈ {json, mermaid, outline, all}`; default `json`.
+4. Clamp `max_nodes` to `[1, 500]` (default 80); clamp `depth` to `≤ 5`
+   (default 3); read `max_incoming_per_node` (default 8) and
+   `include_snippets` (default false).
+5. Build `CodemapOptions { max_nodes, depth, top_k_seeds: 20,
+   max_incoming_per_node, embedding_policy: policy, include_snippets }`.
+6. Open the workspace snapshot.
+7. **Pre-flight staleness check.** Compare `snap.manifest.created_at_unix`
+   to `codemap::newest_source_mtime(workspace_root)`. If sources are
+   newer, push a `pre_diagnostics` message advising
+   `build_hypergraph(force_rebuild=true)`.
+8. Branch on seed source:
+   - If `seed_qualified_names` is non-empty → call `build_codemap(&snap,
+     trimmed_prompt, Some(names), None, &opts, &pre_diagnostics).await`.
+   - Else (`task_prompt` path): build `ProjectPaths`, best-effort open
+     BM25 via `TantivyAdapter`, build `HybridSearch` via
+     `query_tools::create_hybrid_search`, run
+     `hybrid.search(prompt, top_k_seeds*3)` and pass the resulting hits
+     into `build_codemap`.
+9. Render per `format_choice`:
+   - `"json"` → `json_result(&codemap)`.
+   - `"mermaid"` → `Content::text(render_mermaid(&codemap))`.
+   - `"outline"` → `Content::text(render_outline(&codemap))`.
+   - `"all"` → JSON object `{ json, mermaid, outline }`, pretty-printed.
 
 ### Response shape structs (private, all `#[derive(Debug, Serialize)]`)
 
@@ -838,3 +1042,69 @@ No-op function preserved only to suppress dead-code warnings on the `Path` impor
 - `ItemRef { qualified_name, item_kind?, file, span }`.
 - `FunctionsWithFilterResponse { krate, total_match_count, offset, limit, match_count, matches }`.
 - `FunctionsWithFilterMatch { target, qualified_name, signature? }`.
+- Local-only response shapes declared inside audit fns (each with its own `ScopeSummary` flavour): `UnsafeFindingRendered`, `MutStaticFindingRendered`, `MissingDocsFindingRendered`, `DeriveFindingRendered`, `ChannelFindingRendered`, `FnBodyFindingRendered` — all wrap their `findings` array under a top-level `Resp { scope, finding_count, findings }` (recursion uses `cycles`/`cycle_count` instead).
+
+## Module: clear_cache_tool
+
+### `pub struct ClearCacheParams`
+Fields:
+- `directory: Option<String>` — optional project directory to scope the clear; absent means clear all caches.
+- `include_hypergraph: Option<bool>` (default `false`) — when `true`, also wipe the persisted hypergraph snapshot directory at `<data_dir>/graphs/<workspace_hash>/`. Forces the next `build_hypergraph` call to do a full re-index. Backward-compatible — existing callers omitting the field continue to skip hypergraph wipes.
+
+### Private `fn data_dir() -> PathBuf`
+Same XDG-fallback logic as `indexing_tools::data_dir`; returns the
+`dev/rust-code-mcp/search` data directory or `.rust-code-mcp`.
+
+### Private `fn compute_dir_hash(dir_path: &Path) -> String`
+**Call graph:** Sha256::new -> Sha256::update -> Sha256::finalize
+**Steps:**
+1. Hash `dir_path.to_string_lossy()` bytes with SHA-256.
+2. Return the digest as a 64-char hex string.
+
+### `pub async fn clear_cache(params: ClearCacheParams) -> Result<CallToolResult, McpError>`
+**MCP tool — `clear_cache`**: Removes the metadata cache, Tantivy index, and vector-store directories for one or all projects; optionally also wipes the persisted hypergraph snapshot.
+**Call graph:** data_dir -> compute_dir_hash -> std::fs::remove_dir_all -> std::fs::canonicalize -> graph::GraphPaths::for_workspace -> graph::storage::default_data_dir -> PathBuf::join
+**Steps:**
+1. Initialize empty `cleared` and `errors` vectors.
+2. Compute the base `data_dir`. Read `include_hypergraph` (default `false`).
+3. **Project-scoped branch (`directory.is_some()`):**
+   a. Hash the directory and derive `cache_path`, `tantivy_path`, and `vector_path` (with `collection_name`).
+   b. For each derived path that exists, attempt `remove_dir_all`, recording success or failure.
+   c. If `include_hypergraph` is set, canonicalize the directory and build `crate::graph::GraphPaths::for_workspace(&canonical)`. If `paths.root_dir` exists, `remove_dir_all` it and record the hypergraph snapshot path under `cleared` (or push to `errors`).
+4. **Workspace-wide branch (`directory.is_none()`):**
+   a. Recursively remove the global `cache` and `index` subdirectories under `data_dir`.
+   b. If `include_hypergraph` is set, look up `crate::graph::storage::default_data_dir()` (the parent that `GraphPaths::for_workspace` hashes underneath) and `remove_dir_all` it if present.
+5. Build a response string listing cleared paths and errors (or "No cache files found" when both lists empty).
+6. Append a "will be re-indexed" hint scoped to the project or workspace.
+7. If `include_hypergraph` is set, append a line stating that the next `build_hypergraph` call will do a full re-index.
+8. Return `CallToolResult::success` with the response text.
+
+## Module: health_tool
+
+### `pub struct HealthCheckParams`
+Field: `directory: Option<String>` — optional project directory to scope the health check.
+
+### Private `fn data_dir() -> PathBuf`
+Same XDG-fallback logic as `indexing_tools::data_dir`; returns the
+`dev/rust-code-mcp/search` data directory or `.rust-code-mcp`.
+
+### `pub async fn health_check(Parameters(HealthCheckParams)) -> Result<CallToolResult, McpError>`
+**MCP tool — `health_check`**: Returns BM25 / vector store / Merkle tree status as JSON plus a human-readable interpretation.
+**Call graph:** Sha256::new/update/finalize -> data_dir -> get_snapshot_path -> Bm25Search::new -> VectorStore::new_embedded -> HealthMonitor::new -> HealthMonitor::check_health -> serde_json::to_string_pretty
+**Steps:**
+1. Log the health-check intent.
+2. If `directory` is provided, hash it with SHA-256 and derive
+   `bm25_path = data_dir/index/<hash>`,
+   `merkle_path = get_snapshot_path(dir)`,
+   `collection_name = "code_chunks_<first 8 hex>"`.
+3. Otherwise, fall back to a system-wide check using `data_dir/index`, a
+   sentinel non-existent merkle path, and the default collection name.
+4. Try to open the Tantivy index via `Bm25Search::new(&bm25_path)`
+   (wrapped in `Arc` if successful).
+5. Try to open the LanceDB vector store at
+   `data_dir/cache/vectors/<collection_name>` with dimension 384.
+6. Construct a `HealthMonitor` and run `check_health().await`.
+7. Pretty-serialize the report as JSON.
+8. Append a status banner (`Healthy`/`Degraded`/`Unhealthy`), the JSON,
+   an explanatory guide, and the directory context.
+9. Return the response as `CallToolResult::success`.

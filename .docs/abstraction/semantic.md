@@ -1,13 +1,16 @@
 # semantic — Abstract Logic
 
 ## Module: mod
-**Purpose:** Provides a process-wide semantic service that lazily loads rust-analyzer IDE state per project and exposes symbol-level queries.
+**Purpose:** Provides a process-wide semantic service that lazily loads rust-analyzer IDE state per project and exposes symbol-level queries plus rename previews.
 
 1. **Hold a single shared semantic service for the process** -> `SEMANTIC` (LazyLock<Mutex<SemanticService>>)
-2. **Construct an empty service with a per-project IDE cache** -> `SemanticService::new()`
-3. **Lazily load and cache rust-analyzer IDE state for a project path** -> `SemanticService::get_or_load()`
-4. **Search for symbols by name within a project** -> `SemanticService::symbol_search()`
-5. **Resolve all references for a named symbol within a project** -> `SemanticService::find_references_by_name()`
+2. **Re-export the public surface (Location, rename preview types)** -> `pub use position::Location`, `pub use rename::{RenameEdit, RenameFileMove, RenamePreview}`
+3. **Bundle per-project `AnalysisHost` and `Vfs` under a canonical key** -> `ProjectContext` (private struct)
+4. **Construct an empty service with a per-project IDE cache** -> `SemanticService::new()`
+5. **Lazily load and cache rust-analyzer IDE state for a project path** -> `SemanticService::get_or_load()`
+6. **Search for symbols by name within a project** -> `SemanticService::symbol_search()`
+7. **Resolve all references for a named symbol within a project** -> `SemanticService::find_references_by_name()`
+8. **Compute a rename preview by symbol name without touching disk** -> `SemanticService::rename_by_name()`
 
 ## Module: loader
 **Purpose:** Bootstraps a rust-analyzer `AnalysisHost` and `Vfs` for a Cargo workspace with dependency-free, fast-load configuration.
@@ -25,3 +28,12 @@
 6. **Find all references to the symbol at a given file position** -> `find_references()`
 7. **Search the workspace for symbols matching a name, bounded by a limit** -> `symbol_search()`
 8. **Find every reference to any symbol matching a name, deduplicated and sorted** -> `find_references_by_name()`
+
+## Module: rename
+**Purpose:** Wraps rust-analyzer's rename engine with exact-name disambiguation and materializes the result as a side-effect-free `RenamePreview` (textual edits plus file-system moves).
+
+1. **Describe a single in-place text replacement as portable data** -> `RenameEdit` (struct), `impl Display for RenameEdit`
+2. **Describe a create/move/dir-move emitted alongside textual edits** -> `RenameFileMove` (struct), `impl Display for RenameFileMove`
+3. **Aggregate edits and file moves into one preview result** -> `RenamePreview` (struct, with `Default`)
+4. **Find the symbol by exact name, refuse ambiguous matches, then run rust-analyzer's rename and return a preview** -> `rename_by_name()`
+5. **Materialize a rust-analyzer `SourceChange` into deterministic, real-path edits and file moves** -> `source_change_to_preview()`
