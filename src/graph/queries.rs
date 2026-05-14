@@ -2326,6 +2326,39 @@ impl OpenedSnapshot {
             }))
     }
 
+    /// Distinct outgoing references from `caller_fn`'s body.
+    ///
+    /// Wraps the private `usages_for_consumer_function` iterator and dedupes
+    /// by target `NodeId`. Includes calls, type references, const reads —
+    /// anything `Usage` produces with `consumer_function == Some(caller_fn)`.
+    /// The caller (codemap layer) classifies edges by reading each target's
+    /// `Node.item_kind`.
+    pub(crate) fn callees_of(&self, caller_fn: NodeId) -> Result<Vec<NodeId>> {
+        let rtxn = self.env.read_txn()?;
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        for entry in self.usages_for_consumer_function(&rtxn, caller_fn)? {
+            seen.insert(entry?.target);
+        }
+        Ok(seen.into_iter().collect())
+    }
+
+    /// Distinct functions whose body contains a reference to `target`.
+    ///
+    /// Mirrors the `consumer_function.is_some()` filter used by `who_calls`.
+    /// Semantics depend on `target`'s `ItemKind`: if `target` is callable
+    /// these are callers, if `target` is a type these are consumers —
+    /// classification is the caller's concern.
+    pub(crate) fn referrers_of(&self, target: NodeId) -> Result<Vec<NodeId>> {
+        let rtxn = self.env.read_txn()?;
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        for entry in self.usages_for_target(&rtxn, target)? {
+            if let Some(referrer) = entry?.consumer_function {
+                seen.insert(referrer);
+            }
+        }
+        Ok(seen.into_iter().collect())
+    }
+
     /// Walk up `module → parent → ...` and return the set including `module`
     /// itself. Used to answer "is C a descendant of M?".
     fn module_ancestors(

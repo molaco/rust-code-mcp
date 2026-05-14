@@ -513,3 +513,142 @@ pub fn read_manifest_compatible(path: &Path) -> Result<Option<GraphManifest>> {
 
 #[allow(dead_code)]
 fn _binding_id_marker(_: BindingId) {}
+
+#[cfg(test)]
+mod tests {
+    //! Fingerprint sanity. These cover what `compute_fingerprint` actually
+    //! observes — important for trusting `force_rebuild` semantics, since
+    //! the rebuild path keys off `graph_id_for(workspace_hash, fingerprint)`
+    //! and a stale fingerprint would let the call return early via the
+    //! "manifest_path exists" branch in `build_and_persist`.
+
+    use super::*;
+
+    fn write_minimal_crate(dir: &Path) {
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"fp_test\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/lib.rs"), "pub fn answer() -> i32 { 42 }\n").unwrap();
+    }
+
+    #[test]
+    fn fingerprint_changes_when_rs_file_edited() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let before = compute_fingerprint(root).unwrap();
+
+        // Smallest possible byte-level edit: append a trailing newline.
+        fs::write(root.join("src/lib.rs"), "pub fn answer() -> i32 { 42 }\n\n").unwrap();
+        let after = compute_fingerprint(root).unwrap();
+
+        assert_ne!(
+            before, after,
+            "fingerprint must flip on .rs byte change; force_rebuild relies on this"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_cargo_toml_edited() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let before = compute_fingerprint(root).unwrap();
+
+        // Bump version — should flip fingerprint.
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fp_test\"\nversion = \"0.0.1\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let after = compute_fingerprint(root).unwrap();
+
+        assert_ne!(
+            before, after,
+            "fingerprint must flip on Cargo.toml byte change"
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_when_target_dir_grows() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let before = compute_fingerprint(root).unwrap();
+
+        // Simulate a build artifact under target/ — should be ignored.
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::write(root.join("target/debug/fake.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("target/.lockfile"), b"x").unwrap();
+
+        let after = compute_fingerprint(root).unwrap();
+        assert_eq!(
+            before, after,
+            "target/ contents must not affect fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_when_git_dir_grows() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let before = compute_fingerprint(root).unwrap();
+
+        fs::create_dir_all(root.join(".git/objects")).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::write(root.join(".git/objects/abcdef"), b"xx").unwrap();
+
+        let after = compute_fingerprint(root).unwrap();
+        assert_eq!(
+            before, after,
+            ".git/ contents must not affect fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_when_unrelated_file_added() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let before = compute_fingerprint(root).unwrap();
+
+        // README, JSON, dotfile — none should be fingerprinted.
+        fs::write(root.join("README.md"), "# fp_test\n").unwrap();
+        fs::write(root.join("data.json"), "{}\n").unwrap();
+        fs::write(root.join(".env"), "KEY=value\n").unwrap();
+
+        let after = compute_fingerprint(root).unwrap();
+        assert_eq!(
+            before, after,
+            "non-.rs / non-Cargo.{{toml,lock}} files must not affect fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_when_only_path_metadata_changes() {
+        // Sanity: re-running with no edits returns the same hash. Sentinel for
+        // any future drift in WalkDir ordering or filter behavior.
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let a = compute_fingerprint(root).unwrap();
+        let b = compute_fingerprint(root).unwrap();
+        assert_eq!(a, b, "fingerprint must be deterministic across calls");
+    }
+
+    #[test]
+    fn graph_id_changes_with_fingerprint() {
+        // Documenting the rebuild contract: graph_id is derived from
+        // (workspace_hash, fingerprint, SCHEMA_VERSION). A flipped fingerprint
+        // → different graph_id → different snapshot_dir, so force_rebuild and
+        // normal rebuild both end up at a fresh location.
+        let wh = "ws_abc";
+        let a = graph_id_for(wh, "fp_1");
+        let b = graph_id_for(wh, "fp_2");
+        assert_ne!(a, b, "graph_id must change when fingerprint changes");
+    }
+}

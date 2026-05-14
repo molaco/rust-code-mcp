@@ -240,9 +240,7 @@ impl SearchToolRouter {
     }
 
     /// Clear corrupted cache, index, and vector store files
-    #[tool(
-        description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store."
-    )]
+    #[tool(description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store. Pass include_hypergraph=true to ALSO wipe the persisted hypergraph snapshot at <data_dir>/graphs/<workspace_hash>/ — forces the next build_hypergraph call to do a full re-index. The response lists exactly which directories were cleared.")]
     async fn clear_cache(
         &self,
         Parameters(params): Parameters<crate::tools::clear_cache_tool::ClearCacheParams>,
@@ -621,6 +619,72 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph_tools::semantic_overlaps(params).await
     }
+
+    #[tool(description = "Build a task-conditioned subgraph (codemap) of the indexed workspace.
+
+Returns nodes/edges/hierarchy focused on the prompt. Edges come from the
+HIR-driven hypergraph: direct calls and non-import uses. Local trait
+dispatch (`x.method()` where `method` is declared in a workspace-local
+trait) IS captured — the call resolves back to the trait declaration's
+Item. NOT captured: callers reaching an impl method through `dyn Trait`
+over external traits, generic `F: Fn(..)` indirect calls, and resolution
+to specific impl-method NodeIds via fully-qualified `<T as Trait>::m()`.
+These blind spots are inherent to the underlying Usage extraction.
+
+Tunable defaults: max_nodes=80 (cap 500), depth=3 (cap 5),
+max_incoming_per_node=8, embedding_policy='no_rerank', format='json'.
+
+Seed source: pass `task_prompt` for HybridSearch-driven seeds (requires
+`index_codebase` to have populated the vector store / tantivy index), OR
+`seed_qualified_names` for direct lookup. At least one of the two must
+be supplied.
+
+Choosing between them: `task_prompt` is best for exploratory queries
+against documented APIs; the underlying hybrid search (BM25 + vector
+embeddings against doc comments) favors public surfaces with rich
+docstrings, and many search hits fail to snap to an indexed Item span
+(reported in `Codemap.diagnostics`). For pinpoint navigation to a
+specific implementation, prefer `seed_qualified_names`. Note that the
+hypergraph indexes only `pub` and `pub(crate)` items — module-local
+private functions can't be referenced by qualified name. Unresolved
+names go to `Codemap.diagnostics`; if the leaf fails but its parent
+module resolves, the diagnostic notes 'likely private or not indexed'
+to distinguish that from a typo.
+
+Output: `format='json'` returns the full `Codemap` JSON (nodes, edges,
+hierarchy, stats, diagnostics). `format='mermaid'` returns a
+`flowchart LR` rendering with seeds highlighted via a `:::seed` class.
+`format='outline'` returns a flat indented text outline sorted by
+qualified name. `format='all'` wraps the three under a single JSON
+object. Requires `build_hypergraph` to have been called for the
+workspace.")]
+    async fn build_codemap(
+        &self,
+        Parameters(crate::tools::search_tool::BuildCodemapParams {
+            directory,
+            task_prompt,
+            seed_qualified_names,
+            max_nodes,
+            depth,
+            max_incoming_per_node,
+            embedding_policy,
+            format,
+            include_snippets,
+        }): Parameters<crate::tools::search_tool::BuildCodemapParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::handle_build_codemap(
+            &directory,
+            task_prompt.as_deref(),
+            seed_qualified_names.as_deref(),
+            max_nodes,
+            depth,
+            max_incoming_per_node,
+            embedding_policy.as_deref(),
+            format.as_deref(),
+            include_snippets,
+        )
+        .await
+    }
 }
 
 #[tool_handler]
@@ -634,8 +698,8 @@ impl ServerHandler for SearchToolRouter {
                 .enable_tools()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("Rust code intelligence server for searching code, reading files, resolving symbols and references, previewing renames, inspecting dependencies and call graphs, semantic similarity, persisted hypergraph queries, workspace audits, and cache/index maintenance. See each tool's description for parameters and limitations; run `build_hypergraph` before graph-backed tools that require it."
-                    .into(),
+-           instructions: Some("Rust code intelligence server for searching code, reading files, resolving symbols and references, previewing renames, inspecting dependencies and call graphs, semantic similarity, persisted hypergraph queries, workspace audits, and cache/index maintenance. See each tool's description for parameters and limitations; run `build_hypergraph` before graph-backed tools that require it." 
+                .into(),
             ),
         }
     }

@@ -5,8 +5,10 @@
 //! whole model in one transaction, writes manifest.json, then atomically swaps
 //! the workspace's `CURRENT` pointer.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -365,6 +367,9 @@ pub struct OpenedSnapshot {
     pub snapshot_dir: PathBuf,
     pub env: Env<WithoutTls>,
     pub dbs: GraphDatabases,
+    // codemap caches — both populated lazily by graph::codemap helpers.
+    span_index: OnceLock<HashMap<String, Vec<(u32, u32, NodeId)>>>,
+    line_to_byte: Mutex<HashMap<String, Arc<Vec<u32>>>>,
 }
 
 impl OpenedSnapshot {
@@ -379,6 +384,86 @@ impl OpenedSnapshot {
     /// Look up a node record by id.
     pub fn node(&self, txn: &GraphRoTxn<'_>, id: NodeId) -> Result<Option<super::model::Node>> {
         Ok(self.dbs.nodes_by_id.get(txn, id.as_bytes())?)
+    }
+
+    /// Lazily build a per-file flat span index of all Item nodes that have
+    /// `Node.file` and `Node.span` set. Returned map keys are workspace-
+    /// relative file paths (matching `Node.file`); values are
+    /// `(start_byte, end_byte, NodeId)` sorted by `start_byte` ascending.
+    ///
+    /// Built once per `OpenedSnapshot` handle. At ~1,500 items the flat
+    /// `Vec` + binary search is faster than a tree.
+    pub(crate) fn span_index(&self) -> &HashMap<String, Vec<(u32, u32, NodeId)>> {
+        self.span_index.get_or_init(|| {
+            let mut by_file: HashMap<String, Vec<(u32, u32, NodeId)>> = HashMap::new();
+            let rtxn = match self.env.read_txn() {
+                Ok(t) => t,
+                Err(_) => return by_file,
+            };
+            let iter = match self.dbs.nodes_by_id.iter(&rtxn) {
+                Ok(i) => i,
+                Err(_) => return by_file,
+            };
+            for entry in iter {
+                let Ok((id_bytes, node)) = entry else { continue };
+                if !matches!(node.kind, super::model::NodeKind::Item) {
+                    continue;
+                }
+                let Some(ref file) = node.file else { continue };
+                let Some((start, end)) = node.span else { continue };
+                let mut nid_arr = [0u8; 32];
+                nid_arr.copy_from_slice(id_bytes);
+                by_file
+                    .entry(file.clone())
+                    .or_default()
+                    .push((start, end, NodeId(nid_arr)));
+            }
+            for v in by_file.values_mut() {
+                v.sort_by_key(|&(s, _, _)| s);
+            }
+            by_file
+        })
+    }
+
+    /// On-demand line→byte offset table for `workspace_relative_file`.
+    /// `Arc<Vec<u32>>` so the table can be returned by clone without
+    /// holding the mutex across awaits. `Vec<u32>` element `i` is the
+    /// byte offset where source-line `i + 1` begins (1-indexed, matching
+    /// the chunker's `line_start`).
+    pub(crate) fn line_to_byte(
+        &self,
+        workspace_relative_file: &str,
+    ) -> std::io::Result<Arc<Vec<u32>>> {
+        // fast path: already cached
+        {
+            let map = self
+                .line_to_byte
+                .lock()
+                .expect("line_to_byte mutex poisoned");
+            if let Some(v) = map.get(workspace_relative_file) {
+                return Ok(v.clone());
+            }
+        }
+        // build it: read file, compute newline-offset prefix table
+        let abs = PathBuf::from(&self.manifest.workspace_root).join(workspace_relative_file);
+        let bytes = std::fs::read(&abs)?;
+        let mut offsets: Vec<u32> = Vec::with_capacity(64);
+        offsets.push(0); // line 1 starts at byte 0
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' {
+                let next = i.saturating_add(1);
+                if next <= u32::MAX as usize {
+                    offsets.push(next as u32);
+                }
+            }
+        }
+        let arc = Arc::new(offsets);
+        let mut map = self
+            .line_to_byte
+            .lock()
+            .expect("line_to_byte mutex poisoned");
+        map.insert(workspace_relative_file.to_string(), arc.clone());
+        Ok(arc)
     }
 }
 
@@ -431,6 +516,8 @@ pub fn open_specific(
         snapshot_dir,
         env,
         dbs,
+        span_index: OnceLock::new(),
+        line_to_byte: Mutex::new(HashMap::new()),
     }))
 }
 

@@ -492,6 +492,36 @@ pub struct SemanticOverlapsParams {
     pub cross_crate_only: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BuildCodemapParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Natural-language task description. Required unless seed_qualified_names is supplied. Best for exploratory queries against documented APIs — HybridSearch weighs token frequency in doc comments, so verbose-doc public surfaces rank highest. For pinpoint navigation to a specific implementation, prefer seed_qualified_names. Search hits that don't snap to an indexed Item are surfaced in Codemap.diagnostics with per-failure-mode counts (path-norm, line-resolve, kind-filter).")]
+    #[serde(default)]
+    pub task_prompt: Option<String>,
+    #[schemars(description = "Override seeds by qualified name. The hypergraph indexes only `pub` and `pub(crate)` items — module-local private functions and trait-impl methods are not stored as standalone nodes and can't be referenced this way. Names that fail to resolve are surfaced in Codemap.diagnostics rather than erroring out; if the leaf fails but its parent module resolves, the diagnostic notes 'likely private or not indexed'.")]
+    #[serde(default)]
+    pub seed_qualified_names: Option<Vec<String>>,
+    #[schemars(description = "Maximum number of retained nodes. Default 80; capped at 500.")]
+    #[serde(default)]
+    pub max_nodes: Option<usize>,
+    #[schemars(description = "BFS expansion depth from each seed. Default 3; capped at 5.")]
+    #[serde(default)]
+    pub depth: Option<u8>,
+    #[schemars(description = "Per-node incoming-edge cap during BFS expansion. Default 8.")]
+    #[serde(default)]
+    pub max_incoming_per_node: Option<usize>,
+    #[schemars(description = "Embedding-rerank policy: `no_rerank` (default) | `cached_only` | `compute_missing`.")]
+    #[serde(default)]
+    pub embedding_policy: Option<String>,
+    #[schemars(description = "Output format: `json` (default) | `mermaid` | `outline` | `all`.")]
+    #[serde(default)]
+    pub format: Option<String>,
+    #[schemars(description = "Include the first ~5 lines of source per node in the JSON/outline output. Default false.")]
+    #[serde(default)]
+    pub include_snippets: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

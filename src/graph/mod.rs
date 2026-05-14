@@ -7,6 +7,7 @@ pub mod ast_resolve;
 pub mod attributes;
 pub mod bindings;
 pub mod channel_audit;
+pub mod codemap;
 pub mod derive_audit;
 pub mod docs_audit;
 pub mod extract;
