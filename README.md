@@ -2,6 +2,8 @@
 
 An MCP server for searching and analyzing Rust codebases. Combines hybrid BM25 + vector search with a HIR-driven workspace **hypergraph** built on rust-analyzer, exposing 45+ tools for symbol navigation, call-graph traversal, structural audits, and semantic neighborhood queries.
 
+**Links:** [Website](https://rust-code-mcp.pages.dev/) · [Discord](https://discord.com/invite/dENhfbtCa) — come share how you're using it; we want to hear about people's workflows.
+
 ## Architecture
 
 ![Architecture](architecture.mmd.svg)
