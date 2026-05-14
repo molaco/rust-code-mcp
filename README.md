@@ -1,34 +1,47 @@
 # rust-code-mcp
 
-An MCP server for semantic code search in Rust codebases. Combines BM25 full-text search with vector embeddings for hybrid search, plus rust-analyzer based code analysis.
+An MCP server for searching and analyzing Rust codebases. Combines hybrid BM25 + vector search with a HIR-driven workspace **hypergraph** built on rust-analyzer, exposing 45+ tools for symbol navigation, call-graph traversal, structural audits, and semantic neighborhood queries.
 
 ## Architecture
 
 ![Architecture](architecture.mmd.svg)
 
+See [.docs/ARCHITECTURE.md](.docs/ARCHITECTURE.md) for the per-module breakdown, [TOOLS.md](TOOLS.md) for the full MCP tool reference, and [THEORY.md](THEORY.md) for the principles each diagnostic maps to.
+
 ## Features
 
-- **Hybrid search** - BM25 keyword search + semantic vector similarity
-- **Symbol navigation** - Find definitions and references across the codebase
-- **Call graph analysis** - Trace function call relationships
+- **Hybrid search** - BM25 keyword search + semantic vector similarity (RRF fusion)
+- **Symbol navigation** - rust-analyzer–backed `find_definition` / `find_references` / `rename_symbol` (rename returns a preview; no files are modified)
+- **Persisted hypergraph** - HIR-driven workspace snapshot (LMDB) with cross-crate imports, exports, re-exports, call edges, attributes, signatures, statics, and `unsafe` blocks
+- **Call-graph traversal** - `who_calls` / `calls_from` / `call_graph` / `callers_in_crate` / `recursive_callers_count`
+- **Structural audits** - dead public items, name collisions, module shadowing, forbidden cross-crate edges, Robert Martin instability/abstractness
+- **Safety audits** - `unsafe_audit`, `mut_static_audit`, `recursion_check`, `channel_capacity_audit`, `fn_body_audit` (unwrap/panic/lock-across-await detection)
+- **Doc & API hygiene audits** - `missing_docs_audit`, `derive_audit`, `pub_use_pub_type_audit`, `re_export_chain`
+- **Semantic neighbors** - `similar_to_item` and workspace-wide `semantic_overlaps` clustering via cached embeddings
+- **Codemap** - `build_codemap` produces a task-conditioned subgraph (seeded by symbols, expanded over hypergraph edges) with Mermaid + outline rendering
 - **Complexity metrics** - LOC, cyclomatic complexity, function counts
-- **Incremental indexing** - Merkle tree change detection for fast re-indexing
-- **Background sync** - Automatic index updates every 5 minutes
+- **Incremental indexing** - Merkle-tree change detection; background re-sync every 5 minutes
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `search` | Keyword search using hybrid BM25 + vectors |
-| `get_similar_code` | Find semantically similar code snippets |
-| `find_definition` | Locate where a symbol is defined (by name) |
-| `find_references` | Find all usages of a symbol (by name) |
-| `get_dependencies` | List imports for a file |
-| `get_call_graph` | Show function call relationships |
-| `analyze_complexity` | Calculate code complexity metrics |
-| `read_file_content` | Read file contents |
-| `index_codebase` | Manually trigger indexing |
-| `health_check` | Check system status |
+45+ MCP tools grouped by category. Full parameter reference in [TOOLS.md](TOOLS.md).
+
+| Category | Tools |
+|----------|-------|
+| Query | `search`, `get_similar_code`, `read_file_content` |
+| Symbol analysis | `find_definition`, `find_references`, `rename_symbol`, `get_dependencies`, `get_call_graph`, `analyze_complexity` |
+| Index lifecycle | `index_codebase`, `health_check`, `clear_cache` |
+| Hypergraph build | `build_hypergraph` |
+| Imports / exports | `get_imports`, `get_exports`, `get_reexports`, `get_declared_reexports` |
+| Reverse lookup | `who_imports`, `who_uses`, `who_uses_summary` |
+| Call graph | `who_calls`, `calls_from`, `call_graph`, `callers_in_crate`, `recursive_callers_count` |
+| Workspace structure | `dead_pub_in_crate`, `dead_pub_report`, `crate_edges`, `overlaps`, `module_tree`, `workspace_stats` |
+| Architecture rules | `forbidden_dependency_check`, `crate_dependency_metric` |
+| Signatures & attributes | `function_signature`, `functions_with_filter`, `enum_variants`, `item_attributes`, `items_with_attribute` |
+| Safety & quality audits | `unsafe_audit`, `mut_static_audit`, `recursion_check`, `channel_capacity_audit`, `fn_body_audit` |
+| Doc / API audits | `missing_docs_audit`, `derive_audit`, `pub_use_pub_type_audit`, `re_export_chain` |
+| Semantic | `similar_to_item`, `semantic_overlaps` |
+| Codemap | `build_codemap` |
 
 ## Installation
 
@@ -91,10 +104,13 @@ All tools accept a `directory` parameter pointing to your project root. Examples
 - **Search code**: `search` with a query like "error handling in parser"
 - **Find definitions**: `find_definition` for a symbol name
 - **Find references**: `find_references` to see all usages of a symbol
-- **Call graph**: `get_call_graph` to trace function relationships
+- **Preview a rename**: `rename_symbol` returns the full edit set without touching files
+- **Call graph**: `get_call_graph` or `who_calls` / `calls_from` to trace function relationships
 - **Similar code**: `get_similar_code` for semantic similarity search
 
-Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path — it never writes to your project directory.
+For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses a fingerprinted snapshot on subsequent calls), then run audits like `unsafe_audit`, `dead_pub_report`, `overlaps`, `crate_dependency_metric`, or `semantic_overlaps`. The codemap tool (`build_codemap`) produces a Mermaid-renderable subgraph seeded by symbols of interest.
+
+Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path — it never writes to your project directory. The persisted hypergraph lives alongside it (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
 
 ## Nix
 
@@ -186,7 +202,10 @@ Replace:
 - [fastembed](https://github.com/Anush008/fastembed-rs) - Local embeddings (ONNX)
 - [lancedb](https://lancedb.com/) - Embedded vector storage
 - [ra_ap_syntax](https://github.com/rust-lang/rust-analyzer) - AST parsing
-- [ra_ap_ide](https://github.com/rust-lang/rust-analyzer) - Semantic analysis (goto definition, find references)
+- [ra_ap_ide](https://github.com/rust-lang/rust-analyzer) - Semantic analysis (goto definition, find references, rename)
+- [ra_ap_hir](https://github.com/rust-lang/rust-analyzer) - HIR-driven hypergraph extraction
+- [heed](https://github.com/meilisearch/heed) - LMDB-backed persisted hypergraph store
+- [sled](https://github.com/spacejam/sled) - Embedded KV for indexing metadata cache
 - [rmcp](https://github.com/modelcontextprotocol/rust-sdk) - MCP protocol
 
 ## Screenshots
