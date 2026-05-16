@@ -22,6 +22,10 @@ pub enum EmbeddingError {
     /// Async task join failed
     #[error("Async task failed: {0}")]
     TaskJoin(String),
+
+    /// GPU device construction failed (no fallback path)
+    #[error("{0}")]
+    GpuRequired(String),
 }
 
 impl EmbeddingError {
@@ -38,6 +42,11 @@ impl EmbeddingError {
     /// Create a task join error
     pub fn task_join(msg: impl Into<String>) -> Self {
         Self::TaskJoin(msg.into())
+    }
+
+    /// Create a GPU-required error
+    pub fn gpu_required(msg: impl Into<String>) -> Self {
+        Self::GpuRequired(msg.into())
     }
 }
 

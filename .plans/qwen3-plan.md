@@ -287,7 +287,23 @@ arrow-schema bump in lockstep.
 
 
 
-### Step 3 — write the Qwen3 embedder
+### Step 3 — write the Qwen3 embedder — **DONE 2026-05-16**
+
+**Outcome:** `cargo check --lib` green in `cuda-code`. New `Qwen3Embedder` exists but isn't called yet; Step 4 wires it in.
+
+**Work that landed:**
+- New `src/embeddings/qwen3.rs` with `Qwen3Embedder { inner: Mutex<Qwen3TextEmbedding>, dim: usize }`. `new(&EmbeddingBackend)` builds the Candle device (`Device::new_cuda(0)` or `Device::Cpu` only if `force_cpu`), calls `Qwen3TextEmbedding::from_hf(model_id, &device, DType::F32, max_len)`, and logs a Candle env probe (`CUDA_HOME`, `CUDA_PATH`, first `LD_LIBRARY_PATH` entry).
+- `embed_documents(&[&str])` calls fastembed `embed` directly; `embed_queries(&[&str])` prepends the instruction template `"Instruct: Given a code search query, retrieve relevant code\nQuery: "` before delegating to `embed_documents`. The literal lives in one `const QUERY_INSTRUCTION` so it's a one-line edit.
+- `src/embeddings/error.rs`: added `GpuRequired(String)` variant + `gpu_required(impl Into<String>)` helper. Error message includes the actionable hint to use `cuda-code` devshell.
+- `src/embeddings/mod.rs`: one-line `mod qwen3;` addition. No `pub use` — the embedder is `pub(super)` and consumed only by Step 4.
+- `#[allow(dead_code)]` annotations on the new methods so the unused-warning gate stays green until Step 4.
+
+**Verified fastembed API (5.13.4):**
+- `Qwen3TextEmbedding::from_hf(repo_id: &str, device: &Device, dtype: DType, max_length: usize) -> candle_core::Result<Self>`.
+- `Qwen3TextEmbedding::embed<S: AsRef<str>>(&self, texts: &[S]) -> candle_core::Result<Vec<Vec<f32>>>` — **`&self`**, not `&mut self`; output is L2-normalized by the model.
+- `Mutex` kept anyway as defensive thread-safety guard since fastembed doesn't document `Send + Sync` guarantees.
+
+
 
 - Create `src/embeddings/qwen3.rs` containing
   `Qwen3Embedder { inner: Qwen3TextEmbedding, dim: usize, instruction: &'static str }`.
