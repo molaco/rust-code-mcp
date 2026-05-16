@@ -501,7 +501,15 @@ impl UnifiedIndexer {
         let mut rust_files = Vec::new();
         let mut walk_errors = 0;
 
-        for entry in WalkDir::new(dir_path) {
+        let walker = WalkDir::new(dir_path)
+            .into_iter()
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !(entry.file_type().is_dir()
+                    && matches!(name.as_ref(), "target" | ".git" | ".jj" | ".direnv"))
+            });
+
+        for entry in walker {
             match entry {
                 Ok(e)
                     if e.file_type().is_file()

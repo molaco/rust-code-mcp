@@ -51,24 +51,48 @@ impl EmbeddingBatcher {
             .map(|c| c.format_for_embedding())
             .collect();
 
-        let mut all_embeddings = Vec::new();
+        // Qwen3 batches pad to the longest input, so keep similarly
+        // sized chunks together while restoring original order below.
+        let mut ordered_texts: Vec<(usize, String)> = chunk_texts
+            .into_iter()
+            .enumerate()
+            .collect();
+        ordered_texts.sort_by_key(|(_, text)| text.len());
 
-        for (batch_idx, chunk_batch) in chunk_texts.chunks(self.gpu_batch_size).enumerate() {
+        let total_batches = (ordered_texts.len() + self.gpu_batch_size - 1) / self.gpu_batch_size;
+        let mut all_embeddings: Vec<Option<Embedding>> =
+            (0..ordered_texts.len()).map(|_| None).collect();
+
+        for (batch_idx, chunk_batch) in ordered_texts.chunks(self.gpu_batch_size).enumerate() {
+            let min_chars = chunk_batch.first().map(|(_, text)| text.len()).unwrap_or(0);
+            let max_chars = chunk_batch.last().map(|(_, text)| text.len()).unwrap_or(0);
             tracing::debug!(
-                "Embedding GPU sub-batch {}/{} ({} chunks, configured max {})",
+                "Embedding GPU sub-batch {}/{} ({} chunks, configured max {}, chars {}..{})",
                 batch_idx + 1,
-                (chunk_texts.len() + self.gpu_batch_size - 1) / self.gpu_batch_size,
+                total_batches,
                 chunk_batch.len(),
-                self.gpu_batch_size
+                self.gpu_batch_size,
+                min_chars,
+                max_chars
             );
+            let batch_texts: Vec<String> = chunk_batch
+                .iter()
+                .map(|(_, text)| text.clone())
+                .collect();
             let batch_embeddings = self
                 .embedding_generator
-                .embed_documents(chunk_batch.to_vec())
+                .embed_documents(batch_texts)
                 .await?;
-            all_embeddings.extend(batch_embeddings);
+
+            for ((original_idx, _), embedding) in chunk_batch.iter().zip(batch_embeddings) {
+                all_embeddings[*original_idx] = Some(embedding);
+            }
         }
 
-        Ok(all_embeddings)
+        all_embeddings
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| IndexingError::Parser("Embedding result ordering failed".into()))
     }
 
     /// Calculate safe batch size for parallel processing based on available memory

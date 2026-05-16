@@ -24,9 +24,9 @@
 //!
 //! | Codebase Size | Tantivy Threads | Memory (MB) | GPU Batch Size |
 //! |---------------|----------------|-------------|----------------|
-//! | < 100K LOC    | 2              | 50          | 8              |
-//! | 100K - 1M LOC | 4              | 100         | 8              |
-//! | > 1M LOC      | 8              | 200         | 8              |
+//! | < 100K LOC    | 2              | 50          | 32             |
+//! | 100K - 1M LOC | 4              | 100         | 32             |
+//! | > 1M LOC      | 8              | 200         | 32             |
 
 use std::path::{Path, PathBuf};
 
@@ -55,20 +55,20 @@ impl IndexerConfig {
         cache_path: &Path,
         tantivy_path: &Path,
     ) -> Self {
-        // gpu_batch_size is tuned for Qwen3-Embedding-0.6B. The old
-        // MiniLM-era batch sizes pushed Qwen3 near the 24 GB VRAM cliff
-        // on real chunks. Re-tune once a real-corpus throughput
-        // measurement exists.
+        // gpu_batch_size is tuned for Qwen3-Embedding-0.6B after
+        // length-bucketing the embedding inputs. The old MiniLM-era
+        // batch sizes pushed Qwen3 near the 24 GB VRAM cliff on real
+        // chunks.
         let (max_file_size, gpu_batch_size, tantivy_memory_mb, tantivy_threads) =
             if codebase_loc < 100_000 {
                 // Small codebase
-                (10_000_000, 8, 50, 2)
+                (10_000_000, 32, 50, 2)
             } else if codebase_loc < 1_000_000 {
                 // Medium codebase
-                (10_000_000, 8, 100, 4)
+                (10_000_000, 32, 100, 4)
             } else {
                 // Large codebase
-                (15_000_000, 8, 200, 8)
+                (15_000_000, 32, 200, 8)
             };
 
         Self {
@@ -91,7 +91,7 @@ impl IndexerConfig {
             core: IndexerCoreConfig {
                 cache_path: cache_path.to_path_buf(),
                 max_file_size: 10_000_000,
-                gpu_batch_size: 8, // Qwen3-0.6B safe default; see for_codebase_size for the explanation
+                gpu_batch_size: 32, // Qwen3-0.6B safe default with length-bucketed inputs
             },
             tantivy: TantivyConfig {
                 index_path: tantivy_path.to_path_buf(),
@@ -118,7 +118,7 @@ impl Default for IndexerCoreConfig {
         Self {
             cache_path: PathBuf::from("./cache"),
             max_file_size: 10_000_000, // 10 MB
-            gpu_batch_size: 8,         // Qwen3-0.6B safe default
+            gpu_batch_size: 32,        // Qwen3-0.6B safe default with length-bucketed inputs
         }
     }
 }
@@ -178,7 +178,7 @@ mod tests {
             Path::new("./cache"),
             Path::new("./tantivy"),
         );
-        assert_eq!(config.core.gpu_batch_size, 8); // Qwen3-0.6B safe default
+        assert_eq!(config.core.gpu_batch_size, 32); // Qwen3-0.6B safe default with length bucketing
         assert_eq!(config.tantivy.memory_budget_mb, 50);
         assert_eq!(config.tantivy.num_threads, 2);
 
@@ -206,7 +206,7 @@ mod tests {
     fn test_default_configs() {
         let core = IndexerCoreConfig::default();
         assert_eq!(core.max_file_size, 10_000_000);
-        assert_eq!(core.gpu_batch_size, 8); // Qwen3-0.6B safe default
+        assert_eq!(core.gpu_batch_size, 32); // Qwen3-0.6B safe default with length bucketing
 
         let tantivy = TantivyConfig::default(Path::new("./tantivy"));
         assert_eq!(tantivy.memory_budget_mb, 50);

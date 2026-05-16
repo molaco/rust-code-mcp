@@ -93,6 +93,9 @@ rs_merkle = "1.4"      # Merkle tree implementation
 # Performance monitoring
 sysinfo = "0.30"       # System memory monitoring
 
+# Tokenizer (used directly by examples; transitively in fastembed)
+tokenizers = "0.22"
+
 # Parallel processing
 rayon = "1.10"         # Data parallelism
 num_cpus = "1.16"      # CPU count detection
@@ -152,3 +155,7 @@ walkdir = "2"          # For test file discovery
 [[example]]
 name = "count_items"
 path = "examples/count_items.rs"
+
+[[example]]
+name = "chunk_token_stats"
+path = "examples/chunk_token_stats.rs"
