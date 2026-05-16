@@ -5,6 +5,9 @@
 mod error;
 pub use error::EmbeddingError;
 
+mod backend;
+pub use backend::{EmbeddingBackend, Qwen3Variant};
+
 /// Embedding dimension for all-MiniLM-L6-v2
 pub const EMBEDDING_DIM: usize = 384;
 

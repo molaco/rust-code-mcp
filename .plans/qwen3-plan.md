@@ -277,15 +277,15 @@ arrow-schema bump in lockstep.
   `src/vector_store/lancedb.rs`. Anything beyond that is a fresh leak —
   stop and audit.
 
-### Step 2 — introduce the Qwen3 backend struct
+### Step 2 — introduce the Qwen3 backend struct — **DONE 2026-05-16**
 
-- Create `src/embeddings/backend.rs` containing `EmbeddingBackend`,
-  `Qwen3Variant`, the `dim()` method, and the `identity()` method.
-- Wire `EmbeddingBackend::default().dim() == 1024` (Qwen3-0.6B).
-- `EMBEDDING_DIM` stays as a `pub const` for one more step. It becomes
-  unused after Step 5 deletes it.
-- No public-API changes to `EmbeddingGenerator` yet — this step only
-  adds types.
+**Outcome:** `cargo check --lib` green in `cuda-code`. Types-only change, no behavior delta.
+
+**Work that landed:**
+- New module `src/embeddings/backend.rs` with `EmbeddingBackend` (struct: `variant`, `max_len`, `force_cpu`), `Qwen3Variant` (enum: `Embedding0_6B`, `Embedding4B`, `Embedding8B`; `Hash`-derived for Step 6's cache keys), `Default` impl (Qwen3-0.6B / max_len=2048 / force_cpu=false), and `dim()` + `identity()` + `hf_model_id()` methods. Four compile-only `#[cfg(test)]` sanity asserts at the bottom.
+- `src/embeddings/mod.rs` got a two-line wire-up: `mod backend; pub use backend::{EmbeddingBackend, Qwen3Variant};`. Nothing else touched.
+
+
 
 ### Step 3 — write the Qwen3 embedder
 
