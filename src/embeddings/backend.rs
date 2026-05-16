@@ -62,10 +62,10 @@ impl EmbeddingBackend {
     }
 
     /// Stable string used in cache paths and EMBEDDER_VERSION.
-    /// Example: "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1"
+    /// Example: "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2"
     pub fn identity(&self) -> String {
         format!(
-            "fastembed-candle:{}:dim{}:max{}:v1",
+            "fastembed-candle:{}:dim{}:max{}:v2",
             self.variant.hf_model_id().rsplit('/').next().unwrap_or("unknown"),
             self.dim(),
             self.max_len,
@@ -75,7 +75,7 @@ impl EmbeddingBackend {
     /// Parse an `identity()` string back into an `EmbeddingBackend`.
     ///
     /// Accepts the exact format produced by `identity()`:
-    /// `fastembed-candle:Qwen3-Embedding-<X>:dim<Y>:max<Z>:v1`. The
+    /// `fastembed-candle:Qwen3-Embedding-<X>:dim<Y>:max<Z>:v2`. The
     /// `dim` portion is informational — the variant fully determines
     /// the dimension — but must agree with the variant. `force_cpu` is
     /// not encoded in the identity and defaults to `false`.
@@ -135,7 +135,7 @@ impl EmbeddingBackend {
                 max_str, s, e
             ))
         })?;
-        if parts[4] != "v1" {
+        if parts[4] != "v2" {
             return Err(EmbeddingError::invalid_identity(format!(
                 "unsupported identity schema version `{}` in `{}`",
                 parts[4], s
@@ -162,7 +162,7 @@ mod tests {
     fn default_backend_identity_matches_expected() {
         assert_eq!(
             EmbeddingBackend::default().identity(),
-            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1"
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2"
         );
     }
 
@@ -200,7 +200,11 @@ mod tests {
     fn from_identity_rejects_garbage() {
         assert!(EmbeddingBackend::from_identity("garbage").is_err());
         assert!(EmbeddingBackend::from_identity(
-            "fastembed-candle:Qwen3-Embedding-0.6B:dim999:max2048:v1"
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim999:max2048:v2"
+        )
+        .is_err());
+        assert!(EmbeddingBackend::from_identity(
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1"
         )
         .is_err());
     }

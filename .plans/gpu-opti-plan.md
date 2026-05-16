@@ -1072,6 +1072,74 @@ Acceptance:
 
 ## Phase 10: document final settings
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Updated `.docs/gpu-opti-proposal.md` with the implemented outcome, final
+  defaults, fallback settings, cache behavior, and the latest clean benchmark.
+- Added `.docs/gpu-opti-report.md` with a phase-by-phase implementation report.
+- Bumped the Qwen3 embedder identity from
+  `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1` to
+  `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2`.
+- The identity bump protects existing vector stores from silently mixing
+  upstream-fastembed vectors with the patched Qwen3 backend. The Phase 8 parity
+  probe showed only small numerical drift, but the runtime implementation is
+  still different enough to warrant a vector-store identity change.
+
+Final recommended defaults:
+
+| Setting | Value |
+|---|---|
+| Runtime | repo-local `fastembed` 5.13.4 patch over Candle |
+| Embedder identity | `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2` |
+| GPU batch size | 32 |
+| Max padded tokens per batch | 32,768 |
+| Chunk target | 768 |
+| Chunk hard max | 1024 |
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `RUSTFLAGS='-C link-arg=-fuse-ld=bfd' cargo build --release --example index_codebase --example chunk_token_stats`
+  passed with existing warnings.
+- `./target/release/examples/chunk_token_stats` completed:
+  - 122 `.rs` files,
+  - 1999 split chunks,
+  - raw token total 572,008,
+  - capped token total 572,008,
+  - max raw tokens 792,
+  - p95 768,
+  - no chunks above 1024 tokens.
+- A final clean benchmark from `/tmp/rust-code-mcp-gpu-bench-final-h2WFJI`
+  completed after the identity bump:
+  - 122 total Rust files discovered,
+  - 121 indexed files,
+  - 1 skipped sensitive file,
+  - 1982 chunks,
+  - 36.58s wall time,
+  - 34.64s embedding time,
+  - 54.2 chunks/sec,
+  - raw token total across embedding batches: 568,943,
+  - capped token total across embedding batches: 568,943,
+  - padded token total across embedding batches: 615,268,
+  - effective padded tokens/sec: ~17,763.
+- `nvidia-smi dmon -s pucm -d 1 -c 70` captured the final benchmark:
+  - peak observed framebuffer memory: ~6.1 GB,
+  - embedding samples mostly 97-100% SM,
+  - embedding power mostly 304-350W.
+- `cargo check --lib` passed with existing warnings.
+- No formatting command was run.
+
+Result:
+
+- Final wall time improved from the Phase 0 locked baseline 74.87s to 36.58s.
+- Final embedding time improved from 74.44s to 34.64s.
+- Effective padded throughput improved from ~8,596 tokens/sec to ~17,763
+  tokens/sec.
+- The implementation clears the strong-result threshold: below 45s wall time
+  and above 14k padded tokens/sec.
+
 Target files:
 
 - `.docs/gpu-opti-proposal.md`

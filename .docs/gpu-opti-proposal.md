@@ -16,6 +16,83 @@ implemented by fastembed's Candle backend.
 The target is to move effective embedding throughput from roughly 9k model
 tokens/sec toward 20k tokens/sec while preserving retrieval quality.
 
+## Implementation Outcome
+
+This proposal was implemented phase by phase on May 16, 2026. The final path
+keeps the embedded `fastembed`/Candle runtime, vendors a focused Qwen3 backend
+patch, and uses the default local settings below.
+
+| Setting | Final default |
+|---|---|
+| Runtime | `fastembed` 5.13.4 via repo-local `vendor/fastembed` patch |
+| Embedder identity | `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2` |
+| Model | `Qwen/Qwen3-Embedding-0.6B` |
+| Vector dimension | 1024 |
+| Max sequence length | 1024 |
+| GPU batch size | 32 |
+| Padded-token budget | 32,768 |
+| Chunk target | 768 tokens |
+| Chunk hard max | 1024 tokens |
+
+Final clean benchmark, run from `/tmp/rust-code-mcp-gpu-bench-final-h2WFJI`
+after the backend identity bump:
+
+| Metric | Baseline | Final |
+|---|---:|---:|
+| Files indexed | 118 in the original proposal run | 121 |
+| Chunks indexed | 1833 | 1982 |
+| Total wall time | 74.87s | 36.58s |
+| Embedding time | 74.44s | 34.64s |
+| Embedding share | 99.43% | 94.69% |
+| Padded model tokens | 639,936 | 615,268 |
+| Padded tokens/sec | ~8,596 | ~17,763 |
+| Chunks/sec | 24.5 | 54.2 |
+| p95 chunk tokens | 958 | 768 |
+| Max chunk tokens | 17,862 raw before truncation | 792 raw, no truncation |
+| Peak observed GPU memory | ~9.6 GB baseline capture | ~6.1 GB final capture |
+
+The final result is a roughly 2.0x wall-time improvement and a roughly 2.1x
+embedding-time improvement against the locked Phase 0 baseline. It clears the
+strong-result threshold from the implementation plan: below 45s wall time and
+above 14k padded tokens/sec.
+
+Recommended environment for the RTX 3090 path:
+
+```sh
+# Defaults are already the recommended RTX 3090 settings.
+unset RUST_CODE_MCP_EMBED_BATCH_SIZE
+unset RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH
+unset RUST_CODE_MCP_CHUNK_TARGET_TOKENS
+unset RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS
+```
+
+Useful fallback settings for smaller GPUs:
+
+```sh
+# Non-semantic runtime-only throttles. These do not change vectors or cache
+# identity, but may reduce throughput.
+RUST_CODE_MCP_EMBED_BATCH_SIZE=16
+RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH=16384
+
+# Semantic chunk-shape throttles. Use only if the runtime-only throttles still
+# OOM; these intentionally change the chunking cache salt.
+RUST_CODE_MCP_CHUNK_TARGET_TOKENS=512
+RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS=768
+```
+
+Cache behavior:
+
+- `RUST_CODE_MCP_EMBED_BATCH_SIZE` and
+  `RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH` are runtime-only. They change
+  batch shape and throughput, not vector semantics.
+- `RUST_CODE_MCP_CHUNK_TARGET_TOKENS` and
+  `RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS` change formatted chunk content and are
+  included in the chunking cache salt:
+  `chunk-split:v1:target{target}:hard{hard}`.
+- The Qwen3 backend patch intentionally bumps the embedder identity from `v1`
+  to `v2`, so vector stores built with the old fastembed Qwen3 implementation
+  are refused instead of silently mixed with patched vectors.
+
 ## Current Measurements
 
 Benchmark command used:
