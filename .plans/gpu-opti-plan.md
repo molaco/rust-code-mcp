@@ -452,6 +452,57 @@ Risk notes:
 
 ## Phase 4: replace char-length sorting with token-length sorting
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Replaced the embedding batch sort key with capped token length when token
+  lengths are available.
+- Kept formatted character length as the fallback sort key if token metrics are
+  unavailable.
+- Added original input index as the tie-breaker, so equal token lengths preserve
+  deterministic input order.
+- Preserved output order by continuing to write embeddings back into
+  `all_embeddings[original_idx]`.
+- Kept fixed-size batches; no token-budget packing yet.
+- Added pure helper tests for:
+  - capped-token sort order,
+  - equal-token deterministic ordering by original index,
+  - padded-token summary accounting.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `cargo build --release --example index_codebase --example chunk_token_stats`
+  passed with existing warnings.
+- A default batch-size `index_codebase` run completed successfully:
+  - 120 indexed files,
+  - 1865 chunks,
+  - 65.68s wall time,
+  - 65.37s embedding time,
+  - 28.4 chunks/sec.
+- Token totals from the embedding-batch logs:
+  - raw token total: 649,699,
+  - capped token total: 561,252,
+  - padded token total: 616,128,
+  - effective padded tokens/sec: ~9,426.
+
+Result:
+
+- Padded token total is lower than the Phase 3 token-stats char-sorted batch-32
+  report of 650,560.
+- Full index time improved materially from the Phase 0 default baseline
+  74.87s to 65.68s, with a slightly larger source tree.
+- No embedding semantics changed; only the grouping/order of inputs inside GPU
+  sub-batches changed.
+
+Test note:
+
+- The new helper tests are compile-checked by `cargo check --lib`. Running lib
+  tests remains blocked by the repo's debug test link failure:
+  `rust-lld: error: corrupted .eh_frame`.
+
 Target file:
 
 - `src/indexing/embedding_batcher.rs`

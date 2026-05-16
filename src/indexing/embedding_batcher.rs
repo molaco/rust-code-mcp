@@ -94,16 +94,18 @@ impl EmbeddingBatcher {
                 (idx, text, token_len)
             })
             .collect();
-        ordered_texts.sort_by_key(|(_, text, _)| text.len());
+        sort_embedding_inputs(&mut ordered_texts);
 
         let total_batches = (ordered_texts.len() + self.gpu_batch_size - 1) / self.gpu_batch_size;
         let min_chars = ordered_texts
-            .first()
+            .iter()
             .map(|(_, text, _)| text.len())
+            .min()
             .unwrap_or(0);
         let max_chars = ordered_texts
-            .last()
+            .iter()
             .map(|(_, text, _)| text.len())
+            .max()
             .unwrap_or(0);
         let token_summary = summarize_token_lengths(&ordered_texts, self.gpu_batch_size);
 
@@ -142,8 +144,16 @@ impl EmbeddingBatcher {
             (0..ordered_texts.len()).map(|_| None).collect();
 
         for (batch_idx, chunk_batch) in ordered_texts.chunks(self.gpu_batch_size).enumerate() {
-            let min_chars = chunk_batch.first().map(|(_, text, _)| text.len()).unwrap_or(0);
-            let max_chars = chunk_batch.last().map(|(_, text, _)| text.len()).unwrap_or(0);
+            let min_chars = chunk_batch
+                .iter()
+                .map(|(_, text, _)| text.len())
+                .min()
+                .unwrap_or(0);
+            let max_chars = chunk_batch
+                .iter()
+                .map(|(_, text, _)| text.len())
+                .max()
+                .unwrap_or(0);
             tracing::debug!(
                 "Embedding GPU sub-batch {}/{} ({} chunks, configured max {}, chars {}..{})",
                 batch_idx + 1,
@@ -322,6 +332,17 @@ fn summarize_token_lengths(
     })
 }
 
+fn sort_embedding_inputs(ordered_texts: &mut [(usize, String, Option<EmbeddingTextLen>)]) {
+    ordered_texts.sort_by_key(|(original_idx, text, token_len)| {
+        (
+            token_len
+                .map(|len| len.capped_tokens)
+                .unwrap_or_else(|| text.len()),
+            *original_idx,
+        )
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +370,115 @@ mod tests {
         let usage = monitor.usage_percent();
         assert!(usage >= 0.0);
         assert!(usage <= 100.0);
+    }
+
+    #[test]
+    fn test_sort_embedding_inputs_uses_capped_token_length() {
+        let mut inputs = vec![
+            (
+                0,
+                "aaaa".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 100,
+                    capped_tokens: 9,
+                }),
+            ),
+            (
+                1,
+                "b".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 2,
+                    capped_tokens: 2,
+                }),
+            ),
+            (
+                2,
+                "cc".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 8,
+                    capped_tokens: 8,
+                }),
+            ),
+        ];
+
+        sort_embedding_inputs(&mut inputs);
+
+        let ordered_indices: Vec<usize> =
+            inputs.iter().map(|(idx, _, _)| *idx).collect();
+        assert_eq!(ordered_indices, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn test_sort_embedding_inputs_preserves_equal_length_order_by_original_index() {
+        let mut inputs = vec![
+            (
+                2,
+                "c".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 4,
+                    capped_tokens: 4,
+                }),
+            ),
+            (
+                0,
+                "a".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 4,
+                    capped_tokens: 4,
+                }),
+            ),
+            (
+                1,
+                "b".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 4,
+                    capped_tokens: 4,
+                }),
+            ),
+        ];
+
+        sort_embedding_inputs(&mut inputs);
+
+        let ordered_indices: Vec<usize> =
+            inputs.iter().map(|(idx, _, _)| *idx).collect();
+        assert_eq!(ordered_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_summarize_token_lengths_accounts_for_padding() {
+        let ordered = vec![
+            (
+                0,
+                "a".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 3,
+                    capped_tokens: 3,
+                }),
+            ),
+            (
+                1,
+                "bb".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 5,
+                    capped_tokens: 5,
+                }),
+            ),
+            (
+                2,
+                "ccc".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 7,
+                    capped_tokens: 7,
+                }),
+            ),
+        ];
+
+        let summary = summarize_token_lengths(&ordered, 2).unwrap();
+
+        assert_eq!(summary.raw_tokens_total, 15);
+        assert_eq!(summary.capped_tokens_total, 15);
+        assert_eq!(summary.padded_tokens_total, 17);
+        assert_eq!(summary.min_tokens, 3);
+        assert_eq!(summary.max_tokens, 7);
     }
 }
