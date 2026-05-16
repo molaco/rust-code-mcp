@@ -1007,6 +1007,34 @@ Rollback criteria:
 
 ## Phase 9: evaluate an optimized runtime only if needed
 
+Status: completed on May 16, 2026. No runtime abstraction was added in this
+implementation pass.
+
+Decision:
+
+- Phase 8 reached the plan's strong-result band with the embedded Candle path:
+  37.36s wall time, 35.43s embedding time, 52.8 chunks/sec, and ~17,301
+  padded tokens/sec.
+- The remaining gap to the aspirational ~20k tokens/sec target is not large
+  enough to justify adding a second runtime, cache identity variant, deployment
+  surface, and failure mode before measuring a concrete external runtime win.
+- `fastembed`/Candle remains the default local runtime. Runtime identity changes
+  are deferred until there is a proven alternate runtime such as TEI, ONNX
+  Runtime, or TensorRT that materially beats the Phase 8 path on this workload.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `jj status` showed only the unrelated `THEORY_2.md` addition before this
+  docs-only plan update.
+
+Follow-up trigger:
+
+- Reopen Phase 9 if the repo grows enough that index time climbs back above
+  45s, if the measured throughput ceiling remains below an operational target,
+  or if a maintained Qwen3 runtime can be benchmarked with lower wall time and
+  acceptable cache identity semantics.
+
 Target area:
 
 - embedding backend abstraction.
