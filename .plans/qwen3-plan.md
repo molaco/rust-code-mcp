@@ -1,29 +1,33 @@
-# Plan: Generalize embedding wrapper to support Qwen3 via fastembed
+# Plan: Replace embedding backend with fastembed Qwen3 (Candle, CUDA)
 
 ## Goal
 
-Make the embedding model a runtime/config choice instead of a hardcoded
-`AllMiniLML6V2`, and add support for the Qwen3 embedding family
-(`Qwen3-Embedding-0.6B`, `4B`, `8B`) by bumping `fastembed-rs` to a version
-that ships them.
+Replace the hardcoded `AllMiniLML6V2` ONNX embedding path with the Qwen3
+embedding family (`Qwen3-Embedding-0.6B`, `4B`, `8B`) via fastembed-rs's
+Candle backend on CUDA. The ONNX path goes away entirely.
 
 We stay on `fastembed-rs`. We do **not** swap to `EmbedAnything` or
-`embedrs`. The pipeline (file walker, chunker, batcher, incremental index,
-vector store) is untouched — only the encoder layer changes.
+`embedrs`. The indexing pipeline (file walker, chunker, batcher,
+incremental index, vector store) is untouched — only the encoder layer
+is rewritten.
 
 ## Why this path
 
-- `fastembed-rs` 5.13+ ships `Qwen3-Embedding-{0.6B, 4B, 8B}` and
-  `Qwen3-VL-Embedding-2B` under a `qwen3` Cargo feature (Candle backend).
+- `fastembed-rs` 5.13.4 ships `Qwen3-Embedding-{0.6B, 4B, 8B}` and
+  `Qwen3-VL-Embedding-2B` behind a `qwen3` Cargo feature (Candle
+  backend, CUDA via `fastembed/cuda`).
 - Our `Cargo.toml:65` is unpinned to git main; the resolved checkout is
   5.2.0 (no Qwen3). We are ~11 minor versions behind.
 - Our `EmbeddingGenerator` (`src/embeddings/mod.rs`) is ~560 LOC,
   well-isolated, and already the only thing that talks to fastembed.
+  No other crate depends on `ort` directly.
 - All other indexing logic is code-aware (AST-driven chunker, Merkle
   change detection, RAM-aware batcher, secret scanning) and is not
   replaceable by any off-the-shelf library.
-- `EmbedAnything` only ships Qwen3-0.6B; swapping to it would mean a
-  larger rewrite for fewer models than fastembed gives us today.
+- We have a CUDA-configured environment. Keeping a CPU-capable ONNX path
+  alongside Candle would mean maintaining two backends, two CUDA
+  initialization paths, and two memory-management strategies. The
+  simpler design is one path: Candle on CUDA.
 
 ## Constraints
 
@@ -31,18 +35,18 @@ vector store) is untouched — only the encoder layer changes.
   for every compile checkpoint. Do not run `cargo test` unless asked
   (snapshot build ~115s).
 - Do not run `cargo fmt`.
-- No behavior change for the default model path — existing indexes built
-  on `AllMiniLML6V2` (384-dim) must keep working after the bump if the
-  same model is selected.
-- Small, compile-checkable steps. Land in this order — each step compiles
-  on its own.
+- Small, compile-checkable steps. Land in this order — each step
+  compiles on its own.
+- Existing on-disk indexes built with `AllMiniLML6V2` (384-dim) are
+  **invalidated** by this change. Step 6 wires up the refuse-and-tell
+  behavior; users will need to clear their cache once.
 
 ## Background — current state
 
 - Single hardcoded model at `src/embeddings/mod.rs:92`:
   `InitOptions::new(EmbeddingModel::AllMiniLML6V2)`.
 - Backend: fastembed-rs (ONNX via `ort` 2.0.0-rc.10) with hand-rolled
-  CUDA/CPU fallback at `mod.rs:42-88`.
+  CUDA/CPU dispatch at `mod.rs:42-88`. **All of this gets deleted.**
 - Public surface (`src/embeddings/mod.rs`): `EmbeddingGenerator::{new,
   embed, embed_async, embed_batch, embed_batch_async, embed_chunks,
   dimensions}`, `EmbeddingPipeline`, the alias `Embedding = Vec<f32>`,
@@ -54,30 +58,26 @@ vector store) is untouched — only the encoder layer changes.
 - Dim flows into LanceDB via the `vector_size` parameter at
   `src/vector_store/mod.rs:50`, `src/indexing/unified.rs:611,634`,
   `src/indexing/incremental.rs:280,313,353`,
-  `src/vector_store/lancedb.rs:459`. Most call sites pass `384` literally
-  in tests; the production default in `vector_store/mod.rs:50` is also
-  literally `384`.
+  `src/vector_store/lancedb.rs:459`. Production default in
+  `vector_store/mod.rs:50` is literally `384`; the test literals at the
+  other sites are also `384`.
 
 ## Target design
 
 ### Config
 
-Add an `EmbeddingBackend` enum in `src/embeddings/mod.rs`:
+Add an `EmbeddingBackend` struct in `src/embeddings/mod.rs`. There is no
+backend-family enum because there is only one backend — the variants
+live inside Qwen3.
 
 ```rust
-#[derive(Debug, Clone)]
-pub enum EmbeddingBackend {
-    /// fastembed ONNX path (current default).
-    Onnx(OnnxModel),
-    /// fastembed Candle path, behind the `qwen3` feature.
-    Qwen3 { variant: Qwen3Variant, max_len: usize },
-}
-
 #[derive(Debug, Clone, Copy)]
-pub enum OnnxModel {
-    AllMiniLML6V2,   // 384-dim, current default
-    BgeBaseEnV15,    // 768-dim
-    // extend as needed; do not add models we are not actually going to use
+pub struct EmbeddingBackend {
+    pub variant: Qwen3Variant,
+    pub max_len: usize,
+    /// Off by default. Set only for CI/benchmark runs. Enabling this
+    /// emits a warn! on every construction.
+    pub force_cpu: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,410 +86,342 @@ pub enum Qwen3Variant {
     Embedding4B,     // 2560-dim
     Embedding8B,     // 4096-dim
 }
+
+impl Default for EmbeddingBackend {
+    fn default() -> Self {
+        Self {
+            variant: Qwen3Variant::Embedding0_6B,
+            max_len: 2048,
+            force_cpu: false,
+        }
+    }
+}
 ```
 
-The enum reports two things per backend:
+The backend reports two things:
 
-- `fn dim(&self) -> usize` — the output vector dimension.
-- `fn identity(&self) -> &'static str` — a stable string used in cache
-  paths and the `EMBEDDER_VERSION` constant. Examples:
-  `"fastembed-onnx:all-MiniLM-L6-v2:dim384:v1"`,
+- `fn dim(&self) -> usize` — output vector dimension, decided by
+  `variant`.
+- `fn identity(&self) -> String` — stable string used in cache paths
+  and the `EMBEDDER_VERSION` field. Example:
   `"fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max2048:v1"`.
 
-The static `EMBEDDING_DIM` constant goes away.
+The `EMBEDDING_DIM` constant goes away.
 
 ### Max sequence length
 
 Qwen3's `Qwen3TextEmbedding::from_hf(model_id, device, dtype, max_len)`
 takes a max-length argument in tokens (not output dim — the upstream
-README example uses `512`). Code chunks from our AST chunker can easily
-exceed 512 tokens for large functions, so we pick a deliberate default:
+README example uses `512`). Code chunks from our AST chunker can exceed
+512 tokens for large functions, so we pick a deliberate default:
 
-- Default `max_len = 2048` for all Qwen3 variants. Big enough to swallow
-  almost any function-sized chunk after the contextual-retrieval header
-  is prepended; small enough to keep VRAM bounded on a 0.6B run.
-- Make it a field on the `Qwen3` variant so it's part of the cache
-  identity (changing it invalidates indexes). Plumb it through
-  `EmbeddingBackend::identity()`.
+- Default `max_len = 2048` for all Qwen3 variants. Large enough to
+  swallow almost any function-sized chunk after the contextual-retrieval
+  header is prepended; small enough to keep VRAM bounded on 0.6B.
+- It's a field on `EmbeddingBackend` and part of `identity()` so
+  changing it invalidates indexes.
 - Document, but don't expose, the option of pushing it to 8192 for
-  recall experiments later. Don't ship a CLI knob until we have a real
+  recall experiments later. Don't ship a CLI knob until there is a real
   reason.
-
-The ONNX path keeps fastembed's default max-length behavior — it
-already does the right thing for MiniLM/BGE.
 
 ### Instruction-aware embedding (query vs document)
 
 Qwen3 embeddings are instruction-tuned: queries take a task instruction
-prefix, documents take the raw text. Skipping this hurts recall
-measurably on retrieval benchmarks. We add the role split into the
-internal trait and the public surface:
-
-```rust
-trait EmbedderImpl: Send + Sync {
-    fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError>;
-    fn embed_queries(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError>;
-    fn dim(&self) -> usize;
-}
-```
-
-Implementation per backend:
-
-- **ONNX (MiniLM/BGE)** — `embed_queries` and `embed_documents` are
-  identical: just call fastembed `embed`. MiniLM doesn't use prefixes;
-  BGE-v1.5 *does* use a query prefix (`"Represent this sentence for
-  searching relevant passages: "`) — if we ever enable BGE we add it
-  there.
-- **Qwen3** — `embed_documents` calls `Qwen3TextEmbedding::embed`
-  directly with the raw chunk text. `embed_queries` prepends Qwen3's
-  instruction template:
-  `"Instruct: Given a code search query, retrieve relevant code\nQuery: {text}"`.
-  Confirm the exact wording against the upstream Qwen3-Embedding model
-  card on first integration — it may have evolved. Keep the instruction
-  text in one place so changing it across all variants is a one-line
-  edit.
-
-Public surface on `EmbeddingGenerator`:
-
-- Rename the existing `embed`/`embed_async`/`embed_batch`/
-  `embed_batch_async`/`embed_chunks` paths into a `documents` flavor —
-  call sites that build the index pass documents.
-- Add `embed_query` / `embed_query_async` for the search-time path.
-  `src/search/mod.rs` and `src/tools/query_tools.rs` are the only two
-  call sites that need to switch.
-- Keep the old `embed*` names as deprecated thin aliases for one
-  release so the refactor is bisectable. Remove in a follow-up.
-
-### Internal trait
-
-Inside `src/embeddings/`, introduce a private trait that both fastembed
-paths implement:
-
-```rust
-trait EmbedderImpl: Send + Sync {
-    fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError>;
-    fn dim(&self) -> usize;
-}
-```
-
-Two implementors live in submodules:
-- `src/embeddings/onnx.rs` — wraps `fastembed::TextEmbedding` (existing
-  code, extracted unchanged).
-- `src/embeddings/qwen3.rs` — wraps `fastembed::Qwen3TextEmbedding`,
-  gated behind `#[cfg(feature = "qwen3")]` on the impl and the enum
-  variant. The variant must exist regardless of feature so call sites
-  that match on it don't need their own `cfg`s; the constructor returns
-  `EmbeddingError::FeatureDisabled` when the feature is off.
-
-`EmbeddingGenerator` keeps its current public methods but stores
-`Arc<dyn EmbedderImpl>` plus a cached `dim: usize`. The public API
-signatures do not change. We add one new constructor:
+prefix, documents take raw text. Skipping this hurts recall measurably
+on retrieval benchmarks. The public surface splits the two roles:
 
 ```rust
 impl EmbeddingGenerator {
-    pub fn with_backend(backend: EmbeddingBackend) -> Result<Self, EmbeddingError> { ... }
-    pub fn new() -> Result<Self, EmbeddingError> {
-        Self::with_backend(EmbeddingBackend::Onnx(OnnxModel::AllMiniLML6V2))
-    }
+    pub async fn embed_documents(&self, texts: Vec<String>) -> Result<Vec<Embedding>, EmbeddingError>;
+    pub async fn embed_queries(&self, texts: Vec<String>) -> Result<Vec<Embedding>, EmbeddingError>;
+    pub fn dimensions(&self) -> usize;
 }
 ```
 
-`EmbeddingGenerator::new()` keeps the same behavior as today, so most
-call sites need zero changes.
+- `embed_documents` calls `Qwen3TextEmbedding::embed` with the raw text.
+- `embed_queries` prepends the Qwen3 instruction template before the
+  same call:
+  `"Instruct: Given a code search query, retrieve relevant code\nQuery: {text}"`.
+  Confirm the exact wording against the upstream Qwen3-Embedding model
+  card on first integration — it may have evolved. Keep the literal in
+  one place so changing it is a one-line edit.
 
-### Wiring the dim through
+Existing call sites are migrated as part of Step 4:
 
-`EMBEDDING_DIM` is replaced by `EmbeddingGenerator::dimensions()` at the
-three import sites. They all already have access to an
-`EmbeddingGenerator` instance (or can be given one); concretely:
+- Index-building callers (`indexer_core.rs`, `unified.rs`, the graph
+  embedding cache in `graph_tools.rs`) → `embed_documents`.
+- Search-time callers (`src/search/mod.rs`, `src/tools/query_tools.rs`)
+  → `embed_queries`.
 
-- `src/mcp/sync.rs:9` — replace import with the runtime call. Check the
-  call context; if no generator is in scope, plumb one in.
-- `src/tools/query_tools.rs:14` — same.
-- `src/tools/index_tool.rs:6` — same.
-
-Test literals (`384` in `incremental.rs`, `unified.rs`, `lancedb.rs`)
-stay as `384` because they are testing the default-model path. They get
-a comment pointing at the active model so future changes don't drift.
+No deprecation shim. The old `embed`/`embed_batch`/`embed_chunks` names
+go away in the same commit that introduces the split; there's no
+ambiguity about which one a call site wants once you look at it.
 
 ### Cargo
 
-`fastembed` 5.13.4 is published on crates.io; use the version pin, not
-the git source. The previous `git = ...` line goes away.
-
-`Cargo.toml`:
+`fastembed` 5.13.4 is on crates.io; use the version pin, not the git
+source. The previous git line, the direct `ort` dep, and any ORT-only
+fastembed features are removed.
 
 ```toml
 [dependencies]
 # Was: fastembed = { git = "...", ... }
 fastembed = { version = "5.13.4", default-features = false, features = [
-    "ort-download-binaries-native-tls",
     "hf-hub-native-tls",
-    "image-models",
+    "qwen3",
+    "cuda",
 ] }
 
-# fastembed 5.13.4 pins ort = "=2.0.0-rc.12". We currently pin =2.0.0-rc.10.
-# A single-version conflict will block resolution. Bump to match.
-ort = "=2.0.0-rc.12"
+# Direct dep because src/embeddings/qwen3.rs imports Device/DType to
+# build the Qwen3 embedder. Keep in lockstep with fastembed's pin
+# (0.10.2 at 5.13.4).
+candle-core = { version = "0.10.2" }
 
-# Direct, optional. Only needed because src/embeddings/qwen3.rs imports
-# Device/DType from candle-core to build the Qwen3 embedder. Keep the
-# version in lockstep with fastembed's pin (0.10.2 at 5.13.4).
-candle-core = { version = "0.10.2", optional = true }
+# Removed:
+# - ort = "=2.0.0-rc.10"
+# - fastembed feature "ort-download-binaries-native-tls"
+# - fastembed feature "image-models"
 
 [features]
-# GPU is the default. We already ship a CUDA-configured environment;
-# CPU paths exist only as explicit overrides for benchmarking / CI.
-# Do NOT put `features = ["qwen3"]` directly on the fastembed dep —
-# that pulls Candle in unconditionally and breaks the feature gating.
 default = []
 
-# The `qwen3` feature implies CUDA. There is no plain-Candle "qwen3 on
-# CPU" workspace feature — Qwen3-4B/8B on CPU is unusable in practice
-# and we don't want to make it a one-flag mistake.
-qwen3 = ["fastembed/qwen3", "fastembed/cuda", "dep:candle-core"]
-
-# Apple dev boxes only.
-qwen3-metal = ["fastembed/qwen3", "fastembed/metal", "dep:candle-core"]
-
-# Escape hatch. Forces Candle without any GPU backend feature flag.
-# Only useful for CI smoke tests / benchmarks. The Qwen3 runtime path
-# still refuses to construct a CPU device unless `force_cpu` is set in
-# the backend config (see Step 4).
-qwen3-cpu = ["fastembed/qwen3", "dep:candle-core"]
+# Apple dev override. Swaps cuda for metal. Mutually exclusive with the
+# default CUDA build; check at compile time.
+metal = ["fastembed/metal"]
 ```
 
-ONNX path (MiniLM/BGE) keeps its current CUDA-preferred-with-CPU-fallback
-behavior but the messaging changes: CPU is a degraded mode, not a happy
-path. The `tracing::warn!("CUDA not available - using CPU only ...")`
-line at `src/embeddings/mod.rs:86` becomes `tracing::error!(...)` and
-the message is rewritten to point at the CUDA-environment audit so the
-user can diagnose, not just tolerate, the regression.
+Notes:
 
-Qwen3 path is stricter: by default the runtime requires a CUDA device.
-`Device::new_cuda(0)?` is the constructor, not `cuda_if_available`.
-Construction failure returns `EmbeddingError::GpuRequired` with a
-message that includes the relevant `LD_LIBRARY_PATH` / `CUDA_HOME`
-lookups. A `force_cpu: bool` field on `EmbeddingBackend::Qwen3` (off by
-default) is the only way to take the CPU branch. We surface that flag
-in config but not in any "happy path" example.
+- `fastembed/cuda` already implies `fastembed/qwen3` per fastembed's
+  feature graph, but we list both explicitly so the intent is obvious.
+- No `qwen3-cpu` workspace feature. The runtime `force_cpu` field on
+  `EmbeddingBackend` is the single override; the binary always builds
+  with Candle + CUDA.
+- `metal` is a compile-time alternative to CUDA. A real cross-platform
+  build matrix is out of scope; macOS dev boxes pass `--features metal
+  --no-default-features`.
 
-macOS dev boxes go through `qwen3-metal` and use `Device::new_metal(0)`
-with the same strict policy: construction failure is an error, not a
-silent CPU fallback.
+### Device policy
+
+GPU is the only intended runtime path:
+
+- Build via `Device::new_cuda(0)?` (or `Device::new_metal(0)?` under
+  the `metal` feature). Construction failure returns
+  `EmbeddingError::GpuRequired` with a diagnostic block dumping
+  `CUDA_HOME`, `CUDA_PATH`, and the first few entries of
+  `LD_LIBRARY_PATH`. Do **not** use `Device::cuda_if_available` —
+  that masks configuration problems.
+- The only path to `Device::Cpu` is `EmbeddingBackend::force_cpu =
+  true`; that path emits a `tracing::warn!` on every construction and
+  is not surfaced in any "happy path" example.
 
 ## Step-by-step
 
 Each step ends green: `cargo check --lib` passes inside the nix
 devshell.
 
-### Step 1 — bump fastembed and align ORT, no behavior change
+### Step 1 — strip ORT, swap fastembed dep, no Qwen3 yet
 
-This step is bigger than it looks because of a hard version conflict.
+This step is the demolition pass. After it, the crate still embeds with
+MiniLM but the dependency surface has shifted under the wrapper.
 
 - Replace the git-sourced `fastembed` line at `Cargo.toml:65` with
-  `version = "5.13.4"` and the default-features/features set from the
-  Cargo section above. Do **not** add the `qwen3` feature yet.
-- **Bump `ort` from `=2.0.0-rc.10` to `=2.0.0-rc.12`** in the same
-  commit. fastembed 5.13.4 pins ort with a `=` constraint, so leaving
-  ours at rc.10 makes Cargo refuse to resolve. This is the most likely
-  source of compile pain in the whole plan; budget time here.
-- Audit `src/embeddings/mod.rs:12` — we import
-  `ort::execution_providers::{CPUExecutionProvider, CUDAExecutionProvider,
-  ExecutionProvider}` and pass them into fastembed's
-  `with_execution_providers`. Confirm rc.12 still has these types in
-  the same module path and that their builders return the same
-  `ExecutionProviderDispatch`. Read the rc.10→rc.12 changelog (or just
-  diff the cached source trees in `~/.cargo/registry/src/`) before
-  writing code.
-- Run `nix develop ../nix-devshells#code --command cargo check --lib`.
-  Fix call-site breakage **only** in `src/embeddings/mod.rs`; if
-  anything else needs to change, stop and flag it on the plan — it
-  means we missed a leak.
+  `version = "5.13.4"` and the features set from the Cargo section
+  above. **Include `qwen3` and `cuda`** from the start — we are not
+  staging the Candle pull-in.
+- **Delete** the direct `ort` dependency from `Cargo.toml`. fastembed
+  still uses it internally for non-Candle models; we no longer touch it
+  from our code.
+- In `src/embeddings/mod.rs`, delete:
+  - The `use ort::execution_providers::{...}` line.
+  - The CUDA-init block (`mod.rs:42-88`).
+  - The `with_execution_providers(...)` call.
+- Keep `EmbeddingGenerator::new()` calling MiniLM via fastembed's
+  default path so callers still compile. The wrapper degrades to a
+  thin `TextEmbedding::try_new(InitOptions::new(model))` for one step.
+- Add `candle-core = "0.10.2"` to `[dependencies]` so Step 2 has it.
+- Verify with `cargo check --lib` in the devshell. Any breakage outside
+  `src/embeddings/mod.rs` and `Cargo.toml` is a leak we missed — stop
+  and audit.
 
-### Step 2 — introduce the backend enum, keep one impl
+### Step 2 — introduce the Qwen3 backend struct
 
 - Create `src/embeddings/backend.rs` containing `EmbeddingBackend`,
-  `OnnxModel`, `Qwen3Variant`, and the `dim()` method on each.
-- Wire `EmbeddingBackend::Onnx(OnnxModel::AllMiniLML6V2).dim() == 384`.
-- Add `EmbeddingGenerator::with_backend(...)` that currently only
-  handles the ONNX branch (the Qwen3 branch returns
-  `EmbeddingError::FeatureDisabled`).
-- `EmbeddingGenerator::new()` becomes a thin wrapper over
-  `with_backend`.
-- Keep `EMBEDDING_DIM` as a `pub const` for one more step to avoid
-  cascading edits.
+  `Qwen3Variant`, the `dim()` method, and the `identity()` method.
+- Wire `EmbeddingBackend::default().dim() == 1024` (Qwen3-0.6B).
+- `EMBEDDING_DIM` stays as a `pub const` for one more step. It becomes
+  unused after Step 5 deletes it.
+- No public-API changes to `EmbeddingGenerator` yet — this step only
+  adds types.
 
-### Step 3 — extract the ONNX impl behind the internal trait
+### Step 3 — write the Qwen3 embedder
 
-- Create `src/embeddings/onnx.rs` with the internal `EmbedderImpl` trait
-  and the fastembed-TextEmbedding implementation. Move the CUDA dispatch
-  block out of `mod.rs` into a helper here.
-- `EmbeddingGenerator` now holds `Arc<dyn EmbedderImpl>` instead of
-  `Arc<Mutex<TextEmbedding>>`. The `embed_*` methods delegate.
-- The CUDA-preferred dispatch logic moves into `OnnxEmbedder::new`. While
-  moving it: change the "CUDA not available - using CPU only" line at
-  `mod.rs:86` from `warn!` to `error!`, and reword it so it reads as a
-  configuration regression rather than a benign fallback. The dispatch
-  still falls through to CPU so existing MiniLM users on machines that
-  fail the runtime probe keep working, but the log line tells them to
-  fix it.
-
-### Step 4 — add the Qwen3 impl behind `qwen3` feature
-
-- Create `src/embeddings/qwen3.rs` with
-  `Qwen3Embedder { inner: fastembed::Qwen3TextEmbedding, dim: usize, instruction: &'static str }`
-  implementing `EmbedderImpl`.
-- The whole file is `#[cfg(feature = "qwen3")]`.
-- In `EmbeddingGenerator::with_backend`, the Qwen3 arm constructs this
-  under the same cfg; the `#[cfg(not(feature = "qwen3"))]` arm returns
-  `EmbeddingError::FeatureDisabled` with a clear message.
-- Hugging Face model IDs:
-  - `Qwen3Variant::Embedding0_6B` → `"Qwen/Qwen3-Embedding-0.6B"`
-  - `Qwen3Variant::Embedding4B`   → `"Qwen/Qwen3-Embedding-4B"`
-  - `Qwen3Variant::Embedding8B`   → `"Qwen/Qwen3-Embedding-8B"`
+- Create `src/embeddings/qwen3.rs` containing
+  `Qwen3Embedder { inner: Qwen3TextEmbedding, dim: usize, instruction: &'static str }`.
 - Construction maps to fastembed's
   `Qwen3TextEmbedding::from_hf(model_id, &device, dtype, max_len)`:
-  - `device`: **CUDA-required by default.** Build via
-    `Device::new_cuda(0)` and propagate the error as
-    `EmbeddingError::GpuRequired` with a diagnostic block dumping
-    `CUDA_HOME`, `CUDA_PATH`, and the first few entries of
-    `LD_LIBRARY_PATH` (mirror the existing ORT audit at
-    `src/embeddings/mod.rs:42-61` — same idea, different runtime). Only
-    fall back to `Device::Cpu` if `EmbeddingBackend::Qwen3.force_cpu`
-    is set; that path emits a `tracing::warn!` on every construction.
-    Do **not** use `Device::cuda_if_available` — that masks
-    configuration problems we want to surface.
-    This check is **independent** of the ORT CUDA check on the ONNX
-    path; both can live side by side, but the Qwen3 path must not read
-    the ORT check.
-  - `dtype`: start with `DType::F32`. Revisit F16 once 0.6B works; the
+  - **Model IDs**:
+    - `Qwen3Variant::Embedding0_6B` → `"Qwen/Qwen3-Embedding-0.6B"`
+    - `Qwen3Variant::Embedding4B`   → `"Qwen/Qwen3-Embedding-4B"`
+    - `Qwen3Variant::Embedding8B`   → `"Qwen/Qwen3-Embedding-8B"`
+  - **Device**: `Device::new_cuda(0)?` (or `Device::new_metal(0)?`
+    under `--features metal`). Failure returns
+    `EmbeddingError::GpuRequired` with the CUDA-env diagnostic dump
+    (port the spirit of `mod.rs:42-61`, not the contents — those audit
+    ORT, this audits Candle). `force_cpu = true` is the only path to
+    `Device::Cpu`.
+  - **dtype**: `DType::F32` to start. Revisit F16 once 0.6B works; the
     upstream commit `b39d84b` ("Fix Qwen3 F16 dtype mismatches in
     attention and l2_normalize") suggests F16 has had quirks recently.
-  - `max_len`: passed through from `EmbeddingBackend::Qwen3 { max_len }`.
-- `embed_documents` calls `inner.embed(&texts)` directly.
-  `embed_queries` prepends the instruction template described in the
-  "Instruction-aware embedding" section above to each input before the
-  same call. Store the template as a `&'static str` on the embedder so
-  it is easy to swap.
-- Add the same tracing lines we have on the ONNX path
-  (`tracing::info!("=== Qwen3 INITIALIZATION DEBUG ===")` etc.) for log
-  parity, but do **not** copy the ORT environment-variable checks —
-  those are meaningless here. Log Candle's device and dtype instead.
+  - **max_len**: from `EmbeddingBackend.max_len`.
+- Methods: `fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError>`
+  calls `inner.embed(texts)` directly. `fn embed_queries(...)`
+  prepends the instruction template, then the same call. Store the
+  template as a `&'static str` field so editing it is one line.
+- Tracing lines: `tracing::info!("=== Qwen3 INITIALIZATION ===")`,
+  log device + dtype + variant + max_len. No ORT-style env-var checks.
 
-### Step 5 — remove the `EMBEDDING_DIM` constant
+### Step 4 — rewrite `EmbeddingGenerator` on top of Qwen3
+
+- `EmbeddingGenerator` now holds `Qwen3Embedder` and a cached
+  `dim: usize`. No `Arc<dyn Trait>`, no internal trait — there is one
+  implementation.
+- Replace the existing methods with:
+  - `pub fn new() -> Result<Self, EmbeddingError>` → constructs with
+    `EmbeddingBackend::default()`.
+  - `pub fn with_backend(backend: EmbeddingBackend) -> Result<Self, EmbeddingError>`.
+  - `pub async fn embed_documents(...)`, `pub async fn embed_queries(...)`.
+  - `pub fn embed_chunks(...)` — uses `embed_documents` internally.
+  - `pub fn dimensions(&self) -> usize`.
+- The synchronous `embed`/`embed_batch` methods go away; all callers
+  are async-capable. The async methods run the synchronous Candle call
+  on a `spawn_blocking` task (mirror the existing pattern at
+  `mod.rs:128-138`).
+- Migrate call sites in the same commit:
+  - Index builders (`indexer_core.rs:78`, `unified.rs:9`,
+    `graph/codemap.rs`, the graph cache in `graph_tools.rs`) →
+    `embed_documents`.
+  - Search callers (`search/mod.rs:16`, `tools/query_tools.rs`) →
+    `embed_queries`.
+- Update `EmbeddingPipeline` (currently at `mod.rs:197`) to delegate to
+  `embed_documents`. Its `batch_size = 128` default was tuned for
+  ONNX-on-CUDA; for Qwen3-0.6B drop it to `32` and add a comment that
+  this is a starting point to be measured during the smoke test.
+
+### Step 5 — remove `EMBEDDING_DIM`
 
 - Delete `pub const EMBEDDING_DIM: usize = 384;` from
   `src/embeddings/mod.rs`.
 - Update the three importers (`mcp/sync.rs:9`,
   `tools/query_tools.rs:14`, `tools/index_tool.rs:6`) to call
-  `generator.dimensions()` at the right point. If the call site does not
-  already hold a generator, plumb one in via constructor args — do not
-  add a global.
-- The literal `384`s in tests stay; add a one-line comment at each test
-  site naming the model so future readers understand why it's literal.
+  `generator.dimensions()` at the right point. If a call site does not
+  hold a generator, plumb one in via constructor args — do not add a
+  global.
+- The literal `384`s in tests (`incremental.rs:280,313,353`,
+  `unified.rs:611,634`, `lancedb.rs:459`) get replaced with `1024`
+  (the new default's dim) or, better, with a constant pulled from
+  `EmbeddingBackend::default().dim()`. Either is fine — pick whichever
+  produces less test churn when you get there.
+- `vector_store/mod.rs:50` default `vector_size: 384` becomes
+  `EmbeddingBackend::default().dim()`.
 
-### Step 6 — let the indexer pick a backend
+### Step 6 — cache & path identity by model
+
+Switching variants silently is a footgun: LanceDB will reject the dim
+mismatch, but the graph embedding cache and the on-disk vector path
+would otherwise happily mix vectors from two different models. Existing
+MiniLM indexes on disk will also be invalidated by this whole change —
+the same machinery handles them.
+
+1. **`EMBEDDER_VERSION` is currently a `const`** at
+   `src/tools/graph_tools.rs:990`:
+   `"fastembed:all-MiniLM-L6-v2:dim384:v1"`. Replace the constant with
+   a function `embedder_version(&EmbeddingBackend) -> String` that
+   returns the backend's `identity()` value. Audit every reader and
+   feed them the active backend.
+2. **Vector store path** in `src/tools/project_paths.rs:30` is
+   `format!("code_chunks_{}", &dir_hash[..8])` — keyed only by project
+   directory. Extend it:
+   `format!("code_chunks_{}_{}", &dir_hash[..8], &model_fp[..8])` where
+   `model_fp = sha256(backend.identity())`. Two indexes for the same
+   project under different variants live in separate LanceDB
+   directories instead of fighting over one.
+3. **Health check / clear_cache** (MCP handlers under `src/tools/`)
+   must surface the active model in their output and, on startup,
+   refuse to attach an existing index whose recorded `EMBEDDER_VERSION`
+   does not match the configured backend. The refusal message must
+   tell the user the exact `clear_cache` invocation. Do **not**
+   auto-wipe — first run after this change should be a clear,
+   user-driven action.
+4. Write the active `EMBEDDER_VERSION` into a small `metadata.json`
+   alongside the LanceDB directory at first index, verify on reopen.
+   This is what makes (3) implementable.
+
+### Step 7 — let the indexer pick a variant
 
 - Add a `model: EmbeddingBackend` field to whatever struct configures
   the indexer (read `src/indexing/unified.rs` and `indexer_core.rs`
   during this step to see where to slot it).
-- Default to `EmbeddingBackend::Onnx(OnnxModel::AllMiniLML6V2)` so
-  existing CLI invocations keep working.
-- Expose it on the MCP tool surface only after the rest of the chain
-  compiles — that's the place where wrong configuration causes the most
-  user pain, so it deserves its own dedicated step.
-
-### Step 7 — cache & path identity by model
-
-Switching models silently is a footgun: LanceDB will reject the dim
-mismatch, but the graph embedding cache and the on-disk vector path
-would otherwise happily mix vectors from two different models. Fix all
-three identity points in this step.
-
-1. **`EMBEDDER_VERSION` is currently a `const`** at
-   `src/tools/graph_tools.rs:990`: `"fastembed:all-MiniLM-L6-v2:dim384:v1"`.
-   Replace the constant with a function `embedder_version(&EmbeddingBackend) -> String`
-   that returns the backend's `identity()` value. Audit every reader of
-   `EMBEDDER_VERSION` and feed them the active backend.
-2. **Vector store path** in `src/tools/project_paths.rs:30` is
-   `format!("code_chunks_{}", &dir_hash[..8])` — keyed only by project
-   directory. Extend it to include a short model fingerprint:
-   `format!("code_chunks_{}_{}", &dir_hash[..8], &model_fp[..8])` where
-   `model_fp` is `sha256(backend.identity())`. This means two indexes
-   for the same project under different models live in separate
-   LanceDB directories instead of fighting over the same one.
-3. **Health check / clear_cache** (find the MCP handlers — likely under
-   `src/tools/`) must surface the active model in their output and, on
-   startup, refuse to attach an existing index whose recorded
-   `EMBEDDER_VERSION` doesn't match the configured backend. The refusal
-   message must tell the user the exact `clear_cache` invocation to fix
-   it. Do **not** auto-wipe.
-4. Write the active `EMBEDDER_VERSION` into a small `metadata.json`
-   alongside the LanceDB directory at first index, and verify it on
-   reopen. This is the check that makes (3) possible.
+- Default to `EmbeddingBackend::default()` (Qwen3-0.6B).
+- Expose `Qwen3Variant` choice on the MCP tool surface. Wrong choice
+  here is what causes the most user pain (wasted download, wrong dim),
+  so the tool must echo the resolved backend's `identity()` in its
+  response and reject mismatches against an existing index.
 
 ### Step 8 — smoke test
 
-- Build with `--features qwen3` in the devshell. This implies CUDA; if
-  the build fails because Candle's CUDA crate cannot find the sysroot,
-  that is a devshell issue (treat as a blocker, not a code issue).
-- Run the binary against a small fixture directory using each of:
-  - default (MiniLM, ONNX, CUDA EP)
-  - Qwen3-0.6B (Candle, CUDA — `Device::new_cuda(0)`)
-- Confirm GPU is actually in use:
-  - ONNX path: log line confirms `CUDA execution provider available:
-    true` and `Configuring CUDA with X memory limit`.
-  - Qwen3 path: `nvidia-smi` shows the process holding VRAM while the
-    indexer runs. If the Qwen3 construction logs the GPU-required error
-    instead, fix the environment before continuing — do not switch to
-    `force_cpu` to make the smoke test pass.
-- Confirm the LanceDB table is created with the right `vector_size`
-  (1024 for 0.6B vs 384 for MiniLM) by inspecting the table schema.
-- Do **not** attempt 4B/8B on first run — verify the architecture works
-  with 0.6B first, then size up.
+- Build with default features in the devshell. CUDA is implied; if the
+  build fails because Candle's CUDA crate cannot find the sysroot, that
+  is a devshell issue (blocker, not code).
+- Run the binary against a small fixture directory with the default
+  backend (Qwen3-0.6B, CUDA, `Device::new_cuda(0)`).
+- Confirm GPU is actually in use: `nvidia-smi` shows the process
+  holding VRAM while the indexer runs. If construction logs
+  `EmbeddingError::GpuRequired` instead, fix the environment — do not
+  set `force_cpu` to make the smoke test pass.
+- Confirm the LanceDB table is created with `vector_size = 1024` by
+  inspecting the table schema.
+- Confirm `embed_queries` and `embed_documents` produce **different**
+  vectors for the same input string — that proves the instruction
+  prefix is being applied.
+- Measure batch-size sensitivity for 0.6B on the dev GPU; adjust the
+  `EmbeddingPipeline` default if 32 is too low or VRAM-fatal.
+- Do **not** attempt 4B/8B on first run — verify 0.6B works end-to-end,
+  then size up.
 
 ## Risks and open questions
 
-1. **ORT pin conflict is a hard blocker, not soft.** fastembed 5.13.4
-   has `ort = "=2.0.0-rc.12"`; we have `=2.0.0-rc.10`. Cargo's
-   single-version rule means resolution fails unless both move. Step 1
-   bumps us to rc.12; verify `CUDAExecutionProvider` /
-   `CPUExecutionProvider` API parity before writing any other code.
-2. **fastembed API drift between 5.2.0 and 5.13.x.** The
-   `TextEmbedding::try_new(InitOptions::new(model).with_*())` builder
-   has been stable in spirit but field additions are possible. Step 1
-   handles this together with the ORT bump.
-3. **`Qwen3TextEmbedding` ergonomics.** Its `embed` method takes
-   `&[&str]` and is synchronous on Candle. Confirm whether it supports
-   batched inference and what the batch-size sweet spot is on our 8 GB
-   GPU. The README example uses two strings; we will need real batches.
-4. **Memory footprint.** Qwen3-4B and -8B will not fit alongside our
-   current 5.5 GB ORT memory cap on an 8 GB card. If we ever enable
-   them, the ORT cap needs to drop or be removed when Candle is the
-   active backend, since they don't share the same memory pool. Note
-   the ORT cap is set unconditionally today (`mod.rs:78-79`); during
-   the refactor it should move into the ONNX impl, not the generic
-   constructor.
-5. **Instruction template drift.** The exact Qwen3 instruction string
+1. **Candle CUDA build in the devshell.** `fastembed/cuda` pulls in
+   `candle-core/cuda` + `candle-nn/cuda`. The current devshell is
+   configured for ORT's CUDA needs, not Candle's. Verify the build at
+   the start of Step 3; if pieces are missing, that is a devshell
+   change. Don't paper over it from code.
+2. **fastembed Qwen3 batching ergonomics.** `Qwen3TextEmbedding::embed`
+   takes `&[&str]` and is synchronous on Candle. Confirm it supports
+   real batches efficiently. The README example uses two strings, which
+   doesn't prove much — Step 8's batch-size measurement will tell us
+   whether 32 / 64 / 128 is the right starting point.
+3. **VRAM headroom.** Qwen3-0.6B is small enough for 8 GB cards;
+   Qwen3-4B and -8B will not fit. The old 5.5 GB ORT memory cap is
+   deleted with the ONNX path, so there's no longer a competing
+   reservation, but enabling 4B/8B will need a separate VRAM-vs-batch
+   measurement. Out of scope for this plan beyond the 0.6B happy path.
+4. **Instruction template drift.** The exact Qwen3 instruction string
    for code retrieval may change between model card revisions; we are
    hard-coding what works today. Confirm against the model card on
    first integration and centralize the literal in one place.
-6. **Cache/path identity (Step 7).** The graph cache, the LanceDB path,
-   and the indexed-snapshot metadata must all agree on
-   `EMBEDDER_VERSION` derived from the active backend. Stale
-   `code_chunks_<hash>/` directories from before this change will exist
-   on user machines; `clear_cache` must handle them. Do not auto-wipe.
-7. **HF token / network.** Qwen3 download is gated behind a network
+5. **Cache invalidation surface (Step 6).** Every existing on-disk
+   index built with MiniLM is invalidated. `clear_cache` must work
+   cleanly against pre-migration directory layouts (the directory hash
+   was 8 chars, no model fingerprint suffix). Walk the old layout in
+   addition to the new one when listing things to clear.
+6. **HF token / network.** Qwen3 download is gated behind a network
    round-trip to HF Hub on first use; fastembed handles this. Confirm
-   our nix sandbox does not block HF downloads at runtime, only at
-   build time.
-8. **Candle CUDA build complexity.** The `qwen3-cuda` workspace feature
-   pulls in `candle-core/cuda` + `candle-nn/cuda` plus a direct
-   `candle-core` dep. Verify they build cleanly under the `code`
-   devshell before opening a PR — the nix sysroot configured for ORT
-   may not satisfy Candle's CUDA crate. If the devshell is missing
-   pieces, that is a devshell change, not a code change.
+   the nix runtime sandbox does not block HF downloads (build-time
+   sandbox is a separate concern).
+7. **F32 vs F16 memory and quality.** Starting at F32 trades VRAM for
+   stability given the recent upstream F16 fixes. Revisit after 0.6B
+   is green; F16 will be worth it for 4B/8B specifically.
 
 ## Out of scope for this plan
 
@@ -500,5 +432,9 @@ three identity points in this step.
 - Replacing fastembed-rs entirely with `EmbedAnything` or `embedrs`.
   Re-evaluate only if fastembed's Qwen3 path proves unreliable or
   abandoned.
-- Migrating off ORT for the legacy ONNX models. They keep working as
-  they do today.
+- Keeping MiniLM or any ONNX path as a fallback. The ONNX dependency
+  surface (`ort` direct dep, CUDA execution providers, memory cap) is
+  deleted in Step 1 and not restored.
+- Multi-GPU. `Device::new_cuda(0)` hardcodes the first device; making
+  that configurable is a follow-up if a real machine ever has more
+  than one.
