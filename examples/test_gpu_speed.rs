@@ -1,88 +1,78 @@
-//! Simple GPU embedding speed test - no Qdrant needed
+//! Qwen3 smoke test — verify the embedder constructs, runs on GPU,
+//! produces non-zero vectors of the right dim, and that
+//! embed_documents vs embed_queries produce DIFFERENT vectors for
+//! the same input (proves the instruction prefix is applied).
 
-use file_search_mcp::embeddings::EmbeddingGenerator;
+use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
-fn main() {
-    // Initialize tracing to see CUDA debug logs
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
-        )
+        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .with_writer(std::io::stderr)
         .init();
 
-    if let Err(e) = run() {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn std::error::Error + Send>> {
-    println!("\n{}", "=".repeat(60));
-    println!("GPU EMBEDDING SPEED TEST");
-    println!("{}\n", "=".repeat(60));
-
-    println!("Initializing embedding generator with GPU...");
-    let generator = EmbeddingGenerator::new()
-        .map_err(|e| format!("Failed to create generator: {}", e))
-        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error + Send>)?;
-
-    // Test data - simulate 750 code chunks
-    let test_texts: Vec<String> = (0..750)
-        .map(|i| format!("fn test_function_{}() {{\n    println!(\"Hello from function {}\");\n    let x = {};\n    return x * 2;\n}}", i, i, i))
-        .collect();
-
-    println!("Generated {} test chunks\n", test_texts.len());
-
-    // Warmup
-    println!("Warming up GPU...");
-    let _ = generator.embed_batch(test_texts[..16].to_vec())?;
-    println!("Warmup complete\n");
-
-    // Benchmark with batch size 256 (our optimization)
-    println!("Testing with batch size 256 (optimized):");
-    let start = Instant::now();
-    let mut processed = 0;
-
-    for (i, batch) in test_texts.chunks(256).enumerate() {
-        let batch_start = Instant::now();
-        let _ = generator.embed_batch(batch.to_vec())?;
-        let batch_time = batch_start.elapsed();
-        processed += batch.len();
-        println!("  Batch {}: {} chunks in {:.3}s ({:.0} chunks/sec)",
-                 i + 1, batch.len(), batch_time.as_secs_f64(),
-                 batch.len() as f64 / batch_time.as_secs_f64());
-    }
-
-    let total_time = start.elapsed();
-    let throughput = processed as f64 / total_time.as_secs_f64();
-
-    println!("\n{}", "=".repeat(60));
-    println!("RESULTS");
     println!("{}", "=".repeat(60));
-    println!("Total chunks:        {}", processed);
-    println!("Total time:          {:.2}s", total_time.as_secs_f64());
-    println!("Throughput:          {:.0} chunks/sec", throughput);
+    println!("Qwen3 SMOKE TEST");
+    println!("{}", "=".repeat(60));
+
+    let backend = EmbeddingBackend::default();
+    println!("Backend identity: {}", backend.identity());
+    println!("Expected dim:     {}", backend.dim());
+
+    let start = Instant::now();
+    let generator = EmbeddingGenerator::new()?;
+    println!("Generator init:   {:.2}s", start.elapsed().as_secs_f32());
+    println!("Reported dim:     {}", generator.dimensions());
+    assert_eq!(generator.dimensions(), backend.dim(), "dim mismatch");
+
+    // Basic document embedding.
+    let docs = vec!["fn add(a: i32, b: i32) -> i32 { a + b }".to_string()];
+    let t = Instant::now();
+    let doc_vecs = generator.embed_documents(docs.clone()).await?;
+    println!("\nembed_documents 1 chunk: {:.3}s", t.elapsed().as_secs_f32());
+    assert_eq!(doc_vecs.len(), 1);
+    assert_eq!(doc_vecs[0].len(), backend.dim(), "doc dim wrong");
+    assert!(doc_vecs[0].iter().any(|&x| x != 0.0), "doc vec is all zeros");
+    println!("  vec[0..4] = {:?}", &doc_vecs[0][..4]);
+
+    // Query embedding for the SAME input — must differ (instruction prefix).
+    let t = Instant::now();
+    let query_vecs = generator.embed_queries(docs.clone()).await?;
+    println!("\nembed_queries 1 chunk: {:.3}s", t.elapsed().as_secs_f32());
+    assert_eq!(query_vecs.len(), 1);
+    assert_eq!(query_vecs[0].len(), backend.dim(), "query dim wrong");
+    println!("  vec[0..4] = {:?}", &query_vecs[0][..4]);
+
+    let diff: f32 = doc_vecs[0]
+        .iter()
+        .zip(query_vecs[0].iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum();
+    println!("\nL1 distance(doc, query) for same input: {:.4}", diff);
+    assert!(
+        diff > 0.01,
+        "doc and query vectors are too similar — instruction prefix may not be applied"
+    );
+
+    // Batch throughput. Use a modest batch to avoid OOM on first run.
+    let batch: Vec<String> = (0..32)
+        .map(|i| format!("fn f{i}(x: i32) -> i32 {{ x + {i} }}"))
+        .collect();
+    let t = Instant::now();
+    let batch_vecs = generator.embed_documents(batch.clone()).await?;
+    let elapsed = t.elapsed().as_secs_f32();
+    println!(
+        "\nembed_documents 32 chunks: {:.3}s ({:.1} chunks/sec)",
+        elapsed,
+        32.0 / elapsed
+    );
+    assert_eq!(batch_vecs.len(), 32);
 
     println!("\n{}", "=".repeat(60));
-    if throughput > 150.0 {
-        println!("✅ GPU IS ACTIVE!");
-        println!("   {:.0} chunks/sec indicates GPU acceleration", throughput);
-        println!("   Estimated speedup vs CPU: {:.1}x", throughput / 50.0);
-    } else {
-        println!("⚠️  GPU may be inactive");
-        println!("   {:.0} chunks/sec is close to CPU speeds", throughput);
-    }
-
-    if total_time.as_secs_f64() < 5.0 {
-        println!("🎉 Excellent performance!");
-    } else if total_time.as_secs_f64() < 10.0 {
-        println!("✅ Good performance");
-    }
-
-    println!("{}\n", "=".repeat(60));
-
+    println!("SMOKE TEST PASSED");
+    println!("{}", "=".repeat(60));
     Ok(())
 }

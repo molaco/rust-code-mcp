@@ -498,7 +498,33 @@ the same machinery handles them.
   so the tool must echo the resolved backend's `identity()` in its
   response and reject mismatches against an existing index.
 
-### Step 8 — smoke test
+### Step 8 — smoke test — **DONE 2026-05-16**
+
+**Outcome:** smoke test passes. Qwen3-0.6B runs on CUDA, embed_queries vs embed_documents L1 distance is 9.46 (instruction prefix is applied), batch of 32 in 74 ms (~431 chunks/sec post-warmup).
+
+**Smoke test output (verbatim, runtime portion):**
+- Backend identity: `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max2048:v1`
+- CUDA env probe: `cuda_home="…/cuda-merged-12.9"`, `device=Cuda(CudaDevice(DeviceId(1)))`
+- Generator init: 15.94 s (model load + CUDA kernel compile)
+- Reported dim: 1024 ✓
+- `embed_documents 1 chunk`: 1.282 s (cold), `vec[0..4]=[-0.0591, -0.0532, -0.0052, -0.0247]`
+- `embed_queries 1 chunk`: 0.016 s (warm), `vec[0..4]=[-0.0569, -0.0401, -0.0056, -0.0296]`
+- L1 distance(doc, query) for same input: **9.4604** (assert threshold 0.01 — instruction prefix confirmed live)
+- `embed_documents 32 chunks`: 0.074 s = ~431 chunks/sec
+
+**HF cache (Phase 4):** `~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots/<sha>/` contains `config.json` (727 B), `model.safetensors` (1.19 GB), `tokenizer.json` (11.4 MB) — symlinks into `blobs/`. Download worked first-shot.
+
+**Deviation — Cargo.toml `ort` re-added with `alternative-backend`:** First release build failed with `rust-lld: undefined symbol: OrtGetApiBase`. fastembed 5.13.4 has a non-optional `ort` dependency with only `ndarray`/`std`/`api-24` features (no `download-binaries`), so `ort-sys` tries to link against a system `libonnxruntime` that the `cuda-code` devshell doesn't provide. Since we never instantiate ONNX paths, the fix is the upstream-blessed escape hatch:
+```toml
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["alternative-backend"] }
+```
+`alternative-backend` propagates `ort-sys/disable-linking`. The dep is back in `Cargo.toml` but only as a link-suppression marker — no code references `ort` types. The original plan said "delete the `ort` direct dep entirely"; in practice we need it back for this narrow reason. Step 1's intent (no ORT runtime path) is preserved.
+
+**Example fixes:**
+- `examples/test_gpu_speed.rs`: rewritten as the smoke test described in the plan (async, embed_documents vs embed_queries L1 differential, batch throughput).
+- `examples/index_codebase.rs`: minimal compile-fix only — dropped `EMBEDDING_DIM`, switched to `EmbeddingBackend::default().dim()` + `.identity().as_str()` for the new `embedder_identity` arg. Not actually run in Phase 5 (Phase 3 was enough to declare Step 8 done).
+
+
 
 - Build with default features in the devshell. CUDA is implied; if the
   build fails because Candle's CUDA crate cannot find the sysroot, that

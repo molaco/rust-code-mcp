@@ -1,6 +1,6 @@
 //! Index rust-code-mcp codebase with GPU
 
-use file_search_mcp::embeddings::EMBEDDING_DIM;
+use file_search_mcp::embeddings::EmbeddingBackend;
 use file_search_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -19,6 +19,9 @@ async fn main() {
     let cache = PathBuf::from(".cache_bench");
     let tantivy = PathBuf::from(".tantivy_bench");
 
+    let backend = EmbeddingBackend::default();
+    let identity = backend.identity();
+
     println!("Codebase: {}", codebase.display());
     println!("Initializing indexer...\n");
 
@@ -26,13 +29,14 @@ async fn main() {
         &cache,
         &tantivy,
         &format!("rust_code_bench_{}", uuid::Uuid::new_v4()),
-        EMBEDDING_DIM,
+        backend.dim(),
+        identity.as_str(),
         None,
     )
     .await
     .expect("Failed to create indexer");
 
-    println!("🚀 Starting full indexing with GPU acceleration...\n");
+    println!("Starting full indexing with GPU acceleration...\n");
     let start = Instant::now();
 
     let stats = indexer
@@ -49,7 +53,13 @@ async fn main() {
     println!("Files indexed:       {}", stats.indexed_files);
     println!("Chunks generated:    {}", stats.total_chunks);
     println!("Total time:          {:.2}s", duration.as_secs_f64());
-    println!("Throughput:          {:.1} files/sec", stats.indexed_files as f64 / duration.as_secs_f64());
-    println!("                     {:.1} chunks/sec", stats.total_chunks as f64 / duration.as_secs_f64());
+    println!(
+        "Throughput:          {:.1} files/sec",
+        stats.indexed_files as f64 / duration.as_secs_f64()
+    );
+    println!(
+        "                     {:.1} chunks/sec",
+        stats.total_chunks as f64 / duration.as_secs_f64()
+    );
     println!("{}\n", "=".repeat(60));
 }

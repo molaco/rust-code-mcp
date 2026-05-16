@@ -64,6 +64,12 @@ text-splitter = "0.13"  # Semantic text chunking
 # Phase 4: Embedding Generation
 fastembed = { version = "5.13.4", default-features = false, features = ["hf-hub-native-tls", "qwen3", "cuda"] }
 candle-core = "0.10.2"
+# fastembed unconditionally depends on `ort` (ONNX Runtime) even when only the
+# Candle Qwen3 path is used. We never instantiate any ONNX model, so disable
+# linking to libonnxruntime via ort's `alternative-backend` feature (which
+# propagates `ort-sys/disable-linking`). This is the upstream-blessed way to
+# use fastembed without an ONNX Runtime on the system.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["alternative-backend"] }
 
 # Phase 5: Vector Database
 async-trait = "0.1"    # Async trait support

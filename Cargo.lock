@@ -2467,6 +2467,7 @@ dependencies = [
  "lancedb",
  "notify 6.1.1",
  "num_cpus",
+ "ort",
  "ra_ap_base_db",
  "ra_ap_hir",
  "ra_ap_hir_def",
