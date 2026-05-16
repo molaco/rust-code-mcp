@@ -43,7 +43,14 @@ impl Default for EmbeddingBackend {
     fn default() -> Self {
         Self {
             variant: Qwen3Variant::Embedding0_6B,
-            max_len: 2048,
+            // 1024 keeps attention memory bounded: at max_len=2048,
+            // Qwen3-0.6B's per-layer attention matrix is
+            // [batch, heads, seq, seq] x 4 bytes -> ~4 GB for one
+            // layer at batch=8, which OOMs on real-corpus chunks
+            // even on a 24 GB card. 1024 cuts that 4x and still
+            // covers virtually all function-sized chunks after the
+            // contextual-retrieval header.
+            max_len: 1024,
             force_cpu: false,
         }
     }
@@ -55,7 +62,7 @@ impl EmbeddingBackend {
     }
 
     /// Stable string used in cache paths and EMBEDDER_VERSION.
-    /// Example: "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max2048:v1"
+    /// Example: "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1"
     pub fn identity(&self) -> String {
         format!(
             "fastembed-candle:{}:dim{}:max{}:v1",
@@ -155,7 +162,7 @@ mod tests {
     fn default_backend_identity_matches_expected() {
         assert_eq!(
             EmbeddingBackend::default().identity(),
-            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max2048:v1"
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1"
         );
     }
 

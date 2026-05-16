@@ -40,12 +40,20 @@ impl Qwen3Embedder {
             target: "embeddings::qwen3",
             "=== Qwen3 INITIALIZATION ===",
         );
+        // F16 halves model weights AND activations vs F32. Upstream
+        // fastembed fixed Qwen3 F16 dtype mismatches in commit b39d84b
+        // (landed pre-5.13.4). F32 OOMed on real-corpus indexing even
+        // at batch=8 / max_len=1024 because attention scores are
+        // O(seq^2) and Qwen3-0.6B's ~28 layers stack up. Revisit if
+        // we observe NaN / quality regressions on the search side.
+        let dtype = DType::F16;
+
         tracing::info!(
             target: "embeddings::qwen3",
             variant = ?backend.variant,
             model_id = backend.variant.hf_model_id(),
             max_len = backend.max_len,
-            dtype = "F32",
+            ?dtype,
             device = ?device,
             "loading Qwen3 model"
         );
@@ -53,7 +61,7 @@ impl Qwen3Embedder {
         let inner = Qwen3TextEmbedding::from_hf(
             backend.variant.hf_model_id(),
             &device,
-            DType::F32,
+            dtype,
             backend.max_len,
         )
         .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
