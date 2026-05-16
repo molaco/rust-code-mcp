@@ -43,11 +43,9 @@ fn resolve_backend(model: Option<&str>) -> Result<EmbeddingBackend, McpError> {
         return Ok(EmbeddingBackend::default());
     };
     let variant = parse_variant(s).map_err(|msg| McpError::invalid_params(msg, None))?;
-    Ok(EmbeddingBackend {
-        variant,
-        max_len: 2048,
-        force_cpu: false,
-    })
+    let mut backend = EmbeddingBackend::default();
+    backend.variant = variant;
+    Ok(backend)
 }
 
 /// Index a codebase directory with automatic change detection
@@ -356,5 +354,15 @@ mod tests {
     #[test]
     fn parse_variant_rejects_unknown() {
         assert!(parse_variant("minilm").is_err());
+    }
+
+    #[test]
+    fn resolve_backend_explicit_model_keeps_default_limits() {
+        let backend = resolve_backend(Some("qwen3-0.6b")).unwrap();
+        let default = EmbeddingBackend::default();
+
+        assert_eq!(backend.variant, Qwen3Variant::Embedding0_6B);
+        assert_eq!(backend.max_len, default.max_len);
+        assert_eq!(backend.identity(), default.identity());
     }
 }

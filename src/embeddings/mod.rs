@@ -41,7 +41,7 @@ pub struct EmbeddingGenerator {
 
 impl EmbeddingGenerator {
     /// Construct with the default backend (Qwen3-Embedding-0.6B,
-    /// max_len=2048, GPU).
+    /// max_len=1024, GPU).
     pub fn new() -> Result<Self, EmbeddingError> {
         Self::with_backend(EmbeddingBackend::default())
     }

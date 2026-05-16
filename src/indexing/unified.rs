@@ -6,6 +6,7 @@
 //! - IndexerCore: Core file processing and embedding generation
 
 use crate::chunker::{ChunkId, CodeChunk};
+use crate::config::IndexerConfig;
 use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
 use crate::indexing::indexer_core::IndexerCore;
@@ -121,14 +122,16 @@ impl UnifiedIndexer {
             backend.identity()
         );
 
+        let indexer_config = codebase_loc
+            .map(|loc| IndexerConfig::for_codebase_size(loc, cache_path, tantivy_path))
+            .unwrap_or_else(|| IndexerConfig::default(cache_path, tantivy_path));
+
         // Initialize core with the explicit backend so the embedding
         // generator inside agrees with what we tell the vector store.
-        let core = IndexerCore::with_backend(cache_path, None, backend)?;
+        let core = IndexerCore::with_backend(cache_path, Some(indexer_config.core), backend)?;
 
         // Initialize Tantivy adapter
-        let tantivy_config =
-            crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
-        let tantivy = TantivyAdapter::new(tantivy_config)?;
+        let tantivy = TantivyAdapter::new(indexer_config.tantivy)?;
 
         // Initialize embedded vector store
         let vector_path = cache_path
@@ -661,12 +664,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
         let tantivy_path = temp_dir.path().join("tantivy");
+        let backend = EmbeddingBackend::default();
+        let embedder_identity = backend.identity();
 
         let indexer = UnifiedIndexer::for_embedded(
             &cache_path,
             &tantivy_path,
             "test_collection",
-            1024, // Qwen3-Embedding-0.6B
+            backend.dim(),
+            &embedder_identity,
             None,
         )
         .await;
@@ -684,12 +690,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
         let tantivy_path = temp_dir.path().join("tantivy");
+        let backend = EmbeddingBackend::default();
+        let embedder_identity = backend.identity();
 
         let mut indexer = UnifiedIndexer::for_embedded(
             &cache_path,
             &tantivy_path,
             "test_index_file",
-            1024, // Qwen3-Embedding-0.6B
+            backend.dim(),
+            &embedder_identity,
             None,
         )
         .await

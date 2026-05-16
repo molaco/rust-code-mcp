@@ -22,11 +22,11 @@
 //!
 //! The `for_codebase_size()` constructor automatically optimizes settings:
 //!
-//! | Codebase Size | Tantivy Threads | Memory (MB) | Batch Size |
-//! |---------------|----------------|-------------|------------|
-//! | < 100K LOC    | 2              | 50          | 96         |
-//! | 100K - 1M LOC | 4              | 100         | 96         |
-//! | > 1M LOC      | 8              | 200         | 128        |
+//! | Codebase Size | Tantivy Threads | Memory (MB) | GPU Batch Size |
+//! |---------------|----------------|-------------|----------------|
+//! | < 100K LOC    | 2              | 50          | 8              |
+//! | 100K - 1M LOC | 4              | 100         | 8              |
+//! | > 1M LOC      | 8              | 200         | 8              |
 
 use std::path::{Path, PathBuf};
 
@@ -55,12 +55,10 @@ impl IndexerConfig {
         cache_path: &Path,
         tantivy_path: &Path,
     ) -> Self {
-        // gpu_batch_size tuned for Qwen3-Embedding-0.6B at max_len=2048
-        // (hidden_dim=1024, ~28 layers, F32). At batch=96 this exploded into
-        // a ~21 GB activation slab and tripped CUDA_ERROR_OUT_OF_MEMORY on a
-        // 24 GB card. batch=8 stays well inside ~3-4 GB of activations and
-        // leaves headroom for tokenizer-padded worst-case chunks. Re-tune
-        // once a real-corpus throughput measurement exists.
+        // gpu_batch_size is tuned for Qwen3-Embedding-0.6B. The old
+        // MiniLM-era batch sizes pushed Qwen3 near the 24 GB VRAM cliff
+        // on real chunks. Re-tune once a real-corpus throughput
+        // measurement exists.
         let (max_file_size, gpu_batch_size, tantivy_memory_mb, tantivy_threads) =
             if codebase_loc < 100_000 {
                 // Small codebase
@@ -120,7 +118,7 @@ impl Default for IndexerCoreConfig {
         Self {
             cache_path: PathBuf::from("./cache"),
             max_file_size: 10_000_000, // 10 MB
-            gpu_batch_size: 96,        // Optimized for 8GB VRAM
+            gpu_batch_size: 8,         // Qwen3-0.6B safe default
         }
     }
 }

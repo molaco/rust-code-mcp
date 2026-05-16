@@ -26,6 +26,10 @@ impl EmbeddingBatcher {
         gpu_batch_size: usize,
     ) -> Self {
         let memory_monitor = MemoryMonitor::new();
+        tracing::info!(
+            "EmbeddingBatcher configured with GPU embedding batch size: {}",
+            gpu_batch_size
+        );
         Self {
             embedding_generator,
             memory_monitor: Arc::new(Mutex::new(memory_monitor)),
@@ -49,7 +53,14 @@ impl EmbeddingBatcher {
 
         let mut all_embeddings = Vec::new();
 
-        for chunk_batch in chunk_texts.chunks(self.gpu_batch_size) {
+        for (batch_idx, chunk_batch) in chunk_texts.chunks(self.gpu_batch_size).enumerate() {
+            tracing::debug!(
+                "Embedding GPU sub-batch {}/{} ({} chunks, configured max {})",
+                batch_idx + 1,
+                (chunk_texts.len() + self.gpu_batch_size - 1) / self.gpu_batch_size,
+                chunk_batch.len(),
+                self.gpu_batch_size
+            );
             let batch_embeddings = self
                 .embedding_generator
                 .embed_documents(chunk_batch.to_vec())
