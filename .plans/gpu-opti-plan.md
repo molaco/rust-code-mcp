@@ -337,6 +337,62 @@ Acceptance:
 
 ## Phase 3: implement token-length measurement
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Added `EmbeddingTextLen` and `EmbeddingTokenCounter` in
+  `src/embeddings/token_lengths.rs`.
+- Loaded the Qwen3 tokenizer through `hf-hub` using the same model id as the
+  active `EmbeddingBackend`.
+- Counted tokens with `add_special_tokens=true`, matching fastembed's Qwen3
+  `encode_batch(..., true)` path.
+- Capped token length with the active backend `max_len`.
+- Initialized the token counter in `EmbeddingBatcher`.
+- Added raw, capped, padded, and padded-token/sec metrics to embedding batch
+  logs.
+- Kept batching behavior unchanged: Phase 3 still sorts by formatted character
+  length and only uses token lengths for metrics.
+- Updated `examples/chunk_token_stats.rs` to use the shared token counter.
+- Added a small unit test for cap behavior.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `cargo build --release --example chunk_token_stats --example index_codebase`
+  passed with existing warnings.
+- `./target/release/examples/chunk_token_stats` completed in 783.40ms:
+  - 121 `.rs` files,
+  - 1880 parsed/tokenized chunks,
+  - 0 tokenization failures,
+  - raw token total 652,601,
+  - capped token total 564,214,
+  - char-sorted padded total at batch 32: 650,560,
+  - p95 954,
+  - p99 1827.
+- A full `RUST_CODE_MCP_EMBED_BATCH_SIZE=16 index_codebase` run showed
+  `token_metrics_available=true` and produced:
+  - 120 indexed files,
+  - 1861 chunks,
+  - 66.53s wall time,
+  - 66.19s embedding time,
+  - raw token total across embedding batches: 647,808,
+  - capped token total across embedding batches: 559,419,
+  - padded token total across embedding batches: 633,392,
+  - effective padded tokens/sec: ~9,570.
+- `timeout 120s cargo test caps_lengths_at_backend_max_len --lib` compiled but
+  failed at the final debug test link step with the existing `rust-lld`
+  `.eh_frame` corruption seen earlier in this repo. The test body did not run.
+
+Notes:
+
+- The token stats report and embedding logs now use the model-compatible special
+  token setting. Older baseline numbers used direct example tokenization and can
+  differ by small amounts.
+- Phase 4 can now switch the sort key from character length to capped token
+  length without adding tokenizer plumbing in the same change.
+
 Target files:
 
 - `src/indexing/embedding_batcher.rs`

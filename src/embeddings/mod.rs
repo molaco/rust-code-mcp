@@ -18,6 +18,9 @@ pub use backend::{EmbeddingBackend, Qwen3Variant};
 
 mod qwen3;
 
+mod token_lengths;
+pub use token_lengths::{EmbeddingTextLen, EmbeddingTokenCounter};
+
 use crate::chunker::{ChunkId, CodeChunk};
 use std::sync::Arc;
 

@@ -64,6 +64,7 @@ text-splitter = "0.13"  # Semantic text chunking
 # Phase 4: Embedding Generation
 fastembed = { version = "5.13.4", default-features = false, features = ["hf-hub-native-tls", "qwen3", "cuda"] }
 candle-core = "0.10.2"
+hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "native-tls"] }
 # fastembed unconditionally depends on `ort` (ONNX Runtime) even when only the
 # Candle Qwen3 path is used. We never instantiate any ONNX model, so disable
 # linking to libonnxruntime via ort's `alternative-backend` feature (which

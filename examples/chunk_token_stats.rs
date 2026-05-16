@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use file_search_mcp::chunker::Chunker;
+use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingTokenCounter};
 use file_search_mcp::parser::RustParser;
-use tokenizers::Tokenizer;
 use walkdir::WalkDir;
 
 /// One observation: token count for a single chunk and where it came from.
@@ -23,36 +23,6 @@ struct ChunkStat {
     chars: usize,
     file: PathBuf,
     symbol: String,
-}
-
-fn find_tokenizer_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Look in the standard HF cache location.
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let snapshots_dir = PathBuf::from(&home)
-        .join(".cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B/snapshots");
-
-    if !snapshots_dir.exists() {
-        return Err(format!(
-            "Qwen3-Embedding-0.6B snapshot dir not found at {}",
-            snapshots_dir.display()
-        )
-        .into());
-    }
-
-    // Pick the first snapshot containing tokenizer.json.
-    for entry in fs::read_dir(&snapshots_dir)? {
-        let entry = entry?;
-        let candidate = entry.path().join("tokenizer.json");
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err(format!(
-        "no tokenizer.json found under {}",
-        snapshots_dir.display()
-    )
-    .into())
 }
 
 fn should_skip(path: &Path) -> bool {
@@ -77,11 +47,13 @@ fn percentile(sorted: &[usize], p: f64) -> usize {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t0 = Instant::now();
-    let tokenizer_path = find_tokenizer_path()?;
-    println!("Using tokenizer: {}", tokenizer_path.display());
-
-    let tokenizer = Tokenizer::from_file(&tokenizer_path)
-        .map_err(|e| format!("failed to load tokenizer: {e}"))?;
+    let backend = EmbeddingBackend::default();
+    let token_counter = EmbeddingTokenCounter::from_backend(&backend)?;
+    println!(
+        "Using tokenizer for {} (max_len={})",
+        backend.variant.hf_model_id(),
+        token_counter.max_len()
+    );
 
     let root = std::env::current_dir()?;
     println!("Workspace root: {}", root.display());
@@ -149,14 +121,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for chunk in chunks {
             let formatted = chunk.format_for_embedding();
             let chars = formatted.chars().count();
-            let encoded = match tokenizer.encode(formatted, false) {
+            let token_len = match token_counter.count(&formatted) {
                 Ok(e) => e,
                 Err(_) => {
                     failed_tokenize += 1;
                     continue;
                 }
             };
-            let tokens = encoded.get_ids().len();
+            let tokens = token_len.raw_tokens;
 
             stats.push(ChunkStat {
                 tokens,
@@ -197,6 +169,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let min = *tokens_sorted.first().unwrap();
     let max = *tokens_sorted.last().unwrap();
     let sum_tokens: u128 = tokens_sorted.iter().map(|&x| x as u128).sum();
+    let model_max_len = token_counter.max_len();
+    let capped_total: u128 = tokens_sorted
+        .iter()
+        .map(|&x| x.min(model_max_len) as u128)
+        .sum();
+    let mut by_chars: Vec<&ChunkStat> = stats.iter().collect();
+    by_chars.sort_by_key(|s| s.chars);
+    let padded_total_batch_32: u128 = by_chars
+        .chunks(32)
+        .map(|batch| {
+            let batch_max = batch
+                .iter()
+                .map(|s| s.tokens.min(model_max_len))
+                .max()
+                .unwrap_or(0);
+            (batch_max * batch.len()) as u128
+        })
+        .sum();
     let mean = sum_tokens as f64 / n as f64;
     let median = if n.is_multiple_of(2) {
         (tokens_sorted[n / 2 - 1] + tokens_sorted[n / 2]) as f64 / 2.0
@@ -236,6 +226,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Token count summary:");
     println!("  N      = {n}");
+    println!("  raw total = {sum_tokens}");
+    println!("  model input total, capped at {model_max_len} = {capped_total}");
+    println!("  padded model total, char-sorted batch 32 = {padded_total_batch_32}");
     println!("  min    = {min}");
     println!("  mean   = {:.2}", mean);
     println!("  median = {:.1}", median);

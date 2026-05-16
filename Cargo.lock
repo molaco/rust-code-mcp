@@ -2467,6 +2467,7 @@ dependencies = [
  "futures",
  "glob",
  "heed",
+ "hf-hub",
  "lancedb",
  "notify 6.1.1",
  "num_cpus",
