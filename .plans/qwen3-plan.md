@@ -238,29 +238,45 @@ ort = "=2.0.0-rc.12"
 candle-core = { version = "0.10.2", optional = true }
 
 [features]
-# Forwarded workspace features. Do NOT put `features = ["qwen3"]` on the
-# fastembed dep itself — that would unconditionally pull Candle in.
-qwen3 = ["fastembed/qwen3", "dep:candle-core"]
-qwen3-cuda = ["qwen3", "fastembed/cuda"]
-qwen3-metal = ["qwen3", "fastembed/metal"]
+# GPU is the default. We already ship a CUDA-configured environment;
+# CPU paths exist only as explicit overrides for benchmarking / CI.
+# Do NOT put `features = ["qwen3"]` directly on the fastembed dep —
+# that pulls Candle in unconditionally and breaks the feature gating.
+default = []
+
+# The `qwen3` feature implies CUDA. There is no plain-Candle "qwen3 on
+# CPU" workspace feature — Qwen3-4B/8B on CPU is unusable in practice
+# and we don't want to make it a one-flag mistake.
+qwen3 = ["fastembed/qwen3", "fastembed/cuda", "dep:candle-core"]
+
+# Apple dev boxes only.
+qwen3-metal = ["fastembed/qwen3", "fastembed/metal", "dep:candle-core"]
+
+# Escape hatch. Forces Candle without any GPU backend feature flag.
+# Only useful for CI smoke tests / benchmarks. The Qwen3 runtime path
+# still refuses to construct a CPU device unless `force_cpu` is set in
+# the backend config (see Step 4).
+qwen3-cpu = ["fastembed/qwen3", "dep:candle-core"]
 ```
 
-Defaults are unchanged: ONNX only, no Candle, no Qwen3. The `qwen3`
-feature opt-in is what pulls in `candle-core` / `candle-nn`.
+ONNX path (MiniLM/BGE) keeps its current CUDA-preferred-with-CPU-fallback
+behavior but the messaging changes: CPU is a degraded mode, not a happy
+path. The `tracing::warn!("CUDA not available - using CPU only ...")`
+line at `src/embeddings/mod.rs:86` becomes `tracing::error!(...)` and
+the message is rewritten to point at the CUDA-environment audit so the
+user can diagnose, not just tolerate, the regression.
 
-GPU mapping is critical and easy to get wrong:
+Qwen3 path is stricter: by default the runtime requires a CUDA device.
+`Device::new_cuda(0)?` is the constructor, not `cuda_if_available`.
+Construction failure returns `EmbeddingError::GpuRequired` with a
+message that includes the relevant `LD_LIBRARY_PATH` / `CUDA_HOME`
+lookups. A `force_cpu: bool` field on `EmbeddingBackend::Qwen3` (off by
+default) is the only way to take the CPU branch. We surface that flag
+in config but not in any "happy path" example.
 
-- Our existing CUDA fallback (`src/embeddings/mod.rs:42-88`) is for
-  **ORT**, not Candle. It is irrelevant on the Qwen3 path.
-- For Qwen3 on CUDA, the right knob is `fastembed/cuda`, which fastembed
-  defines as `["qwen3", "nomic-v2-moe", "candle-core/cuda",
-  "candle-nn/cuda"]`. The `qwen3-cuda` workspace feature above forwards
-  to it.
-- On the Qwen3 code path we build the Candle device explicitly:
-  `Device::cuda_if_available(0).unwrap_or(Device::Cpu)`. Keep the
-  tracing lines for parity with the ORT path so log scraping still
-  works.
-- macOS dev boxes go through `qwen3-metal`, same shape.
+macOS dev boxes go through `qwen3-metal` and use `Device::new_metal(0)`
+with the same strict policy: construction failure is an error, not a
+silent CPU fallback.
 
 ## Step-by-step
 
@@ -307,11 +323,17 @@ This step is bigger than it looks because of a hard version conflict.
 ### Step 3 — extract the ONNX impl behind the internal trait
 
 - Create `src/embeddings/onnx.rs` with the internal `EmbedderImpl` trait
-  and the fastembed-TextEmbedding implementation. Move the CUDA fallback
+  and the fastembed-TextEmbedding implementation. Move the CUDA dispatch
   block out of `mod.rs` into a helper here.
 - `EmbeddingGenerator` now holds `Arc<dyn EmbedderImpl>` instead of
   `Arc<Mutex<TextEmbedding>>`. The `embed_*` methods delegate.
-- The CUDA/CPU dispatch logic moves into `OnnxEmbedder::new`.
+- The CUDA-preferred dispatch logic moves into `OnnxEmbedder::new`. While
+  moving it: change the "CUDA not available - using CPU only" line at
+  `mod.rs:86` from `warn!` to `error!`, and reword it so it reads as a
+  configuration regression rather than a benign fallback. The dispatch
+  still falls through to CPU so existing MiniLM users on machines that
+  fail the runtime probe keep working, but the log line tells them to
+  fix it.
 
 ### Step 4 — add the Qwen3 impl behind `qwen3` feature
 
@@ -328,9 +350,18 @@ This step is bigger than it looks because of a hard version conflict.
   - `Qwen3Variant::Embedding8B`   → `"Qwen/Qwen3-Embedding-8B"`
 - Construction maps to fastembed's
   `Qwen3TextEmbedding::from_hf(model_id, &device, dtype, max_len)`:
-  - `device`: `candle_core::Device::cuda_if_available(0).unwrap_or(Device::Cpu)`.
-    This is **independent** of the ORT CUDA check on the ONNX path.
-    Both checks can live side by side, but the Qwen3 path must not read
+  - `device`: **CUDA-required by default.** Build via
+    `Device::new_cuda(0)` and propagate the error as
+    `EmbeddingError::GpuRequired` with a diagnostic block dumping
+    `CUDA_HOME`, `CUDA_PATH`, and the first few entries of
+    `LD_LIBRARY_PATH` (mirror the existing ORT audit at
+    `src/embeddings/mod.rs:42-61` — same idea, different runtime). Only
+    fall back to `Device::Cpu` if `EmbeddingBackend::Qwen3.force_cpu`
+    is set; that path emits a `tracing::warn!` on every construction.
+    Do **not** use `Device::cuda_if_available` — that masks
+    configuration problems we want to surface.
+    This check is **independent** of the ORT CUDA check on the ONNX
+    path; both can live side by side, but the Qwen3 path must not read
     the ORT check.
   - `dtype`: start with `DType::F32`. Revisit F16 once 0.6B works; the
     upstream commit `b39d84b` ("Fix Qwen3 F16 dtype mismatches in
@@ -400,10 +431,19 @@ three identity points in this step.
 
 ### Step 8 — smoke test
 
-- Build with `--features qwen3` in the devshell.
+- Build with `--features qwen3` in the devshell. This implies CUDA; if
+  the build fails because Candle's CUDA crate cannot find the sysroot,
+  that is a devshell issue (treat as a blocker, not a code issue).
 - Run the binary against a small fixture directory using each of:
-  - default (MiniLM, ONNX)
-  - Qwen3-0.6B (Candle, GPU if available)
+  - default (MiniLM, ONNX, CUDA EP)
+  - Qwen3-0.6B (Candle, CUDA — `Device::new_cuda(0)`)
+- Confirm GPU is actually in use:
+  - ONNX path: log line confirms `CUDA execution provider available:
+    true` and `Configuring CUDA with X memory limit`.
+  - Qwen3 path: `nvidia-smi` shows the process holding VRAM while the
+    indexer runs. If the Qwen3 construction logs the GPU-required error
+    instead, fix the environment before continuing — do not switch to
+    `force_cpu` to make the smoke test pass.
 - Confirm the LanceDB table is created with the right `vector_size`
   (1024 for 0.6B vs 384 for MiniLM) by inspecting the table schema.
 - Do **not** attempt 4B/8B on first run — verify the architecture works
