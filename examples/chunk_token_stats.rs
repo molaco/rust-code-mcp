@@ -4,15 +4,16 @@
 //! For every `.rs` file in the workspace:
 //!   1. Parse with `RustParser::parse_source_complete`.
 //!   2. Run through `Chunker::chunk_file`.
-//!   3. Format each chunk with `CodeChunk::format_for_embedding`.
-//!   4. Tokenize with the Qwen3 tokenizer.
-//!   5. Aggregate statistics and print a report.
+//!   3. Apply the oversized-chunk splitter.
+//!   4. Format each chunk with `CodeChunk::format_for_embedding`.
+//!   5. Tokenize with the Qwen3 tokenizer.
+//!   6. Aggregate statistics and print a report.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use file_search_mcp::chunker::Chunker;
+use file_search_mcp::chunker::{ChunkSplitConfig, Chunker};
 use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingTokenCounter};
 use file_search_mcp::parser::RustParser;
 use walkdir::WalkDir;
@@ -83,6 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut failed_chunk: Vec<(PathBuf, String)> = Vec::new();
     let mut failed_tokenize: usize = 0;
     let mut files_with_chunks: usize = 0;
+    let mut raw_chunks: usize = 0;
     let mut total_chunks: usize = 0;
 
     // Heuristic: the tokenizer has a configured max length; flag chunks whose
@@ -112,6 +114,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
+        raw_chunks += chunks.len();
+        let chunks = chunker.split_oversized_chunks(
+            chunks,
+            ChunkSplitConfig::default(),
+            |chunk| {
+                token_counter
+                    .count(&chunk.format_for_embedding())
+                    .ok()
+                    .map(|len| len.raw_tokens)
+            },
+        );
 
         if !chunks.is_empty() {
             files_with_chunks += 1;
@@ -149,7 +162,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("==== Chunk token-count distribution ====");
     println!("Files scanned:        {}", rs_files.len());
     println!("Files producing chunks: {files_with_chunks}");
-    println!("Total chunks (parsed): {total_chunks}");
+    println!("Raw chunks (parsed):  {raw_chunks}");
+    println!("Total chunks (split): {total_chunks}");
     println!("Tokenized chunks:     {}", stats.len());
     println!("Tokenize failures:    {failed_tokenize}");
     println!("Parse failures:       {}", failed_parse.len());

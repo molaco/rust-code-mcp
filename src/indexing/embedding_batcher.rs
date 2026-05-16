@@ -272,6 +272,21 @@ impl EmbeddingBatcher {
         }
     }
 
+    /// Count raw formatted tokens for a chunk when the tokenizer is available.
+    pub(crate) fn count_chunk_raw_tokens(&self, chunk: &CodeChunk) -> Option<usize> {
+        let counter = self.token_counter.as_ref()?;
+        match counter.count(&chunk.format_for_embedding()) {
+            Ok(len) => Some(len.raw_tokens),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "Chunk token count unavailable; falling back to estimated split size"
+                );
+                None
+            }
+        }
+    }
+
     /// Calculate safe batch size for parallel processing based on available memory
     pub(crate) fn calculate_safe_batch_size(&self) -> usize {
         let available_mb = self.memory_monitor.lock().unwrap().available_bytes() / 1_000_000;

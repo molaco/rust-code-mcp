@@ -736,6 +736,75 @@ Acceptance:
 
 ## Phase 7: split oversized chunks before embedding
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Added `RUST_CODE_MCP_CHUNK_TARGET_TOKENS` with default `768`.
+- Added `RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS` with default `1024`.
+- Added chunk-splitting config to `IndexerCoreConfig` and env overrides with
+  validation/clamping.
+- Added a chunking cache-key salt:
+  `chunk-split:v1:target{target}:hard{hard}`. This makes the metadata cache
+  miss when chunking semantics change, so unchanged files are reprocessed under
+  the new chunk policy.
+- Added `ChunkSplitConfig` and an exact-token oversized-chunk pass.
+- Omit oversized container chunks (`impl`, `module`, `trait`) when child chunks
+  already cover the useful semantic boundaries.
+- Preserve omitted parent context on child chunks through
+  `ChunkContext::parent_symbol_name`.
+- Split oversized leaf chunks by line boundaries and annotate them with
+  `split_part` / `split_total`.
+- Updated `CodeChunk::format_for_embedding()` to include parent and split-part
+  context.
+- Updated `examples/chunk_token_stats.rs` to apply the production splitter
+  before reporting token distribution.
+- Added synthetic tests for:
+  - oversized container omission with parent metadata on child chunks,
+  - oversized leaf line splitting,
+  - unchanged small chunks.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `cargo build --release --example chunk_token_stats --example index_codebase`
+  hit the known `rust-lld` `.eh_frame` corruption, this time while linking the
+  release `index_codebase` example.
+- Rebuilding the examples with `RUSTFLAGS='-C link-arg=-fuse-ld=bfd'` passed
+  with existing warnings.
+- `./target/release/examples/chunk_token_stats` completed:
+  - 121 `.rs` files,
+  - 1922 raw parsed chunks,
+  - 1991 split chunks,
+  - raw token total 569,777,
+  - capped token total 569,777,
+  - max raw tokens 792,
+  - p95 767,
+  - p99 776,
+  - no chunks above 1024 tokens.
+- A clean full-index benchmark from `/tmp/rust-code-mcp-gpu-bench-phase7`
+  completed:
+  - 120 indexed files,
+  - 1973 chunks,
+  - 61.95s wall time,
+  - 60.05s embedding time,
+  - 31.8 chunks/sec,
+  - raw token total across embedding batches: 566,621,
+  - capped token total across embedding batches: 566,621,
+  - padded token total across embedding batches: 612,947,
+  - effective padded tokens/sec: ~10,208.
+
+Result:
+
+- Raw truncation loss was removed on this workspace: raw token total now equals
+  capped token total in both the token-stats report and embedding logs.
+- p95 dropped from Phase 3's 959 to 767, meeting the selected 768 target.
+- Full index time improved over Phase 0's 74.87s and Phase 5's 71.56s, but did
+  not reach the minimum useful target of below 60s.
+- Splitting increased chunk count, but the smaller max sequence length reduced
+  embedding wall time enough to offset the extra chunks.
+
 Target areas:
 
 - AST chunk creation code.

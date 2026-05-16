@@ -31,7 +31,7 @@
 //! # }
 //! ```
 
-use crate::chunker::{Chunker, CodeChunk};
+use crate::chunker::{Chunker, ChunkSplitConfig, CodeChunk};
 use crate::config::IndexerCoreConfig;
 use crate::embeddings::{Embedding, EmbeddingBackend, EmbeddingGenerator};
 use crate::indexing::embedding_batcher::EmbeddingBatcher;
@@ -61,6 +61,8 @@ pub struct IndexerCore {
     file_processor: FileProcessor,
     /// Code chunker
     chunker: Chunker,
+    /// Token limits for oversized chunk splitting
+    chunk_split_config: ChunkSplitConfig,
     /// Batch embedding generation and memory monitoring
     embedding_batcher: EmbeddingBatcher,
 }
@@ -82,7 +84,15 @@ impl IndexerCore {
     ) -> Result<Self, IndexingError> {
         let config = config.unwrap_or_default().with_env_overrides();
 
-        let file_processor = FileProcessor::new(cache_path, config.max_file_size)?;
+        let chunk_split_config = ChunkSplitConfig::new(
+            config.chunk_target_tokens,
+            config.chunk_hard_max_tokens,
+        );
+        let file_processor = FileProcessor::with_cache_key_salt(
+            cache_path,
+            config.max_file_size,
+            config.chunking_cache_salt(),
+        )?;
         let chunker = Chunker::new();
         let embedding_generator = EmbeddingGenerator::with_backend(backend)?;
         let embedding_batcher = EmbeddingBatcher::new(
@@ -94,6 +104,7 @@ impl IndexerCore {
         Ok(Self {
             file_processor,
             chunker,
+            chunk_split_config,
             embedding_batcher,
         })
     }
@@ -170,6 +181,11 @@ impl IndexerCore {
         // Chunk (CPU-intensive)
         let chunks = self.chunker.chunk_file(file_path, &content, &parse_result)
             .map_err(|e| IndexingError::Parser(e.to_string()))?;
+        let chunks = self.chunker.split_oversized_chunks(
+            chunks,
+            self.chunk_split_config,
+            |chunk| self.embedding_batcher.count_chunk_raw_tokens(chunk),
+        );
 
         if chunks.is_empty() {
             tracing::warn!("No chunks generated for {}", file_path.display());

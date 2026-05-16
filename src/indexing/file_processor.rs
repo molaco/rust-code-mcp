@@ -20,13 +20,25 @@ pub(crate) struct FileProcessor {
     file_filter: SensitiveFileFilter,
     /// Maximum file size to process (bytes)
     max_file_size: u64,
+    /// Salt for metadata-cache keys when indexing semantics change.
+    cache_key_salt: String,
 }
 
 impl FileProcessor {
     /// Create a new FileProcessor
+    #[cfg(test)]
     pub(crate) fn new(
         cache_path: &Path,
         max_file_size: u64,
+    ) -> Result<Self, IndexingError> {
+        Self::with_cache_key_salt(cache_path, max_file_size, String::new())
+    }
+
+    /// Create a new FileProcessor with a metadata-cache key salt.
+    pub(crate) fn with_cache_key_salt(
+        cache_path: &Path,
+        max_file_size: u64,
+        cache_key_salt: String,
     ) -> Result<Self, IndexingError> {
         let metadata_cache = MetadataCache::new(cache_path)
             .map_err(|e| IndexingError::Cache(e.to_string()))?;
@@ -38,6 +50,7 @@ impl FileProcessor {
             secrets_scanner,
             file_filter,
             max_file_size,
+            cache_key_salt,
         })
     }
 
@@ -68,7 +81,7 @@ impl FileProcessor {
     /// Fast check if file has likely changed using only stat info (mtime + size).
     /// Avoids reading file content. Use as a pre-filter before `has_file_changed`.
     pub(crate) fn has_stat_changed(&self, file_path: &Path) -> Result<bool, IndexingError> {
-        let file_path_str = file_path.to_string_lossy().to_string();
+        let file_path_str = self.cache_key(file_path);
         let stat = crate::metadata_cache::FileStat::from_path(file_path)
             .map_err(|e| IndexingError::Cache(e.to_string()))?;
         self.metadata_cache.has_stat_changed(&file_path_str, &stat)
@@ -77,14 +90,14 @@ impl FileProcessor {
 
     /// Check if file has changed (using metadata cache, reads content hash)
     pub(crate) fn has_file_changed(&self, file_path: &Path, content: &str) -> Result<bool, IndexingError> {
-        let file_path_str = file_path.to_string_lossy().to_string();
+        let file_path_str = self.cache_key(file_path);
         self.metadata_cache.has_changed(&file_path_str, content)
             .map_err(|e| IndexingError::Cache(e.to_string()))
     }
 
     /// Update metadata cache for a file
     pub(crate) fn update_file_metadata(&self, file_path: &Path, content: &str) -> Result<(), IndexingError> {
-        let file_path_str = file_path.to_string_lossy().to_string();
+        let file_path_str = self.cache_key(file_path);
         let metadata = std::fs::metadata(file_path)?;
         let file_meta = crate::metadata_cache::FileMetadata::from_content(
             content,
@@ -123,6 +136,15 @@ impl FileProcessor {
         self.metadata_cache
             .clear()
             .map_err(|e| IndexingError::Cache(e.to_string()))
+    }
+
+    fn cache_key(&self, file_path: &Path) -> String {
+        let file_path_str = file_path.to_string_lossy();
+        if self.cache_key_salt.is_empty() {
+            file_path_str.to_string()
+        } else {
+            format!("{}::{}", self.cache_key_salt, file_path_str)
+        }
     }
 }
 

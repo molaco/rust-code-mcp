@@ -31,6 +31,8 @@
 //! Set `RUST_CODE_MCP_EMBED_BATCH_SIZE` and
 //! `RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH` to override runtime embedding
 //! batch shape without changing embedding cache identity.
+//! Set `RUST_CODE_MCP_CHUNK_TARGET_TOKENS` and
+//! `RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS` to tune oversized chunk splitting.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -40,11 +42,19 @@ pub const EMBED_BATCH_SIZE_ENV: &str = "RUST_CODE_MCP_EMBED_BATCH_SIZE";
 /// Environment variable for overriding the padded token budget per embedding batch.
 pub const EMBED_MAX_TOKENS_PER_BATCH_ENV: &str =
     "RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH";
+/// Environment variable for the preferred formatted chunk token length.
+pub const CHUNK_TARGET_TOKENS_ENV: &str = "RUST_CODE_MCP_CHUNK_TARGET_TOKENS";
+/// Environment variable for the hard formatted chunk token length.
+pub const CHUNK_HARD_MAX_TOKENS_ENV: &str =
+    "RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS";
 
 const DEFAULT_GPU_BATCH_SIZE: usize = 32;
 const DEFAULT_MAX_TOKENS_PER_BATCH: usize = 32 * 1024;
+const DEFAULT_CHUNK_TARGET_TOKENS: usize = 768;
+const DEFAULT_CHUNK_HARD_MAX_TOKENS: usize = 1024;
 const MAX_GPU_BATCH_SIZE: usize = 256;
 const MAX_TOKENS_PER_BATCH: usize = 1_048_576;
+const MAX_CHUNK_TOKENS: usize = 16_384;
 
 /// Unified indexer configuration
 ///
@@ -93,6 +103,8 @@ impl IndexerConfig {
                 max_file_size,
                 gpu_batch_size,
                 max_tokens_per_batch: DEFAULT_MAX_TOKENS_PER_BATCH,
+                chunk_target_tokens: DEFAULT_CHUNK_TARGET_TOKENS,
+                chunk_hard_max_tokens: DEFAULT_CHUNK_HARD_MAX_TOKENS,
             },
             tantivy: TantivyConfig {
                 index_path: tantivy_path.to_path_buf(),
@@ -110,6 +122,8 @@ impl IndexerConfig {
                 max_file_size: 10_000_000,
                 gpu_batch_size: DEFAULT_GPU_BATCH_SIZE, // Qwen3-0.6B safe default with length-bucketed inputs
                 max_tokens_per_batch: DEFAULT_MAX_TOKENS_PER_BATCH,
+                chunk_target_tokens: DEFAULT_CHUNK_TARGET_TOKENS,
+                chunk_hard_max_tokens: DEFAULT_CHUNK_HARD_MAX_TOKENS,
             },
             tantivy: TantivyConfig {
                 index_path: tantivy_path.to_path_buf(),
@@ -131,6 +145,10 @@ pub struct IndexerCoreConfig {
     pub gpu_batch_size: usize,
     /// Padded token budget for embedding generation
     pub max_tokens_per_batch: usize,
+    /// Preferred formatted chunk length before splitting.
+    pub chunk_target_tokens: usize,
+    /// Hard formatted chunk length before splitting.
+    pub chunk_hard_max_tokens: usize,
 }
 
 impl IndexerCoreConfig {
@@ -142,7 +160,27 @@ impl IndexerCoreConfig {
         self.gpu_batch_size = gpu_batch_size_from_env(self.gpu_batch_size);
         self.max_tokens_per_batch =
             max_tokens_per_batch_from_env(self.max_tokens_per_batch);
+        self.chunk_target_tokens =
+            chunk_tokens_from_env(CHUNK_TARGET_TOKENS_ENV, self.chunk_target_tokens);
+        self.chunk_hard_max_tokens =
+            chunk_tokens_from_env(CHUNK_HARD_MAX_TOKENS_ENV, self.chunk_hard_max_tokens);
+        if self.chunk_hard_max_tokens < self.chunk_target_tokens {
+            tracing::warn!(
+                chunk_target_tokens = self.chunk_target_tokens,
+                chunk_hard_max_tokens = self.chunk_hard_max_tokens,
+                "Chunk hard max was below target; raising hard max to target"
+            );
+            self.chunk_hard_max_tokens = self.chunk_target_tokens;
+        }
         self
+    }
+
+    /// Cache-key salt for chunking changes that alter indexed document content.
+    pub fn chunking_cache_salt(&self) -> String {
+        format!(
+            "chunk-split:v1:target{}:hard{}",
+            self.chunk_target_tokens, self.chunk_hard_max_tokens
+        )
     }
 }
 
@@ -153,6 +191,8 @@ impl Default for IndexerCoreConfig {
             max_file_size: 10_000_000, // 10 MB
             gpu_batch_size: DEFAULT_GPU_BATCH_SIZE, // Qwen3-0.6B safe default with length-bucketed inputs
             max_tokens_per_batch: DEFAULT_MAX_TOKENS_PER_BATCH,
+            chunk_target_tokens: DEFAULT_CHUNK_TARGET_TOKENS,
+            chunk_hard_max_tokens: DEFAULT_CHUNK_HARD_MAX_TOKENS,
         }
     }
 }
@@ -271,6 +311,63 @@ fn parse_max_tokens_per_batch_override(raw: &str) -> Result<usize, &'static str>
     Ok(parsed.min(MAX_TOKENS_PER_BATCH))
 }
 
+fn chunk_tokens_from_env(env_var: &'static str, default: usize) -> usize {
+    let raw = match env::var(env_var) {
+        Ok(raw) => raw,
+        Err(env::VarError::NotPresent) => return default,
+        Err(err) => {
+            tracing::warn!(
+                env_var,
+                error = ?err,
+                default,
+                "Ignoring unreadable chunk token override"
+            );
+            return default;
+        }
+    };
+
+    match parse_chunk_token_override(&raw) {
+        Ok(tokens) => {
+            if raw.parse::<usize>().ok().is_some_and(|requested| requested > MAX_CHUNK_TOKENS) {
+                tracing::warn!(
+                    env_var,
+                    requested = raw.as_str(),
+                    max = MAX_CHUNK_TOKENS,
+                    "Clamping chunk token override"
+                );
+            }
+            tracing::info!(
+                env_var,
+                chunk_tokens = tokens,
+                "Using chunk token override"
+            );
+            tokens
+        }
+        Err(reason) => {
+            tracing::warn!(
+                env_var,
+                value = raw.as_str(),
+                reason,
+                default,
+                "Ignoring invalid chunk token override"
+            );
+            default
+        }
+    }
+}
+
+fn parse_chunk_token_override(raw: &str) -> Result<usize, &'static str> {
+    let parsed = raw
+        .parse::<usize>()
+        .map_err(|_| "value must be a positive integer")?;
+
+    if parsed == 0 {
+        return Err("value must be greater than zero");
+    }
+
+    Ok(parsed.min(MAX_CHUNK_TOKENS))
+}
+
 /// Tantivy BM25 indexing configuration
 #[derive(Debug, Clone)]
 pub struct TantivyConfig {
@@ -331,6 +428,14 @@ mod tests {
             config.core.max_tokens_per_batch,
             DEFAULT_MAX_TOKENS_PER_BATCH
         );
+        assert_eq!(
+            config.core.chunk_target_tokens,
+            DEFAULT_CHUNK_TARGET_TOKENS
+        );
+        assert_eq!(
+            config.core.chunk_hard_max_tokens,
+            DEFAULT_CHUNK_HARD_MAX_TOKENS
+        );
         assert_eq!(config.tantivy.memory_budget_mb, 50);
         assert_eq!(config.tantivy.num_threads, 2);
 
@@ -360,6 +465,8 @@ mod tests {
         assert_eq!(core.max_file_size, 10_000_000);
         assert_eq!(core.gpu_batch_size, 32); // Qwen3-0.6B safe default with length bucketing
         assert_eq!(core.max_tokens_per_batch, DEFAULT_MAX_TOKENS_PER_BATCH);
+        assert_eq!(core.chunk_target_tokens, DEFAULT_CHUNK_TARGET_TOKENS);
+        assert_eq!(core.chunk_hard_max_tokens, DEFAULT_CHUNK_HARD_MAX_TOKENS);
 
         let tantivy = TantivyConfig::default(Path::new("./tantivy"));
         assert_eq!(tantivy.memory_budget_mb, 50);
@@ -389,5 +496,16 @@ mod tests {
         );
         assert!(parse_max_tokens_per_batch_override("0").is_err());
         assert!(parse_max_tokens_per_batch_override("not-a-number").is_err());
+    }
+
+    #[test]
+    fn test_chunk_token_override_parser() {
+        assert_eq!(parse_chunk_token_override("768").unwrap(), 768);
+        assert_eq!(
+            parse_chunk_token_override("999999").unwrap(),
+            MAX_CHUNK_TOKENS
+        );
+        assert!(parse_chunk_token_override("0").is_err());
+        assert!(parse_chunk_token_override("not-a-number").is_err());
     }
 }
