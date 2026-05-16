@@ -156,13 +156,81 @@ async fn ensure_indexed(
     Ok(stats)
 }
 
-/// Create a HybridSearch with a pre-validated BM25 search
+/// Resolve the embedding backend the query side should use.
+///
+/// Search must embed queries with the same model that produced the
+/// document vectors on disk; otherwise the cosine scoring against
+/// LanceDB is meaningless and (in the worst case) hits a dim mismatch.
+/// We treat `metadata.json` (written by `LanceDbBackend::new` on first
+/// index) as the source of truth and parse it back into an
+/// `EmbeddingBackend`. If no metadata file exists yet (very fresh
+/// install, no prior index), fall back to the default backend — the
+/// vector store will then create the metadata on first write.
+fn resolve_query_backend(paths: &ProjectPaths) -> Result<EmbeddingBackend, McpError> {
+    let metadata_path = paths.vector_path.join("metadata.json");
+    if !metadata_path.exists() {
+        return Ok(EmbeddingBackend::default());
+    }
+    let bytes = std::fs::read(&metadata_path).map_err(|e| {
+        McpError::invalid_params(
+            format!(
+                "Failed to read vector store metadata at {}: {}",
+                metadata_path.display(),
+                e
+            ),
+            None,
+        )
+    })?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        McpError::invalid_params(
+            format!(
+                "Failed to parse vector store metadata at {}: {}",
+                metadata_path.display(),
+                e
+            ),
+            None,
+        )
+    })?;
+    let identity = parsed
+        .get("embedder_version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!(
+                    "Missing `embedder_version` in {}",
+                    metadata_path.display()
+                ),
+                None,
+            )
+        })?;
+    EmbeddingBackend::from_identity(identity).map_err(|e| {
+        McpError::invalid_params(
+            format!(
+                "Invalid embedder identity `{identity}` in {}: {e}. \
+                 Run `clear_cache` for this directory to discard the stale index.",
+                metadata_path.display()
+            ),
+            None,
+        )
+    })
+}
+
+/// Create a HybridSearch with a pre-validated BM25 search.
+///
+/// The embedding backend is resolved from `metadata.json` next to the
+/// LanceDB table (written by the indexer on first run). This keeps
+/// query embeddings in lockstep with the on-disk vectors even when the
+/// indexer was configured with a non-default variant.
 pub(crate) async fn create_hybrid_search(
     paths: &ProjectPaths,
     bm25_search: Option<crate::search::bm25::Bm25Search>,
 ) -> Result<HybridSearch, McpError> {
-    let embedding_generator = EmbeddingGenerator::new().map_err(|e| {
-        McpError::invalid_params(format!("Failed to initialize embedding generator: {}", e), None)
+    let backend = resolve_query_backend(paths)?;
+    let embedding_generator = EmbeddingGenerator::with_backend(backend).map_err(|e| {
+        McpError::invalid_params(
+            format!("Failed to initialize embedding generator: {}", e),
+            None,
+        )
     })?;
 
     let vector_store = VectorStore::new_embedded(

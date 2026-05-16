@@ -30,6 +30,20 @@ fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
 }
 
+/// Read the embedder identity recorded in `metadata.json` next to a
+/// vector store. Returns `None` if the file is absent or malformed —
+/// health check is best-effort and should never fail because of a
+/// missing sidecar.
+fn read_on_disk_embedder_identity(vector_path: &std::path::Path) -> Option<String> {
+    let metadata_path = vector_path.join("metadata.json");
+    let bytes = std::fs::read(&metadata_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    parsed
+        .get("embedder_version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
 /// Check system health status
 #[tool(description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)")]
 pub async fn health_check(
@@ -38,7 +52,11 @@ pub async fn health_check(
     tracing::info!("Performing health check");
 
     // The health probe shows the configured embedder so users can see at
-    // a glance which model the cache will be tied to.
+    // a glance which model the cache is tied to. Default backend is the
+    // "configured" view; further down we also read the on-disk
+    // `metadata.json` when a directory is supplied so the report
+    // reflects the real cached identity (which may differ if the user
+    // indexed with a non-default `model` argument).
     let backend = EmbeddingBackend::default();
     let embedder_identity = backend.identity();
 
@@ -81,9 +99,26 @@ pub async fn health_check(
 
     // Initialize embedded vector store (LanceDB)
     // Path must match unified.rs: cache_path.parent().join("vectors").join(collection_name)
+    let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
+
+    // On-disk identity, if any: the actual model that wrote this
+    // index. May differ from `embedder_identity` (the configured
+    // default) when the user picked a variant at index time.
+    let on_disk_identity = read_on_disk_embedder_identity(&vector_path);
+
     let vector_store = {
-        let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
-        VectorStore::new_embedded(vector_path, backend.dim(), &embedder_identity)
+        // Use the on-disk identity when probing, so we don't trip the
+        // VersionMismatch check just to read health info. Fall back to
+        // the configured default if the metadata file is absent.
+        let probe_identity = on_disk_identity
+            .clone()
+            .unwrap_or_else(|| embedder_identity.clone());
+        let probe_dim = on_disk_identity
+            .as_deref()
+            .and_then(|s| EmbeddingBackend::from_identity(s).ok())
+            .map(|b| b.dim())
+            .unwrap_or_else(|| backend.dim());
+        VectorStore::new_embedded(vector_path, probe_dim, &probe_identity)
             .await
             .ok()
             .map(std::sync::Arc::new)
@@ -97,13 +132,32 @@ pub async fn health_check(
 
     // Serialize to JSON, then splice in the active embedder identity so
     // operators can confirm which model the cache will be keyed against.
+    // Report both the configured default (what a fresh index would use)
+    // and the on-disk model (what the existing index was built with).
     let mut health_value = serde_json::to_value(&health)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
     if let Some(obj) = health_value.as_object_mut() {
+        // `embedder` keeps its existing meaning: the currently configured
+        // default. `embedder_on_disk` is new and reflects the actual
+        // metadata.json next to the LanceDB table when present.
         obj.insert(
             "embedder".to_string(),
+            serde_json::Value::String(
+                on_disk_identity
+                    .clone()
+                    .unwrap_or_else(|| embedder_identity.clone()),
+            ),
+        );
+        obj.insert(
+            "embedder_configured".to_string(),
             serde_json::Value::String(embedder_identity.clone()),
         );
+        if let Some(disk) = on_disk_identity.as_deref() {
+            obj.insert(
+                "embedder_on_disk".to_string(),
+                serde_json::Value::String(disk.to_string()),
+            );
+        }
     }
     let status_json = serde_json::to_string_pretty(&health_value)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;

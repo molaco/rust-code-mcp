@@ -6,7 +6,7 @@
 //! - IndexerCore: Core file processing and embedding generation
 
 use crate::chunker::{ChunkId, CodeChunk};
-use crate::embeddings::EmbeddingGenerator;
+use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
 use crate::indexing::indexer_core::IndexerCore;
 use crate::indexing::tantivy_adapter::TantivyAdapter;
@@ -62,6 +62,10 @@ pub struct UnifiedIndexer {
     vector_store: VectorStore,
     /// Performance metrics
     metrics: IndexingMetrics,
+    /// Active embedding backend configuration. Stored for downstream
+    /// callers (e.g. cache-version checks) that need to reconcile
+    /// against the model that built this index.
+    backend: EmbeddingBackend,
 }
 
 impl UnifiedIndexer {
@@ -85,20 +89,57 @@ impl UnifiedIndexer {
         embedder_identity: &str,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
-        tracing::info!("Initializing UnifiedIndexer with embedded LanceDB...");
+        Self::for_embedded_with_backend(
+            cache_path,
+            tantivy_path,
+            collection_name,
+            vector_size,
+            embedder_identity,
+            codebase_loc,
+            EmbeddingBackend::default(),
+        )
+        .await
+    }
 
-        // Initialize core
-        let core = IndexerCore::new(cache_path, None)?;
+    /// Create a new unified indexer with an explicit embedding backend.
+    ///
+    /// `vector_size` and `embedder_identity` should normally be derived
+    /// from `backend.dim()` and `backend.identity()`; they are passed
+    /// explicitly so existing call sites that pre-compute them stay
+    /// compatible without re-deriving.
+    pub async fn for_embedded_with_backend(
+        cache_path: &Path,
+        tantivy_path: &Path,
+        collection_name: &str,
+        vector_size: usize,
+        embedder_identity: &str,
+        codebase_loc: Option<usize>,
+        backend: EmbeddingBackend,
+    ) -> Result<Self> {
+        tracing::info!(
+            "Initializing UnifiedIndexer with embedded LanceDB (embedder={})...",
+            backend.identity()
+        );
+
+        // Initialize core with the explicit backend so the embedding
+        // generator inside agrees with what we tell the vector store.
+        let core = IndexerCore::with_backend(cache_path, None, backend)?;
 
         // Initialize Tantivy adapter
-        let tantivy_config = crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
+        let tantivy_config =
+            crate::config::TantivyConfig::for_codebase_size(tantivy_path, codebase_loc);
         let tantivy = TantivyAdapter::new(tantivy_config)?;
 
         // Initialize embedded vector store
-        let vector_path = cache_path.parent().unwrap_or(cache_path).join("vectors").join(collection_name);
-        let vector_store = VectorStore::new_embedded(vector_path, vector_size, embedder_identity)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize VectorStore: {}", e))?;
+        let vector_path = cache_path
+            .parent()
+            .unwrap_or(cache_path)
+            .join("vectors")
+            .join(collection_name);
+        let vector_store =
+            VectorStore::new_embedded(vector_path, vector_size, embedder_identity)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to initialize VectorStore: {}", e))?;
 
         tracing::info!("UnifiedIndexer initialized successfully with embedded backend");
 
@@ -107,7 +148,13 @@ impl UnifiedIndexer {
             tantivy,
             vector_store,
             metrics: IndexingMetrics::new(),
+            backend,
         })
+    }
+
+    /// Borrow the active embedding backend configuration.
+    pub fn backend(&self) -> &EmbeddingBackend {
+        &self.backend
     }
 
     /// Index a single file to both Tantivy and vector store

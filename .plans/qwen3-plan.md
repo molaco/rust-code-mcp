@@ -455,7 +455,39 @@ the same machinery handles them.
    alongside the LanceDB directory at first index, verify on reopen.
    This is what makes (3) implementable.
 
-### Step 7 — let the indexer pick a variant
+### Step 7 — let the indexer pick a variant — **DONE 2026-05-16**
+
+**Outcome:** `cargo check --lib` green in `cuda-code`, 18 warnings (unchanged baseline). MCP `index` tool accepts a `model` argument; query path reads `metadata.json` to lock onto whichever model built the index.
+
+**Indexer config flow** — three layers of `with_backend` constructors added, each defaulting through existing constructors:
+- `IndexerCore::with_backend(cache_path, config, backend)` ↔ `IndexerCore::new()` defaults.
+- `UnifiedIndexer::for_embedded_with_backend(...)` ↔ `for_embedded(...)` defaults. New `backend: EmbeddingBackend` field + `backend()` accessor.
+- `IncrementalIndexer::with_backend(...)` ↔ `new(...)` defaults.
+
+**MCP `index` tool** (`src/tools/index_tool.rs`):
+- `IndexCodebaseParams.model: Option<String>` with schemars description.
+- `parse_variant` accepts `qwen3-0.6b` / `qwen3-0_6b` / `0.6b`, `qwen3-4b` / `4b`, `qwen3-8b` / `8b` (case-insensitive).
+- Response text includes `Embedder: <identity>` in all three response branches.
+- `VectorStoreError::VersionMismatch` surfaced as `McpError::invalid_params` with a `clear_cache <dir>` hint.
+
+**Query path locks onto on-disk model:**
+- `EmbeddingBackend::from_identity(s) -> Result<Self, EmbeddingError>` added in `embeddings/backend.rs`. Parses the strict `fastembed-candle:Qwen3-Embedding-<X>:dim<Y>:max<Z>:v1` form; cross-validates encoded `dim` against the variant's actual dimension.
+- `EmbeddingError::InvalidIdentity` variant added.
+- `query_tools.rs::create_hybrid_search` reads `paths.vector_path/metadata.json`, parses the identity, builds `EmbeddingGenerator::with_backend(...)`. Missing file → default backend. Malformed → clear `clear_cache` hint.
+
+**Health tool** (`src/tools/health_tool.rs`):
+- `read_on_disk_embedder_identity(vector_path)` helper.
+- JSON output exposes `embedder` (preferred display), `embedder_configured` (default), `embedder_on_disk` (when metadata.json present).
+- Vector-store probe uses on-disk identity + derived dim so it never trips `VersionMismatch` against itself.
+
+**Step 6 deferred sites:** left at `EmbeddingBackend::default()` with explicit `// TODO: accept backend from caller` comments at `graph_tools.rs::ensure_embeddings_for` (~line 1075) and `graph/codemap.rs` rerank path (~line 378). Threading further would force signature changes on `semantic_overlaps` and `build_codemap` (MCP tools not currently variant-aware) — explicit out-of-scope per the plan.
+
+**Surprises / notes:**
+- The MCP `index` tool returns `Content::text` with `Embedder: <identity>` rather than structured JSON; matches surrounding tool shape.
+- Search/`get_similar_code` MCP tools do not accept a user-supplied `model`. Metadata.json is the correct source of truth and is what landed.
+- Pre-existing `#[ignore]`-gated tests in `unified.rs` need a signature touch-up from Step 6's `for_embedded` plumbing; they don't affect `cargo check --lib`. Sweep in a later cleanup or when running the snapshot suite.
+
+
 
 - Add a `model: EmbeddingBackend` field to whatever struct configures
   the indexer (read `src/indexing/unified.rs` and `indexer_core.rs`

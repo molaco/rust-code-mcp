@@ -26,6 +26,12 @@ pub enum EmbeddingError {
     /// GPU device construction failed (no fallback path)
     #[error("{0}")]
     GpuRequired(String),
+
+    /// Failed to parse an embedder identity string back into an
+    /// `EmbeddingBackend`. Used when reading `metadata.json` next to a
+    /// LanceDB table.
+    #[error("Invalid embedder identity: {0}")]
+    InvalidIdentity(String),
 }
 
 impl EmbeddingError {
@@ -47,6 +53,11 @@ impl EmbeddingError {
     /// Create a GPU-required error
     pub fn gpu_required(msg: impl Into<String>) -> Self {
         Self::GpuRequired(msg.into())
+    }
+
+    /// Create an invalid-identity error.
+    pub fn invalid_identity(msg: impl Into<String>) -> Self {
+        Self::InvalidIdentity(msg.into())
     }
 }
 

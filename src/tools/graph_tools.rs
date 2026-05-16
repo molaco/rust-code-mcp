@@ -1072,6 +1072,12 @@ pub(crate) async fn ensure_embeddings_for(
     // below treats a row as fresh only if its `embedder_version` matches.
     // `EmbeddingGenerator::new()` (phase B) uses `EmbeddingBackend::default()`,
     // so we read the same default here to keep them in lockstep.
+    //
+    // TODO(step7+): accept an explicit `&EmbeddingBackend` from the
+    // caller so non-default Qwen3 variants pick up a fresh embedder
+    // here. Plumbing requires updating `semantic_overlaps` and
+    // `codemap.rs::build_codemap`, which is a follow-up — for now this
+    // stays on the default to match the embedder constructed below.
     let active_backend = crate::embeddings::EmbeddingBackend::default();
     let active_version = embedder_version(&active_backend);
 

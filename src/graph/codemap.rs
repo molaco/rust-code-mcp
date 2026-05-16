@@ -375,6 +375,11 @@ pub(crate) async fn build_codemap(
             ordered.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
             // Compute the active embedder identity once (same default the
             // generator below picks up).
+            //
+            // TODO(step7+): when build_codemap learns to accept an
+            // `&EmbeddingBackend` from its caller, replace this default
+            // with the caller's choice so non-default Qwen3 variants
+            // invalidate stale cache rows correctly.
             let active_version = crate::tools::graph_tools::embedder_version(
                 &crate::embeddings::EmbeddingBackend::default(),
             );

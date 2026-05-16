@@ -9,6 +9,7 @@
 //!
 //! This achieves 100-1000x speedup vs full reindexing for unchanged codebases.
 
+use crate::embeddings::EmbeddingBackend;
 use crate::indexing::merkle::{ChangeSet, FileSystemMerkle};
 use crate::indexing::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
 use anyhow::Result;
@@ -60,13 +61,41 @@ impl IncrementalIndexer {
         embedder_identity: &str,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
-        let indexer = UnifiedIndexer::for_embedded(
+        Self::with_backend(
             cache_path,
             tantivy_path,
             collection_name,
             vector_size,
             embedder_identity,
             codebase_loc,
+            EmbeddingBackend::default(),
+        )
+        .await
+    }
+
+    /// Create a new incremental indexer with an explicit embedding
+    /// backend.
+    ///
+    /// Threaded down to `UnifiedIndexer::for_embedded_with_backend` so
+    /// the embedding generator inside agrees with the identity written
+    /// to the vector store's `metadata.json`.
+    pub async fn with_backend(
+        cache_path: &Path,
+        tantivy_path: &Path,
+        collection_name: &str,
+        vector_size: usize,
+        embedder_identity: &str,
+        codebase_loc: Option<usize>,
+        backend: EmbeddingBackend,
+    ) -> Result<Self> {
+        let indexer = UnifiedIndexer::for_embedded_with_backend(
+            cache_path,
+            tantivy_path,
+            collection_name,
+            vector_size,
+            embedder_identity,
+            codebase_loc,
+            backend,
         )
         .await?;
 

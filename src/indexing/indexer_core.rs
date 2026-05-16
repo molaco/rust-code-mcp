@@ -33,7 +33,7 @@
 
 use crate::chunker::{Chunker, CodeChunk};
 use crate::config::IndexerCoreConfig;
-use crate::embeddings::{Embedding, EmbeddingGenerator};
+use crate::embeddings::{Embedding, EmbeddingBackend, EmbeddingGenerator};
 use crate::indexing::embedding_batcher::EmbeddingBatcher;
 use crate::indexing::file_processor::FileProcessor;
 use crate::indexing::IndexingError;
@@ -66,16 +66,25 @@ pub struct IndexerCore {
 }
 
 impl IndexerCore {
-    /// Create a new IndexerCore
+    /// Create a new IndexerCore with the default embedding backend.
     pub fn new(
         cache_path: &Path,
         config: Option<IndexerCoreConfig>,
+    ) -> Result<Self, IndexingError> {
+        Self::with_backend(cache_path, config, EmbeddingBackend::default())
+    }
+
+    /// Create a new IndexerCore with an explicit embedding backend.
+    pub fn with_backend(
+        cache_path: &Path,
+        config: Option<IndexerCoreConfig>,
+        backend: EmbeddingBackend,
     ) -> Result<Self, IndexingError> {
         let config = config.unwrap_or_default();
 
         let file_processor = FileProcessor::new(cache_path, config.max_file_size)?;
         let chunker = Chunker::new();
-        let embedding_generator = EmbeddingGenerator::new()?;
+        let embedding_generator = EmbeddingGenerator::with_backend(backend)?;
         let embedding_batcher = EmbeddingBatcher::new(embedding_generator, config.gpu_batch_size);
 
         Ok(Self {
