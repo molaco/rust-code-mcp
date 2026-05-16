@@ -85,7 +85,11 @@ impl IndexerCore {
         let file_processor = FileProcessor::new(cache_path, config.max_file_size)?;
         let chunker = Chunker::new();
         let embedding_generator = EmbeddingGenerator::with_backend(backend)?;
-        let embedding_batcher = EmbeddingBatcher::new(embedding_generator, config.gpu_batch_size);
+        let embedding_batcher = EmbeddingBatcher::new(
+            embedding_generator,
+            config.gpu_batch_size,
+            config.max_tokens_per_batch,
+        );
 
         Ok(Self {
             file_processor,

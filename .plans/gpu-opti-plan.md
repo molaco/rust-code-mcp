@@ -554,6 +554,66 @@ Rollback criteria:
 
 ## Phase 5: add token-budget batch packing
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Added `RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH`.
+- Kept `RUST_CODE_MCP_EMBED_BATCH_SIZE` as the fixed item-count ceiling.
+- Added default padded-token budget `32 * 1024 = 32768`.
+- Added parser coverage for valid, clamped, zero, and non-integer token-budget
+  values.
+- Extended `IndexerCoreConfig` with `max_tokens_per_batch` and applied the env
+  override during indexer construction.
+- Reworked `EmbeddingBatcher` planning to create sub-batches from token-sorted
+  inputs using both:
+  - `batch_len <= max_batch_size`,
+  - `batch_len * max_capped_token_len <= max_tokens_per_batch`.
+- Preserved single oversize chunks by allowing them to form a one-item batch.
+- Updated padded-token summaries to use the planned batch boundaries rather
+  than fixed-size chunks.
+- Logged the configured token budget in embedding batch plan and completion
+  records.
+- Added helper tests for budget-respecting plans, oversize single items, and
+  padded-token summary accounting.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `cargo build --release --example index_codebase --example gpu_batch_matrix`
+  passed with existing warnings.
+- Full benchmark matrix was run from a temp working directory after clearing
+  temp `.cache_bench`, `.tantivy_bench`, and `vectors` directories between
+  runs.
+
+Benchmark matrix:
+
+| Batch size | Token budget | Indexed chunks | Wall time | Embedding time | Chunks/sec | Padded tokens | Padded tokens/sec | Result |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 32 | 32,768 | 1875 | 71.56s | 71.22s | 26.2 | 620,608 | ~8,714 | best Phase 5 point |
+| 64 | 32,768 | 1875 | 78.36s | 78.03s | 23.9 | 658,411 | ~8,438 | slower |
+| 64 | 49,152 | 1875 | 83.28s | 82.96s | 22.5 | 679,523 | ~8,191 | slower |
+| 96 | 49,152 | 1875 | 81.50s | 81.15s | 23.0 | 701,287 | ~8,642 | slower |
+
+Result:
+
+- The planner works and default settings did not OOM.
+- Padded token total stays below the original ~640k baseline at the default
+  `32 / 32768` point, but it does not beat the Phase 4 default run:
+  - Phase 4: 65.68s wall, 616,128 padded tokens.
+  - Phase 5 best: 71.56s wall, 620,608 padded tokens.
+- Larger item-count ceilings and token budgets increase padding waste on this
+  workload, so they should remain opt-in rather than becoming the default.
+- The best currently measured production default remains the Phase 4
+  token-length sort with batch size 32 and token budget 32768.
+
+Test note:
+
+- The new helper tests are compile-checked by `cargo check --lib`. Running lib
+  tests remains blocked by the repo's debug test link failure:
+  `rust-lld: error: corrupted .eh_frame`.
+
 Target files:
 
 - `src/config/indexer.rs`

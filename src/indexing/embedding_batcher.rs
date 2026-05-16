@@ -20,6 +20,8 @@ pub(crate) struct EmbeddingBatcher {
     memory_monitor: Arc<Mutex<MemoryMonitor>>,
     /// GPU batch size for embedding generation
     gpu_batch_size: usize,
+    /// Padded token budget for embedding generation
+    max_tokens_per_batch: usize,
     /// Token counter for Qwen3 model-input metrics.
     token_counter: Option<EmbeddingTokenCounter>,
 }
@@ -33,13 +35,32 @@ struct TokenLengthSummary {
     max_tokens: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EmbeddingBatchPlan {
+    start: usize,
+    end: usize,
+}
+
 impl EmbeddingBatcher {
     /// Create a new EmbeddingBatcher with a pre-constructed generator
     pub(crate) fn new(
         embedding_generator: EmbeddingGenerator,
         gpu_batch_size: usize,
+        max_tokens_per_batch: usize,
     ) -> Self {
         let memory_monitor = MemoryMonitor::new();
+        let gpu_batch_size = if gpu_batch_size == 0 {
+            tracing::warn!("Embedding GPU batch size was 0; clamping to 1");
+            1
+        } else {
+            gpu_batch_size
+        };
+        let max_tokens_per_batch = if max_tokens_per_batch == 0 {
+            tracing::warn!("Embedding token budget was 0; clamping to 1");
+            1
+        } else {
+            max_tokens_per_batch
+        };
         let token_counter = match EmbeddingTokenCounter::from_backend(embedding_generator.backend()) {
             Ok(counter) => {
                 tracing::info!(
@@ -57,13 +78,15 @@ impl EmbeddingBatcher {
             }
         };
         tracing::info!(
-            "EmbeddingBatcher configured with GPU embedding batch size: {}",
-            gpu_batch_size
+            gpu_batch_size,
+            max_tokens_per_batch,
+            "EmbeddingBatcher configured"
         );
         Self {
             embedding_generator,
             memory_monitor: Arc::new(Mutex::new(memory_monitor)),
             gpu_batch_size,
+            max_tokens_per_batch,
             token_counter,
         }
     }
@@ -96,7 +119,12 @@ impl EmbeddingBatcher {
             .collect();
         sort_embedding_inputs(&mut ordered_texts);
 
-        let total_batches = (ordered_texts.len() + self.gpu_batch_size - 1) / self.gpu_batch_size;
+        let batch_plan = plan_embedding_batches(
+            &ordered_texts,
+            self.gpu_batch_size,
+            self.max_tokens_per_batch,
+        );
+        let total_batches = batch_plan.len();
         let min_chars = ordered_texts
             .iter()
             .map(|(_, text, _)| text.len())
@@ -107,13 +135,14 @@ impl EmbeddingBatcher {
             .map(|(_, text, _)| text.len())
             .max()
             .unwrap_or(0);
-        let token_summary = summarize_token_lengths(&ordered_texts, self.gpu_batch_size);
+        let token_summary = summarize_token_lengths(&ordered_texts, &batch_plan);
 
         if let Some(summary) = token_summary {
             tracing::info!(
                 chunks = ordered_texts.len(),
                 sub_batches = total_batches,
                 configured_max_batch_size = self.gpu_batch_size,
+                max_tokens_per_batch = self.max_tokens_per_batch,
                 min_chars,
                 max_chars,
                 raw_tokens_total = summary.raw_tokens_total,
@@ -132,6 +161,7 @@ impl EmbeddingBatcher {
                 chunks = ordered_texts.len(),
                 sub_batches = total_batches,
                 configured_max_batch_size = self.gpu_batch_size,
+                max_tokens_per_batch = self.max_tokens_per_batch,
                 min_chars,
                 max_chars,
                 token_metrics_available = false,
@@ -143,7 +173,8 @@ impl EmbeddingBatcher {
         let mut all_embeddings: Vec<Option<Embedding>> =
             (0..ordered_texts.len()).map(|_| None).collect();
 
-        for (batch_idx, chunk_batch) in ordered_texts.chunks(self.gpu_batch_size).enumerate() {
+        for (batch_idx, plan) in batch_plan.iter().enumerate() {
+            let chunk_batch = &ordered_texts[plan.start..plan.end];
             let min_chars = chunk_batch
                 .iter()
                 .map(|(_, text, _)| text.len())
@@ -193,6 +224,7 @@ impl EmbeddingBatcher {
                 chunks = embeddings.len(),
                 sub_batches = total_batches,
                 configured_max_batch_size = self.gpu_batch_size,
+                max_tokens_per_batch = self.max_tokens_per_batch,
                 elapsed_secs = embed_duration.as_secs_f64(),
                 chunks_per_sec,
                 min_chars,
@@ -213,6 +245,7 @@ impl EmbeddingBatcher {
                 chunks = embeddings.len(),
                 sub_batches = total_batches,
                 configured_max_batch_size = self.gpu_batch_size,
+                max_tokens_per_batch = self.max_tokens_per_batch,
                 elapsed_secs = embed_duration.as_secs_f64(),
                 chunks_per_sec,
                 min_chars,
@@ -284,12 +317,8 @@ impl EmbeddingBatcher {
 
 fn summarize_token_lengths(
     ordered_texts: &[(usize, String, Option<EmbeddingTextLen>)],
-    batch_size: usize,
+    batch_plan: &[EmbeddingBatchPlan],
 ) -> Option<TokenLengthSummary> {
-    if batch_size == 0 {
-        return None;
-    }
-
     if ordered_texts.is_empty() {
         return Some(TokenLengthSummary {
             raw_tokens_total: 0,
@@ -314,7 +343,8 @@ fn summarize_token_lengths(
     }
 
     let mut padded_tokens_total = 0usize;
-    for chunk_batch in ordered_texts.chunks(batch_size) {
+    for plan in batch_plan {
+        let chunk_batch = &ordered_texts[plan.start..plan.end];
         let batch_max = chunk_batch
             .iter()
             .filter_map(|(_, _, token_len)| token_len.map(|len| len.capped_tokens))
@@ -330,6 +360,53 @@ fn summarize_token_lengths(
         min_tokens,
         max_tokens,
     })
+}
+
+fn plan_embedding_batches(
+    ordered_texts: &[(usize, String, Option<EmbeddingTextLen>)],
+    max_batch_size: usize,
+    max_tokens_per_batch: usize,
+) -> Vec<EmbeddingBatchPlan> {
+    if ordered_texts.is_empty() {
+        return Vec::new();
+    }
+
+    let max_batch_size = max_batch_size.max(1);
+    let max_tokens_per_batch = max_tokens_per_batch.max(1);
+    let mut plans = Vec::new();
+    let mut start = 0usize;
+    let mut batch_len = 0usize;
+    let mut batch_max_tokens = 0usize;
+
+    for (idx, (_, text, token_len)) in ordered_texts.iter().enumerate() {
+        let item_tokens = token_len
+            .map(|len| len.capped_tokens)
+            .unwrap_or_else(|| text.len())
+            .max(1);
+        let next_len = batch_len + 1;
+        let next_max_tokens = batch_max_tokens.max(item_tokens);
+        let exceeds_count = next_len > max_batch_size;
+        let exceeds_token_budget = next_len * next_max_tokens > max_tokens_per_batch;
+
+        if batch_len > 0 && (exceeds_count || exceeds_token_budget) {
+            plans.push(EmbeddingBatchPlan { start, end: idx });
+            start = idx;
+            batch_len = 0;
+            batch_max_tokens = 0;
+        }
+
+        batch_len += 1;
+        batch_max_tokens = batch_max_tokens.max(item_tokens);
+    }
+
+    if batch_len > 0 {
+        plans.push(EmbeddingBatchPlan {
+            start,
+            end: ordered_texts.len(),
+        });
+    }
+
+    plans
 }
 
 fn sort_embedding_inputs(ordered_texts: &mut [(usize, String, Option<EmbeddingTextLen>)]) {
@@ -473,12 +550,93 @@ mod tests {
             ),
         ];
 
-        let summary = summarize_token_lengths(&ordered, 2).unwrap();
+        let batch_plan = plan_embedding_batches(&ordered, 2, 10);
+        let summary = summarize_token_lengths(&ordered, &batch_plan).unwrap();
 
         assert_eq!(summary.raw_tokens_total, 15);
         assert_eq!(summary.capped_tokens_total, 15);
         assert_eq!(summary.padded_tokens_total, 17);
         assert_eq!(summary.min_tokens, 3);
         assert_eq!(summary.max_tokens, 7);
+    }
+
+    #[test]
+    fn test_plan_embedding_batches_respects_token_budget() {
+        let ordered = vec![
+            (
+                0,
+                "a".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 4,
+                    capped_tokens: 4,
+                }),
+            ),
+            (
+                1,
+                "b".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 4,
+                    capped_tokens: 4,
+                }),
+            ),
+            (
+                2,
+                "c".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 8,
+                    capped_tokens: 8,
+                }),
+            ),
+            (
+                3,
+                "d".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 8,
+                    capped_tokens: 8,
+                }),
+            ),
+        ];
+
+        let plan = plan_embedding_batches(&ordered, 4, 16);
+
+        assert_eq!(
+            plan,
+            vec![
+                EmbeddingBatchPlan { start: 0, end: 2 },
+                EmbeddingBatchPlan { start: 2, end: 4 },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_plan_embedding_batches_keeps_oversize_single_item() {
+        let ordered = vec![
+            (
+                0,
+                "a".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 32,
+                    capped_tokens: 32,
+                }),
+            ),
+            (
+                1,
+                "b".to_string(),
+                Some(EmbeddingTextLen {
+                    raw_tokens: 2,
+                    capped_tokens: 2,
+                }),
+            ),
+        ];
+
+        let plan = plan_embedding_batches(&ordered, 4, 16);
+
+        assert_eq!(
+            plan,
+            vec![
+                EmbeddingBatchPlan { start: 0, end: 1 },
+                EmbeddingBatchPlan { start: 1, end: 2 },
+            ]
+        );
     }
 }
