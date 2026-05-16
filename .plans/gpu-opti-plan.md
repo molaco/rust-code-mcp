@@ -135,6 +135,49 @@ Acceptance:
 
 ## Phase 1: make embedding batch size tunable
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Added `RUST_CODE_MCP_EMBED_BATCH_SIZE`.
+- Kept the default batch size at `32`.
+- Added parsing that rejects non-integer values and `0`.
+- Added a conservative maximum of `256`; larger requested values are clamped.
+- Applied the override in `IndexerCoreConfig::with_env_overrides()` during
+  `IndexerCore` construction.
+- Left batch size out of embedder identity/cache identity.
+- Added parser unit coverage for valid, clamped, zero, and non-integer values.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `cargo build --release --example index_codebase` passed with existing
+  warnings.
+- The release benchmark logs showed the override being applied, for example
+  `gpu_batch_size=64` and `EmbeddingBatcher configured with GPU embedding batch
+  size: 64`.
+- `cargo test test_gpu_batch_size_override_parser --lib` was attempted, but the
+  test-profile cargo process hung with a defunct `rustc` child and was killed
+  after it produced no useful output. The parser test remains in the code.
+
+Benchmark matrix from a temp working directory:
+
+| `RUST_CODE_MCP_EMBED_BATCH_SIZE` | Indexed chunks | Wall time | Embedding time | Chunks/sec | Result |
+|---:|---:|---:|---:|---:|---|
+| 16 | 1841 | 70.04s | 69.69s | 26.3 | fastest in this run |
+| 32 | 1841 | 73.23s | 72.87s | 25.1 | current default |
+| 48 | 1841 | 80.49s | 80.17s | 22.9 | slower |
+| 64 | 1841 | 87.56s | 87.24s | 21.0 | slower |
+
+Conclusion:
+
+- Runtime batch-size tuning works.
+- Larger fixed batches do not help this workload; they make the current
+  char-length batching worse.
+- Phase 2/3/5 should focus on measuring and reducing padded-token waste rather
+  than raising fixed batch size globally.
+
 Target files:
 
 - `src/config/indexer.rs`

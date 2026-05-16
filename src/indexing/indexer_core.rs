@@ -80,7 +80,7 @@ impl IndexerCore {
         config: Option<IndexerCoreConfig>,
         backend: EmbeddingBackend,
     ) -> Result<Self, IndexingError> {
-        let config = config.unwrap_or_default();
+        let config = config.unwrap_or_default().with_env_overrides();
 
         let file_processor = FileProcessor::new(cache_path, config.max_file_size)?;
         let chunker = Chunker::new();
