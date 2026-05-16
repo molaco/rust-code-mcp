@@ -684,6 +684,31 @@ Acceptance:
 
 ## Phase 6: optional quadratic attention budget
 
+Status: intentionally left out on May 16, 2026.
+
+Decision:
+
+- `jj show --summary` ran before the phase.
+- No production code was added for this phase.
+- Phase 5 showed that increasing the item-count ceiling and token budget
+  regresses wall time:
+  - `32 / 32768`: 71.56s wall, 620,608 padded tokens.
+  - `64 / 32768`: 78.36s wall, 658,411 padded tokens.
+  - `64 / 49152`: 83.28s wall, 679,523 padded tokens.
+  - `96 / 49152`: 81.50s wall, 701,287 padded tokens.
+- The best measured default remains the token-length sorted batch-size-32 path
+  from Phase 4, not a larger token-budget plan.
+- A disabled quadratic attention-budget config would add planner complexity
+  without measured benefit.
+
+Result:
+
+- Left the code out, matching this phase's acceptance rule:
+  "If it does not help, leave the code out rather than carrying unused config."
+- Future work can revisit this only with a specific pathological corpus where
+  token-sorted fixed batches still form expensive mixed-length long-sequence
+  groups.
+
 Target file:
 
 - `src/indexing/embedding_batcher.rs`
