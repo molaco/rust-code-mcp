@@ -25,7 +25,7 @@
 //! let core = IndexerCore::new(Path::new("./cache"), None)?;
 //!
 //! let processed = core.process_file_sync(Path::new("src/main.rs"))?;
-//! let embeddings = core.generate_embeddings_batched(&processed.chunks)?;
+//! // generate_embeddings_batched is async — requires a runtime in real use.
 //! let batch_size = core.calculate_safe_batch_size();
 //! # Ok(())
 //! # }
@@ -175,11 +175,16 @@ impl IndexerCore {
 
     // --- Embedding delegation (EmbeddingBatcher) ---
 
-    /// Generate embeddings for chunks in batches
+    /// Generate embeddings for chunks in batches.
     ///
     /// Uses GPU-optimized batch size to avoid OOM on GPU memory.
-    pub fn generate_embeddings_batched(&self, chunks: &[CodeChunk]) -> Result<Vec<Embedding>, IndexingError> {
-        self.embedding_batcher.generate_embeddings_batched(chunks)
+    pub async fn generate_embeddings_batched(
+        &self,
+        chunks: &[CodeChunk],
+    ) -> Result<Vec<Embedding>, IndexingError> {
+        self.embedding_batcher
+            .generate_embeddings_batched(chunks)
+            .await
     }
 
     /// Calculate safe batch size for parallel processing based on available memory

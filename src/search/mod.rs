@@ -85,8 +85,16 @@ impl VectorSearch {
         query: &str,
         limit: usize,
     ) -> Result<Vec<VectorSearchResult>, SearchError> {
-        // Generate embedding for the query
-        let query_embedding = self.embedding_generator.embed_async(query.to_string()).await?;
+        // Generate embedding for the query (instruction-prefixed).
+        let mut query_embeddings = self
+            .embedding_generator
+            .embed_queries(vec![query.to_string()])
+            .await?;
+        let query_embedding = query_embeddings
+            .pop()
+            .ok_or(SearchError::Embedding(
+                crate::embeddings::EmbeddingError::NoEmbeddingGenerated,
+            ))?;
 
         // Search in vector store
         self.vector_store.search(query_embedding, limit).await

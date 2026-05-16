@@ -24,7 +24,6 @@ pub(super) struct Qwen3Embedder {
 }
 
 impl Qwen3Embedder {
-    #[allow(dead_code)]
     pub(super) fn new(backend: &EmbeddingBackend) -> Result<Self, EmbeddingError> {
         let device = if backend.force_cpu {
             tracing::warn!(
@@ -71,12 +70,10 @@ impl Qwen3Embedder {
         })
     }
 
-    #[allow(dead_code)]
     pub(super) fn dim(&self) -> usize {
         self.dim
     }
 
-    #[allow(dead_code)]
     pub(super) fn embed_documents(
         &self,
         texts: &[&str],
@@ -89,7 +86,6 @@ impl Qwen3Embedder {
             .map_err(|e| EmbeddingError::embed_failed(e.to_string()))
     }
 
-    #[allow(dead_code)]
     pub(super) fn embed_queries(
         &self,
         texts: &[&str],
@@ -103,7 +99,6 @@ impl Qwen3Embedder {
     }
 }
 
-#[allow(dead_code)]
 fn build_cuda_device() -> Result<Device, EmbeddingError> {
     // Mirror the spirit of the old ORT CUDA audit but for Candle.
     // We log the env up front so failure modes (missing CUDA_HOME,

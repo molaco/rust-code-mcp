@@ -330,7 +330,21 @@ arrow-schema bump in lockstep.
 - Tracing lines: `tracing::info!("=== Qwen3 INITIALIZATION ===")`,
   log device + dtype + variant + max_len. No ORT-style env-var checks.
 
-### Step 4 — rewrite `EmbeddingGenerator` on top of Qwen3
+### Step 4 — rewrite `EmbeddingGenerator` on top of Qwen3 — **DONE 2026-05-16**
+
+**Outcome:** `cargo check --lib` green in `cuda-code`. 18 warnings, all pre-existing (zero new). MiniLM is gone from the codebase; the binary is now Qwen3-only.
+
+**Work that landed:**
+- `src/embeddings/mod.rs` rewritten (337 → 179 lines). `EmbeddingGenerator { inner: Arc<Qwen3Embedder>, backend: EmbeddingBackend }` with `new`, `with_backend`, `dimensions`, `backend`, `embed_documents`, `embed_queries`, `embed_chunks`. All async via `tokio::task::spawn_blocking`. Synchronous `embed*` methods deleted. MiniLM-dim test block deleted.
+- `EmbeddingPipeline::process_chunks` is now `async`. Default `batch_size` 128 → 32 (Qwen3-0.6B starting point; smoke test calibrates).
+- `EMBEDDING_DIM` left in place; Step 5 removes it.
+- Call sites migrated:
+  - **`embed_documents` (index/cache/batcher path):** `indexing/embedding_batcher.rs`, `indexing/indexer_core.rs`, `indexing/unified.rs`, `tools/graph_tools.rs`.
+  - **`embed_queries` (search path):** `search/mod.rs`, `search/resilient.rs`, `graph/codemap.rs` (prompt reranking).
+- Newly-async signatures: `EmbeddingBatcher::generate_embeddings_batched`, `IndexerCore::generate_embeddings_batched`, `EmbeddingPipeline::process_chunks`.
+- No `block_in_place` adaptations were needed — every call site already lived on an async stack.
+
+
 
 - `EmbeddingGenerator` now holds `Qwen3Embedder` and a cached
   `dim: usize`. No `Arc<dyn Trait>`, no internal trait — there is one

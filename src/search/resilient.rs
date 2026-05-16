@@ -168,10 +168,14 @@ impl ResilientHybridSearch {
             .as_ref()
             .ok_or_else(|| anyhow!("Embedding generator not configured"))?;
 
-        // Generate query embedding
+        // Generate query embedding (instruction-prefixed via embed_queries).
         let query_embedding = embedding_generator
-            .embed(query)
-            .map_err(|e| anyhow!("Failed to generate query embedding: {:?}", e))?;
+            .embed_queries(vec![query.to_string()])
+            .await
+            .map_err(|e| anyhow!("Failed to generate query embedding: {:?}", e))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Embedding generator returned no vector"))?;
 
         // Search vector store
         let results = vector_store

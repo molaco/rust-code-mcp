@@ -33,10 +33,15 @@ impl EmbeddingBatcher {
         }
     }
 
-    /// Generate embeddings for chunks in batches
+    /// Generate embeddings for chunks in batches.
     ///
     /// Uses GPU-optimized batch size to avoid OOM on GPU memory.
-    pub(crate) fn generate_embeddings_batched(&self, chunks: &[CodeChunk]) -> Result<Vec<Embedding>, IndexingError> {
+    /// Chunks are formatted with their context and embedded via
+    /// `EmbeddingGenerator::embed_documents` (no instruction prefix).
+    pub(crate) async fn generate_embeddings_batched(
+        &self,
+        chunks: &[CodeChunk],
+    ) -> Result<Vec<Embedding>, IndexingError> {
         let chunk_texts: Vec<String> = chunks
             .iter()
             .map(|c| c.format_for_embedding())
@@ -45,8 +50,10 @@ impl EmbeddingBatcher {
         let mut all_embeddings = Vec::new();
 
         for chunk_batch in chunk_texts.chunks(self.gpu_batch_size) {
-            let batch_embeddings = self.embedding_generator
-                .embed_batch(chunk_batch.to_vec())?;
+            let batch_embeddings = self
+                .embedding_generator
+                .embed_documents(chunk_batch.to_vec())
+                .await?;
             all_embeddings.extend(batch_embeddings);
         }
 

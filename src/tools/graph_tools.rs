@@ -701,7 +701,7 @@ pub async fn similar_to_item(
 ///      16 bytes), look up `embeddings_by_target` — if hit AND content_hash
 ///      AND embedder_version match, reuse the cached vector; else mark for
 ///      embedding.
-///   3. Batch-embed all cache misses via `EmbeddingGenerator::embed_batch_async`
+///   3. Batch-embed all cache misses via `EmbeddingGenerator::embed_documents`
 ///      in chunks of `EMBED_CHUNK`; persist each fresh vector to LMDB.
 ///   4. Identical-source short-circuit (v1.1c): items sharing a content_hash
 ///      get `score = 1.0` directly (skip cosine for that pair).
@@ -1149,7 +1149,7 @@ pub(crate) async fn ensure_embeddings_for(
         .unwrap_or(0);
 
     // Pull texts out into their own Vec so we can pass owned Strings
-    // to embed_batch_async without cloning Pending entries.
+    // to embed_documents without cloning Pending entries.
     let mut new_vectors: Vec<Vec<f32>> = Vec::with_capacity(pending.len());
     for chunk_start in (0..pending.len()).step_by(EMBED_CHUNK) {
         let chunk_end = (chunk_start + EMBED_CHUNK).min(pending.len());
@@ -1157,10 +1157,11 @@ pub(crate) async fn ensure_embeddings_for(
             .iter()
             .map(|p| p.source.clone())
             .collect();
+        // Document-side embedding (raw source slices, no instruction prefix).
         let vectors = embedder
-            .embed_batch_async(texts)
+            .embed_documents(texts)
             .await
-            .map_err(|e| anyhow::anyhow!("embed_batch_async: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("embed_documents: {e}"))?;
         new_vectors.extend(vectors);
     }
 

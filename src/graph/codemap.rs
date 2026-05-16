@@ -398,10 +398,15 @@ pub(crate) async fn build_codemap(
         } else {
             let generator = crate::embeddings::EmbeddingGenerator::new()
                 .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
+            // Query-side: the prompt is a retrieval query scored against
+            // cached document vectors — apply the instruction prefix.
             let v = generator
-                .embed_async(prompt.unwrap().to_owned())
+                .embed_queries(vec![prompt.unwrap().to_owned()])
                 .await
-                .map_err(|e| anyhow::anyhow!("embed_async: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("embed_queries: {e}"))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("embed_queries returned no vector"))?;
             Some(v)
         };
 

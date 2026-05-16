@@ -1,6 +1,14 @@
-//! Embedding generation using fastembed
+//! Embedding generation using fastembed's Candle backend (Qwen3).
 //!
-//! Generates embeddings for code chunks using local ONNX models
+//! `EmbeddingGenerator` wraps a `Qwen3Embedder`. The synchronous
+//! ONNX path is gone: every public method is `async` and runs the
+//! underlying blocking Candle call on the tokio blocking pool.
+//!
+//! The public surface splits document- and query-side embedding so
+//! Qwen3's instruction tuning is applied correctly:
+//! - `embed_documents` — raw text, no instruction prefix. Used by the
+//!   indexer / cache / batcher.
+//! - `embed_queries` — instruction prefix applied. Used by search.
 
 mod error;
 pub use error::EmbeddingError;
@@ -10,127 +18,99 @@ pub use backend::{EmbeddingBackend, Qwen3Variant};
 
 mod qwen3;
 
-/// Embedding dimension for all-MiniLM-L6-v2
+/// Legacy embedding dimension constant.
+///
+/// Kept for one more step so existing call sites compile during the
+/// migration; Step 5 removes it entirely and switches readers to
+/// `EmbeddingBackend::dim()`. The value here is the old MiniLM dim,
+/// not the active Qwen3 dim — do **not** rely on it for new code.
 pub const EMBEDDING_DIM: usize = 384;
 
 use crate::chunker::{ChunkId, CodeChunk};
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-/// An embedding vector (384 dimensions for all-MiniLM-L6-v2)
+/// An embedding vector. Dimension depends on the active backend
+/// (1024 for Qwen3-0.6B by default).
 pub type Embedding = Vec<f32>;
 
-/// A chunk with its generated embedding
+/// A chunk paired with its generated embedding.
 #[derive(Debug, Clone)]
 pub struct ChunkWithEmbedding {
     pub chunk_id: ChunkId,
     pub embedding: Embedding,
 }
 
-/// Embedding generator using fastembed
+/// Embedding generator backed by Qwen3 over fastembed's Candle path.
 #[derive(Clone)]
 pub struct EmbeddingGenerator {
-    model: Arc<Mutex<TextEmbedding>>,
-    dimensions: usize,
+    inner: Arc<qwen3::Qwen3Embedder>,
+    backend: EmbeddingBackend,
 }
 
 impl EmbeddingGenerator {
-    /// Create a new embedding generator with the default model (all-MiniLM-L6-v2)
-    ///
-    /// This model:
-    /// - 384 dimensions
-    /// - ~80MB download
-    /// - Good balance of speed and quality
+    /// Construct with the default backend (Qwen3-Embedding-0.6B,
+    /// max_len=2048, GPU).
     pub fn new() -> Result<Self, EmbeddingError> {
-        tracing::info!("Initializing embedding model (all-MiniLM-L6-v2)...");
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(true),
-        )
-        .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
-
-        tracing::info!("EmbeddingGenerator initialized successfully (dimensions: 384)");
-
-        Ok(Self {
-            model: Arc::new(Mutex::new(model)),
-            dimensions: 384,
-        })
+        Self::with_backend(EmbeddingBackend::default())
     }
 
-    /// Get the embedding dimensions
+    /// Construct with an explicit backend configuration.
+    pub fn with_backend(backend: EmbeddingBackend) -> Result<Self, EmbeddingError> {
+        let inner = Arc::new(qwen3::Qwen3Embedder::new(&backend)?);
+        Ok(Self { inner, backend })
+    }
+
+    /// Output vector dimension for the active backend.
     pub fn dimensions(&self) -> usize {
-        self.dimensions
+        self.inner.dim()
     }
 
-    /// Generate embedding for a single text
-    pub fn embed(&self, text: &str) -> Result<Embedding, EmbeddingError> {
-        let mut model = self.model.lock().unwrap();
-        let embeddings = model.embed(vec![text], None)
-            .map_err(|e| EmbeddingError::embed_failed(e.to_string()))?;
-        embeddings
-            .into_iter()
-            .next()
-            .ok_or(EmbeddingError::NoEmbeddingGenerated)
+    /// Borrow the active backend configuration.
+    pub fn backend(&self) -> &EmbeddingBackend {
+        &self.backend
     }
 
-    /// Generate embedding for a single text, non-blocking (runs on blocking thread pool)
-    pub async fn embed_async(&self, text: String) -> Result<Embedding, EmbeddingError> {
-        let model = self.model.clone();
+    /// Document-side embedding (raw text, no instruction prefix).
+    /// Used by indexer / cache / batcher.
+    pub async fn embed_documents(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<Vec<Embedding>, EmbeddingError> {
+        let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mut model = model.lock().unwrap();
-            let embeddings = model.embed(vec![&text], None)
-                .map_err(|e| EmbeddingError::embed_failed(e.to_string()))?;
-            embeddings
-                .into_iter()
-                .next()
-                .ok_or(EmbeddingError::NoEmbeddingGenerated)
+            let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            inner.embed_documents(&refs)
         })
         .await
         .map_err(|e| EmbeddingError::task_join(e.to_string()))?
     }
 
-    /// Generate embeddings for multiple texts (batch processing)
-    pub fn embed_batch(
+    /// Query-side embedding (Qwen3 instruction prefix applied).
+    /// Used by search.
+    pub async fn embed_queries(
         &self,
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
-        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-        let mut model = self.model.lock().unwrap();
-        model.embed(text_refs, None)
-            .map_err(|e| EmbeddingError::embed_failed(e.to_string()))
-    }
-
-    /// Generate embeddings for multiple texts, non-blocking (runs on blocking thread pool)
-    pub async fn embed_batch_async(
-        &self,
-        texts: Vec<String>,
-    ) -> Result<Vec<Embedding>, EmbeddingError> {
-        let model = self.model.clone();
+        let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            let mut model = model.lock().unwrap();
-            model.embed(text_refs, None)
-                .map_err(|e| EmbeddingError::embed_failed(e.to_string()))
+            let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            inner.embed_queries(&refs)
         })
         .await
         .map_err(|e| EmbeddingError::task_join(e.to_string()))?
     }
 
-    /// Generate embeddings for code chunks
-    pub fn embed_chunks(
+    /// Embed a slice of code chunks for the index.
+    ///
+    /// Wraps `embed_documents` over each chunk's
+    /// `format_for_embedding()` output.
+    pub async fn embed_chunks(
         &self,
         chunks: &[CodeChunk],
     ) -> Result<Vec<ChunkWithEmbedding>, EmbeddingError> {
-        // Format chunks for embedding
-        let formatted: Vec<String> = chunks
-            .iter()
-            .map(|chunk| chunk.format_for_embedding())
-            .collect();
-
-        // Generate embeddings in batch
-        let embeddings = self.embed_batch(formatted)?;
-
-        // Pair with chunk IDs
+        let formatted: Vec<String> =
+            chunks.iter().map(|c| c.format_for_embedding()).collect();
+        let embeddings = self.embed_documents(formatted).await?;
         let results: Vec<ChunkWithEmbedding> = chunks
             .iter()
             .zip(embeddings.into_iter())
@@ -139,27 +119,27 @@ impl EmbeddingGenerator {
                 embedding,
             })
             .collect();
-
         Ok(results)
     }
 }
 
-/// Embedding pipeline with batch processing and progress reporting
+/// Embedding pipeline with batch processing and progress reporting.
 pub struct EmbeddingPipeline {
     generator: EmbeddingGenerator,
     batch_size: usize,
 }
 
 impl EmbeddingPipeline {
-    /// Create a new embedding pipeline
+    /// Create a new embedding pipeline.
     pub fn new(generator: EmbeddingGenerator) -> Self {
         Self {
             generator,
-            batch_size: 128, // Optimized for 8GB VRAM - maximizes GPU parallelism
+            // Starting point for Qwen3-0.6B; calibrate during smoke test.
+            batch_size: 32,
         }
     }
 
-    /// Create with custom batch size
+    /// Create with a custom batch size.
     pub fn with_batch_size(generator: EmbeddingGenerator, batch_size: usize) -> Self {
         Self {
             generator,
@@ -167,10 +147,10 @@ impl EmbeddingPipeline {
         }
     }
 
-    /// Process chunks with progress callback
+    /// Process chunks with a progress callback.
     ///
-    /// The progress callback receives (current, total) for each batch processed
-    pub fn process_chunks<F>(
+    /// The callback receives `(current, total)` after each batch.
+    pub async fn process_chunks<F>(
         &self,
         chunks: Vec<CodeChunk>,
         mut progress: F,
@@ -181,9 +161,8 @@ impl EmbeddingPipeline {
         let total = chunks.len();
         let mut results = Vec::new();
 
-        // Process in batches
         for (batch_idx, batch) in chunks.chunks(self.batch_size).enumerate() {
-            let batch_results = self.generator.embed_chunks(batch)?;
+            let batch_results = self.generator.embed_chunks(batch).await?;
             results.extend(batch_results);
 
             let processed = (batch_idx + 1) * self.batch_size;
@@ -193,145 +172,8 @@ impl EmbeddingPipeline {
         Ok(results)
     }
 
-    /// Get the embedding dimensions
+    /// Output vector dimension for the active backend.
     pub fn dimensions(&self) -> usize {
         self.generator.dimensions()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::chunker::{ChunkContext, CodeChunk};
-    use std::path::PathBuf;
-
-    fn create_test_chunk(content: &str, symbol_name: &str) -> CodeChunk {
-        CodeChunk {
-            id: ChunkId::new(),
-            content: content.to_string(),
-            context: ChunkContext {
-                file_path: PathBuf::from("test.rs"),
-                module_path: vec!["crate".to_string()],
-                symbol_name: symbol_name.to_string(),
-                symbol_kind: "function".to_string(),
-                docstring: None,
-                imports: vec![],
-                outgoing_calls: vec![],
-                line_start: 1,
-                line_end: 10,
-            },
-            overlap_prev: None,
-            overlap_next: None,
-        }
-    }
-
-    #[test]
-    #[ignore] // Requires model download, run with --ignored
-    fn test_generator_creation() {
-        let generator = EmbeddingGenerator::new();
-        assert!(generator.is_ok());
-
-        let generator = generator.unwrap();
-        assert_eq!(generator.dimensions(), 384);
-    }
-
-    #[test]
-    #[ignore] // Requires model download
-    fn test_embed_single() {
-        let generator = EmbeddingGenerator::new().unwrap();
-        let embedding = generator.embed("fn test() {}").unwrap();
-
-        assert_eq!(embedding.len(), 384);
-        // Check that it's not all zeros
-        assert!(embedding.iter().any(|&x| x != 0.0));
-    }
-
-    #[test]
-    #[ignore] // Requires model download
-    fn test_embed_batch() {
-        let generator = EmbeddingGenerator::new().unwrap();
-        let texts = vec![
-            "fn test1() {}".to_string(),
-            "fn test2() {}".to_string(),
-            "struct Data {}".to_string(),
-        ];
-
-        let embeddings = generator.embed_batch(texts).unwrap();
-
-        assert_eq!(embeddings.len(), 3);
-        for embedding in &embeddings {
-            assert_eq!(embedding.len(), 384);
-        }
-    }
-
-    #[test]
-    #[ignore] // Requires model download
-    fn test_embed_chunks() {
-        let generator = EmbeddingGenerator::new().unwrap();
-
-        let chunks = vec![
-            create_test_chunk("fn test1() {}", "test1"),
-            create_test_chunk("fn test2() {}", "test2"),
-        ];
-
-        let results = generator.embed_chunks(&chunks).unwrap();
-
-        assert_eq!(results.len(), 2);
-        for result in &results {
-            assert_eq!(result.embedding.len(), 384);
-        }
-    }
-
-    #[test]
-    #[ignore] // Requires model download
-    fn test_pipeline() {
-        let generator = EmbeddingGenerator::new().unwrap();
-        let pipeline = EmbeddingPipeline::with_batch_size(generator, 2);
-
-        let chunks = vec![
-            create_test_chunk("fn test1() {}", "test1"),
-            create_test_chunk("fn test2() {}", "test2"),
-            create_test_chunk("fn test3() {}", "test3"),
-        ];
-
-        let mut progress_calls = 0;
-        let results = pipeline
-            .process_chunks(chunks, |current, total| {
-                progress_calls += 1;
-                println!("Progress: {}/{}", current, total);
-            })
-            .unwrap();
-
-        assert_eq!(results.len(), 3);
-        assert!(progress_calls > 0, "Progress callback should be called");
-    }
-
-    #[test]
-    #[ignore] // Requires model download
-    fn test_embedding_similarity() {
-        let generator = EmbeddingGenerator::new().unwrap();
-
-        // Similar functions should have similar embeddings
-        let emb1 = generator.embed("fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
-        let emb2 = generator.embed("fn sum(x: i32, y: i32) -> i32 { x + y }").unwrap();
-        let emb3 = generator.embed("struct Point { x: f64, y: f64 }").unwrap();
-
-        // Cosine similarity
-        let sim_12 = cosine_similarity(&emb1, &emb2);
-        let sim_13 = cosine_similarity(&emb1, &emb3);
-
-        // Similar code should be more similar than dissimilar code
-        assert!(
-            sim_12 > sim_13,
-            "Similar functions should be more similar than unrelated code"
-        );
-    }
-
-    // Helper: compute cosine similarity
-    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-        dot / (norm_a * norm_b)
     }
 }

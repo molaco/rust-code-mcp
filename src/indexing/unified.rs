@@ -147,7 +147,10 @@ impl UnifiedIndexer {
         );
 
         // Generate embeddings
-        let embeddings = self.core.generate_embeddings_batched(&processed.chunks)?;
+        let embeddings = self
+            .core
+            .generate_embeddings_batched(&processed.chunks)
+            .await?;
 
         tracing::debug!("Generated {} embeddings", embeddings.len());
 
@@ -508,7 +511,10 @@ impl UnifiedIndexer {
         );
 
         // Generate embeddings in GPU-optimized batches
-        let all_embeddings = self.core.generate_embeddings_batched(&all_chunks)?;
+        let all_embeddings = self
+            .core
+            .generate_embeddings_batched(&all_chunks)
+            .await?;
 
         let embed_duration = embed_start.elapsed();
         self.metrics.embed_duration += embed_duration;
