@@ -1,3 +1,9 @@
+// lancedb 0.29's async stack (lance_io::uring + moka::future) pushes the
+// auto-trait Send check past the default 128-level recursion limit when
+// the sync-manager future is spawned in main. Bump it locally; this is a
+// compile-time inference budget, not a runtime cost.
+#![recursion_limit = "512"]
+
 use file_search_mcp::mcp::SyncManager;
 use file_search_mcp::tools::search_tool::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
