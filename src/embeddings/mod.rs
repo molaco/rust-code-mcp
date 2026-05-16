@@ -18,14 +18,6 @@ pub use backend::{EmbeddingBackend, Qwen3Variant};
 
 mod qwen3;
 
-/// Legacy embedding dimension constant.
-///
-/// Kept for one more step so existing call sites compile during the
-/// migration; Step 5 removes it entirely and switches readers to
-/// `EmbeddingBackend::dim()`. The value here is the old MiniLM dim,
-/// not the active Qwen3 dim — do **not** rely on it for new code.
-pub const EMBEDDING_DIM: usize = 384;
-
 use crate::chunker::{ChunkId, CodeChunk};
 use std::sync::Arc;
 

@@ -277,7 +277,7 @@ mod tests {
             &cache_path,
             &tantivy_path,
             "test_incremental",
-            384,
+            1024, // Qwen3-Embedding-0.6B
             None,
         )
         .await
@@ -310,7 +310,7 @@ mod tests {
             &cache_path,
             &tantivy_path,
             "test_no_changes",
-            384,
+            1024, // Qwen3-Embedding-0.6B
             None,
         )
         .await
@@ -350,7 +350,7 @@ mod tests {
             &cache_path,
             &tantivy_path,
             "test_incremental_update",
-            384,
+            1024, // Qwen3-Embedding-0.6B
             None,
         )
         .await

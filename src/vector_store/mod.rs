@@ -13,7 +13,7 @@ pub use lancedb::LanceDbBackend;
 pub use traits::VectorStoreBackend;
 
 use crate::chunker::{ChunkId, CodeChunk};
-use crate::embeddings::Embedding;
+use crate::embeddings::{Embedding, EmbeddingBackend};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ impl Default for VectorStoreConfig {
 
         Self::Embedded {
             path: cache_dir.join("vectors"),
-            vector_size: 384, // all-MiniLM-L6-v2
+            vector_size: EmbeddingBackend::default().dim(),
         }
     }
 }
@@ -198,7 +198,7 @@ mod tests {
         match config {
             VectorStoreConfig::Embedded { path, vector_size } => {
                 assert!(path.to_string_lossy().contains("vectors"));
-                assert_eq!(vector_size, 384);
+                assert_eq!(vector_size, 1024); // Qwen3-Embedding-0.6B
             }
         }
     }

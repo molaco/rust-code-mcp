@@ -614,7 +614,7 @@ mod tests {
             &cache_path,
             &tantivy_path,
             "test_collection",
-            384,
+            1024, // Qwen3-Embedding-0.6B
             None,
         )
         .await;
@@ -637,7 +637,7 @@ mod tests {
             &cache_path,
             &tantivy_path,
             "test_index_file",
-            384,
+            1024, // Qwen3-Embedding-0.6B
             None,
         )
         .await

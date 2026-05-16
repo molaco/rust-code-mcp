@@ -371,7 +371,24 @@ arrow-schema bump in lockstep.
   ONNX-on-CUDA; for Qwen3-0.6B drop it to `32` and add a comment that
   this is a starting point to be measured during the smoke test.
 
-### Step 5 — remove `EMBEDDING_DIM`
+### Step 5 — remove `EMBEDDING_DIM` — **DONE 2026-05-16**
+
+**Outcome:** `cargo check --lib` green in `cuda-code`, 18 warnings (unchanged baseline). `EMBEDDING_DIM` is gone from all imports.
+
+**Work that landed:**
+- `pub const EMBEDDING_DIM: usize = 384;` deleted from `src/embeddings/mod.rs`.
+- **Importers migrated:**
+  - `src/tools/query_tools.rs` — two sites. `ensure_indexed` (no live generator) → `EmbeddingBackend::default().dim()`. `create_hybrid_search` (generator in scope) → `embedding_generator.dimensions()`.
+  - `src/mcp/sync.rs::sync_directory` → `EmbeddingBackend::default().dim()`.
+  - `src/tools/index_tool.rs::index_codebase` → `EmbeddingBackend::default().dim()`.
+- **Production default** `src/vector_store/mod.rs:50` (was `vector_size: 384`) → `EmbeddingBackend::default().dim()` with the import added.
+- **Test literals** (`incremental.rs:280,313,353`, `unified.rs:617,640`, `lancedb.rs:462`, `vector_store/mod.rs:201`) → `1024 // Qwen3-Embedding-0.6B`.
+
+**Deferred (flagged by agent, intentionally left for Step 6):**
+- `src/tools/health_tool.rs:75` has a hardcoded `VectorStore::new_embedded(vector_path, 384)`. Step 6 will already touch `health_tool.rs` for active-model surfacing and version-mismatch refusal — fix it there as part of the same edit.
+- Stale doc-comment references to `EMBEDDING_DIM` / `384` / "MiniLM" in `vector_store/mod.rs:36`, `vector_store/lancedb.rs:43`, `indexing/unified.rs:74`, `graph/model.rs:254`. Pure cosmetic; sweep in Step 6 or a later cleanup.
+
+
 
 - Delete `pub const EMBEDDING_DIM: usize = 384;` from
   `src/embeddings/mod.rs`.

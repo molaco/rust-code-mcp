@@ -459,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn test_lancedb_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 384).await;
+        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 1024).await; // Qwen3-Embedding-0.6B
         assert!(backend.is_ok());
     }
 

@@ -6,7 +6,7 @@
 //! - Uses IncrementalIndexer for fast change detection
 //! - Tracks multiple directories independently
 
-use crate::embeddings::EMBEDDING_DIM;
+use crate::embeddings::EmbeddingBackend;
 use crate::indexing::incremental::IncrementalIndexer;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -138,7 +138,7 @@ impl SyncManager {
             &paths.cache_path,
             &paths.tantivy_path,
             &paths.collection_name,
-            EMBEDDING_DIM,
+            EmbeddingBackend::default().dim(),
             None,
         )
         .await?;
