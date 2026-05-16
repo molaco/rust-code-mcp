@@ -8,6 +8,7 @@ use crate::embeddings::{Embedding, EmbeddingGenerator};
 use crate::indexing::IndexingError;
 use crate::metrics::memory::MemoryMonitor;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Handles batch embedding generation and memory-aware batch sizing.
 pub(crate) struct EmbeddingBatcher {
@@ -60,6 +61,26 @@ impl EmbeddingBatcher {
         ordered_texts.sort_by_key(|(_, text)| text.len());
 
         let total_batches = (ordered_texts.len() + self.gpu_batch_size - 1) / self.gpu_batch_size;
+        let min_chars = ordered_texts
+            .first()
+            .map(|(_, text)| text.len())
+            .unwrap_or(0);
+        let max_chars = ordered_texts
+            .last()
+            .map(|(_, text)| text.len())
+            .unwrap_or(0);
+
+        tracing::info!(
+            chunks = ordered_texts.len(),
+            sub_batches = total_batches,
+            configured_max_batch_size = self.gpu_batch_size,
+            min_chars,
+            max_chars,
+            token_metrics_available = false,
+            "Embedding batch plan"
+        );
+
+        let embed_start = Instant::now();
         let mut all_embeddings: Vec<Option<Embedding>> =
             (0..ordered_texts.len()).map(|_| None).collect();
 
@@ -89,10 +110,30 @@ impl EmbeddingBatcher {
             }
         }
 
-        all_embeddings
+        let embeddings = all_embeddings
             .into_iter()
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| IndexingError::Parser("Embedding result ordering failed".into()))
+            .ok_or_else(|| IndexingError::Parser("Embedding result ordering failed".into()))?;
+
+        let embed_duration = embed_start.elapsed();
+        let chunks_per_sec = if embed_duration.is_zero() {
+            0.0
+        } else {
+            embeddings.len() as f64 / embed_duration.as_secs_f64()
+        };
+        tracing::info!(
+            chunks = embeddings.len(),
+            sub_batches = total_batches,
+            configured_max_batch_size = self.gpu_batch_size,
+            elapsed_secs = embed_duration.as_secs_f64(),
+            chunks_per_sec,
+            min_chars,
+            max_chars,
+            token_metrics_available = false,
+            "Embedding batcher completed document embeddings"
+        );
+
+        Ok(embeddings)
     }
 
     /// Calculate safe batch size for parallel processing based on available memory

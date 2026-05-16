@@ -237,6 +237,59 @@ Rollback criteria:
 
 ## Phase 2: add embedding throughput instrumentation
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Added structured `Embedding batch plan` logs from `EmbeddingBatcher` with:
+  - chunks,
+  - sub-batches,
+  - configured max embedding batch size,
+  - min/max formatted character length,
+  - `token_metrics_available=false`.
+- Added structured `Embedding batcher completed document embeddings` logs with:
+  - chunks,
+  - sub-batches,
+  - configured max embedding batch size,
+  - elapsed seconds,
+  - chunks/sec,
+  - min/max formatted character length,
+  - `token_metrics_available=false`.
+- Added `examples/gpu_batch_matrix.rs`, a helper that runs the release
+  `index_codebase` sibling binary from temporary directories, applies
+  `RUST_CODE_MCP_EMBED_BATCH_SIZE`, parses the metrics summary, and prints a
+  compact comparison table.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `cargo build --release --example index_codebase --example gpu_batch_matrix`
+  passed with existing warnings.
+- `./target/release/examples/gpu_batch_matrix 16` completed one full helper
+  benchmark and printed:
+  - 1848 chunks,
+  - 66.71s index wall time,
+  - 66.35s embedding time,
+  - 27.7 chunks/sec,
+  - 67.61s child process wall time.
+- A direct `RUST_CODE_MCP_EMBED_BATCH_SIZE=16 index_codebase` run showed the new
+  structured logs. Example first batch:
+  - chunks: 599,
+  - sub-batches: 38,
+  - configured max batch size: 16,
+  - min/max chars: 147..27327,
+  - elapsed: 19.57s,
+  - chunks/sec: 30.6.
+
+Notes:
+
+- Token-level metrics are intentionally marked unavailable here. Phase 3 wires
+  tokenizer-backed token lengths into the hot path.
+- The new benchmark helper supports the default `16 32 48 64` matrix, but the
+  phase verification used a one-size smoke run to avoid repeating the full
+  Phase 1 matrix.
+
 Target files:
 
 - `src/indexing/unified.rs`
