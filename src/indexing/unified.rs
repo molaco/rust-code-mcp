@@ -506,7 +506,7 @@ impl UnifiedIndexer {
             .filter_entry(|entry| {
                 let name = entry.file_name().to_string_lossy();
                 !(entry.file_type().is_dir()
-                    && matches!(name.as_ref(), "target" | ".git" | ".jj" | ".direnv"))
+                    && matches!(name.as_ref(), "target" | "vendor" | ".git" | ".jj" | ".direnv"))
             });
 
         for entry in walker {

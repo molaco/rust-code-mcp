@@ -29,7 +29,12 @@ struct ChunkStat {
 fn should_skip(path: &Path) -> bool {
     for component in path.components() {
         let s = component.as_os_str().to_string_lossy();
-        if s == "target" || s == ".cache_bench" || s == ".tantivy_bench" || s == ".git" {
+        if s == "target"
+            || s == "vendor"
+            || s == ".cache_bench"
+            || s == ".tantivy_bench"
+            || s == ".git"
+        {
             return true;
         }
     }

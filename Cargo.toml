@@ -105,6 +105,9 @@ num_cpus = "1.16"      # CPU count detection
 default = ["embedded"]  # LanceDB embedded backend (zero-config)
 embedded = []  # LanceDB is always included, this is just a marker
 
+[patch.crates-io]
+fastembed = { path = "vendor/fastembed" }
+
 [[example]]
 name = "load_benchmark"
 path = "examples/load_benchmark.rs"

@@ -888,6 +888,69 @@ Rollback criteria:
 
 ## Phase 8: patch fastembed Qwen3 hot spots
 
+Status: completed on May 16, 2026.
+
+Implemented:
+
+- Vendored `fastembed` 5.13.4 under `vendor/fastembed`.
+- Added a `[patch.crates-io]` override so the workspace uses the local
+  fastembed patch.
+- Patched Qwen3 attention to use Candle's last-dim softmax:
+  `candle_nn::ops::softmax_last_dim(&attn)`.
+- Patched Qwen3 RMSNorm to use Candle's fused `candle_nn::ops::rms_norm` on
+  contiguous inputs, with the original manual implementation retained as a
+  non-contiguous fallback.
+- Added `examples/qwen3_parity_probe.rs`, which can:
+  - write an upstream embedding snapshot for a fixed corpus,
+  - compare patched embeddings against the snapshot,
+  - report min/mean cosine and max/mean absolute delta.
+- Excluded `vendor/` from normal indexing and from the token-stats example so
+  benchmark file counts remain comparable after vendoring.
+
+Verification:
+
+- `jj show --summary` ran before the phase.
+- `cargo check --lib` passed with existing warnings.
+- `RUSTFLAGS='-C link-arg=-fuse-ld=bfd' cargo build --release --example index_codebase --example chunk_token_stats`
+  passed with existing warnings. The bfd linker override is still needed to
+  avoid the known `rust-lld` `.eh_frame` failure on this machine.
+- The parity probe was built once against upstream fastembed in
+  `/tmp/rust-code-mcp-upstream-target`, then against the local patch.
+- Parity results against upstream fastembed:
+  - documents: 30 vectors, min cosine `0.999993464`, mean cosine
+    `0.999995310`, max absolute delta `0.000549316`, mean absolute delta
+    `0.000074970`,
+  - queries: 5 vectors, min cosine `0.999990430`, mean cosine `0.999992007`,
+    max absolute delta `0.000518799`, mean absolute delta `0.000098410`.
+- `./target/release/examples/chunk_token_stats` with `vendor/` excluded:
+  - 121 `.rs` files,
+  - 1991 split chunks,
+  - raw token total 569,861,
+  - capped token total 569,861,
+  - max raw tokens 792,
+  - p95 768,
+  - no chunks above 1024 tokens.
+- A clean full-index benchmark from `/tmp/rust-code-mcp-gpu-bench-phase8`
+  completed with the committed repo-local patch and `vendor/` excluded:
+  - 120 indexed files,
+  - 1974 chunks,
+  - 37.36s wall time,
+  - 35.43s embedding time,
+  - 52.8 chunks/sec,
+  - raw token total across embedding batches: 566,797,
+  - capped token total across embedding batches: 566,797,
+  - padded token total across embedding batches: 613,036,
+  - effective padded tokens/sec: ~17,301.
+
+Result:
+
+- The backend patch is worth carrying: it cuts Phase 7 embedding time from
+  60.05s to 35.43s on the same workspace shape.
+- Throughput moved from ~10.2k padded tokens/sec to ~17.3k padded tokens/sec,
+  close to the original 20k target.
+- Numerical drift is small enough for the optimization scope, based on the
+  fixed-corpus cosine/delta probe.
+
 Target area:
 
 - vendored or patched fastembed Qwen3 implementation.
