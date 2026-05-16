@@ -71,13 +71,18 @@ impl UnifiedIndexer {
     /// * `cache_path` - Path to metadata cache directory
     /// * `tantivy_path` - Path to Tantivy index directory
     /// * `collection_name` - Collection/table name for vector store
-    /// * `vector_size` - Vector dimensions (384 for all-MiniLM-L6-v2)
+    /// * `vector_size` - Vector dimensions (depends on active embedder
+    ///   backend; default is 1024 for Qwen3-Embedding-0.6B)
+    /// * `embedder_identity` - Stable identity for the active embedder
+    ///   (`EmbeddingBackend::identity()`); written to the vector store's
+    ///   `metadata.json` and reconciled on reopen.
     /// * `codebase_loc` - Estimated lines of code (for Tantivy optimization)
     pub async fn for_embedded(
         cache_path: &Path,
         tantivy_path: &Path,
         collection_name: &str,
         vector_size: usize,
+        embedder_identity: &str,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
         tracing::info!("Initializing UnifiedIndexer with embedded LanceDB...");
@@ -91,7 +96,7 @@ impl UnifiedIndexer {
 
         // Initialize embedded vector store
         let vector_path = cache_path.parent().unwrap_or(cache_path).join("vectors").join(collection_name);
-        let vector_store = VectorStore::new_embedded(vector_path, vector_size)
+        let vector_store = VectorStore::new_embedded(vector_path, vector_size, embedder_identity)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to initialize VectorStore: {}", e))?;
 

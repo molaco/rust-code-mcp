@@ -373,11 +373,16 @@ pub(crate) async fn build_codemap(
             // stable across runs.
             let mut ordered: Vec<NodeId> = retained.iter().copied().collect();
             ordered.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
+            // Compute the active embedder identity once (same default the
+            // generator below picks up).
+            let active_version = crate::tools::graph_tools::embedder_version(
+                &crate::embeddings::EmbeddingBackend::default(),
+            );
             for nid in ordered {
                 let rec = snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())?;
-                let fresh = rec.as_ref().map(|r| {
-                    r.embedder_version == crate::tools::graph_tools::EMBEDDER_VERSION
-                });
+                let fresh = rec
+                    .as_ref()
+                    .map(|r| r.embedder_version == active_version);
                 match (rec, fresh) {
                     (Some(rec), Some(true)) => {
                         cached.insert(nid, rec.vector);

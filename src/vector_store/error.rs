@@ -30,6 +30,18 @@ pub enum VectorStoreError {
     /// Generic backend error
     #[error("Backend error: {0}")]
     Backend(String),
+
+    /// On-disk vector store was built with a different embedder than the
+    /// one currently configured. The cached vectors are dimension- and/or
+    /// instruction-incompatible and must be discarded before reindexing.
+    #[error(
+        "vector store embedder mismatch: stored={stored}, configured={configured}. \
+         Run clear_cache to discard and rebuild."
+    )]
+    VersionMismatch {
+        stored: String,
+        configured: String,
+    },
 }
 
 impl VectorStoreError {
@@ -56,6 +68,18 @@ impl VectorStoreError {
     /// Create a backend error
     pub fn backend(msg: impl Into<String>) -> Self {
         Self::Backend(msg.into())
+    }
+
+    /// Create a version-mismatch error between the stored embedder
+    /// identity and the currently configured one.
+    pub fn version_mismatch(
+        stored: impl Into<String>,
+        configured: impl Into<String>,
+    ) -> Self {
+        Self::VersionMismatch {
+            stored: stored.into(),
+            configured: configured.into(),
+        }
     }
 }
 

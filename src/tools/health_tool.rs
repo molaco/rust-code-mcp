@@ -9,6 +9,7 @@ use rmcp::{
 use std::path::PathBuf;
 use directories::ProjectDirs;
 
+use crate::embeddings::EmbeddingBackend;
 use crate::monitoring::health::HealthMonitor;
 use crate::search::Bm25Search;
 use crate::vector_store::VectorStore;
@@ -36,19 +37,29 @@ pub async fn health_check(
 ) -> Result<CallToolResult, McpError> {
     tracing::info!("Performing health check");
 
+    // The health probe shows the configured embedder so users can see at
+    // a glance which model the cache will be tied to.
+    let backend = EmbeddingBackend::default();
+    let embedder_identity = backend.identity();
+
     // Determine paths using hash-based approach (consistent with index_tool)
     let (bm25_path, merkle_path, collection_name) = if let Some(ref dir) = directory {
         let dir_path = std::path::Path::new(dir);
 
-        // Calculate directory hash (same as index_tool)
+        // Calculate directory hash + model fingerprint (must match
+        // `ProjectPaths::from_directory` so the health probe targets the
+        // same vector directory the indexer would write to).
         let dir_hash = {
             let mut hasher = Sha256::new();
             hasher.update(dir_path.to_string_lossy().as_bytes());
             format!("{:x}", hasher.finalize())
         };
-
-        // index_tool uses full hash for paths, but first 8 chars for collection name
-        let collection_name = format!("code_chunks_{}", &dir_hash[..8]);
+        let model_fp = {
+            let mut hasher = Sha256::new();
+            hasher.update(embedder_identity.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+        let collection_name = format!("code_chunks_{}_{}", &dir_hash[..8], &model_fp[..8]);
 
         (
             data_dir().join("index").join(&dir_hash),  // Full hash, matching index_tool
@@ -72,7 +83,7 @@ pub async fn health_check(
     // Path must match unified.rs: cache_path.parent().join("vectors").join(collection_name)
     let vector_store = {
         let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
-        VectorStore::new_embedded(vector_path, 384)
+        VectorStore::new_embedded(vector_path, backend.dim(), &embedder_identity)
             .await
             .ok()
             .map(std::sync::Arc::new)
@@ -84,8 +95,17 @@ pub async fn health_check(
     // Run health check
     let health = monitor.check_health().await;
 
-    // Serialize to JSON
-    let status_json = serde_json::to_string_pretty(&health)
+    // Serialize to JSON, then splice in the active embedder identity so
+    // operators can confirm which model the cache will be keyed against.
+    let mut health_value = serde_json::to_value(&health)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    if let Some(obj) = health_value.as_object_mut() {
+        obj.insert(
+            "embedder".to_string(),
+            serde_json::Value::String(embedder_identity.clone()),
+        );
+    }
+    let status_json = serde_json::to_string_pretty(&health_value)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
     // Add interpretation

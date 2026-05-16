@@ -405,7 +405,25 @@ arrow-schema bump in lockstep.
 - `vector_store/mod.rs:50` default `vector_size: 384` becomes
   `EmbeddingBackend::default().dim()`.
 
-### Step 6 — cache & path identity by model
+### Step 6 — cache & path identity by model — **DONE 2026-05-16**
+
+**Outcome:** `cargo check --lib` green in `cuda-code`, 18 warnings (unchanged baseline). Vector stores now refuse to attach to a directory built with a different embedder; clear_cache walks both legacy and new layouts; health surfaces the active embedder.
+
+**Substep A — `EMBEDDER_VERSION` is now a function.** `pub(crate) fn embedder_version(&EmbeddingBackend) -> String` (returns `backend.identity()`) at `tools/graph_tools.rs`. Callers in `graph_tools.rs::ensure_embeddings_for` (cache predicate + persist) and `graph/codemap.rs:378` (rerank cache freshness) updated; both compute `active_version` from `EmbeddingBackend::default()` for now (Step 7 will thread real backends).
+
+**Substep B — `ProjectPaths::from_directory` takes `&EmbeddingBackend`.** Vector path becomes `code_chunks_<dirhash[..8]>_<modelfp[..8]>` where `model_fp = sha256(backend.identity())`. Cache/tantivy paths unchanged. Six callers updated (`query_tools.rs`, `mcp/sync.rs`, `index_tool.rs`, `graph_tools.rs`), all passing `&EmbeddingBackend::default()`.
+
+**Substep C — `metadata.json` next to LanceDB.** `LanceDbBackend::new(path, vector_dim, embedder_identity: &str)`. `VectorStoreError::VersionMismatch { stored, configured }` added with actionable message. On open: read sibling `metadata.json`; mismatch → error; absent → write. Identity plumbed through `VectorStore::new_embedded`, `UnifiedIndexer::for_embedded`, `IncrementalIndexer::new` — all production callers pass `backend.identity()`.
+
+**Substep D — health + clear_cache.** `health_tool.rs:75` hardcoded `384` replaced with `EmbeddingBackend::default().dim()`. Health JSON gains `"embedder": "<identity>"`. `clear_cache_tool.rs` per-directory mode walks both `code_chunks_<dirhash[..8]>` (legacy) and `code_chunks_<dirhash[..8]>_*` (new) and removes both. All-projects mode unchanged. Mismatch error propagates up through `McpError` without auto-wipe.
+
+**Substep E — stale doc comments swept.** `vector_store/mod.rs:36`, `vector_store/lancedb.rs:43`, `indexing/unified.rs:74`, `graph/model.rs:254`, plus two comments in `graph_tools.rs:710,893` updated to reflect dynamic dim.
+
+**Verification:** `rg "EMBEDDER_VERSION" src/` → only doc-comments in `embeddings/backend.rs`. `rg "MiniLM|384" src/` → only the explanatory comment in `clear_cache_tool.rs` about legacy directories.
+
+**Judgement call deferred to Step 7:** the `ensure_embeddings_for` and `codemap.rs` rerank paths still compute `active_version` from `EmbeddingBackend::default()` locally rather than threading a `&EmbeddingBackend` parameter. Both functions are downstream of a hardcoded `EmbeddingGenerator::new()` in the same scope — Step 7 will revisit both when introducing per-call backend selection.
+
+
 
 Switching variants silently is a footgun: LanceDB will reject the dim
 mismatch, but the graph embedding cache and the on-disk vector path

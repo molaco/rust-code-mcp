@@ -124,11 +124,13 @@ async fn ensure_indexed(
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
 
+    let backend = EmbeddingBackend::default();
     let mut indexer = UnifiedIndexer::for_embedded(
         &paths.cache_path,
         &paths.tantivy_path,
         &paths.collection_name,
-        EmbeddingBackend::default().dim(),
+        backend.dim(),
+        &backend.identity(),
         None,
     )
     .await
@@ -163,15 +165,18 @@ pub(crate) async fn create_hybrid_search(
         McpError::invalid_params(format!("Failed to initialize embedding generator: {}", e), None)
     })?;
 
-    let vector_store =
-        VectorStore::new_embedded(paths.vector_path.clone(), embedding_generator.dimensions())
-            .await
-            .map_err(|e| {
-                McpError::invalid_params(
-                    format!("Failed to initialize vector store: {}", e),
-                    None,
-                )
-            })?;
+    let vector_store = VectorStore::new_embedded(
+        paths.vector_path.clone(),
+        embedding_generator.dimensions(),
+        &embedding_generator.backend().identity(),
+    )
+    .await
+    .map_err(|e| {
+        McpError::invalid_params(
+            format!("Failed to initialize vector store: {}", e),
+            None,
+        )
+    })?;
 
     Ok(HybridSearch::with_defaults(
         embedding_generator,
@@ -257,7 +262,7 @@ pub async fn search(
         ));
     }
 
-    let paths = ProjectPaths::from_directory(dir_path);
+    let paths = ProjectPaths::from_directory(dir_path, &EmbeddingBackend::default());
 
     // Try existing index; if corrupt or missing, rebuild
     let mut bm25 = try_open_bm25(&paths);
@@ -313,7 +318,7 @@ pub async fn get_similar_code(
         ));
     }
 
-    let paths = ProjectPaths::from_directory(dir_path);
+    let paths = ProjectPaths::from_directory(dir_path, &EmbeddingBackend::default());
 
     let hybrid_search = create_hybrid_search(&paths, None).await?;
 

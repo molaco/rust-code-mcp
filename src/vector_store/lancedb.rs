@@ -15,7 +15,8 @@ use lancedb::index::scalar::BTreeIndexBuilder;
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::DistanceType;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::chunker::{ChunkId, CodeChunk};
@@ -25,6 +26,78 @@ use super::traits::VectorStoreBackend;
 use super::SearchResult;
 
 const TABLE_NAME: &str = "vectors";
+const METADATA_FILE: &str = "metadata.json";
+
+/// On-disk fingerprint stored next to the LanceDB table. Records which
+/// embedder produced the vectors so that a switch is detected on reopen
+/// instead of silently corrupting search results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VectorStoreMetadata {
+    embedder_version: String,
+    created_at: String,
+}
+
+fn metadata_path(table_dir: &Path) -> PathBuf {
+    table_dir.join(METADATA_FILE)
+}
+
+fn read_metadata(table_dir: &Path) -> Result<Option<VectorStoreMetadata>, VectorStoreError> {
+    let path = metadata_path(table_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path).map_err(|e| {
+        VectorStoreError::backend(format!(
+            "failed to read vector store metadata at {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    let parsed: VectorStoreMetadata = serde_json::from_slice(&bytes).map_err(|e| {
+        VectorStoreError::serialization(format!(
+            "failed to parse vector store metadata at {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(Some(parsed))
+}
+
+fn write_metadata_if_missing(
+    table_dir: &Path,
+    embedder_identity: &str,
+) -> Result<(), VectorStoreError> {
+    let path = metadata_path(table_dir);
+    if path.exists() {
+        return Ok(());
+    }
+    // RFC 3339 timestamp using only std (avoid pulling in chrono just for
+    // a stamp). Falls back to "0" on a wildly broken clock.
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| {
+            // YYYY-MM-DDTHH:MM:SSZ isn't worth re-implementing — store
+            // the unix timestamp as a decimal string instead. Good
+            // enough to debug, doesn't add a dep.
+            format!("unix:{}", d.as_secs())
+        })
+        .unwrap_or_else(|_| "unix:0".to_string());
+    let meta = VectorStoreMetadata {
+        embedder_version: embedder_identity.to_string(),
+        created_at,
+    };
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(|e| {
+        VectorStoreError::serialization(format!("failed to serialize vector store metadata: {}", e))
+    })?;
+    std::fs::write(&path, bytes).map_err(|e| {
+        VectorStoreError::backend(format!(
+            "failed to write vector store metadata at {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(())
+}
 
 /// LanceDB backend for embedded vector storage
 pub struct LanceDbBackend {
@@ -40,8 +113,19 @@ impl LanceDbBackend {
     ///
     /// # Arguments
     /// * `path` - Directory for database storage
-    /// * `vector_dim` - Embedding dimension (384 for all-MiniLM-L6-v2)
-    pub async fn new(path: PathBuf, vector_dim: usize) -> Result<Self, VectorStoreError> {
+    /// * `vector_dim` - Embedding dimension (depends on active embedder)
+    /// * `embedder_identity` - Stable identity string for the embedder
+    ///   that produced (or will produce) vectors stored here. On first
+    ///   create, the identity is recorded in `metadata.json` beside the
+    ///   table directory. On reopen, the recorded identity is compared
+    ///   against the configured one and a [`VectorStoreError::VersionMismatch`]
+    ///   is returned on disagreement — callers are expected to refuse and
+    ///   ask the user to run `clear_cache`.
+    pub async fn new(
+        path: PathBuf,
+        vector_dim: usize,
+        embedder_identity: &str,
+    ) -> Result<Self, VectorStoreError> {
         // Ensure directory exists
         std::fs::create_dir_all(&path).map_err(|e| {
             VectorStoreError::connection(format!("Failed to create directory: {}", e))
@@ -62,8 +146,26 @@ impl LanceDbBackend {
             schema,
         };
 
-        // Ensure table exists
+        // Ensure table exists, then reconcile the on-disk embedder
+        // fingerprint with what the caller asked for. Order matters:
+        // create the table first so a half-initialized directory cannot
+        // leave a metadata file pointing at a model that never produced
+        // any vectors.
         backend.ensure_table_exists().await?;
+        match read_metadata(&path)? {
+            Some(meta) if meta.embedder_version != embedder_identity => {
+                return Err(VectorStoreError::version_mismatch(
+                    meta.embedder_version,
+                    embedder_identity,
+                ));
+            }
+            Some(_) => {
+                // Match — nothing to do.
+            }
+            None => {
+                write_metadata_if_missing(&path, embedder_identity)?;
+            }
+        }
 
         Ok(backend)
     }
@@ -459,14 +561,19 @@ mod tests {
     #[tokio::test]
     async fn test_lancedb_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 1024).await; // Qwen3-Embedding-0.6B
+        let backend = LanceDbBackend::new(
+            temp_dir.path().to_path_buf(),
+            1024, // Qwen3-Embedding-0.6B
+            "test-embedder:v1",
+        )
+        .await;
         assert!(backend.is_ok());
     }
 
     #[tokio::test]
     async fn test_lancedb_upsert_and_count() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4)
+        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
             .await
             .unwrap();
 
@@ -486,7 +593,7 @@ mod tests {
     #[tokio::test]
     async fn test_lancedb_delete() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4)
+        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
             .await
             .unwrap();
 
@@ -509,7 +616,7 @@ mod tests {
     #[tokio::test]
     async fn test_lancedb_delete_by_file_path() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4)
+        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
             .await
             .unwrap();
 
@@ -537,7 +644,7 @@ mod tests {
     #[tokio::test]
     async fn test_lancedb_clear() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4)
+        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
             .await
             .unwrap();
 
@@ -560,7 +667,7 @@ mod tests {
     #[tokio::test]
     async fn test_lancedb_health_check() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4)
+        let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
             .await
             .unwrap();
 

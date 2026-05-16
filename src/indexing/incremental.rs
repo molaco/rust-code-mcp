@@ -47,12 +47,17 @@ pub struct IncrementalIndexer {
 }
 
 impl IncrementalIndexer {
-    /// Create a new incremental indexer with embedded LanceDB backend
+    /// Create a new incremental indexer with embedded LanceDB backend.
+    ///
+    /// `embedder_identity` is the stable string returned by the active
+    /// `EmbeddingBackend::identity()`; it is written to the vector
+    /// store's `metadata.json` on first index and reconciled on reopen.
     pub async fn new(
         cache_path: &Path,
         tantivy_path: &Path,
         collection_name: &str,
         vector_size: usize,
+        embedder_identity: &str,
         codebase_loc: Option<usize>,
     ) -> Result<Self> {
         let indexer = UnifiedIndexer::for_embedded(
@@ -60,6 +65,7 @@ impl IncrementalIndexer {
             tantivy_path,
             collection_name,
             vector_size,
+            embedder_identity,
             codebase_loc,
         )
         .await?;
@@ -278,6 +284,7 @@ mod tests {
             &tantivy_path,
             "test_incremental",
             1024, // Qwen3-Embedding-0.6B
+            "test-embedder:v1",
             None,
         )
         .await
@@ -311,6 +318,7 @@ mod tests {
             &tantivy_path,
             "test_no_changes",
             1024, // Qwen3-Embedding-0.6B
+            "test-embedder:v1",
             None,
         )
         .await
@@ -351,6 +359,7 @@ mod tests {
             &tantivy_path,
             "test_incremental_update",
             1024, // Qwen3-Embedding-0.6B
+            "test-embedder:v1",
             None,
         )
         .await

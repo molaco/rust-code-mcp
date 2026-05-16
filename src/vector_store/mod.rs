@@ -33,8 +33,13 @@ pub enum VectorStoreConfig {
     Embedded {
         /// Path to store the database
         path: PathBuf,
-        /// Vector dimensions (384 for all-MiniLM-L6-v2)
+        /// Vector dimensions (depends on the active embedder backend;
+        /// 1024 for the default Qwen3-Embedding-0.6B).
         vector_size: usize,
+        /// Stable embedder identity string written to `metadata.json`
+        /// next to the LanceDB table. Reopens with a different identity
+        /// are rejected with [`VectorStoreError::VersionMismatch`].
+        embedder_identity: String,
     },
 }
 
@@ -44,10 +49,11 @@ impl Default for VectorStoreConfig {
         let cache_dir = directories::ProjectDirs::from("", "", "rust-code-mcp")
             .map(|dirs| dirs.cache_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from(".cache/rust-code-mcp"));
-
+        let backend = EmbeddingBackend::default();
         Self::Embedded {
             path: cache_dir.join("vectors"),
-            vector_size: EmbeddingBackend::default().dim(),
+            vector_size: backend.dim(),
+            embedder_identity: backend.identity(),
         }
     }
 }
@@ -62,9 +68,19 @@ pub struct VectorStore {
 }
 
 impl VectorStore {
-    /// Create with embedded backend (LanceDB)
-    pub async fn new_embedded(path: PathBuf, vector_size: usize) -> Result<Self, VectorStoreError> {
-        let backend = LanceDbBackend::new(path, vector_size).await?;
+    /// Create with embedded backend (LanceDB).
+    ///
+    /// `embedder_identity` is the stable string returned by
+    /// [`EmbeddingBackend::identity`] for the embedder that will produce
+    /// vectors stored here. On reopen with a different identity, this
+    /// returns [`VectorStoreError::VersionMismatch`] so the caller can
+    /// refuse to corrupt the existing index.
+    pub async fn new_embedded(
+        path: PathBuf,
+        vector_size: usize,
+        embedder_identity: &str,
+    ) -> Result<Self, VectorStoreError> {
+        let backend = LanceDbBackend::new(path, vector_size, embedder_identity).await?;
         Ok(Self {
             backend: Arc::new(backend),
         })
@@ -73,9 +89,11 @@ impl VectorStore {
     /// Create from config
     pub async fn from_config(config: VectorStoreConfig) -> Result<Self, VectorStoreError> {
         match config {
-            VectorStoreConfig::Embedded { path, vector_size } => {
-                Self::new_embedded(path, vector_size).await
-            }
+            VectorStoreConfig::Embedded {
+                path,
+                vector_size,
+                embedder_identity,
+            } => Self::new_embedded(path, vector_size, &embedder_identity).await,
         }
     }
 
@@ -165,9 +183,10 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_vector_store() {
         let temp_dir = TempDir::new().unwrap();
-        let store = VectorStore::new_embedded(temp_dir.path().to_path_buf(), 4)
-            .await
-            .unwrap();
+        let store =
+            VectorStore::new_embedded(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
+                .await
+                .unwrap();
 
         // Test basic operations
         let chunk_id = ChunkId::new();
@@ -196,9 +215,14 @@ mod tests {
     async fn test_default_config() {
         let config = VectorStoreConfig::default();
         match config {
-            VectorStoreConfig::Embedded { path, vector_size } => {
+            VectorStoreConfig::Embedded {
+                path,
+                vector_size,
+                embedder_identity,
+            } => {
                 assert!(path.to_string_lossy().contains("vectors"));
                 assert_eq!(vector_size, 1024); // Qwen3-Embedding-0.6B
+                assert!(embedder_identity.contains("Qwen3-Embedding-0.6B"));
             }
         }
     }

@@ -131,14 +131,16 @@ impl SyncManager {
     /// - Only reindexes changed files if changes detected
     async fn sync_directory(&self, dir: &Path) -> Result<()> {
         use crate::tools::project_paths::ProjectPaths;
-        let paths = ProjectPaths::from_directory(dir);
+        let backend = EmbeddingBackend::default();
+        let paths = ProjectPaths::from_directory(dir, &backend);
 
         // Create incremental indexer with embedded LanceDB backend
         let mut indexer = IncrementalIndexer::new(
             &paths.cache_path,
             &paths.tantivy_path,
             &paths.collection_name,
-            EmbeddingBackend::default().dim(),
+            backend.dim(),
+            &backend.identity(),
             None,
         )
         .await?;

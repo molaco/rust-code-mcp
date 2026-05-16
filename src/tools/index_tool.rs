@@ -46,7 +46,7 @@ pub async fn index_codebase(
 
     tracing::info!("Indexing codebase: {} (force: {})", dir.display(), force);
 
-    let paths = ProjectPaths::from_directory(&dir);
+    let paths = ProjectPaths::from_directory(&dir, &EmbeddingBackend::default());
 
     tracing::debug!(
         "Using collection: {}, cache: {}, index: {}",
@@ -67,11 +67,13 @@ pub async fn index_codebase(
     }
 
     // Create incremental indexer with embedded LanceDB backend
+    let backend = EmbeddingBackend::default();
     let mut indexer = IncrementalIndexer::new(
         &paths.cache_path,
         &paths.tantivy_path,
         &paths.collection_name,
-        EmbeddingBackend::default().dim(),
+        backend.dim(),
+        &backend.identity(),
         None,
     )
     .await

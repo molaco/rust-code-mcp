@@ -607,9 +607,10 @@ pub async fn similar_to_item(
     })?.to_string();
 
     // 3. Run vector-only search.
-    let paths = crate::tools::project_paths::ProjectPaths::from_directory(Path::new(
-        &params.directory,
-    ));
+    let paths = crate::tools::project_paths::ProjectPaths::from_directory(
+        Path::new(&params.directory),
+        &crate::embeddings::EmbeddingBackend::default(),
+    );
     let hybrid_search = crate::tools::query_tools::create_hybrid_search(&paths, None).await?;
 
     let limit = params.limit.unwrap_or(10);
@@ -706,7 +707,8 @@ pub async fn similar_to_item(
 ///   4. Identical-source short-circuit (v1.1c): items sharing a content_hash
 ///      get `score = 1.0` directly (skip cosine for that pair).
 ///   5. In-memory pairwise cosine over remaining (NodeId, vector) pairs.
-///      O(N²) on 384-dim vectors — comfortable for a few thousand items.
+///      O(N²) on embedder-dim vectors (default 1024 for Qwen3-0.6B) —
+///      comfortable for a few thousand items.
 ///   6. Apply existing filters (cross_crate_only, skip_tests, threshold) and
 ///      dedupe symmetric edges via canonical (smaller-id-first) key.
 ///
@@ -889,8 +891,9 @@ pub async fn semantic_overlaps(
         }
     }
 
-    // 7. In-memory pairwise cosine. O(N²) on 384-dim vectors. Identical-hash
-    //    pairs are skipped here (already handled above with score=1.0).
+    // 7. In-memory pairwise cosine. O(N²) on embedder-dim vectors
+    //    (default 1024 for Qwen3-0.6B). Identical-hash pairs are
+    //    skipped here (already handled above with score=1.0).
     for i in 0..seeds_ctx.len() {
         let Some(va) = seeds_ctx[i].cached_vec.as_ref() else {
             continue;
@@ -982,12 +985,15 @@ pub async fn semantic_overlaps(
 
 /// Stable identifier for the embedding model + dimension. Cache entries
 /// whose `embedder_version` does not match this string are treated as
-/// misses and refreshed. Bump when the embedder model or dimension
-/// changes.
+/// misses and refreshed. The identity is derived from the active
+/// `EmbeddingBackend`, so switching variants (or `max_len`) invalidates
+/// stale cache rows automatically.
 ///
 /// Single source of truth shared by `semantic_overlaps` and
 /// `ensure_embeddings_for`; previously duplicated as a fn-local `const`.
-pub(crate) const EMBEDDER_VERSION: &str = "fastembed:all-MiniLM-L6-v2:dim384:v1";
+pub(crate) fn embedder_version(backend: &crate::embeddings::EmbeddingBackend) -> String {
+    backend.identity()
+}
 
 /// Max texts per `embed_batch_async` call. Keeps memory bounded when the
 /// workspace has thousands of items.
@@ -1062,6 +1068,13 @@ pub(crate) async fn ensure_embeddings_for(
     let mut pending: Vec<Pending> = Vec::new();
     let mut file_cache: HashMap<String, String> = HashMap::new();
 
+    // Resolve the active embedder identity once. The cache classifier
+    // below treats a row as fresh only if its `embedder_version` matches.
+    // `EmbeddingGenerator::new()` (phase B) uses `EmbeddingBackend::default()`,
+    // so we read the same default here to keep them in lockstep.
+    let active_backend = crate::embeddings::EmbeddingBackend::default();
+    let active_version = embedder_version(&active_backend);
+
     {
         let rtxn = snap.env.read_txn()?;
         // De-duplicate so the same NodeId appearing twice in the input
@@ -1112,7 +1125,7 @@ pub(crate) async fn ensure_embeddings_for(
             match snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())? {
                 Some(rec)
                     if rec.content_hash == content_hash
-                        && rec.embedder_version == EMBEDDER_VERSION =>
+                        && rec.embedder_version == active_version =>
                 {
                     out.insert(
                         nid,
@@ -1172,7 +1185,7 @@ pub(crate) async fn ensure_embeddings_for(
             let rec = EmbeddingRecord {
                 content_hash: p.content_hash,
                 vector: vector.clone(),
-                embedder_version: EMBEDDER_VERSION.to_string(),
+                embedder_version: active_version.clone(),
                 generated_at_unix: now,
             };
             snap.dbs
@@ -3126,7 +3139,10 @@ pub(crate) async fn handle_build_codemap(
         // have errored above).
         let prompt = trimmed_prompt.expect("validated above");
         let dir_path = std::path::Path::new(directory);
-        let paths = crate::tools::project_paths::ProjectPaths::from_directory(dir_path);
+        let paths = crate::tools::project_paths::ProjectPaths::from_directory(
+            dir_path,
+            &crate::embeddings::EmbeddingBackend::default(),
+        );
         // Best-effort BM25 open. If absent we get vector-only hits; that is
         // still a valid seed source.
         let bm25 = {
