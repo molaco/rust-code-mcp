@@ -51,6 +51,43 @@ run formatting.
 
 ## Phase 0: lock down the baseline
 
+Status: completed on May 16, 2026.
+
+Evidence:
+
+- `jj show --summary` ran before the phase.
+- `jj status` showed a clean working copy before benchmark changes.
+- `./target/release/examples/chunk_token_stats` completed in 955.26ms.
+- `./target/release/examples/index_codebase` completed successfully.
+- `nvidia-smi dmon -s pucm -d 1 -c 90` captured GPU utilization during the
+  indexing run.
+
+Recorded baseline:
+
+| Metric | Value |
+|---|---:|
+| Qwen3 variant | `Qwen3-Embedding-0.6B` |
+| Embedder identity | `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v1` |
+| Max sequence length | 1024 |
+| GPU batch size | 32 |
+| CUDA device | RTX 3090 |
+| Vector dimension | 1024 |
+| Parsed chunks | 1852 |
+| Indexed chunks | 1833 |
+| Raw token total | 642,901 |
+| Capped token total | 555,939 |
+| Padded token total, batch 32 | 639,936 |
+| Index wall time | 74.87s |
+| Embedding time | 74.44s |
+| Embedding share | 99.43% |
+| Parse time | 0.075s |
+| Index/write time | 0.142s |
+| Effective chunks/sec | 24.5 |
+| Effective padded tokens/sec | ~8,596 |
+| Peak observed GPU memory | ~9.6 GB |
+| Observed GPU SM utilization | mostly 97-100% during embedding |
+| Observed GPU power | mostly 330-350W during embedding |
+
 1. Confirm the working copy state:
 
    ```sh
@@ -663,4 +700,3 @@ Target result:
 - Throughput reaches roughly 20k padded tokens/sec.
 - Full index time approaches 30-35s for this workspace.
 - The path to the result is documented and reproducible.
-
