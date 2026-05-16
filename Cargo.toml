@@ -62,8 +62,8 @@ heed = "0.22.1"
 text-splitter = "0.13"  # Semantic text chunking
 
 # Phase 4: Embedding Generation
-fastembed = { git = "https://github.com/Anush008/fastembed-rs" }  # Local embeddings (ONNX-based) from GitHub
-ort = { version = "=2.0.0-rc.10", features = ["cuda", "download-binaries", "ndarray", "std"] }  # ONNX Runtime with CUDA support
+fastembed = { version = "5.13.4", default-features = false, features = ["hf-hub-native-tls", "qwen3", "cuda"] }
+candle-core = "0.10.2"
 
 # Phase 5: Vector Database
 async-trait = "0.1"    # Async trait support
@@ -71,9 +71,9 @@ thiserror = "1"        # Error derive macros
 futures = "0.3"        # Futures traits for stream operations
 
 # Vector database - embedded (default)
-lancedb = "0.15"
-arrow-array = "53"
-arrow-schema = "53"
+lancedb = "0.29.0"
+arrow-array = "58"
+arrow-schema = "58"
 
 # Additional dependencies for Phase 1
 walkdir = "2"          # Directory traversal for indexing

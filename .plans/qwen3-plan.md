@@ -31,7 +31,7 @@ is rewritten.
 
 ## Constraints
 
-- Use `nix develop ../nix-devshells#code --command cargo check --lib`
+- Use `nix develop ../nix-devshells#cuda-code --command cargo check --lib`
   for every compile checkpoint. Do not run `cargo test` unless asked
   (snapshot build ~115s).
 - Do not run `cargo fmt`.
@@ -220,10 +220,29 @@ GPU is the only intended runtime path:
 Each step ends green: `cargo check --lib` passes inside the nix
 devshell.
 
-### Step 1 — strip ORT, swap fastembed dep, no Qwen3 yet
+### Step 1 — strip ORT, swap fastembed dep, bump lancedb, no Qwen3 yet — **DONE 2026-05-16**
+
+**Outcome:** `cargo check --lib` green in the new `cuda-code` devshell.
+
+**Work that landed:**
+- `Cargo.toml`: replaced git-sourced `fastembed` with `fastembed = { version = "5.13.4", default-features = false, features = ["hf-hub-native-tls", "qwen3", "cuda"] }`; deleted `ort = "=2.0.0-rc.10"`; added `candle-core = "0.10.2"`; bumped `lancedb` `0.15` → `0.29.0` and `arrow-array` / `arrow-schema` `53` → `58`.
+- `Cargo.lock`: `tempfile` bumped `3.19.1` → `3.23.0` (required by `lance-index 6.0.0`'s use of `TempDir::keep`).
+- `src/embeddings/mod.rs`: deleted `use ort::execution_providers::{...}`, the CUDA-init block (was `mod.rs:42-88`), and `.with_execution_providers(...)`. `EmbeddingGenerator::new()` is now a thin `TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true))`.
+- `src/vector_store/lancedb.rs`: two `Box::new(RecordBatchIterator{..})` sites coerced to `Box<dyn RecordBatchReader + Send>` (lancedb 0.29 swapped its `IntoArrow` blanket impl for `Scannable`, which only matches the explicit trait-object form).
+- **New devshell** `/home/molaco/Documents/nix-devshells/devshells/cuda-code.nix` provides `nvcc` (cudatoolkit), `cuda_cudart`, `libcublas`, `cudnn`, and the right `LD_LIBRARY_PATH` (including `/run/opengl-driver/lib`). All cargo invocations from this point on must use `nix develop ../nix-devshells#cuda-code --command ...`. The legacy `code` devshell stays around for the old MiniLM workflow.
+- **Pre-existing build break fixed inline:** `src/tools/search_tool_router.rs:701` had a stray `-` diff marker that made the parent commit fail to compile. Removed the marker. Not Step 1's responsibility on paper, but unblocked verification.
+
+
 
 This step is the demolition pass. After it, the crate still embeds with
 MiniLM but the dependency surface has shifted under the wrapper.
+
+**Dep-graph leak discovered during execution.** `lancedb 0.15` pins
+`half = "=2.4.1"`, but `candle-core 0.10.2` (pulled by fastembed
+5.13.4's Qwen3 feature) needs `half ^2.5.0`. Cargo's single-version
+rule makes this unresolvable. The fix is to bump lancedb to `0.29.0`
+(latest), which uses `half ^2.7.1` and `arrow ^58.0.0`. arrow-array and
+arrow-schema bump in lockstep.
 
 - Replace the git-sourced `fastembed` line at `Cargo.toml:65` with
   `version = "5.13.4"` and the features set from the Cargo section
@@ -232,6 +251,19 @@ MiniLM but the dependency surface has shifted under the wrapper.
 - **Delete** the direct `ort` dependency from `Cargo.toml`. fastembed
   still uses it internally for non-Candle models; we no longer touch it
   from our code.
+- **Bump lancedb** from `0.15` to `0.29.0`. Bump `arrow-array` and
+  `arrow-schema` from `53` to `58`. These are dictated by the lancedb
+  0.29 transitive constraints.
+- Migrate `src/vector_store/lancedb.rs` for any API drift across the
+  lancedb 0.15 → 0.29 span. The API surface we touch is small: `connect`,
+  `BTreeIndexBuilder`, `Index`, `ExecutableQuery`, `QueryBase`,
+  `DistanceType`, `Connection`, `Table`. Most are likely unchanged; a
+  few may have moved modules or grown new parameters. Read the
+  upstream changelog and adapt minimally — do not rewrite the file.
+- The arrow types we use (`RecordBatch`, `RecordBatchIterator`,
+  `StringArray`, `Float32Array`, `FixedSizeListArray`, `Array`,
+  `Schema`, `Field`, `DataType`) are stable across arrow 53→58; only
+  expect compile-time fix-ups, not real migration work.
 - In `src/embeddings/mod.rs`, delete:
   - The `use ort::execution_providers::{...}` line.
   - The CUDA-init block (`mod.rs:42-88`).
@@ -239,10 +271,11 @@ MiniLM but the dependency surface has shifted under the wrapper.
 - Keep `EmbeddingGenerator::new()` calling MiniLM via fastembed's
   default path so callers still compile. The wrapper degrades to a
   thin `TextEmbedding::try_new(InitOptions::new(model))` for one step.
-- Add `candle-core = "0.10.2"` to `[dependencies]` so Step 2 has it.
-- Verify with `cargo check --lib` in the devshell. Any breakage outside
-  `src/embeddings/mod.rs` and `Cargo.toml` is a leak we missed — stop
-  and audit.
+- Add `candle-core = "0.10.2"` to `[dependencies]`.
+- Verify with `cargo check --lib` in the devshell. Allowed scope of
+  edits this step: `Cargo.toml`, `src/embeddings/mod.rs`,
+  `src/vector_store/lancedb.rs`. Anything beyond that is a fresh leak —
+  stop and audit.
 
 ### Step 2 — introduce the Qwen3 backend struct
 

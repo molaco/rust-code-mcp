@@ -5,7 +5,8 @@
 
 use async_trait::async_trait;
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
+    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
+    StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
@@ -125,10 +126,11 @@ impl LanceDbBackend {
             )
             .map_err(|e| VectorStoreError::backend(format!("Failed to create batch: {}", e)))?;
 
-            let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
+            let batches: Box<dyn RecordBatchReader + Send> =
+                Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
 
             let table = self.db
-                .create_table(&self.table_name, Box::new(batches))
+                .create_table(&self.table_name, batches)
                 .execute()
                 .await
                 .map_err(|e| VectorStoreError::backend(format!("Failed to create table: {}", e)))?;
@@ -258,7 +260,8 @@ impl VectorStoreBackend for LanceDbBackend {
         let table = self.get_table().await?;
         let batch = self.chunks_to_batch(&chunks_with_embeddings)?;
         let schema = batch.schema();
-        let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        let batches: Box<dyn RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
 
         // Use native merge_insert for atomic upsert (replaces delete-then-add pattern)
         // - when_matched_update_all: update existing rows with matching id
@@ -269,7 +272,7 @@ impl VectorStoreBackend for LanceDbBackend {
             .when_matched_update_all(None)
             .when_not_matched_insert_all();
         merge_builder
-            .execute(Box::new(batches))
+            .execute(batches)
             .await
             .map_err(|e| VectorStoreError::backend(format!("Failed to upsert chunks: {}", e)))?;
 
