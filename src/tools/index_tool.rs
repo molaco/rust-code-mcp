@@ -3,7 +3,7 @@
 //! Provides the `index_codebase` tool which allows manual triggering of
 //! incremental indexing with optional force reindex.
 
-use crate::embeddings::{EmbeddingBackend, Qwen3Variant};
+use crate::embeddings::{EmbeddingBackend, EmbeddingProfile, Qwen3Variant};
 use crate::indexing::incremental::IncrementalIndexer;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStoreError;
@@ -21,6 +21,10 @@ pub struct IndexCodebaseParams {
         description = "Optional embedding model variant. One of: \"qwen3-0.6b\" (default, 1024-dim), \"qwen3-4b\" (2560-dim), \"qwen3-8b\" (4096-dim). Picking a variant different from an existing index returns a version-mismatch error pointing to clear_cache."
     )]
     pub model: Option<String>,
+    #[schemars(
+        description = "Optional embedding profile. Preferred over `model` when both are set. One of: \"local-gpu-small\" (default Qwen3-Embedding-0.6B CUDA), \"local-cpu-small\" (BGESmallENV15Q CPU), \"openrouter-qwen3-8b\" (OpenRouter API), \"local-qwen3-4b\", \"local-qwen3-8b\"."
+    )]
+    pub embedding_profile: Option<String>,
 }
 
 /// Parse a user-supplied model string into a [`Qwen3Variant`].
@@ -35,10 +39,20 @@ fn parse_variant(s: &str) -> Result<Qwen3Variant, String> {
     }
 }
 
-/// Resolve the user-supplied (or omitted) `model` argument into an
-/// `EmbeddingBackend`. Defaults to `EmbeddingBackend::default()` when
-/// the caller did not pick a variant.
-fn resolve_backend(model: Option<&str>) -> Result<EmbeddingBackend, McpError> {
+/// Resolve user-supplied embedding selection into an `EmbeddingBackend`.
+///
+/// `embedding_profile` is the preferred API and wins over the legacy `model`
+/// argument when both are set.
+fn resolve_backend(
+    embedding_profile: Option<&str>,
+    model: Option<&str>,
+) -> Result<EmbeddingBackend, McpError> {
+    if let Some(profile) = embedding_profile {
+        let profile = EmbeddingProfile::parse(profile)
+            .map_err(|msg| McpError::invalid_params(msg, None))?;
+        return Ok(EmbeddingBackend::from_profile(profile));
+    }
+
     let Some(s) = model else {
         return Ok(EmbeddingBackend::default());
     };
@@ -77,7 +91,10 @@ pub async fn index_codebase(
     // Resolve the embedding backend from the optional `model` arg. This
     // becomes the single source of truth for vector_size /
     // embedder_identity / project paths for this run.
-    let backend = resolve_backend(params.model.as_deref())?;
+    let backend = resolve_backend(
+        params.embedding_profile.as_deref(),
+        params.model.as_deref(),
+    )?;
     let embedder_identity = backend.identity();
     let paths = ProjectPaths::from_directory(&dir, &backend);
 
@@ -174,10 +191,15 @@ pub async fn index_codebase(
         // No files indexed at all
         format!(
             "No Rust files suitable for indexing were found in '{}'.\n\
+            Profile: {}\n\
             Embedder: {}\n\
             Skipped files: {}\n\
             Time: {:?}",
-            params.directory, embedder_identity, stats.skipped_files, elapsed
+            params.directory,
+            backend.profile.name(),
+            embedder_identity,
+            stats.skipped_files,
+            elapsed
         )
     } else if stats.indexed_files == 0 {
         // No changes detected
@@ -189,6 +211,7 @@ pub async fn index_codebase(
             - Unchanged files: {}\n\
             - Skipped files: {}\n\
             - Time: {:?} (< 10ms change detection)\n\n\
+            Profile: {}\n\
             Embedder: {}\n\
             Background sync: {}\n\
             Collection: {}",
@@ -198,6 +221,7 @@ pub async fn index_codebase(
             stats.unchanged_files,
             stats.skipped_files,
             elapsed,
+            backend.profile.name(),
             embedder_identity,
             if sync_manager.is_some() {
                 "enabled (5-minute interval)"
@@ -216,6 +240,7 @@ pub async fn index_codebase(
             - Unchanged files: {}\n\
             - Skipped files: {}\n\
             - Time: {:?}\n\n\
+            Profile: {}\n\
             Embedder: {}\n\
             Background sync: {}\n\
             Collection: {}",
@@ -226,6 +251,7 @@ pub async fn index_codebase(
             stats.unchanged_files,
             stats.skipped_files,
             elapsed,
+            backend.profile.name(),
             embedder_identity,
             if sync_manager.is_some() {
                 "enabled (5-minute interval)"
@@ -250,6 +276,7 @@ mod tests {
             directory: "/nonexistent/path".to_string(),
             force_reindex: None,
             model: None,
+            embedding_profile: None,
         };
 
         let result = index_codebase(params, None).await;
@@ -266,6 +293,7 @@ mod tests {
             directory: file_path.to_string_lossy().to_string(),
             force_reindex: None,
             model: None,
+            embedding_profile: None,
         };
 
         let result = index_codebase(params, None).await;
@@ -288,6 +316,7 @@ mod tests {
             directory: test_codebase.to_string_lossy().to_string(),
             force_reindex: None,
             model: None,
+            embedding_profile: None,
         };
 
         let result = index_codebase(params, None).await;
@@ -311,6 +340,7 @@ mod tests {
             directory: test_codebase.to_string_lossy().to_string(),
             force_reindex: None,
             model: None,
+            embedding_profile: None,
         };
         let result1 = index_codebase(params1, None).await;
         assert!(result1.is_ok());
@@ -320,6 +350,7 @@ mod tests {
             directory: test_codebase.to_string_lossy().to_string(),
             force_reindex: Some(true),
             model: None,
+            embedding_profile: None,
         };
         let result2 = index_codebase(params2, None).await;
         assert!(result2.is_ok());
@@ -356,11 +387,28 @@ mod tests {
 
     #[test]
     fn resolve_backend_explicit_model_keeps_default_limits() {
-        let backend = resolve_backend(Some("qwen3-0.6b")).unwrap();
+        let backend = resolve_backend(None, Some("qwen3-0.6b")).unwrap();
         let default = EmbeddingBackend::default();
 
         assert_eq!(backend.qwen3_variant(), Some(Qwen3Variant::Embedding0_6B));
         assert_eq!(backend.max_len, default.max_len);
         assert_eq!(backend.identity(), default.identity());
+    }
+
+    #[test]
+    fn resolve_backend_profile_wins_over_legacy_model() {
+        let backend = resolve_backend(Some("local-cpu-small"), Some("qwen3-0.6b")).unwrap();
+
+        assert_eq!(backend.profile, EmbeddingProfile::LocalCpuSmall);
+        assert_eq!(backend.dim(), 384);
+    }
+
+    #[test]
+    fn resolve_backend_rejects_invalid_profile() {
+        let err = resolve_backend(Some("nope"), None).unwrap_err();
+        let text = err.to_string();
+
+        assert!(text.contains("unknown embedding profile"));
+        assert!(text.contains("local-gpu-small"));
     }
 }

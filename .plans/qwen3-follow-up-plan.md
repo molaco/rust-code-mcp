@@ -109,6 +109,8 @@ Verification:
 
 ## Phase 3: Expose Profile Selection in MCP Tools
 
+Status: Complete.
+
 Add an explicit MCP argument while keeping the old argument.
 
 Implementation steps:
@@ -127,6 +129,18 @@ Acceptance criteria:
 - `index_codebase(..., embedding_profile: "local-gpu-small")` works.
 - `index_codebase(..., model: "qwen3-0.6b")` still works.
 - Invalid profile names fail before indexing starts.
+
+Completed work:
+
+- Added optional `embedding_profile` to `IndexCodebaseParams`.
+- Implemented resolution order where `embedding_profile` wins over legacy `model`.
+- Kept legacy model aliases for `qwen3-0.6b`, `qwen3-4b`, and `qwen3-8b`.
+- Included resolved profile name in `index_codebase` result text.
+- Added tests for legacy model resolution, profile precedence, and invalid profile errors.
+
+Verification:
+
+- `CUDARC_CUDA_VERSION=12080 cargo check --lib` passed with pre-existing warnings.
 
 ## Phase 4: Implement OpenRouter Qwen3-Embedding-8B
 
