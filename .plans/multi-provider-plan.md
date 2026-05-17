@@ -438,7 +438,7 @@ Acceptance criteria:
 
 ## Phase 8: Tests And Verification
 
-Status: Unit-test coverage added; verification commands pending confirmed Nix shell.
+Status: Completed and verified in `cuda-code`.
 
 Unit tests:
 
@@ -453,19 +453,26 @@ Unit tests:
   rejection, missing-`dim` rejection, bad-path error.
 - `resolve_profile` resolves built-ins, aliases, and a project-root TOML
   profile given a directory.
+- Search-time metadata resolution preserves a legacy vector-store
+  `embedder_version` while rebuilding a usable backend for queries.
 
-Verification commands (after confirming the Nix shell):
+Verification commands run:
 
 ```sh
-nix develop ../nix-devshells#<shell> --command zsh -lc 'cargo check --lib'
-nix develop ../nix-devshells#<shell> --command zsh -lc 'cargo check --tests'
-nix develop ../nix-devshells#<shell> --command zsh -lc 'cargo test embeddings:: --lib'
-nix develop ../nix-devshells#<shell> --command zsh -lc 'cargo test indexing::embedding_batcher --lib'
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo check --lib'
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo check --tests'
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo test embeddings:: --lib'
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo test indexing::embedding_batcher --lib'
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo test tools::query_tools::tests::resolve_query_backend_preserves_legacy_vector_identity --lib'
 ```
 
-Live check (needs an OpenRouter key): index a small tree with a TOML-defined
-OpenRouter profile; confirm `search` returns results; confirm background sync
-updates that index, not a default-profile one.
+Verification notes:
+
+- Fixed one final `EmbeddingBackend` move after it lost `Copy`
+  (`UnifiedIndexer::for_embedded_with_backend` now clones the backend when
+  constructing `IndexerCore`).
+- Live OpenRouter smoke was not run; it needs a real OpenRouter key and is
+  intentionally outside the deterministic command set above.
 
 Acceptance criteria:
 

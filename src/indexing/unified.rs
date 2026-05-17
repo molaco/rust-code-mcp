@@ -128,7 +128,8 @@ impl UnifiedIndexer {
 
         // Initialize core with the explicit backend so the embedding
         // generator inside agrees with what we tell the vector store.
-        let core = IndexerCore::with_backend(cache_path, Some(indexer_config.core), backend)?;
+        let core =
+            IndexerCore::with_backend(cache_path, Some(indexer_config.core), backend.clone())?;
 
         // Initialize Tantivy adapter
         let tantivy = TantivyAdapter::new(indexer_config.tantivy)?;

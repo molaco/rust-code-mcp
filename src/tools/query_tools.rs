@@ -523,6 +523,22 @@ pub async fn get_similar_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embeddings::EmbeddingBackend;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn test_project_paths(vector_path: PathBuf) -> ProjectPaths {
+        ProjectPaths {
+            dir_hash: "test-dir".to_string(),
+            indexing_identity: "test-indexing".to_string(),
+            chunking_identity: "test-chunking".to_string(),
+            cache_path: vector_path.join("cache"),
+            tantivy_path: vector_path.join("tantivy"),
+            snapshot_path: vector_path.join("snapshot.json"),
+            collection_name: "code_chunks_test_legacy".to_string(),
+            vector_path,
+        }
+    }
 
     #[tokio::test]
     async fn test_read_file_content_nonexistent() {
@@ -552,5 +568,25 @@ mod tests {
     async fn test_get_similar_code_invalid_directory() {
         let result = get_similar_code("test query", "/nonexistent/directory", 5, None).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_query_backend_preserves_legacy_vector_identity() {
+        let temp_dir = TempDir::new().unwrap();
+        let vector_path = temp_dir.path().join("vectors").join("code_chunks_legacy");
+        std::fs::create_dir_all(&vector_path).unwrap();
+        let legacy_identity =
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2";
+        std::fs::write(
+            vector_path.join("metadata.json"),
+            serde_json::json!({ "embedder_version": legacy_identity }).to_string(),
+        )
+        .unwrap();
+        let paths = test_project_paths(vector_path);
+
+        let resolved = resolve_query_backend(&paths, EmbeddingBackend::default()).unwrap();
+
+        assert_eq!(resolved.vector_identity, legacy_identity);
+        assert_eq!(resolved.backend.profile.name(), "local-gpu-small");
     }
 }
