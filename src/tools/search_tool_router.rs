@@ -125,9 +125,19 @@ impl SearchToolRouter {
     )]
     async fn search(
         &self,
-        Parameters(SearchParams { directory, keyword }): Parameters<SearchParams>,
+        Parameters(SearchParams {
+            directory,
+            keyword,
+            embedding_profile,
+        }): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::query_tools::search(&directory, &keyword, self.sync_manager.as_ref()).await
+        crate::tools::query_tools::search(
+            &directory,
+            &keyword,
+            embedding_profile.as_deref(),
+            self.sync_manager.as_ref(),
+        )
+        .await
     }
 
     /// Find the definition of a symbol by name
@@ -222,10 +232,17 @@ impl SearchToolRouter {
             query,
             directory,
             limit,
+            embedding_profile,
         }): Parameters<GetSimilarCodeParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = limit.unwrap_or(5);
-        crate::tools::query_tools::get_similar_code(&query, &directory, limit).await
+        crate::tools::query_tools::get_similar_code(
+            &query,
+            &directory,
+            limit,
+            embedding_profile.as_deref(),
+        )
+        .await
     }
 
     /// Manually index a codebase directory with automatic change detection

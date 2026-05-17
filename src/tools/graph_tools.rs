@@ -611,7 +611,12 @@ pub async fn similar_to_item(
         Path::new(&params.directory),
         &crate::embeddings::EmbeddingBackend::default(),
     );
-    let hybrid_search = crate::tools::query_tools::create_hybrid_search(&paths, None).await?;
+    let hybrid_search = crate::tools::query_tools::create_hybrid_search(
+        &paths,
+        None,
+        crate::embeddings::EmbeddingBackend::default(),
+    )
+    .await?;
 
     let limit = params.limit.unwrap_or(10);
     let threshold = params.threshold.unwrap_or(0.0);
@@ -3159,7 +3164,12 @@ pub(crate) async fn handle_build_codemap(
                 .and_then(|adapter| adapter.create_bm25_search())
                 .ok()
         };
-        let hybrid = crate::tools::query_tools::create_hybrid_search(&paths, bm25).await?;
+        let hybrid = crate::tools::query_tools::create_hybrid_search(
+            &paths,
+            bm25,
+            crate::embeddings::EmbeddingBackend::default(),
+        )
+        .await?;
         let hits = hybrid
             .search(prompt, opts.top_k_seeds.saturating_mul(3))
             .await

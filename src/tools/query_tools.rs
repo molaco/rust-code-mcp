@@ -11,7 +11,7 @@ use tokio::fs;
 use std::path::Path;
 use tracing;
 
-use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator, EmbeddingProfile};
 use crate::search::HybridSearch;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStore;
@@ -115,20 +115,21 @@ fn clean_stale_index(paths: &ProjectPaths) {
 async fn ensure_indexed(
     dir_path: &Path,
     paths: &ProjectPaths,
+    backend: EmbeddingBackend,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
 ) -> Result<crate::indexing::unified::IndexStats, McpError> {
     use crate::indexing::unified::UnifiedIndexer;
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
 
-    let backend = EmbeddingBackend::default();
-    let mut indexer = UnifiedIndexer::for_embedded(
+    let mut indexer = UnifiedIndexer::for_embedded_with_backend(
         &paths.cache_path,
         &paths.tantivy_path,
         &paths.collection_name,
         backend.dim(),
         &backend.identity(),
         None,
+        backend,
     )
     .await
     .map_err(|e| McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None))?;
@@ -163,10 +164,13 @@ async fn ensure_indexed(
 /// `EmbeddingBackend`. If no metadata file exists yet (very fresh
 /// install, no prior index), fall back to the default backend — the
 /// vector store will then create the metadata on first write.
-fn resolve_query_backend(paths: &ProjectPaths) -> Result<EmbeddingBackend, McpError> {
+fn resolve_query_backend(
+    paths: &ProjectPaths,
+    configured_backend: EmbeddingBackend,
+) -> Result<EmbeddingBackend, McpError> {
     let metadata_path = paths.vector_path.join("metadata.json");
     if !metadata_path.exists() {
-        return Ok(EmbeddingBackend::default());
+        return Ok(configured_backend);
     }
     let bytes = std::fs::read(&metadata_path).map_err(|e| {
         McpError::invalid_params(
@@ -221,8 +225,15 @@ fn resolve_query_backend(paths: &ProjectPaths) -> Result<EmbeddingBackend, McpEr
 pub(crate) async fn create_hybrid_search(
     paths: &ProjectPaths,
     bm25_search: Option<crate::search::bm25::Bm25Search>,
+    configured_backend: EmbeddingBackend,
 ) -> Result<HybridSearch, McpError> {
-    let backend = resolve_query_backend(paths)?;
+    let backend = resolve_query_backend(paths, configured_backend)?;
+    tracing::info!(
+        profile = backend.profile.name(),
+        embedder = backend.identity(),
+        collection = paths.collection_name,
+        "Creating hybrid search with embedding profile"
+    );
     let embedding_generator = EmbeddingGenerator::with_backend(backend).map_err(|e| {
         McpError::invalid_params(
             format!("Failed to initialize embedding generator: {}", e),
@@ -248,6 +259,18 @@ pub(crate) async fn create_hybrid_search(
         vector_store,
         bm25_search,
     ))
+}
+
+fn resolve_requested_backend(
+    embedding_profile: Option<&str>,
+) -> Result<EmbeddingBackend, McpError> {
+    if let Some(profile) = embedding_profile {
+        let profile = EmbeddingProfile::parse(profile)
+            .map_err(|msg| McpError::invalid_params(msg, None))?;
+        return Ok(EmbeddingBackend::from_profile(profile));
+    }
+
+    Ok(EmbeddingBackend::default())
 }
 
 /// Format search results into a display string
@@ -310,6 +333,7 @@ fn format_results(
 pub async fn search(
     directory: &str,
     keyword: &str,
+    embedding_profile: Option<&str>,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
 ) -> Result<CallToolResult, McpError> {
     let dir_path = Path::new(directory);
@@ -327,7 +351,8 @@ pub async fn search(
         ));
     }
 
-    let paths = ProjectPaths::from_directory(dir_path, &EmbeddingBackend::default());
+    let requested_backend = resolve_requested_backend(embedding_profile)?;
+    let paths = ProjectPaths::from_directory(dir_path, &requested_backend);
 
     // Try existing index; if corrupt or missing, rebuild
     let mut bm25 = try_open_bm25(&paths);
@@ -341,7 +366,7 @@ pub async fn search(
         // Corrupt or missing — clean stale caches to force full reindex
         rebuilt = paths.tantivy_path.exists();
         clean_stale_index(&paths);
-        let st = ensure_indexed(dir_path, &paths, sync_manager).await?;
+        let st = ensure_indexed(dir_path, &paths, requested_backend, sync_manager).await?;
         bm25 = try_open_bm25(&paths);
         Some(st)
     };
@@ -356,9 +381,13 @@ pub async fn search(
         }
     }
 
-    let hybrid_search = create_hybrid_search(&paths, bm25).await?;
+    let hybrid_search = create_hybrid_search(&paths, bm25, requested_backend).await?;
 
-    tracing::info!("Performing hybrid search for: {}", keyword);
+    tracing::info!(
+        profile = requested_backend.profile.name(),
+        "Performing hybrid search for: {}",
+        keyword
+    );
     let results = hybrid_search
         .search(keyword, 10)
         .await
@@ -374,6 +403,7 @@ pub async fn get_similar_code(
     query: &str,
     directory: &str,
     limit: usize,
+    embedding_profile: Option<&str>,
 ) -> Result<CallToolResult, McpError> {
     let dir_path = Path::new(directory);
     if !dir_path.is_dir() {
@@ -383,9 +413,10 @@ pub async fn get_similar_code(
         ));
     }
 
-    let paths = ProjectPaths::from_directory(dir_path, &EmbeddingBackend::default());
+    let requested_backend = resolve_requested_backend(embedding_profile)?;
+    let paths = ProjectPaths::from_directory(dir_path, &requested_backend);
 
-    let hybrid_search = create_hybrid_search(&paths, None).await?;
+    let hybrid_search = create_hybrid_search(&paths, None, requested_backend).await?;
 
     let results = hybrid_search
         .vector_only_search(query, limit)
@@ -449,19 +480,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_invalid_directory() {
-        let result = search("/nonexistent/directory", "test", None).await;
+        let result = search("/nonexistent/directory", "test", None, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_search_empty_keyword() {
-        let result = search("/tmp", "", None).await;
+        let result = search("/tmp", "", None, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_get_similar_code_invalid_directory() {
-        let result = get_similar_code("test query", "/nonexistent/directory", 5).await;
+        let result = get_similar_code("test query", "/nonexistent/directory", 5, None).await;
         assert!(result.is_err());
     }
 }

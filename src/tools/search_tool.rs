@@ -21,6 +21,10 @@ pub struct SearchParams {
     pub directory: String,
     #[schemars(description = "Keyword to search for")]
     pub keyword: String,
+    #[schemars(
+        description = "Optional embedding profile for vector search. One of: \"local-gpu-small\", \"local-cpu-small\", \"openrouter-qwen3-8b\", \"local-qwen3-4b\", \"local-qwen3-8b\"."
+    )]
+    pub embedding_profile: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -83,6 +87,10 @@ pub struct GetSimilarCodeParams {
     pub directory: String,
     #[schemars(description = "Number of similar results to return (default 5)")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Optional embedding profile for vector search. One of: \"local-gpu-small\", \"local-cpu-small\", \"openrouter-qwen3-8b\", \"local-qwen3-4b\", \"local-qwen3-8b\"."
+    )]
+    pub embedding_profile: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

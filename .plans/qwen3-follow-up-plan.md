@@ -269,6 +269,8 @@ Verification:
 
 ## Phase 6: Make Query Embedding Profile-Aware
 
+Status: Complete.
+
 Search must use the same profile semantics as indexing.
 
 Implementation steps:
@@ -285,6 +287,20 @@ Acceptance criteria:
 - BGE-indexed collections use BGE query formatting.
 - OpenRouter-indexed collections use OpenRouter/Qwen3 query formatting.
 - Cross-profile dimension mistakes fail clearly.
+
+Completed work:
+
+- Added optional `embedding_profile` to `search` and `get_similar_code` MCP parameters.
+- Query paths now derive `ProjectPaths` from the requested embedding backend instead of always using the default backend.
+- Auto-indexing from search now initializes the requested backend and collection.
+- `create_hybrid_search` now accepts the configured backend, falls back to it when metadata is absent, and still reconciles against on-disk metadata when present.
+- Query embedding formatting is profile-aware through `EmbeddingBackend::format_query`.
+- Added profile/embedder/collection tracing for query initialization.
+- Updated graph-side callers to pass the default backend explicitly.
+
+Verification:
+
+- `CUDARC_CUDA_VERSION=12080 cargo check --lib` passed with pre-existing warnings.
 
 ## Phase 7: Add Tests
 
