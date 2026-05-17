@@ -1,7 +1,9 @@
 //! Index rust-code-mcp codebase for embedding benchmark runs.
 
 use anyhow::{Context, Result, bail};
-use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingProfile};
+use file_search_mcp::embeddings::{
+    openrouter_runtime_config, EmbeddingBackend, EmbeddingProfile, EmbeddingRuntime,
+};
 use file_search_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -81,6 +83,22 @@ async fn main() -> Result<()> {
     println!("\nMachine metrics:");
     println!("embedding_profile={}", backend.profile.name());
     println!("vector_dim={}", backend.dim());
+    if backend.runtime == EmbeddingRuntime::OpenRouter {
+        let openrouter_config = openrouter_runtime_config();
+        println!(
+            "openrouter_max_batch_inputs={}",
+            openrouter_config.max_batch_inputs
+        );
+        println!(
+            "openrouter_max_batch_tokens={}",
+            openrouter_config.max_batch_tokens
+        );
+        println!("openrouter_concurrency={}", openrouter_config.concurrency);
+        println!(
+            "openrouter_encoding_format={}",
+            openrouter_config.encoding_format.as_str()
+        );
+    }
     println!("total_files={}", stats.total_files);
     println!("indexed_files={}", stats.indexed_files);
     println!("skipped_files={}", stats.skipped_files);

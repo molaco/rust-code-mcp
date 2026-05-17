@@ -251,7 +251,32 @@ Acceptance criteria:
 
 ## Phase 5: Add OpenRouter Request Metrics
 
-Status: Planned.
+Status: Implemented.
+
+Implementation notes:
+
+- Added `OpenRouterRequestMetrics` in `src/embeddings/openrouter.rs`.
+- Metrics now track:
+  - request count
+  - retry count
+  - payload-too-large split count
+  - failed request count
+  - total/min/average/max request latency
+  - total/max input count per request
+  - total/max estimated padded tokens per request
+  - response vector count
+  - response dimension
+- Added per-request debug logs with request index, retry attempt, input count, estimated tokens, latency, HTTP status when available, and response shape on success.
+- Added a structured summary log with stable `openrouter_*` fields for benchmark parsing.
+- Added `openrouter_padded_tokens_per_sec` based on remote request token estimates and elapsed embedding time.
+- Exposed safe OpenRouter runtime config through `openrouter_runtime_config`, `OpenRouterRuntimeConfig`, and `OpenRouterEncodingFormat`.
+- Updated `examples/index_codebase.rs` to print OpenRouter config machine metrics when the active profile is OpenRouter.
+- Added unit coverage for metrics aggregation.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 

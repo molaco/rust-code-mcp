@@ -6,7 +6,8 @@ use futures::stream::{self, StreamExt};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1/embeddings";
 const API_KEY_ENV: &str = "RUST_CODE_MCP_OPENROUTER_API_KEY";
@@ -35,20 +36,20 @@ pub(super) struct OpenRouterEmbedder {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct OpenRouterRuntimeConfig {
-    pub(crate) max_batch_inputs: usize,
-    pub(crate) max_batch_tokens: usize,
-    pub(crate) concurrency: usize,
-    pub(crate) encoding_format: OpenRouterEncodingFormat,
+pub struct OpenRouterRuntimeConfig {
+    pub max_batch_inputs: usize,
+    pub max_batch_tokens: usize,
+    pub concurrency: usize,
+    pub encoding_format: OpenRouterEncodingFormat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OpenRouterEncodingFormat {
+pub enum OpenRouterEncodingFormat {
     Float,
 }
 
 impl OpenRouterEncodingFormat {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Float => "float",
         }
@@ -92,6 +93,77 @@ struct OpenRouterInput {
 struct OpenRouterBatchPlan {
     start: usize,
     end: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct OpenRouterRequestMetrics {
+    request_count: usize,
+    retry_count: usize,
+    split_count: usize,
+    failed_request_count: usize,
+    total_latency: Duration,
+    min_latency: Option<Duration>,
+    max_latency: Duration,
+    total_request_inputs: usize,
+    max_request_inputs: usize,
+    total_estimated_tokens: usize,
+    max_estimated_tokens: usize,
+    response_vector_count: usize,
+    response_dim: Option<usize>,
+}
+
+type OpenRouterMetricsHandle = Arc<Mutex<OpenRouterRequestMetrics>>;
+
+impl OpenRouterRequestMetrics {
+    fn start_request(&mut self) -> usize {
+        self.request_count += 1;
+        self.request_count
+    }
+
+    fn record_request(
+        &mut self,
+        latency: Duration,
+        input_count: usize,
+        estimated_tokens: usize,
+        response_vectors: usize,
+        response_dim: usize,
+        failed: bool,
+    ) {
+        self.total_latency += latency;
+        self.min_latency = Some(
+            self.min_latency
+                .map(|min_latency| min_latency.min(latency))
+                .unwrap_or(latency),
+        );
+        self.max_latency = self.max_latency.max(latency);
+        self.total_request_inputs += input_count;
+        self.max_request_inputs = self.max_request_inputs.max(input_count);
+        self.total_estimated_tokens += estimated_tokens;
+        self.max_estimated_tokens = self.max_estimated_tokens.max(estimated_tokens);
+        self.response_vector_count += response_vectors;
+        if response_vectors > 0 {
+            self.response_dim = Some(response_dim);
+        }
+        if failed {
+            self.failed_request_count += 1;
+        }
+    }
+
+    fn record_retry(&mut self) {
+        self.retry_count += 1;
+    }
+
+    fn record_split(&mut self) {
+        self.split_count += 1;
+    }
+
+    fn avg_latency(&self) -> Duration {
+        if self.request_count == 0 {
+            Duration::ZERO
+        } else {
+            self.total_latency / self.request_count as u32
+        }
+    }
 }
 
 impl OpenRouterEmbedder {
@@ -217,6 +289,8 @@ impl OpenRouterEmbedder {
 
         let expected_count = texts.len();
         let batches = self.plan_remote_batches(texts);
+        let embed_start = Instant::now();
+        let metrics = Arc::new(Mutex::new(OpenRouterRequestMetrics::default()));
         tracing::info!(
             inputs = expected_count,
             request_batches = batches.len(),
@@ -227,7 +301,9 @@ impl OpenRouterEmbedder {
         );
 
         let mut request_stream = stream::iter(batches)
-            .map(|batch| self.request_batch_with_split(batch, input_type))
+            .map(|batch| {
+                self.request_batch_with_split(batch, input_type, metrics.clone())
+            })
             .buffer_unordered(self.config.concurrency);
         let mut ordered_embeddings = Vec::with_capacity(expected_count);
 
@@ -235,15 +311,31 @@ impl OpenRouterEmbedder {
             match result {
                 Ok(mut embeddings) => ordered_embeddings.append(&mut embeddings),
                 Err(OpenRouterBatchError::PayloadTooLarge(msg)) => {
+                    log_openrouter_request_metrics(
+                        &metrics.lock().unwrap(),
+                        embed_start.elapsed(),
+                        ordered_embeddings.len(),
+                    );
                     return Err(EmbeddingError::embed_failed(format!(
                         "OpenRouter rejected a single embedding input as too large: {msg}"
                     )));
                 }
                 Err(OpenRouterBatchError::Fatal(msg)) => {
+                    log_openrouter_request_metrics(
+                        &metrics.lock().unwrap(),
+                        embed_start.elapsed(),
+                        ordered_embeddings.len(),
+                    );
                     return Err(EmbeddingError::embed_failed(msg));
                 }
             }
         }
+
+        log_openrouter_request_metrics(
+            &metrics.lock().unwrap(),
+            embed_start.elapsed(),
+            ordered_embeddings.len(),
+        );
 
         restore_original_embedding_order(expected_count, ordered_embeddings)
             .map_err(EmbeddingError::embed_failed)
@@ -253,13 +345,18 @@ impl OpenRouterEmbedder {
         &self,
         batch: OpenRouterInputBatch,
         input_type: &str,
+        metrics: OpenRouterMetricsHandle,
     ) -> Result<Vec<(usize, Embedding)>, OpenRouterBatchError> {
         let mut ordered_embeddings = Vec::with_capacity(batch.len());
         let mut pending = VecDeque::from([batch]);
 
         while let Some(batch) = pending.pop_front() {
             let texts = batch.texts();
-            match self.request_batch(&texts, input_type).await {
+            let estimated_tokens = batch.padded_tokens();
+            match self
+                .request_batch(&texts, input_type, estimated_tokens, metrics.clone())
+                .await
+            {
                 Ok(embeddings) => {
                     ordered_embeddings.extend(
                         batch
@@ -272,6 +369,7 @@ impl OpenRouterEmbedder {
                 Err(OpenRouterBatchError::PayloadTooLarge(msg)) if batch.len() > 1 => {
                     let batch_len = batch.len();
                     let (left, right) = batch.split_at(batch_len / 2);
+                    metrics.lock().unwrap().record_split();
                     pending.push_front(right);
                     pending.push_front(left);
                     tracing::warn!(
@@ -291,6 +389,8 @@ impl OpenRouterEmbedder {
         &self,
         texts: &[String],
         input_type: &str,
+        estimated_tokens: usize,
+        metrics: OpenRouterMetricsHandle,
     ) -> Result<Vec<Embedding>, OpenRouterBatchError> {
         let request = EmbeddingRequest {
             model: &self.model,
@@ -302,6 +402,8 @@ impl OpenRouterEmbedder {
 
         let mut last_retryable = None;
         for attempt in 0..=MAX_RETRIES {
+            let request_index = metrics.lock().unwrap().start_request();
+            let request_start = Instant::now();
             let response = self
                 .client
                 .post(&self.base_url)
@@ -315,16 +417,94 @@ impl OpenRouterEmbedder {
                 Ok(response) if response.status().is_success() => {
                     let status = response.status();
                     let body = response.text().await.map_err(|e| {
+                        let latency = request_start.elapsed();
+                        metrics.lock().unwrap().record_request(
+                            latency,
+                            texts.len(),
+                            estimated_tokens,
+                            0,
+                            self.dim,
+                            true,
+                        );
+                        tracing::debug!(
+                            openrouter_request_index = request_index,
+                            openrouter_retry_attempt = attempt,
+                            openrouter_input_count = texts.len(),
+                            openrouter_estimated_tokens = estimated_tokens,
+                            openrouter_latency_secs = latency.as_secs_f64(),
+                            http_status = status.as_u16(),
+                            "OpenRouter embedding response body read failed"
+                        );
                         OpenRouterBatchError::Fatal(format!(
                             "OpenRouter response body read failed after {status}: {e}"
                         ))
                     })?;
-                    return parse_embeddings_response(&body, self.dim, texts.len())
-                        .map_err(OpenRouterBatchError::Fatal);
+                    let latency = request_start.elapsed();
+                    let embeddings = match parse_embeddings_response(&body, self.dim, texts.len()) {
+                        Ok(embeddings) => embeddings,
+                        Err(err) => {
+                            metrics.lock().unwrap().record_request(
+                                latency,
+                                texts.len(),
+                                estimated_tokens,
+                                0,
+                                self.dim,
+                                true,
+                            );
+                            tracing::debug!(
+                                openrouter_request_index = request_index,
+                                openrouter_retry_attempt = attempt,
+                                openrouter_input_count = texts.len(),
+                                openrouter_estimated_tokens = estimated_tokens,
+                                openrouter_latency_secs = latency.as_secs_f64(),
+                                http_status = status.as_u16(),
+                                "OpenRouter embedding response parse failed"
+                            );
+                            return Err(OpenRouterBatchError::Fatal(err));
+                        }
+                    };
+                    metrics.lock().unwrap().record_request(
+                        latency,
+                        texts.len(),
+                        estimated_tokens,
+                        embeddings.len(),
+                        self.dim,
+                        false,
+                    );
+                    tracing::debug!(
+                        openrouter_request_index = request_index,
+                        openrouter_retry_attempt = attempt,
+                        openrouter_input_count = texts.len(),
+                        openrouter_estimated_tokens = estimated_tokens,
+                        openrouter_latency_secs = latency.as_secs_f64(),
+                        http_status = status.as_u16(),
+                        openrouter_response_vectors = embeddings.len(),
+                        openrouter_response_dim = self.dim,
+                        "OpenRouter embedding request completed"
+                    );
+                    return Ok(embeddings);
                 }
                 Ok(response) => {
                     let status = response.status();
                     let body = response.text().await.unwrap_or_default();
+                    let latency = request_start.elapsed();
+                    metrics.lock().unwrap().record_request(
+                        latency,
+                        texts.len(),
+                        estimated_tokens,
+                        0,
+                        self.dim,
+                        true,
+                    );
+                    tracing::debug!(
+                        openrouter_request_index = request_index,
+                        openrouter_retry_attempt = attempt,
+                        openrouter_input_count = texts.len(),
+                        openrouter_estimated_tokens = estimated_tokens,
+                        openrouter_latency_secs = latency.as_secs_f64(),
+                        http_status = status.as_u16(),
+                        "OpenRouter embedding request failed"
+                    );
                     let msg = format!(
                         "OpenRouter embeddings request failed with HTTP {status}: {}",
                         body_snippet(&body)
@@ -333,6 +513,7 @@ impl OpenRouterEmbedder {
                         return Err(OpenRouterBatchError::PayloadTooLarge(msg));
                     }
                     if is_retryable_status(status) && attempt < MAX_RETRIES {
+                        metrics.lock().unwrap().record_retry();
                         last_retryable = Some(msg);
                         sleep_for_retry(attempt).await;
                         continue;
@@ -340,11 +521,46 @@ impl OpenRouterEmbedder {
                     return Err(OpenRouterBatchError::Fatal(msg));
                 }
                 Err(err) if is_retryable_reqwest_error(&err) && attempt < MAX_RETRIES => {
+                    let latency = request_start.elapsed();
+                    metrics.lock().unwrap().record_request(
+                        latency,
+                        texts.len(),
+                        estimated_tokens,
+                        0,
+                        self.dim,
+                        true,
+                    );
+                    tracing::debug!(
+                        openrouter_request_index = request_index,
+                        openrouter_retry_attempt = attempt,
+                        openrouter_input_count = texts.len(),
+                        openrouter_estimated_tokens = estimated_tokens,
+                        openrouter_latency_secs = latency.as_secs_f64(),
+                        "OpenRouter embedding request transport failed"
+                    );
+                    metrics.lock().unwrap().record_retry();
                     last_retryable = Some(format!("OpenRouter request failed: {err}"));
                     sleep_for_retry(attempt).await;
                     continue;
                 }
                 Err(err) => {
+                    let latency = request_start.elapsed();
+                    metrics.lock().unwrap().record_request(
+                        latency,
+                        texts.len(),
+                        estimated_tokens,
+                        0,
+                        self.dim,
+                        true,
+                    );
+                    tracing::debug!(
+                        openrouter_request_index = request_index,
+                        openrouter_retry_attempt = attempt,
+                        openrouter_input_count = texts.len(),
+                        openrouter_estimated_tokens = estimated_tokens,
+                        openrouter_latency_secs = latency.as_secs_f64(),
+                        "OpenRouter embedding request transport failed"
+                    );
                     return Err(OpenRouterBatchError::Fatal(format!(
                         "OpenRouter request failed: {err}"
                     )));
@@ -502,8 +718,47 @@ fn restore_original_embedding_order(
         .collect()
 }
 
+fn log_openrouter_request_metrics(
+    metrics: &OpenRouterRequestMetrics,
+    elapsed: Duration,
+    embedding_count: usize,
+) {
+    let min_latency = metrics.min_latency.unwrap_or(Duration::ZERO);
+    let avg_latency = metrics.avg_latency();
+    let padded_tokens_per_sec = if elapsed.is_zero() {
+        0.0
+    } else {
+        metrics.total_estimated_tokens as f64 / elapsed.as_secs_f64()
+    };
+
+    tracing::info!(
+        openrouter_request_count = metrics.request_count,
+        openrouter_retry_count = metrics.retry_count,
+        openrouter_split_count = metrics.split_count,
+        openrouter_failed_request_count = metrics.failed_request_count,
+        openrouter_total_request_latency_secs = metrics.total_latency.as_secs_f64(),
+        openrouter_min_request_latency_secs = min_latency.as_secs_f64(),
+        openrouter_avg_request_latency_secs = avg_latency.as_secs_f64(),
+        openrouter_max_request_latency_secs = metrics.max_latency.as_secs_f64(),
+        openrouter_total_request_inputs = metrics.total_request_inputs,
+        openrouter_max_request_inputs = metrics.max_request_inputs,
+        openrouter_total_estimated_tokens = metrics.total_estimated_tokens,
+        openrouter_max_estimated_tokens = metrics.max_estimated_tokens,
+        openrouter_response_vector_count = metrics.response_vector_count,
+        openrouter_response_dim = metrics.response_dim.unwrap_or(0),
+        openrouter_embedding_count = embedding_count,
+        openrouter_elapsed_secs = elapsed.as_secs_f64(),
+        openrouter_padded_tokens_per_sec = padded_tokens_per_sec,
+        "OpenRouter embedding request metrics"
+    );
+}
+
 fn api_key_from_env() -> Result<String, EmbeddingError> {
     resolve_api_key(|key| std::env::var(key))
+}
+
+pub fn openrouter_runtime_config() -> OpenRouterRuntimeConfig {
+    openrouter_runtime_config_from_env()
 }
 
 fn openrouter_runtime_config_from_env() -> OpenRouterRuntimeConfig {
@@ -815,6 +1070,32 @@ mod tests {
         assert_eq!(config.max_batch_inputs, MAX_BATCH_INPUTS);
         assert_eq!(config.max_batch_tokens, MAX_BATCH_TOKENS);
         assert_eq!(config.concurrency, MAX_CONCURRENCY);
+    }
+
+    #[test]
+    fn request_metrics_tracks_counts_and_latency() {
+        let mut metrics = OpenRouterRequestMetrics::default();
+
+        assert_eq!(metrics.start_request(), 1);
+        metrics.record_request(Duration::from_millis(100), 4, 40, 4, 4096, false);
+        metrics.record_retry();
+        metrics.record_split();
+        assert_eq!(metrics.start_request(), 2);
+        metrics.record_request(Duration::from_millis(300), 2, 20, 0, 4096, true);
+
+        assert_eq!(metrics.request_count, 2);
+        assert_eq!(metrics.retry_count, 1);
+        assert_eq!(metrics.split_count, 1);
+        assert_eq!(metrics.failed_request_count, 1);
+        assert_eq!(metrics.total_request_inputs, 6);
+        assert_eq!(metrics.max_request_inputs, 4);
+        assert_eq!(metrics.total_estimated_tokens, 60);
+        assert_eq!(metrics.max_estimated_tokens, 40);
+        assert_eq!(metrics.response_vector_count, 4);
+        assert_eq!(metrics.response_dim, Some(4096));
+        assert_eq!(metrics.min_latency, Some(Duration::from_millis(100)));
+        assert_eq!(metrics.max_latency, Duration::from_millis(300));
+        assert_eq!(metrics.avg_latency(), Duration::from_millis(200));
     }
 
     #[test]

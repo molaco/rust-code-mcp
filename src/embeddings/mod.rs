@@ -21,6 +21,9 @@ pub use backend::{
 
 mod fastembed_cpu;
 mod openrouter;
+pub use openrouter::{
+    openrouter_runtime_config, OpenRouterEncodingFormat, OpenRouterRuntimeConfig,
+};
 mod qwen3;
 
 mod token_lengths;
