@@ -21,11 +21,12 @@ pub struct EmbeddingTokenCounter {
 impl EmbeddingTokenCounter {
     /// Load the tokenizer for the active backend.
     pub fn from_backend(backend: &EmbeddingBackend) -> Result<Self, EmbeddingError> {
+        let variant = backend.require_qwen3_variant()?;
         let api = ApiBuilder::new()
             .with_progress(false)
             .build()
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
-        let repo = api.model(backend.variant.hf_model_id().to_string());
+        let repo = api.model(variant.hf_model_id().to_string());
         let tokenizer_path = repo
             .get("tokenizer.json")
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;

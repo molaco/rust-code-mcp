@@ -57,7 +57,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token_counter = EmbeddingTokenCounter::from_backend(&backend)?;
     println!(
         "Using tokenizer for {} (max_len={})",
-        backend.variant.hf_model_id(),
+        backend
+            .qwen3_variant()
+            .map(|variant| variant.hf_model_id())
+            .unwrap_or(backend.model.provider_model_id()),
         token_counter.max_len()
     );
 

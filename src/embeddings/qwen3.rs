@@ -11,20 +11,15 @@ use crate::embeddings::Embedding;
 use crate::embeddings::backend::EmbeddingBackend;
 use crate::embeddings::error::EmbeddingError;
 
-/// Qwen3 instruction template for code-retrieval queries.
-/// Centralized so the literal lives in one place — model-card revisions
-/// may change the exact wording; update here and audit retrieval
-/// quality before shipping.
-const QUERY_INSTRUCTION: &str =
-    "Instruct: Given a code search query, retrieve relevant code\nQuery: ";
-
 pub(super) struct Qwen3Embedder {
     inner: Mutex<Qwen3TextEmbedding>,
+    backend: EmbeddingBackend,
     dim: usize,
 }
 
 impl Qwen3Embedder {
     pub(super) fn new(backend: &EmbeddingBackend) -> Result<Self, EmbeddingError> {
+        let variant = backend.require_qwen3_variant()?;
         let device = if backend.force_cpu {
             tracing::warn!(
                 "Qwen3Embedder: force_cpu=true; embedding will run on CPU. \
@@ -50,8 +45,9 @@ impl Qwen3Embedder {
 
         tracing::info!(
             target: "embeddings::qwen3",
-            variant = ?backend.variant,
-            model_id = backend.variant.hf_model_id(),
+            profile = backend.profile.name(),
+            model = backend.model.display_name(),
+            model_id = variant.hf_model_id(),
             max_len = backend.max_len,
             ?dtype,
             device = ?device,
@@ -59,14 +55,14 @@ impl Qwen3Embedder {
         );
 
         let inner = Qwen3TextEmbedding::from_hf(
-            backend.variant.hf_model_id(),
+            variant.hf_model_id(),
             &device,
             dtype,
             backend.max_len,
         )
         .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
 
-        let dim = backend.variant.dim();
+        let dim = backend.dim();
         tracing::info!(
             target: "embeddings::qwen3",
             "Qwen3Embedder initialized (dim={dim})"
@@ -74,6 +70,7 @@ impl Qwen3Embedder {
 
         Ok(Self {
             inner: Mutex::new(inner),
+            backend: *backend,
             dim,
         })
     }
@@ -100,7 +97,7 @@ impl Qwen3Embedder {
     ) -> Result<Vec<Embedding>, EmbeddingError> {
         let prefixed: Vec<String> = texts
             .iter()
-            .map(|t| format!("{QUERY_INSTRUCTION}{t}"))
+            .map(|t| self.backend.format_query(t))
             .collect();
         let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
         self.embed_documents(&refs)

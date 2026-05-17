@@ -56,6 +56,8 @@ Completed work:
 
 ## Phase 2: Define First-Class Embedding Profiles
 
+Status: Complete.
+
 Replace the current model-only selection with profile-aware configuration.
 
 Target profiles:
@@ -90,6 +92,20 @@ Acceptance criteria:
 - Existing callers using `model: "qwen3-0.6b"` continue to work.
 - New callers can use explicit profile names.
 - Profile identities are unique and stable.
+
+Completed work:
+
+- Refactored `src/embeddings/backend.rs` around `EmbeddingProfile`, `EmbeddingRuntime`, and `EmbeddingModelSpec`.
+- Added stable metadata for `local-gpu-small`, `local-cpu-small`, `openrouter-qwen3-8b`, plus compatibility local Qwen3 4B/8B profiles.
+- Kept the existing default Qwen3-Embedding-0.6B identity string compatible: `fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2`.
+- Added profile dimensions, default token caps, default chunking metadata, and query formatting behavior.
+- Updated local Qwen3 initialization and token counting to use the new model spec.
+- Added unit coverage for profile parsing, identity uniqueness, dimension values, query formatting, and identity round-trips.
+
+Verification:
+
+- `CUDARC_CUDA_VERSION=12080 cargo check --lib` passed with pre-existing warnings.
+- `CUDARC_CUDA_VERSION=12080 cargo test embeddings::backend --lib` compiled but could not link because CUDA libraries (`cuda`, `nvrtc`, `curand`, `cublas`, `cublasLt`, `cudart`) are not visible in this shell.
 
 ## Phase 3: Expose Profile Selection in MCP Tools
 

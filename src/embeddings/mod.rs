@@ -14,7 +14,10 @@ mod error;
 pub use error::EmbeddingError;
 
 mod backend;
-pub use backend::{EmbeddingBackend, Qwen3Variant};
+pub use backend::{
+    EmbeddingBackend, EmbeddingModelSpec, EmbeddingProfile, EmbeddingRuntime,
+    Qwen3Variant, QueryFormatting,
+};
 
 mod qwen3;
 

@@ -43,9 +43,7 @@ fn resolve_backend(model: Option<&str>) -> Result<EmbeddingBackend, McpError> {
         return Ok(EmbeddingBackend::default());
     };
     let variant = parse_variant(s).map_err(|msg| McpError::invalid_params(msg, None))?;
-    let mut backend = EmbeddingBackend::default();
-    backend.variant = variant;
-    Ok(backend)
+    Ok(EmbeddingBackend::from_qwen3_variant(variant))
 }
 
 /// Index a codebase directory with automatic change detection
@@ -361,7 +359,7 @@ mod tests {
         let backend = resolve_backend(Some("qwen3-0.6b")).unwrap();
         let default = EmbeddingBackend::default();
 
-        assert_eq!(backend.variant, Qwen3Variant::Embedding0_6B);
+        assert_eq!(backend.qwen3_variant(), Some(Qwen3Variant::Embedding0_6B));
         assert_eq!(backend.max_len, default.max_len);
         assert_eq!(backend.identity(), default.identity());
     }
