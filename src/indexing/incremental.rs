@@ -10,16 +10,34 @@
 //! This achieves 100-1000x speedup vs full reindexing for unchanged codebases.
 
 use crate::embeddings::EmbeddingBackend;
+use crate::indexing::identity::{
+    active_chunking_identity, identity_hash, indexing_identity,
+};
 use crate::indexing::merkle::{ChangeSet, FileSystemMerkle};
 use crate::indexing::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing;
 
-/// Get snapshot storage path for a codebase
+/// Get snapshot storage path for a codebase with the default backend.
 ///
 /// Uses consistent path with data_dir(): ~/.local/share/search/merkle/{hash}.snapshot
 pub fn get_snapshot_path(codebase_path: &Path) -> PathBuf {
+    get_snapshot_path_for_backend(codebase_path, &EmbeddingBackend::default())
+}
+
+/// Get snapshot storage path for a codebase/backend/chunking identity.
+pub fn get_snapshot_path_for_backend(
+    codebase_path: &Path,
+    backend: &EmbeddingBackend,
+) -> PathBuf {
+    let chunking_identity = active_chunking_identity();
+    let identity = indexing_identity(codebase_path, backend, &chunking_identity);
+    get_snapshot_path_for_identity(&identity)
+}
+
+/// Get snapshot storage path for a precomputed indexing identity.
+pub fn get_snapshot_path_for_identity(indexing_identity: &str) -> PathBuf {
     use directories::ProjectDirs;
 
     // Use same ProjectDirs config as data_dir() for consistency
@@ -31,13 +49,8 @@ pub fn get_snapshot_path(codebase_path: &Path) -> PathBuf {
     };
     std::fs::create_dir_all(&merkle_dir).ok();
 
-    // Hash codebase path to create unique snapshot file
-    let path_hash = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(codebase_path.to_string_lossy().as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
+    // Hash the full indexing identity to create a unique snapshot file.
+    let path_hash = identity_hash(indexing_identity);
 
     merkle_dir.join(format!("{}.snapshot", &path_hash[..16]))
 }
@@ -120,7 +133,7 @@ impl IncrementalIndexer {
             codebase_path.display()
         );
 
-        let snapshot_path = get_snapshot_path(codebase_path);
+        let snapshot_path = get_snapshot_path_for_backend(codebase_path, self.indexer.backend());
         tracing::debug!("Snapshot path: {}", snapshot_path.display());
 
         // Step 1: Load previous snapshot (if exists)
@@ -292,6 +305,40 @@ impl IncrementalIndexer {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn snapshot_path_changes_by_backend_identity() {
+        let codebase_path = Path::new("/tmp/rust-code-mcp-snapshot-test");
+        let default_backend = EmbeddingBackend::default();
+        let mut alternate_backend = EmbeddingBackend::default();
+        alternate_backend.max_len = 2048;
+
+        assert_ne!(
+            get_snapshot_path_for_backend(codebase_path, &default_backend),
+            get_snapshot_path_for_backend(codebase_path, &alternate_backend)
+        );
+    }
+
+    #[test]
+    fn snapshot_path_changes_by_chunking_identity() {
+        let codebase_path = Path::new("/tmp/rust-code-mcp-snapshot-test");
+        let backend = EmbeddingBackend::default();
+        let first = indexing_identity(
+            codebase_path,
+            &backend,
+            "chunk-split:v1:target768:hard1024",
+        );
+        let second = indexing_identity(
+            codebase_path,
+            &backend,
+            "chunk-split:v1:target512:hard768",
+        );
+
+        assert_ne!(
+            get_snapshot_path_for_identity(&first),
+            get_snapshot_path_for_identity(&second)
+        );
+    }
 
     #[tokio::test]
     #[ignore] // Requires embedding model

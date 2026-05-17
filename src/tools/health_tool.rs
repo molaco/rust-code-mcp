@@ -12,9 +12,8 @@ use directories::ProjectDirs;
 use crate::embeddings::EmbeddingBackend;
 use crate::monitoring::health::HealthMonitor;
 use crate::search::Bm25Search;
+use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStore;
-use crate::indexing::incremental::get_snapshot_path;
-use sha2::{Digest, Sha256};
 
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -60,29 +59,15 @@ pub async fn health_check(
     let backend = EmbeddingBackend::default();
     let embedder_identity = backend.identity();
 
-    // Determine paths using hash-based approach (consistent with index_tool)
+    // Determine paths using the same shared helper as index_tool.
     let (bm25_path, merkle_path, collection_name) = if let Some(ref dir) = directory {
         let dir_path = std::path::Path::new(dir);
-
-        // Calculate directory hash + model fingerprint (must match
-        // `ProjectPaths::from_directory` so the health probe targets the
-        // same vector directory the indexer would write to).
-        let dir_hash = {
-            let mut hasher = Sha256::new();
-            hasher.update(dir_path.to_string_lossy().as_bytes());
-            format!("{:x}", hasher.finalize())
-        };
-        let model_fp = {
-            let mut hasher = Sha256::new();
-            hasher.update(embedder_identity.as_bytes());
-            format!("{:x}", hasher.finalize())
-        };
-        let collection_name = format!("code_chunks_{}_{}", &dir_hash[..8], &model_fp[..8]);
+        let paths = ProjectPaths::from_directory(dir_path, &backend);
 
         (
-            data_dir().join("index").join(&dir_hash),  // Full hash, matching index_tool
-            get_snapshot_path(dir_path),
-            collection_name,
+            paths.tantivy_path,
+            paths.snapshot_path,
+            paths.collection_name,
         )
     } else {
         // System-wide check: can't determine specific snapshot path

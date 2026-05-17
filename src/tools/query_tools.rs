@@ -95,17 +95,14 @@ fn try_open_bm25(paths: &ProjectPaths) -> Option<crate::search::bm25::Bm25Search
 
 /// Remove stale index artifacts so ensure_indexed does a full rebuild.
 /// Called when try_open_bm25 detects a corrupt or missing tantivy index.
-fn clean_stale_index(paths: &ProjectPaths, dir: &Path) {
-    use crate::indexing::incremental::get_snapshot_path;
-
+fn clean_stale_index(paths: &ProjectPaths) {
     // Remove corrupt tantivy index
     if paths.tantivy_path.exists() {
         std::fs::remove_dir_all(&paths.tantivy_path).ok();
     }
     // Remove merkle snapshot so incremental indexer does a full pass
-    let snapshot = get_snapshot_path(dir);
-    if snapshot.exists() {
-        std::fs::remove_file(&snapshot).ok();
+    if paths.snapshot_path.exists() {
+        std::fs::remove_file(&paths.snapshot_path).ok();
     }
     // Clear metadata cache so files are re-processed
     if paths.cache_path.exists() {
@@ -343,7 +340,7 @@ pub async fn search(
     } else {
         // Corrupt or missing — clean stale caches to force full reindex
         rebuilt = paths.tantivy_path.exists();
-        clean_stale_index(&paths, dir_path);
+        clean_stale_index(&paths);
         let st = ensure_indexed(dir_path, &paths, sync_manager).await?;
         bm25 = try_open_bm25(&paths);
         Some(st)

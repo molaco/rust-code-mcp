@@ -4,7 +4,7 @@
 //! incremental indexing with optional force reindex.
 
 use crate::embeddings::{EmbeddingBackend, Qwen3Variant};
-use crate::indexing::incremental::{get_snapshot_path, IncrementalIndexer};
+use crate::indexing::incremental::IncrementalIndexer;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
@@ -93,10 +93,10 @@ pub async fn index_codebase(
 
     // Handle force reindex by deleting snapshot
     if force {
-        let snapshot_path = get_snapshot_path(&dir);
+        let snapshot_path = &paths.snapshot_path;
         if snapshot_path.exists() {
             tracing::info!("Force reindex: deleting snapshot at {}", snapshot_path.display());
-            std::fs::remove_file(&snapshot_path).map_err(|e| {
+            std::fs::remove_file(snapshot_path).map_err(|e| {
                 McpError::invalid_params(format!("Failed to delete snapshot: {}", e), None)
             })?;
         }

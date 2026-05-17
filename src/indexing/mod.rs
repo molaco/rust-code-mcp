@@ -5,6 +5,7 @@ pub(crate) mod embedding_batcher;
 pub mod error;
 pub mod errors;
 pub(crate) mod file_processor;
+pub mod identity;
 pub mod incremental;
 pub mod indexer_core;
 pub mod merkle;

@@ -19,6 +19,8 @@ The implementation must preserve the existing optimized Qwen3-Embedding-0.6B pat
 
 ## Phase 1: Fix Cache Correctness
 
+Status: Complete.
+
 Multiple embedding profiles are unsafe until incremental state is keyed by the embedding profile.
 
 Current risk:
@@ -43,6 +45,14 @@ Acceptance criteria:
 
 - Indexing the same directory with two different profiles cannot reuse the same Merkle snapshot.
 - Existing default indexing still works.
+
+Completed work:
+
+- Added `src/indexing/identity.rs` as the shared source for indexing identities.
+- Merkle snapshots now key off canonical codebase path, active embedder identity, and chunking identity.
+- `ProjectPaths` now exposes the resolved indexing identity, chunking identity, and snapshot path.
+- Force reindex and stale-index cleanup now delete the profile-aware snapshot path.
+- Added tests proving snapshot paths differ by backend identity and chunking identity.
 
 ## Phase 2: Define First-Class Embedding Profiles
 
@@ -337,4 +347,3 @@ Legacy compatibility:
   "model": "qwen3-0.6b"
 }
 ```
-
