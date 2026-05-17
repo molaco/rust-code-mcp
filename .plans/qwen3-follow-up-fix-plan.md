@@ -55,7 +55,15 @@ Nix should:
 
 ## Phase 1: Fix Cargo ORT Strategy
 
-Status: Pending.
+Status: Implemented.
+
+Implementation notes:
+
+- `Cargo.toml` now uses `ort-load-dynamic` instead of `ort-download-binaries-native-tls`.
+- `hf-hub-native-tls`, `qwen3`, and `cuda` remain enabled.
+- `reqwest` remains enabled for OpenRouter.
+- `ort alternative-backend` was not restored.
+- `Cargo.lock` was refreshed by Cargo from inside `nix develop ../nix-devshells#cuda-code`; the ORT download-only dependencies were removed from the lockfile.
 
 Implementation steps:
 
@@ -84,7 +92,17 @@ Acceptance criteria:
 
 ## Phase 2: Update CUDA Devshell
 
-Status: Pending.
+Status: Implemented.
+
+Implementation notes:
+
+- `/home/molaco/Documents/nix-devshells/devshells/cuda-code.nix` now includes `onnxruntime` in `extraPackages`.
+- The interactive shell exports `ORT_DYLIB_PATH="${pkgs.onnxruntime}/lib/libonnxruntime.so"`.
+- The interactive shell prepends `${pkgs.onnxruntime}/lib` to `LD_LIBRARY_PATH`.
+- The MCP server env now sets the same `ORT_DYLIB_PATH`.
+- The MCP server env now includes `${pkgs.onnxruntime}/lib` in `LD_LIBRARY_PATH`.
+- Existing CUDA paths and `/run/opengl-driver/lib` were preserved.
+- Existing unrelated changes in `/home/molaco/Documents/nix-devshells` were not touched.
 
 Implementation steps:
 
@@ -110,7 +128,14 @@ Acceptance criteria:
 
 ## Phase 3: Verify Build From Correct Shell
 
-Status: Pending.
+Status: Verified.
+
+Verification notes:
+
+- The user confirmed `../nix-devshells#cuda-code` for project builds.
+- `nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo check --lib'` passed with existing warnings.
+- `nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo check --tests'` passed with existing warnings.
+- Nix printed `Git tree '/home/molaco/Documents/nix-devshells' is dirty` because the devshell changes were still uncommitted during verification.
 
 Run all verification from:
 
@@ -135,7 +160,7 @@ Acceptance criteria:
 
 ## Phase 4: Runtime Smoke Checks
 
-Status: Pending.
+Status: Pending; requires Phase 3 verification first.
 
 Only after Phase 3 passes:
 
@@ -151,7 +176,7 @@ Acceptance criteria:
 
 ## Phase 5: Redo Phase 8 Benchmark Work
 
-Status: Pending.
+Status: Pending; should remain separate from this build fix.
 
 Redo benchmark/profile work only after the build fix is committed.
 

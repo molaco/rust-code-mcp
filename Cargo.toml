@@ -65,7 +65,7 @@ text-splitter = "0.13"  # Semantic text chunking
 # Phase 4: Embedding Generation
 fastembed = { version = "5.13.4", default-features = false, features = [
   "hf-hub-native-tls",
-  "ort-download-binaries-native-tls",
+  "ort-load-dynamic",
   "qwen3",
   "cuda",
 ] }
