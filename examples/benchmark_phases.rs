@@ -105,10 +105,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let gen_time = gen_start.elapsed();
     println!("  Generator init: {:.2}s", gen_time.as_secs_f64());
 
+    // Runtime for the async embedding API.
+    let embed_rt = tokio::runtime::Runtime::new()?;
+
     // Warmup like test_gpu_speed does
     println!("  Warming up GPU...");
     let warmup_texts: Vec<String> = (0..16).map(|i| format!("fn warmup_{}() {{}}", i)).collect();
-    let _ = generator.embed_batch(warmup_texts)
+    embed_rt.block_on(generator.embed_documents(warmup_texts))
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
         })?;
@@ -122,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let chunk_texts: Vec<String> = chunk_batch.iter()
             .map(|c| c.format_for_embedding())
             .collect();
-        let batch_embeddings = generator.embed_batch(chunk_texts)
+        let batch_embeddings = embed_rt.block_on(generator.embed_documents(chunk_texts))
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
             })?;
@@ -150,7 +153,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let temp_dir = TempDir::new().unwrap();
         let vector_store = VectorStore::new_embedded(
             temp_dir.path().join("vectors"),
-            384
+            384,
+            "benchmark-phases:v1"
         ).await.unwrap();
 
         // Simulate per-file writes (current behavior)
@@ -244,11 +248,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  Deleted snapshot to force full reindex");
 
         let init_start = Instant::now();
+        let bench_backend = rust_code_mcp::embeddings::EmbeddingBackend::default();
         let mut indexer = IncrementalIndexer::new(
             &cache_path,
             &tantivy_path,
             &collection_name,
             384,
+            &bench_backend.identity(),
             None
         ).await.expect("Failed to create indexer");
         let init_time = init_start.elapsed();

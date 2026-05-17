@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend
             .qwen3_variant()
             .map(|variant| variant.hf_model_id())
-            .unwrap_or(backend.model.provider_model_id()),
+            .unwrap_or(backend.model_id()),
         token_counter.max_len()
     );
 

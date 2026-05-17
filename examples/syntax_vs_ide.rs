@@ -112,6 +112,8 @@ fn process(config: Config) {  // Which Config is this?
         load_out_dirs_from_check: false,
         with_proc_macro_server: ProcMacroServerChoice::None,
         prefill_caches: true,
+        num_worker_threads: num_cpus::get_physical(),
+        proc_macro_processes: 1,
     };
 
     let (db, vfs, _) = load_workspace_at(&project_path, &cargo_config, &load_config, &|_| {})?;
@@ -138,7 +140,9 @@ fn process(config: Config) {  // Which Config is this?
             if let Some(idx) = text.find("parser: RustParser") {
                 let offset = ra_ap_ide::TextSize::from((idx + 8) as u32); // point to "RustParser"
                 let position = ra_ap_ide::FilePosition { file_id, offset };
-                let config = ra_ap_ide::GotoDefinitionConfig { minicore: Default::default() };
+                let config = ra_ap_ide::GotoDefinitionConfig {
+                    ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
+                };
 
                 println!("Example: goto_definition on 'RustParser' in indexer_core.rs:");
                 if let Ok(Some(nav_info)) = analysis.goto_definition(position, &config) {

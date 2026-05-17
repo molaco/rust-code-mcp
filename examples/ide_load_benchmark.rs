@@ -137,6 +137,8 @@ fn main() -> anyhow::Result<()> {
         load_out_dirs_from_check: false,  // Skip build script outputs
         with_proc_macro_server: ProcMacroServerChoice::None,  // Skip proc macros
         prefill_caches: false,  // Don't prefill for initial benchmark
+        num_worker_threads: num_cpus::get_physical(),
+        proc_macro_processes: 1,
     };
 
     // ============ NO DEPS (local project only) ============

@@ -21,6 +21,8 @@ fn load_project(path: &Path, no_deps: bool) -> anyhow::Result<(AnalysisHost, Vfs
         load_out_dirs_from_check: false,
         with_proc_macro_server: ProcMacroServerChoice::None,
         prefill_caches: true,
+        num_worker_threads: num_cpus::get_physical(),
+        proc_macro_processes: 1,
     };
 
     let (db, vfs, _) = load_workspace_at(path, &cargo_config, &load_config, &|_| {})?;
@@ -45,7 +47,9 @@ fn test_goto_def_in_file(host: &AnalysisHost, vfs: &Vfs, file_suffix: &str, sear
             for (idx, _) in text.match_indices(search_term) {
                 let offset = ra_ap_ide::TextSize::from(idx as u32);
                 let position = ra_ap_ide::FilePosition { file_id, offset };
-                let config = ra_ap_ide::GotoDefinitionConfig { minicore: Default::default() };
+                let config = ra_ap_ide::GotoDefinitionConfig {
+                    ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
+                };
 
                 match analysis.goto_definition(position, &config) {
                     Ok(Some(nav_info)) if !nav_info.info.is_empty() => {

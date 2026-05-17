@@ -34,6 +34,8 @@ fn load_project(path: &Path, no_deps: bool, prefill: bool, with_sysroot: bool) -
         load_out_dirs_from_check: false,
         with_proc_macro_server: ProcMacroServerChoice::None,
         prefill_caches: prefill,
+        num_worker_threads: num_cpus::get_physical(),
+        proc_macro_processes: 1,
     };
 
     let (db, vfs, _) = load_workspace_at(path, &cargo_config, &load_config, &|_| {})?;
@@ -124,9 +126,8 @@ fn test_goto_def_at_search(project: &LoadedProject, search_term: &str) {
                 let offset = ra_ap_ide::TextSize::from(pos as u32);
                 let position = ra_ap_ide::FilePosition { file_id, offset };
 
-                // Create config with empty minicore
                 let config = ra_ap_ide::GotoDefinitionConfig {
-                    minicore: Default::default(),
+                    ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
                 };
 
                 print!("  goto_def '{}' in {}: ", search_term, path_str.split('/').last().unwrap_or("?"));

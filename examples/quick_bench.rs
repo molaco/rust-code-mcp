@@ -1,6 +1,6 @@
 //! Quick GPU benchmark - run with: cargo run --release --bin quick_bench
 
-use rust_code_mcp::embeddings::EMBEDDING_DIM;
+use rust_code_mcp::embeddings::EmbeddingBackend;
 use rust_code_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -26,11 +26,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📁 Codebase: {}", codebase_path.display());
     println!("🔧 Initializing indexer with GPU acceleration...\n");
 
+    let backend = EmbeddingBackend::default();
     let mut indexer = IncrementalIndexer::new(
         &cache_path,
         &tantivy_path,
         &collection_name,
-        EMBEDDING_DIM,
+        backend.dim(),
+        &backend.identity(),
         None,
     )
     .await?;
