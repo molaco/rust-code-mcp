@@ -208,7 +208,22 @@ Acceptance criteria:
 
 ## Phase 4: Bypass Local GPU Pre-Splitting For OpenRouter
 
-Status: Planned.
+Status: Implemented.
+
+Implementation notes:
+
+- Added a runtime branch in `src/indexing/embedding_batcher.rs` for `EmbeddingRuntime::OpenRouter`.
+- OpenRouter now formats the current indexing batch once and calls `EmbeddingGenerator::embed_documents` once.
+- Remote sub-batching, splitting, and concurrency are delegated to `OpenRouterEmbedder`.
+- Local GPU and local CPU still use the existing length-bucketed local `plan_embedding_batches` path.
+- OpenRouter no longer goes through logs named `Embedding GPU sub-batch`.
+- Added OpenRouter-specific plan/completion logs with chunk count, character span, token totals when available, elapsed time, and chunks/sec.
+- Added `summarize_unsorted_token_lengths` coverage for the remote branch.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 

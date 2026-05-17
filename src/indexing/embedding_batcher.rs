@@ -5,7 +5,7 @@
 
 use crate::chunker::CodeChunk;
 use crate::embeddings::{
-    Embedding, EmbeddingGenerator, EmbeddingTextLen, EmbeddingTokenCounter,
+    Embedding, EmbeddingGenerator, EmbeddingRuntime, EmbeddingTextLen, EmbeddingTokenCounter,
 };
 use crate::indexing::IndexingError;
 use crate::metrics::memory::MemoryMonitor;
@@ -106,6 +106,12 @@ impl EmbeddingBatcher {
             .collect();
 
         let token_lengths = self.count_token_lengths(&chunk_texts);
+
+        if self.embedding_generator.backend().runtime == EmbeddingRuntime::OpenRouter {
+            return self
+                .generate_openrouter_embeddings(chunk_texts, token_lengths)
+                .await;
+        }
 
         // Qwen3 batches pad to the longest input, so keep similarly
         // sized chunks together while restoring original order below.
@@ -258,6 +264,88 @@ impl EmbeddingBatcher {
         Ok(embeddings)
     }
 
+    async fn generate_openrouter_embeddings(
+        &self,
+        chunk_texts: Vec<String>,
+        token_lengths: Option<Vec<EmbeddingTextLen>>,
+    ) -> Result<Vec<Embedding>, IndexingError> {
+        let total_chunks = chunk_texts.len();
+        let min_chars = chunk_texts.iter().map(|text| text.len()).min().unwrap_or(0);
+        let max_chars = chunk_texts.iter().map(|text| text.len()).max().unwrap_or(0);
+        let token_summary = summarize_unsorted_token_lengths(token_lengths.as_deref());
+
+        if let Some(summary) = token_summary {
+            tracing::info!(
+                chunks = total_chunks,
+                min_chars,
+                max_chars,
+                raw_tokens_total = summary.raw_tokens_total,
+                capped_tokens_total = summary.capped_tokens_total,
+                min_tokens = summary.min_tokens,
+                max_tokens = summary.max_tokens,
+                token_metrics_available = true,
+                "Embedding OpenRouter remote batch plan"
+            );
+        } else {
+            tracing::info!(
+                chunks = total_chunks,
+                min_chars,
+                max_chars,
+                token_metrics_available = false,
+                "Embedding OpenRouter remote batch plan"
+            );
+        }
+
+        let embed_start = Instant::now();
+        let embeddings = self
+            .embedding_generator
+            .embed_documents(chunk_texts)
+            .await?;
+
+        if embeddings.len() != total_chunks {
+            return Err(IndexingError::Parser(format!(
+                "OpenRouter returned {} embeddings for {} chunks",
+                embeddings.len(),
+                total_chunks
+            )));
+        }
+
+        let embed_duration = embed_start.elapsed();
+        let chunks_per_sec = if embed_duration.is_zero() {
+            0.0
+        } else {
+            embeddings.len() as f64 / embed_duration.as_secs_f64()
+        };
+
+        if let Some(summary) = token_summary {
+            tracing::info!(
+                chunks = embeddings.len(),
+                elapsed_secs = embed_duration.as_secs_f64(),
+                chunks_per_sec,
+                min_chars,
+                max_chars,
+                raw_tokens_total = summary.raw_tokens_total,
+                capped_tokens_total = summary.capped_tokens_total,
+                min_tokens = summary.min_tokens,
+                max_tokens = summary.max_tokens,
+                token_metrics_available = true,
+                "Embedding batcher completed OpenRouter document embeddings"
+            );
+        } else {
+            tracing::info!(
+                chunks = embeddings.len(),
+                elapsed_secs = embed_duration.as_secs_f64(),
+                chunks_per_sec,
+                min_chars,
+                max_chars,
+                token_metrics_available = false,
+                "Embedding batcher completed OpenRouter document embeddings"
+            );
+        }
+
+        Ok(embeddings)
+    }
+
     fn count_token_lengths(&self, texts: &[String]) -> Option<Vec<EmbeddingTextLen>> {
         let counter = self.token_counter.as_ref()?;
         match counter.count_batch(texts) {
@@ -372,6 +460,41 @@ fn summarize_token_lengths(
         raw_tokens_total,
         capped_tokens_total,
         padded_tokens_total,
+        min_tokens,
+        max_tokens,
+    })
+}
+
+fn summarize_unsorted_token_lengths(
+    token_lengths: Option<&[EmbeddingTextLen]>,
+) -> Option<TokenLengthSummary> {
+    let token_lengths = token_lengths?;
+    if token_lengths.is_empty() {
+        return Some(TokenLengthSummary {
+            raw_tokens_total: 0,
+            capped_tokens_total: 0,
+            padded_tokens_total: 0,
+            min_tokens: 0,
+            max_tokens: 0,
+        });
+    }
+
+    let mut raw_tokens_total = 0usize;
+    let mut capped_tokens_total = 0usize;
+    let mut min_tokens = usize::MAX;
+    let mut max_tokens = 0usize;
+
+    for token_len in token_lengths {
+        raw_tokens_total += token_len.raw_tokens;
+        capped_tokens_total += token_len.capped_tokens;
+        min_tokens = min_tokens.min(token_len.capped_tokens);
+        max_tokens = max_tokens.max(token_len.capped_tokens);
+    }
+
+    Some(TokenLengthSummary {
+        raw_tokens_total,
+        capped_tokens_total,
+        padded_tokens_total: capped_tokens_total,
         min_tokens,
         max_tokens,
     })
@@ -573,6 +696,28 @@ mod tests {
         assert_eq!(summary.padded_tokens_total, 17);
         assert_eq!(summary.min_tokens, 3);
         assert_eq!(summary.max_tokens, 7);
+    }
+
+    #[test]
+    fn test_summarize_unsorted_token_lengths_for_remote_path() {
+        let lengths = vec![
+            EmbeddingTextLen {
+                raw_tokens: 10,
+                capped_tokens: 8,
+            },
+            EmbeddingTextLen {
+                raw_tokens: 3,
+                capped_tokens: 3,
+            },
+        ];
+
+        let summary = summarize_unsorted_token_lengths(Some(&lengths)).unwrap();
+
+        assert_eq!(summary.raw_tokens_total, 13);
+        assert_eq!(summary.capped_tokens_total, 11);
+        assert_eq!(summary.padded_tokens_total, 11);
+        assert_eq!(summary.min_tokens, 3);
+        assert_eq!(summary.max_tokens, 8);
     }
 
     #[test]
