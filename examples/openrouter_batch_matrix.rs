@@ -33,6 +33,7 @@ struct BenchmarkResult {
     retry_count: usize,
     split_count: usize,
     failed_request_count: usize,
+    provider_preferences: bool,
     avg_request_latency_secs: f64,
     estimated_tokens: usize,
     padded_tokens_per_sec: f64,
@@ -55,9 +56,9 @@ fn main() -> Result<()> {
     println!("max batch tokens: {:?}", args.max_batch_tokens);
     println!("concurrency: {:?}\n", args.concurrency);
     println!(
-        "| inputs | tokens | concurrency | chunks | index wall | embed time | requests | retries | splits | failed | avg req latency | estimated tokens | padded tokens/sec | child wall |"
+        "| inputs | tokens | concurrency | provider | chunks | index wall | embed time | requests | retries | splits | failed | avg req latency | estimated tokens | padded tokens/sec | child wall |"
     );
-    println!("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
 
     for max_batch_inputs in &args.max_batch_inputs {
         for max_batch_tokens in &args.max_batch_tokens {
@@ -69,10 +70,11 @@ fn main() -> Result<()> {
                     *concurrency,
                 )?;
                 println!(
-                    "| {} | {} | {} | {} | {:.2}s | {:.2}s | {} | {} | {} | {} | {:.3}s | {} | {:.1} | {:.2}s |",
+                    "| {} | {} | {} | {} | {} | {:.2}s | {:.2}s | {} | {} | {} | {} | {:.3}s | {} | {:.1} | {:.2}s |",
                     result.max_batch_inputs,
                     result.max_batch_tokens,
                     result.concurrency,
+                    result.provider_preferences,
                     result.total_chunks,
                     result.duration_secs,
                     result.embed_duration_secs,
@@ -232,6 +234,8 @@ fn run_benchmark(
     let split_count = metric_sum_usize(&combined, "openrouter_split_count");
     let failed_request_count =
         metric_sum_usize(&combined, "openrouter_failed_request_count");
+    let provider_preferences = metric_string(&combined, "openrouter_provider_preferences")
+        .is_some_and(|value| value == "true");
     let total_latency_secs =
         metric_sum_f64(&combined, "openrouter_total_request_latency_secs");
     let estimated_tokens =
@@ -258,6 +262,7 @@ fn run_benchmark(
         retry_count,
         split_count,
         failed_request_count,
+        provider_preferences,
         avg_request_latency_secs,
         estimated_tokens,
         padded_tokens_per_sec,
@@ -277,6 +282,13 @@ fn metric_usize(output: &str, key: &str) -> Option<usize> {
     output
         .split_whitespace()
         .find_map(|part| part.strip_prefix(&prefix)?.parse::<usize>().ok())
+}
+
+fn metric_string(output: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    output
+        .split_whitespace()
+        .find_map(|part| Some(part.strip_prefix(&prefix)?.to_string()))
 }
 
 fn metric_sum_f64(output: &str, key: &str) -> f64 {

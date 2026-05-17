@@ -98,6 +98,21 @@ async fn main() -> Result<()> {
             "openrouter_encoding_format={}",
             openrouter_config.encoding_format.as_str()
         );
+        println!(
+            "openrouter_provider_preferences={}",
+            openrouter_config.provider.is_some()
+        );
+        if let Some(provider) = openrouter_config.provider {
+            if let Some(sort) = provider.sort {
+                println!("openrouter_provider_sort={}", sort.as_str());
+            }
+            if let Some(throughput) = provider.preferred_min_throughput {
+                println!("openrouter_preferred_min_throughput={throughput}");
+            }
+            if let Some(latency) = provider.preferred_max_latency {
+                println!("openrouter_preferred_max_latency={latency}");
+            }
+        }
     }
     println!("total_files={}", stats.total_files);
     println!("indexed_files={}", stats.indexed_files);

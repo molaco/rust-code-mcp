@@ -22,7 +22,8 @@ pub use backend::{
 mod fastembed_cpu;
 mod openrouter;
 pub use openrouter::{
-    openrouter_runtime_config, OpenRouterEncodingFormat, OpenRouterRuntimeConfig,
+    openrouter_runtime_config, OpenRouterEncodingFormat, OpenRouterProviderPreferences,
+    OpenRouterProviderSort, OpenRouterRuntimeConfig,
 };
 mod qwen3;
 

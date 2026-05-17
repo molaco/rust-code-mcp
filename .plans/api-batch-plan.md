@@ -395,7 +395,30 @@ Acceptance criteria:
 
 ## Phase 7: Optional Provider Routing Preferences
 
-Status: Planned after Phase 1-6.
+Status: Implemented.
+
+Implementation notes:
+
+- Added optional provider preference env vars:
+  - `RUST_CODE_MCP_OPENROUTER_PROVIDER_SORT`
+  - `RUST_CODE_MCP_OPENROUTER_PREFERRED_MIN_THROUGHPUT`
+  - `RUST_CODE_MCP_OPENROUTER_PREFERRED_MAX_LATENCY`
+- Supported provider sort values:
+  - `price`
+  - `throughput`
+  - `latency`
+- Added `OpenRouterProviderPreferences` and `OpenRouterProviderSort`.
+- `EmbeddingRequest` now includes `provider` only when at least one provider preference is configured.
+- Invalid provider preference values are ignored with warnings.
+- Defaults leave provider routing unset.
+- `examples/index_codebase.rs` prints whether provider preferences were used, plus configured preference values when present.
+- `examples/openrouter_batch_matrix.rs` includes a `provider` column so benchmark rows record whether provider routing was active.
+- Added serialization coverage to confirm the provider object is omitted when unset and serialized when configured.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 
