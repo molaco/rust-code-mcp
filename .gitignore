@@ -4,6 +4,7 @@
 /.fastembed_cache/
 /.tantivy_bench/
 .mcp.json
+.mcp.toml
 /OUTPUT/
 /RESULTS/
 /DOCS/
