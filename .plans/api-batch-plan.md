@@ -324,7 +324,30 @@ Acceptance criteria:
 
 ## Phase 6: Add OpenRouter Batch Matrix Benchmark
 
-Status: Planned.
+Status: Implemented.
+
+Implementation notes:
+
+- Added `examples/openrouter_batch_matrix.rs`.
+- The benchmark runs the sibling `index_codebase` binary with `--profile openrouter-qwen3-8b`.
+- If neither OpenRouter API key env var is set, it prints `openrouter_benchmark=skipped_missing_api_key` and exits successfully before requiring the sibling binary.
+- Default sweep:
+  - `max_batch_inputs`: `32,64,128`
+  - `max_batch_tokens`: `32768,65536,131072`
+  - `concurrency`: `1,2,4,8`
+  - `encoding_format`: `float`
+- Added CLI filters:
+  - `--inputs 64,128`
+  - `--tokens 65536,131072`
+  - `--concurrency 2,4`
+- The benchmark parses OpenRouter metrics across all indexing batches, summing request/retry/split/failure counts and estimated tokens.
+- Output is a markdown table with chunks, wall time, embedding time, requests, retries, splits, failures, average request latency, estimated tokens, padded tokens/sec, and child wall time.
+
+Verification notes:
+
+- Source review completed.
+- Secret scan over touched OpenRouter files found no API key literal.
+- Cargo build/run was not executed in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 
