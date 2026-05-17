@@ -160,7 +160,51 @@ Acceptance criteria:
 
 ## Phase 4: Runtime Smoke Checks
 
-Status: Pending; requires Phase 3 verification first.
+Status: Verified.
+
+Implementation notes:
+
+- Added `examples/embedding_profile_smoke.rs` as a small runtime smoke entry point.
+- The smoke example creates a temporary one-file Rust codebase under `/tmp`, initializes the requested profile, clears its temporary index data, and runs `IncrementalIndexer::index_with_change_detection`.
+- The smoke example is intentionally separate from benchmark examples and does not collect throughput metrics.
+- A compile-only issue in the new smoke example's OpenRouter expected-error guard was found on the first GPU smoke attempt and fixed before rerunning.
+
+Verification commands and results:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo run --example embedding_profile_smoke -- local-gpu-small'
+```
+
+Result:
+
+- `profile=local-gpu-small`
+- `identity=fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2`
+- `indexed_files=1`
+- `total_chunks=1`
+- `smoke=ok`
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo run --example embedding_profile_smoke -- local-cpu-small'
+```
+
+Result:
+
+- `profile=local-cpu-small`
+- `identity=fastembed-onnx-cpu:BGESmallENV15Q:dim384:max512:v1`
+- `indexed_files=1`
+- `total_chunks=1`
+- `smoke=ok`
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'if [ -n "${RUST_CODE_MCP_OPENROUTER_API_KEY:-}${OPENROUTER_API_KEY:-}" ]; then cargo run --example embedding_profile_smoke -- openrouter-qwen3-8b; else cargo run --example embedding_profile_smoke -- openrouter-qwen3-8b --expect-missing-key; fi'
+```
+
+Result in this shell:
+
+- `profile=openrouter-qwen3-8b`
+- `identity=openrouter:qwen/qwen3-embedding-8b:dim4096:max32768:v1`
+- `smoke=expected_missing_openrouter_key`
+- Clear error text: `missing OpenRouter API key; set RUST_CODE_MCP_OPENROUTER_API_KEY or OPENROUTER_API_KEY`
 
 Only after Phase 3 passes:
 
