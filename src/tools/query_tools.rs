@@ -110,6 +110,39 @@ fn clean_stale_index(paths: &ProjectPaths) {
     }
 }
 
+fn vector_metadata_exists(paths: &ProjectPaths) -> bool {
+    paths.vector_path.join("metadata.json").exists()
+}
+
+fn backend_matches_request(indexed: &EmbeddingBackend, requested: &EmbeddingBackend) -> bool {
+    indexed.runtime == requested.runtime
+        && indexed.model_id() == requested.model_id()
+        && indexed.dim() == requested.dim()
+        && indexed.max_len == requested.max_len
+        && indexed.profile.query_policy == requested.profile.query_policy
+}
+
+fn select_index_paths(
+    dir_path: &Path,
+    requested_backend: &EmbeddingBackend,
+) -> Result<ProjectPaths, McpError> {
+    let requested_paths = ProjectPaths::from_directory(dir_path, requested_backend);
+    if vector_metadata_exists(&requested_paths) {
+        return Ok(requested_paths);
+    }
+
+    let existing = ProjectPaths::indexed_profiles(dir_path)
+        .map_err(|msg| McpError::invalid_params(msg, None))?;
+    if let Some(indexed) = existing
+        .into_iter()
+        .find(|indexed| backend_matches_request(&indexed.backend, requested_backend))
+    {
+        return Ok(indexed.paths);
+    }
+
+    Ok(requested_paths)
+}
+
 /// Initialize indexer and run incremental indexing, returning stats.
 /// Only called when we actually need to index.
 async fn ensure_indexed(
@@ -121,13 +154,15 @@ async fn ensure_indexed(
     use crate::indexing::unified::UnifiedIndexer;
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
+    let resolved = resolve_query_backend(paths, backend)?;
+    let backend = resolved.backend;
 
     let mut indexer = UnifiedIndexer::for_embedded_with_backend(
         &paths.cache_path,
         &paths.tantivy_path,
         &paths.collection_name,
         backend.dim(),
-        &backend.identity(),
+        &resolved.vector_identity,
         None,
         backend,
     )
@@ -164,13 +199,22 @@ async fn ensure_indexed(
 /// `EmbeddingBackend`. If no metadata file exists yet (very fresh
 /// install, no prior index), fall back to the default backend — the
 /// vector store will then create the metadata on first write.
+struct ResolvedQueryBackend {
+    backend: EmbeddingBackend,
+    vector_identity: String,
+}
+
 fn resolve_query_backend(
     paths: &ProjectPaths,
     configured_backend: EmbeddingBackend,
-) -> Result<EmbeddingBackend, McpError> {
+) -> Result<ResolvedQueryBackend, McpError> {
     let metadata_path = paths.vector_path.join("metadata.json");
     if !metadata_path.exists() {
-        return Ok(configured_backend);
+        let vector_identity = configured_backend.identity();
+        return Ok(ResolvedQueryBackend {
+            backend: configured_backend,
+            vector_identity,
+        });
     }
     let bytes = std::fs::read(&metadata_path).map_err(|e| {
         McpError::invalid_params(
@@ -204,7 +248,7 @@ fn resolve_query_backend(
                 None,
             )
         })?;
-    EmbeddingBackend::from_identity(identity).map_err(|e| {
+    let backend = EmbeddingBackend::from_identity(identity).map_err(|e| {
         McpError::invalid_params(
             format!(
                 "Invalid embedder identity `{identity}` in {}: {e}. \
@@ -213,6 +257,11 @@ fn resolve_query_backend(
             ),
             None,
         )
+    })?;
+
+    Ok(ResolvedQueryBackend {
+        backend,
+        vector_identity: identity.to_string(),
     })
 }
 
@@ -227,10 +276,11 @@ pub(crate) async fn create_hybrid_search(
     bm25_search: Option<crate::search::bm25::Bm25Search>,
     configured_backend: EmbeddingBackend,
 ) -> Result<HybridSearch, McpError> {
-    let backend = resolve_query_backend(paths, configured_backend)?;
+    let resolved = resolve_query_backend(paths, configured_backend)?;
+    let backend = resolved.backend;
     tracing::info!(
         profile = backend.profile.name(),
-        embedder = backend.identity(),
+        embedder = resolved.vector_identity.as_str(),
         collection = paths.collection_name,
         "Creating hybrid search with embedding profile"
     );
@@ -244,7 +294,7 @@ pub(crate) async fn create_hybrid_search(
     let vector_store = VectorStore::new_embedded(
         paths.vector_path.clone(),
         embedding_generator.dimensions(),
-        &embedding_generator.backend().identity(),
+        &resolved.vector_identity,
     )
     .await
     .map_err(|e| {
@@ -353,12 +403,13 @@ pub async fn search(
     }
 
     let requested_backend = resolve_requested_backend(embedding_profile, dir_path)?;
-    let paths = ProjectPaths::from_directory(dir_path, &requested_backend);
+    let paths = select_index_paths(dir_path, &requested_backend)?;
 
     // Try existing index; if corrupt or missing, rebuild
+    let vector_index_exists = vector_metadata_exists(&paths);
     let mut bm25 = try_open_bm25(&paths);
     let mut rebuilt = false;
-    let stats = if bm25.is_some() {
+    let stats = if bm25.is_some() && vector_index_exists {
         if let Some(ref sync_mgr) = sync_manager {
             sync_mgr.track_directory(dir_path.to_path_buf()).await;
         }
@@ -421,7 +472,7 @@ pub async fn get_similar_code(
     }
 
     let requested_backend = resolve_requested_backend(embedding_profile, dir_path)?;
-    let paths = ProjectPaths::from_directory(dir_path, &requested_backend);
+    let paths = select_index_paths(dir_path, &requested_backend)?;
 
     let hybrid_search = create_hybrid_search(&paths, None, requested_backend).await?;
 

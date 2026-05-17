@@ -400,7 +400,7 @@ Acceptance criteria:
 
 ## Phase 7: Profile-Aware Background Sync
 
-Status: Not started. Depends on Phase 4.
+Status: Implemented; build/test verification pending confirmed Nix shell.
 
 Rationale: Round-2/S4. `sync_directory` (`src/mcp/sync.rs:132`) builds
 `EmbeddingBackend::default()` unconditionally. A directory indexed with a

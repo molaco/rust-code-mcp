@@ -6,7 +6,6 @@
 //! - Uses IncrementalIndexer for fast change detection
 //! - Tracks multiple directories independently
 
-use crate::embeddings::EmbeddingBackend;
 use crate::indexing::incremental::IncrementalIndexer;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -131,32 +130,53 @@ impl SyncManager {
     /// - Only reindexes changed files if changes detected
     async fn sync_directory(&self, dir: &Path) -> Result<()> {
         use crate::tools::project_paths::ProjectPaths;
-        let backend = EmbeddingBackend::default();
-        let paths = ProjectPaths::from_directory(dir, &backend);
 
-        // Create incremental indexer with embedded LanceDB backend
-        let mut indexer = IncrementalIndexer::new(
-            &paths.cache_path,
-            &paths.tantivy_path,
-            &paths.collection_name,
-            backend.dim(),
-            &backend.identity(),
-            None,
-        )
-        .await?;
-
-        // Run incremental indexing
-        let stats = indexer.index_with_change_detection(dir).await?;
-
-        if stats.indexed_files > 0 {
-            tracing::info!(
-                "✓ Synced {}: {} files indexed, {} chunks",
-                dir.display(),
-                stats.indexed_files,
-                stats.total_chunks
+        let indexes = ProjectPaths::indexed_profiles(dir)
+            .map_err(|msg| anyhow::anyhow!(msg))?;
+        if indexes.is_empty() {
+            tracing::debug!(
+                "No existing embedding indexes found for {}; sync skipped",
+                dir.display()
             );
-        } else {
-            tracing::debug!("No changes detected for {}", dir.display());
+            return Ok(());
+        }
+
+        for indexed in indexes {
+            let backend = indexed.backend;
+            let paths = indexed.paths;
+
+            // Create incremental indexer with the backend recorded in
+            // metadata.json. The stored identity may be a legacy identity, so
+            // pass it through unchanged when reopening the vector store.
+            let mut indexer = IncrementalIndexer::with_backend(
+                &paths.cache_path,
+                &paths.tantivy_path,
+                &paths.collection_name,
+                backend.dim(),
+                &indexed.stored_identity,
+                None,
+                backend,
+            )
+            .await?;
+
+            // Run incremental indexing
+            let stats = indexer.index_with_change_detection(dir).await?;
+
+            if stats.indexed_files > 0 {
+                tracing::info!(
+                    "✓ Synced {} profile {}: {} files indexed, {} chunks",
+                    dir.display(),
+                    paths.collection_name,
+                    stats.indexed_files,
+                    stats.total_chunks
+                );
+            } else {
+                tracing::debug!(
+                    "No changes detected for {} profile {}",
+                    dir.display(),
+                    paths.collection_name
+                );
+            }
         }
 
         Ok(())
