@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::embeddings::EmbeddingBackend;
 use crate::indexing::identity::{
-    active_chunking_identity, identity_hash, indexing_identity,
+    active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
 use crate::indexing::incremental::get_snapshot_path_for_identity;
 use crate::tools::indexing_tools::data_dir;
@@ -32,7 +32,7 @@ impl ProjectPaths {
     /// project under different embedder variants land in distinct
     /// LanceDB directories instead of colliding.
     pub fn from_directory(dir: &Path, backend: &EmbeddingBackend) -> Self {
-        let chunking_identity = active_chunking_identity();
+        let chunking_identity = active_chunking_identity_for_backend(backend);
         Self::from_directory_with_chunking_identity(dir, backend, chunking_identity)
     }
 

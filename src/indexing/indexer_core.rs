@@ -82,7 +82,10 @@ impl IndexerCore {
         config: Option<IndexerCoreConfig>,
         backend: EmbeddingBackend,
     ) -> Result<Self, IndexingError> {
-        let config = config.unwrap_or_default().with_env_overrides();
+        let config = config
+            .unwrap_or_default()
+            .with_embedding_profile(backend.profile)
+            .with_env_overrides();
 
         let chunk_split_config = ChunkSplitConfig::new(
             config.chunk_target_tokens,

@@ -37,6 +37,8 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use crate::embeddings::EmbeddingProfile;
+
 /// Environment variable for overriding the GPU embedding batch size.
 pub const EMBED_BATCH_SIZE_ENV: &str = "RUST_CODE_MCP_EMBED_BATCH_SIZE";
 /// Environment variable for overriding the padded token budget per embedding batch.
@@ -152,6 +154,14 @@ pub struct IndexerCoreConfig {
 }
 
 impl IndexerCoreConfig {
+    /// Apply profile-specific chunk defaults before runtime environment
+    /// overrides. Batch settings intentionally stay global/env driven.
+    pub fn with_embedding_profile(mut self, profile: EmbeddingProfile) -> Self {
+        self.chunk_target_tokens = profile.default_chunk_target_tokens();
+        self.chunk_hard_max_tokens = profile.default_chunk_hard_max_tokens();
+        self
+    }
+
     /// Apply runtime environment overrides.
     ///
     /// Batch size changes batch shape only; it does not alter vector semantics
@@ -471,6 +481,19 @@ mod tests {
         let tantivy = TantivyConfig::default(Path::new("./tantivy"));
         assert_eq!(tantivy.memory_budget_mb, 50);
         assert_eq!(tantivy.num_threads, 2);
+    }
+
+    #[test]
+    fn cpu_embedding_profile_uses_smaller_chunk_defaults() {
+        let core =
+            IndexerCoreConfig::default().with_embedding_profile(EmbeddingProfile::LocalCpuSmall);
+
+        assert_eq!(core.chunk_target_tokens, 384);
+        assert_eq!(core.chunk_hard_max_tokens, 512);
+        assert_eq!(
+            core.chunking_cache_salt(),
+            "chunk-split:v1:target384:hard512"
+        );
     }
 
     #[test]

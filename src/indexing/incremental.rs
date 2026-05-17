@@ -11,7 +11,7 @@
 
 use crate::embeddings::EmbeddingBackend;
 use crate::indexing::identity::{
-    active_chunking_identity, identity_hash, indexing_identity,
+    active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
 use crate::indexing::merkle::{ChangeSet, FileSystemMerkle};
 use crate::indexing::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
@@ -31,7 +31,7 @@ pub fn get_snapshot_path_for_backend(
     codebase_path: &Path,
     backend: &EmbeddingBackend,
 ) -> PathBuf {
-    let chunking_identity = active_chunking_identity();
+    let chunking_identity = active_chunking_identity_for_backend(backend);
     let identity = indexing_identity(codebase_path, backend, &chunking_identity);
     get_snapshot_path_for_identity(&identity)
 }

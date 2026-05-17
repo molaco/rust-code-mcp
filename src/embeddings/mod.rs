@@ -19,6 +19,7 @@ pub use backend::{
     Qwen3Variant, QueryFormatting,
 };
 
+mod fastembed_cpu;
 mod openrouter;
 mod qwen3;
 
@@ -49,6 +50,7 @@ pub struct EmbeddingGenerator {
 #[derive(Clone)]
 enum EmbeddingGeneratorInner {
     Qwen3(Arc<qwen3::Qwen3Embedder>),
+    FastembedCpu(Arc<fastembed_cpu::FastembedCpuEmbedder>),
     OpenRouter(Arc<openrouter::OpenRouterEmbedder>),
 }
 
@@ -69,9 +71,9 @@ impl EmbeddingGenerator {
                 openrouter::OpenRouterEmbedder::new(&backend)?,
             )),
             EmbeddingRuntime::LocalFastembedOnnxCpu => {
-                return Err(EmbeddingError::model_init(
-                    "local-cpu-small embedding backend is not implemented yet",
-                ));
+                EmbeddingGeneratorInner::FastembedCpu(Arc::new(
+                    fastembed_cpu::FastembedCpuEmbedder::new(&backend)?,
+                ))
             }
         };
         Ok(Self { inner, backend })
@@ -81,6 +83,7 @@ impl EmbeddingGenerator {
     pub fn dimensions(&self) -> usize {
         match &self.inner {
             EmbeddingGeneratorInner::Qwen3(inner) => inner.dim(),
+            EmbeddingGeneratorInner::FastembedCpu(inner) => inner.dim(),
             EmbeddingGeneratorInner::OpenRouter(inner) => inner.dim(),
         }
     }
@@ -106,6 +109,15 @@ impl EmbeddingGenerator {
                 .await
                 .map_err(|e| EmbeddingError::task_join(e.to_string()))?
             }
+            EmbeddingGeneratorInner::FastembedCpu(inner) => {
+                let inner = inner.clone();
+                tokio::task::spawn_blocking(move || {
+                    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                    inner.embed_documents(&refs)
+                })
+                .await
+                .map_err(|e| EmbeddingError::task_join(e.to_string()))?
+            }
             EmbeddingGeneratorInner::OpenRouter(inner) => {
                 inner.embed_documents(texts).await
             }
@@ -120,6 +132,15 @@ impl EmbeddingGenerator {
     ) -> Result<Vec<Embedding>, EmbeddingError> {
         match &self.inner {
             EmbeddingGeneratorInner::Qwen3(inner) => {
+                let inner = inner.clone();
+                tokio::task::spawn_blocking(move || {
+                    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                    inner.embed_queries(&refs)
+                })
+                .await
+                .map_err(|e| EmbeddingError::task_join(e.to_string()))?
+            }
+            EmbeddingGeneratorInner::FastembedCpu(inner) => {
                 let inner = inner.clone();
                 tokio::task::spawn_blocking(move || {
                     let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();

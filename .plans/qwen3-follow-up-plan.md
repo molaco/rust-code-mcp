@@ -207,6 +207,8 @@ Verification:
 
 ## Phase 5: Implement Local CPU Small with BGESmallENV15Q
 
+Status: Complete.
+
 Add a quantized CPU embedding backend for machines without useful CUDA.
 
 Model:
@@ -248,6 +250,22 @@ Acceptance criteria:
 - `embedding_profile: "local-cpu-small"` initializes without CUDA.
 - Generated embeddings are 384-dimensional.
 - CPU profile has a distinct vector collection and Merkle snapshot.
+
+Completed work:
+
+- Added `src/embeddings/fastembed_cpu.rs` backed by `fastembed::TextEmbedding`.
+- Wired `EmbeddingGenerator` to dispatch `local-cpu-small` to `BGESmallENV15Q`.
+- Enabled fastembed's ONNX Runtime download feature and removed the direct `ort alternative-backend` override that would prevent ONNX execution.
+- Set `local-cpu-small` to 384 dimensions and 512 max tokens through the profile metadata.
+- Added BGE query prefix behavior through profile-aware query formatting.
+- Applied profile-specific chunk defaults before env overrides, so `local-cpu-small` uses `target384/hard512` by default.
+- Updated token counting to load the tokenizer for the active model spec, not only Qwen3.
+- Added unit coverage for the CPU profile chunking salt.
+
+Verification:
+
+- `CUDARC_CUDA_VERSION=12080 cargo check --lib` passed with pre-existing warnings.
+- Runtime CPU indexing was not executed in this shell because the binary still links the CUDA-enabled Candle stack; the CPU backend itself does not construct a CUDA device.
 
 ## Phase 6: Make Query Embedding Profile-Aware
 

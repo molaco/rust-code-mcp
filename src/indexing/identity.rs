@@ -10,7 +10,13 @@ use std::path::{Path, PathBuf};
 /// Chunking changes alter the document text that gets embedded, so they must
 /// invalidate both metadata-cache entries and Merkle snapshots.
 pub fn active_chunking_identity() -> String {
+    active_chunking_identity_for_backend(&EmbeddingBackend::default())
+}
+
+/// Active chunking identity for a specific embedding backend.
+pub fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
     IndexerCoreConfig::default()
+        .with_embedding_profile(backend.profile)
         .with_env_overrides()
         .chunking_cache_salt()
 }
