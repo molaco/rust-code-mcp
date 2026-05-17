@@ -20,6 +20,9 @@ use crate::vector_store::VectorStore;
 pub struct HealthCheckParams {
     #[schemars(description = "Optional: project directory to check (checks system-wide if not provided)")]
     pub directory: Option<String>,
+    #[schemars(description = "Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: the built-in default profile.")]
+    #[serde(default)]
+    pub embedding_profile: Option<String>,
 }
 
 /// Get the path for storing persistent index and cache
@@ -46,17 +49,29 @@ fn read_on_disk_embedder_identity(vector_path: &std::path::Path) -> Option<Strin
 /// Check system health status
 #[tool(description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)")]
 pub async fn health_check(
-    Parameters(HealthCheckParams { directory }): Parameters<HealthCheckParams>,
+    Parameters(HealthCheckParams {
+        directory,
+        embedding_profile,
+    }): Parameters<HealthCheckParams>,
 ) -> Result<CallToolResult, McpError> {
     tracing::info!("Performing health check");
 
-    // The health probe shows the configured embedder so users can see at
-    // a glance which model the cache is tied to. Default backend is the
-    // "configured" view; further down we also read the on-disk
-    // `metadata.json` when a directory is supplied so the report
-    // reflects the real cached identity (which may differ if the user
-    // indexed with a non-default `model` argument).
-    let backend = EmbeddingBackend::default();
+    // The BM25 index, vector store, and collection name are all keyed by
+    // the embedder identity. The probe must therefore target the SAME
+    // profile the directory was indexed with — otherwise it reports an
+    // empty "default" index that was never built. Resolve the requested
+    // profile (default when unset); further down we still read the
+    // on-disk `metadata.json` so the report reflects the real cached
+    // identity.
+    let backend = match embedding_profile.as_deref() {
+        Some(name) => {
+            let root = directory.as_deref().unwrap_or(".");
+            let profile = crate::embeddings::resolve_profile(name, std::path::Path::new(root))
+                .map_err(|msg| McpError::invalid_params(msg, None))?;
+            EmbeddingBackend::from_profile(profile)
+        }
+        None => EmbeddingBackend::default(),
+    };
     let embedder_identity = backend.identity();
 
     // Determine paths using the same shared helper as index_tool.
