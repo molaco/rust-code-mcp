@@ -374,7 +374,7 @@ Acceptance criteria:
 
 ## Phase 6: Generalize the OpenRouter Model Path
 
-Status: Not started. Depends on Phase 2.
+Status: Implemented; OpenRouter now sends `profile.model_id` directly. Build/test verification pending confirmed Nix shell.
 
 Design:
 
