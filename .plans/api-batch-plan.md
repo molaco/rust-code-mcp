@@ -55,7 +55,27 @@ nix develop ../nix-devshells#<shell> --command <command>
 
 ## Phase 1: Add OpenRouter Runtime Config
 
-Status: Planned.
+Status: Implemented.
+
+Implementation notes:
+
+- Added OpenRouter-specific runtime config in `src/embeddings/openrouter.rs`.
+- Added env vars:
+  - `RUST_CODE_MCP_OPENROUTER_MAX_BATCH_INPUTS`
+  - `RUST_CODE_MCP_OPENROUTER_MAX_BATCH_TOKENS`
+  - `RUST_CODE_MCP_OPENROUTER_CONCURRENCY`
+  - `RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT`
+- Defaults are `128` inputs, `131072` tokens, concurrency `4`, and `float` encoding.
+- Invalid numeric values fall back to defaults.
+- Over-large numeric values clamp to configured caps.
+- Unsupported encoding values currently fall back to `float`; `base64` remains reserved for Phase 8.
+- `OpenRouterEmbedder::new` logs the resolved config once and `request_batch` now reads `encoding_format` from the config.
+- Added unit coverage for defaults, valid overrides, invalid values, unsupported encoding, and clamping.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 

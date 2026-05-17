@@ -11,7 +11,17 @@ const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1/embeddings";
 const API_KEY_ENV: &str = "RUST_CODE_MCP_OPENROUTER_API_KEY";
 const FALLBACK_API_KEY_ENV: &str = "OPENROUTER_API_KEY";
 const BASE_URL_ENV: &str = "RUST_CODE_MCP_OPENROUTER_BASE_URL";
+const MAX_BATCH_INPUTS_ENV: &str = "RUST_CODE_MCP_OPENROUTER_MAX_BATCH_INPUTS";
+const MAX_BATCH_TOKENS_ENV: &str = "RUST_CODE_MCP_OPENROUTER_MAX_BATCH_TOKENS";
+const CONCURRENCY_ENV: &str = "RUST_CODE_MCP_OPENROUTER_CONCURRENCY";
+const ENCODING_FORMAT_ENV: &str = "RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT";
 const MAX_RETRIES: usize = 3;
+const DEFAULT_MAX_BATCH_INPUTS: usize = 128;
+const DEFAULT_MAX_BATCH_TOKENS: usize = 131_072;
+const DEFAULT_CONCURRENCY: usize = 4;
+const MAX_BATCH_INPUTS: usize = 512;
+const MAX_BATCH_TOKENS: usize = 1_048_576;
+const MAX_CONCURRENCY: usize = 16;
 
 #[derive(Clone)]
 pub(super) struct OpenRouterEmbedder {
@@ -20,13 +30,35 @@ pub(super) struct OpenRouterEmbedder {
     base_url: String,
     model: String,
     dim: usize,
+    config: OpenRouterRuntimeConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OpenRouterRuntimeConfig {
+    pub(crate) max_batch_inputs: usize,
+    pub(crate) max_batch_tokens: usize,
+    pub(crate) concurrency: usize,
+    pub(crate) encoding_format: OpenRouterEncodingFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpenRouterEncodingFormat {
+    Float,
+}
+
+impl OpenRouterEncodingFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Float => "float",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
 struct EmbeddingRequest<'a> {
     model: &'a str,
     input: &'a [String],
-    encoding_format: &'static str,
+    encoding_format: &'a str,
     dimensions: usize,
     input_type: &'a str,
 }
@@ -76,6 +108,15 @@ impl OpenRouterEmbedder {
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
+        let config = openrouter_runtime_config_from_env();
+
+        tracing::info!(
+            max_batch_inputs = config.max_batch_inputs,
+            max_batch_tokens = config.max_batch_tokens,
+            concurrency = config.concurrency,
+            encoding_format = config.encoding_format.as_str(),
+            "OpenRouter embedding runtime configured"
+        );
 
         Ok(Self {
             client,
@@ -83,6 +124,7 @@ impl OpenRouterEmbedder {
             base_url,
             model,
             dim: backend.dim(),
+            config,
         })
     }
 
@@ -167,7 +209,7 @@ impl OpenRouterEmbedder {
         let request = EmbeddingRequest {
             model: &self.model,
             input: texts,
-            encoding_format: "float",
+            encoding_format: self.config.encoding_format.as_str(),
             dimensions: self.dim,
             input_type,
         };
@@ -232,6 +274,130 @@ impl OpenRouterEmbedder {
 
 fn api_key_from_env() -> Result<String, EmbeddingError> {
     resolve_api_key(|key| std::env::var(key))
+}
+
+fn openrouter_runtime_config_from_env() -> OpenRouterRuntimeConfig {
+    resolve_openrouter_runtime_config(|key| std::env::var(key))
+}
+
+fn resolve_openrouter_runtime_config<F>(mut get_var: F) -> OpenRouterRuntimeConfig
+where
+    F: FnMut(&str) -> Result<String, std::env::VarError>,
+{
+    OpenRouterRuntimeConfig {
+        max_batch_inputs: positive_usize_from_env(
+            &mut get_var,
+            MAX_BATCH_INPUTS_ENV,
+            DEFAULT_MAX_BATCH_INPUTS,
+            MAX_BATCH_INPUTS,
+            "OpenRouter max batch input count",
+        ),
+        max_batch_tokens: positive_usize_from_env(
+            &mut get_var,
+            MAX_BATCH_TOKENS_ENV,
+            DEFAULT_MAX_BATCH_TOKENS,
+            MAX_BATCH_TOKENS,
+            "OpenRouter max batch token budget",
+        ),
+        concurrency: positive_usize_from_env(
+            &mut get_var,
+            CONCURRENCY_ENV,
+            DEFAULT_CONCURRENCY,
+            MAX_CONCURRENCY,
+            "OpenRouter concurrency",
+        ),
+        encoding_format: encoding_format_from_env(&mut get_var),
+    }
+}
+
+fn positive_usize_from_env<F>(
+    get_var: &mut F,
+    env_var: &'static str,
+    default: usize,
+    max: usize,
+    label: &'static str,
+) -> usize
+where
+    F: FnMut(&str) -> Result<String, std::env::VarError>,
+{
+    let raw = match get_var(env_var) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return default,
+        Err(err) => {
+            tracing::warn!(
+                env_var,
+                error = ?err,
+                default,
+                "Ignoring unreadable {label} override"
+            );
+            return default;
+        }
+    };
+
+    let parsed = match raw.trim().parse::<usize>() {
+        Ok(parsed) if parsed > 0 => parsed,
+        Ok(_) => {
+            tracing::warn!(
+                env_var,
+                value = raw.as_str(),
+                default,
+                "Ignoring invalid {label} override; value must be greater than zero"
+            );
+            return default;
+        }
+        Err(_) => {
+            tracing::warn!(
+                env_var,
+                value = raw.as_str(),
+                default,
+                "Ignoring invalid {label} override; value must be a positive integer"
+            );
+            return default;
+        }
+    };
+
+    if parsed > max {
+        tracing::warn!(
+            env_var,
+            requested = parsed,
+            max,
+            "Clamping {label} override"
+        );
+    }
+
+    parsed.min(max)
+}
+
+fn encoding_format_from_env<F>(get_var: &mut F) -> OpenRouterEncodingFormat
+where
+    F: FnMut(&str) -> Result<String, std::env::VarError>,
+{
+    let raw = match get_var(ENCODING_FORMAT_ENV) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return OpenRouterEncodingFormat::Float,
+        Err(err) => {
+            tracing::warn!(
+                env_var = ENCODING_FORMAT_ENV,
+                error = ?err,
+                default = OpenRouterEncodingFormat::Float.as_str(),
+                "Ignoring unreadable OpenRouter encoding format override"
+            );
+            return OpenRouterEncodingFormat::Float;
+        }
+    };
+
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "float" => OpenRouterEncodingFormat::Float,
+        _ => {
+            tracing::warn!(
+                env_var = ENCODING_FORMAT_ENV,
+                value = raw.as_str(),
+                default = OpenRouterEncodingFormat::Float.as_str(),
+                "Ignoring unsupported OpenRouter encoding format override"
+            );
+            OpenRouterEncodingFormat::Float
+        }
+    }
 }
 
 fn resolve_api_key<F>(mut get_var: F) -> Result<String, EmbeddingError>
@@ -366,5 +532,73 @@ mod tests {
 
         assert!(err.to_string().contains("missing OpenRouter API key"));
         assert!(err.to_string().contains(API_KEY_ENV));
+    }
+
+    #[test]
+    fn runtime_config_uses_defaults() {
+        let config = config_from_pairs(&[]);
+
+        assert_eq!(config.max_batch_inputs, DEFAULT_MAX_BATCH_INPUTS);
+        assert_eq!(config.max_batch_tokens, DEFAULT_MAX_BATCH_TOKENS);
+        assert_eq!(config.concurrency, DEFAULT_CONCURRENCY);
+        assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Float);
+    }
+
+    #[test]
+    fn runtime_config_accepts_valid_overrides() {
+        let config = config_from_pairs(&[
+            (MAX_BATCH_INPUTS_ENV, "64"),
+            (MAX_BATCH_TOKENS_ENV, "65536"),
+            (CONCURRENCY_ENV, "8"),
+            (ENCODING_FORMAT_ENV, "float"),
+        ]);
+
+        assert_eq!(config.max_batch_inputs, 64);
+        assert_eq!(config.max_batch_tokens, 65_536);
+        assert_eq!(config.concurrency, 8);
+        assert_eq!(config.encoding_format.as_str(), "float");
+    }
+
+    #[test]
+    fn runtime_config_rejects_zero_and_invalid_overrides() {
+        let config = config_from_pairs(&[
+            (MAX_BATCH_INPUTS_ENV, "0"),
+            (MAX_BATCH_TOKENS_ENV, "abc"),
+            (CONCURRENCY_ENV, ""),
+            (ENCODING_FORMAT_ENV, "base64"),
+        ]);
+
+        assert_eq!(config.max_batch_inputs, DEFAULT_MAX_BATCH_INPUTS);
+        assert_eq!(config.max_batch_tokens, DEFAULT_MAX_BATCH_TOKENS);
+        assert_eq!(config.concurrency, DEFAULT_CONCURRENCY);
+        assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Float);
+    }
+
+    #[test]
+    fn runtime_config_clamps_large_overrides() {
+        let config = config_from_pairs(&[
+            (MAX_BATCH_INPUTS_ENV, "999999"),
+            (MAX_BATCH_TOKENS_ENV, "999999999"),
+            (CONCURRENCY_ENV, "999"),
+        ]);
+
+        assert_eq!(config.max_batch_inputs, MAX_BATCH_INPUTS);
+        assert_eq!(config.max_batch_tokens, MAX_BATCH_TOKENS);
+        assert_eq!(config.concurrency, MAX_CONCURRENCY);
+    }
+
+    fn config_from_pairs(pairs: &[(&str, &str)]) -> OpenRouterRuntimeConfig {
+        resolve_openrouter_runtime_config(|key| {
+            pairs
+                .iter()
+                .find_map(|(pair_key, value)| {
+                    if *pair_key == key {
+                        Some((*value).to_string())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(std::env::VarError::NotPresent)
+        })
     }
 }
