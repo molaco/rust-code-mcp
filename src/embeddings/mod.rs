@@ -19,6 +19,8 @@ pub use backend::{
     Qwen3Variant, QueryFormatting,
 };
 
+mod identity;
+
 mod fastembed_cpu;
 mod openrouter;
 pub use openrouter::{

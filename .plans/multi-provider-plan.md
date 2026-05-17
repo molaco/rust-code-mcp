@@ -103,7 +103,7 @@ P1 and P2 are independent and may be done in either order. P4 needs P1+P2+P3.
 
 ## Phase 1: Identity Codec (Isolated)
 
-Status: Not started.
+Status: Implemented; build/test verification pending confirmed Nix shell.
 
 Rationale: a pure string codec with no dependency on the profile/backend data
 model. This removes the Round-2/S1 sequencing trap — it is tested on raw field
