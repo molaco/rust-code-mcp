@@ -80,7 +80,11 @@ This plan absorbs two rounds of design review (ten findings total); see
 5. Before any build/test command, confirm the Nix shell and run as:
    `nix develop ../nix-devshells#<shell> --command <command>`.
 6. Never log API keys.
-7. Each phase: start with `jj show --summary`, update this file's phase
+7. Secrets stay strictly in environment variables. `embedding_profiles.toml`
+   carries model **metadata only** — never an API key, token, or credential.
+   The TOML loader rejects unknown keys, so a stray `api_key` field is a hard
+   parse error rather than a silently-stored secret.
+8. Each phase: start with `jj show --summary`, update this file's phase
    status, commit separately.
 
 ## Phase Dependency Order
@@ -326,6 +330,11 @@ Design:
 
 - User profiles merge into the registry; a name colliding with a built-in is
   an error (no silent override).
+- **Secrets never live in TOML.** The OpenRouter API key continues to come
+  only from `RUST_CODE_MCP_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY`. The
+  `serde` structs use `#[serde(deny_unknown_fields)]`, so any credential-like
+  key (`api_key`, `token`, `authorization`, …) fails the parse with a clear
+  message instead of being read or stored.
 - **Directory-aware resolution (Round-2/S3).** Backend resolution moves behind
   a `resolve_profile(name, project_root)` API. Both call sites are updated to
   pass the directory:
@@ -354,6 +363,8 @@ Acceptance criteria:
 - A name collision with a built-in is rejected.
 - Missing/invalid TOML path or missing `dim` produces a clear error, not a
   panic.
+- A TOML profile containing any unknown field (including a credential-like
+  key such as `api_key`) is rejected by `deny_unknown_fields`.
 - With no TOML present, behavior is identical to Phase 4.
 
 ---
