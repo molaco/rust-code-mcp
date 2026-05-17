@@ -1,0 +1,8 @@
+# Dynamic embedding profiles (multi-provider benchmark).
+# API-only; secrets stay in env vars, never here.
+
+[[profile]]
+name = "openrouter-text-embedding-3-small"
+model_id = "openai/text-embedding-3-small"
+dim = 1536
+max_len = 8191

@@ -2,7 +2,8 @@
 
 use anyhow::{Context, Result, bail};
 use file_search_mcp::embeddings::{
-    openrouter_runtime_config, EmbeddingBackend, EmbeddingProfile, EmbeddingRuntime,
+    openrouter_runtime_config, resolve_profile, EmbeddingBackend, EmbeddingProfile,
+    EmbeddingRuntime,
 };
 use file_search_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
@@ -44,7 +45,7 @@ async fn main() -> Result<()> {
         backend.dim(),
         identity.as_str(),
         None,
-        backend,
+        backend.clone(),
     )
     .await
     .context("Failed to create indexer")?;
@@ -145,7 +146,7 @@ struct Args {
 impl Args {
     fn parse() -> Result<Self> {
         let mut codebase = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mut profile = EmbeddingProfile::LocalGpuSmall;
+        let mut profile_name = String::from("local-gpu-small");
         let mut args = std::env::args().skip(1);
 
         while let Some(arg) = args.next() {
@@ -159,13 +160,18 @@ impl Args {
                     codebase = PathBuf::from(value);
                 }
                 "--profile" => {
-                    let value = args.next().context("--profile requires a profile name")?;
-                    profile = EmbeddingProfile::parse(&value)
-                        .map_err(|err| anyhow::anyhow!(err))?;
+                    profile_name = args
+                        .next()
+                        .context("--profile requires a profile name")?;
                 }
                 other => bail!("unknown argument `{other}`"),
             }
         }
+
+        // Resolve through the registry so built-in *and* dynamic
+        // (`embedding_profiles.toml`) profiles both work.
+        let profile = resolve_profile(&profile_name, &codebase)
+            .map_err(|err| anyhow::anyhow!(err))?;
 
         Ok(Self { codebase, profile })
     }
