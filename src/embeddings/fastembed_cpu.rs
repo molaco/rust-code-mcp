@@ -1,6 +1,6 @@
 //! CPU text embedding backend backed by fastembed's ONNX path.
 
-use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime};
+use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime, FastembedCpuModel};
 use crate::embeddings::{Embedding, EmbeddingError};
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::sync::Mutex;
@@ -19,16 +19,17 @@ impl FastembedCpuEmbedder {
                 backend.profile.name()
             )));
         }
+        let model = backend.require_fastembed_cpu_model()?;
 
         tracing::info!(
             target: "embeddings::fastembed_cpu",
             profile = backend.profile.name(),
-            model = backend.model.display_name(),
+            model = model.display_name(),
             max_len = backend.max_len,
             "loading fastembed CPU model"
         );
 
-        let options = TextInitOptions::new(EmbeddingModel::BGESmallENV15Q)
+        let options = TextInitOptions::new(to_fastembed_model(model))
             .with_max_length(backend.max_len)
             .with_show_download_progress(false);
         let inner = TextEmbedding::try_new(options)
@@ -36,7 +37,7 @@ impl FastembedCpuEmbedder {
 
         Ok(Self {
             inner: Mutex::new(inner),
-            backend: *backend,
+            backend: backend.clone(),
             dim: backend.dim(),
         })
     }
@@ -65,5 +66,11 @@ impl FastembedCpuEmbedder {
             .collect();
         let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
         self.embed_documents(&refs)
+    }
+}
+
+fn to_fastembed_model(model: FastembedCpuModel) -> EmbeddingModel {
+    match model {
+        FastembedCpuModel::BgeSmallEnV15Q => EmbeddingModel::BGESmallENV15Q,
     }
 }

@@ -46,7 +46,7 @@ impl Qwen3Embedder {
         tracing::info!(
             target: "embeddings::qwen3",
             profile = backend.profile.name(),
-            model = backend.model.display_name(),
+            model = backend.model_display_name(),
             model_id = variant.hf_model_id(),
             max_len = backend.max_len,
             ?dtype,
@@ -70,7 +70,7 @@ impl Qwen3Embedder {
 
         Ok(Self {
             inner: Mutex::new(inner),
-            backend: *backend,
+            backend: backend.clone(),
             dim,
         })
     }

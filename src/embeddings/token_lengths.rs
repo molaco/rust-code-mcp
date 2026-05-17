@@ -25,7 +25,7 @@ impl EmbeddingTokenCounter {
             .with_progress(false)
             .build()
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
-        let repo = api.model(backend.model.provider_model_id().to_string());
+        let repo = api.model(backend.tokenizer_model_id().to_string());
         let tokenizer_path = repo
             .get("tokenizer.json")
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;

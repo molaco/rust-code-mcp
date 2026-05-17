@@ -128,7 +128,7 @@ pub async fn index_codebase(
         backend.dim(),
         &embedder_identity,
         None,
-        backend,
+        backend.clone(),
     )
     .await
     {
@@ -399,7 +399,7 @@ mod tests {
     fn resolve_backend_profile_wins_over_legacy_model() {
         let backend = resolve_backend(Some("local-cpu-small"), Some("qwen3-0.6b")).unwrap();
 
-        assert_eq!(backend.profile, EmbeddingProfile::LocalCpuSmall);
+        assert_eq!(backend.profile.name(), "local-cpu-small");
         assert_eq!(backend.dim(), 384);
     }
 

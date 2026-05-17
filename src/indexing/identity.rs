@@ -16,7 +16,7 @@ pub fn active_chunking_identity() -> String {
 /// Active chunking identity for a specific embedding backend.
 pub fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
     IndexerCoreConfig::default()
-        .with_embedding_profile(backend.profile)
+        .with_embedding_profile(backend.profile.clone())
         .with_env_overrides()
         .chunking_cache_salt()
 }

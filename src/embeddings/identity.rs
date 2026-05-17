@@ -4,6 +4,8 @@
 //! parsing stays in `EmbeddingBackend::from_identity` so this codec can remain
 //! a small, testable data codec.
 
+#![allow(dead_code)]
+
 use super::backend::EmbeddingRuntime;
 
 const PREFIX: &str = "emb";

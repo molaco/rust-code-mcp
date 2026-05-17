@@ -234,16 +234,7 @@ impl OpenRouterEmbedder {
             .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
             .trim_end_matches('/')
             .to_string();
-        let model = backend
-            .model
-            .openrouter_model_id()
-            .ok_or_else(|| {
-                EmbeddingError::model_init(format!(
-                    "embedding model `{}` is not available through OpenRouter",
-                    backend.model.display_name()
-                ))
-            })?
-            .to_string();
+        let model = backend.model_id().to_string();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()

@@ -1,33 +1,38 @@
 //! Embedding backend configuration.
 //!
-//! Defines embedding profiles, runtimes, model specs, dimensions, and stable
-//! identity strings used in cache paths and `EMBEDDER_VERSION`.
+//! Defines embedding profiles, runtimes, model loader specs, dimensions, and
+//! stable identity strings used in cache paths and `EMBEDDER_VERSION`.
 
 use super::error::EmbeddingError;
+use std::sync::{Arc, LazyLock};
 
 pub(crate) const QWEN3_CODE_QUERY_PREFIX: &str =
     "Instruct: Given a code search query, retrieve relevant code\nQuery: ";
 pub(crate) const BGE_SEARCH_QUERY_PREFIX: &str =
     "Represent this sentence for searching relevant passages: ";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmbeddingBackend {
     pub profile: EmbeddingProfile,
     pub runtime: EmbeddingRuntime,
-    pub model: EmbeddingModelSpec,
     pub max_len: usize,
     /// Off by default. Set only for CI/benchmark runs. Enabling this
     /// emits a warn! on every construction.
     pub force_cpu: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EmbeddingProfile {
-    LocalGpuSmall,
-    LocalQwen3_4B,
-    LocalQwen3_8B,
-    LocalCpuSmall,
-    OpenRouterQwen3_8B,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EmbeddingProfile {
+    pub name: Arc<str>,
+    pub runtime: EmbeddingRuntime,
+    pub model_id: Arc<str>,
+    pub tokenizer_model_id: Option<Arc<str>>,
+    pub dim: usize,
+    pub max_len: usize,
+    pub query_policy: QueryPolicy,
+    pub chunk_target_tokens: usize,
+    pub chunk_hard_max_tokens: usize,
+    pub local_loader: Option<LocalLoaderSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,17 +43,20 @@ pub enum EmbeddingRuntime {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EmbeddingModelSpec {
-    Qwen3Embedding0_6B,
-    Qwen3Embedding4B,
-    Qwen3Embedding8B,
-    BgeSmallEnV15Q,
+pub enum LocalLoaderSpec {
+    Qwen3(Qwen3Variant),
+    FastembedCpu(FastembedCpuModel),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum QueryFormatting {
-    Qwen3CodeInstruction,
-    BgeSearchInstruction,
+pub enum FastembedCpuModel {
+    BgeSmallEnV15Q,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum QueryPolicy {
+    InstructionPrefix(Arc<str>),
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,12 +66,97 @@ pub enum Qwen3Variant {
     Embedding8B,
 }
 
+static BUILT_IN_PROFILES: LazyLock<Vec<EmbeddingProfile>> = LazyLock::new(|| {
+    vec![
+        EmbeddingProfile {
+            name: arc("local-gpu-small"),
+            runtime: EmbeddingRuntime::LocalQwen3CandleCuda,
+            model_id: arc("Qwen/Qwen3-Embedding-0.6B"),
+            tokenizer_model_id: Some(arc("Qwen/Qwen3-Embedding-0.6B")),
+            dim: 1024,
+            max_len: 1024,
+            query_policy: QueryPolicy::InstructionPrefix(arc(QWEN3_CODE_QUERY_PREFIX)),
+            chunk_target_tokens: 768,
+            chunk_hard_max_tokens: 1024,
+            local_loader: Some(LocalLoaderSpec::Qwen3(Qwen3Variant::Embedding0_6B)),
+        },
+        EmbeddingProfile {
+            name: arc("local-qwen3-4b"),
+            runtime: EmbeddingRuntime::LocalQwen3CandleCuda,
+            model_id: arc("Qwen/Qwen3-Embedding-4B"),
+            tokenizer_model_id: Some(arc("Qwen/Qwen3-Embedding-4B")),
+            dim: 2560,
+            max_len: 1024,
+            query_policy: QueryPolicy::InstructionPrefix(arc(QWEN3_CODE_QUERY_PREFIX)),
+            chunk_target_tokens: 768,
+            chunk_hard_max_tokens: 1024,
+            local_loader: Some(LocalLoaderSpec::Qwen3(Qwen3Variant::Embedding4B)),
+        },
+        EmbeddingProfile {
+            name: arc("local-qwen3-8b"),
+            runtime: EmbeddingRuntime::LocalQwen3CandleCuda,
+            model_id: arc("Qwen/Qwen3-Embedding-8B"),
+            tokenizer_model_id: Some(arc("Qwen/Qwen3-Embedding-8B")),
+            dim: 4096,
+            max_len: 1024,
+            query_policy: QueryPolicy::InstructionPrefix(arc(QWEN3_CODE_QUERY_PREFIX)),
+            chunk_target_tokens: 768,
+            chunk_hard_max_tokens: 1024,
+            local_loader: Some(LocalLoaderSpec::Qwen3(Qwen3Variant::Embedding8B)),
+        },
+        EmbeddingProfile {
+            name: arc("local-cpu-small"),
+            runtime: EmbeddingRuntime::LocalFastembedOnnxCpu,
+            model_id: arc("Qdrant/bge-small-en-v1.5-onnx-Q"),
+            tokenizer_model_id: Some(arc("Qdrant/bge-small-en-v1.5-onnx-Q")),
+            dim: 384,
+            max_len: 512,
+            query_policy: QueryPolicy::InstructionPrefix(arc(BGE_SEARCH_QUERY_PREFIX)),
+            chunk_target_tokens: 384,
+            chunk_hard_max_tokens: 512,
+            local_loader: Some(LocalLoaderSpec::FastembedCpu(
+                FastembedCpuModel::BgeSmallEnV15Q,
+            )),
+        },
+        EmbeddingProfile {
+            name: arc("openrouter-qwen3-8b"),
+            runtime: EmbeddingRuntime::OpenRouter,
+            model_id: arc("qwen/qwen3-embedding-8b"),
+            tokenizer_model_id: Some(arc("Qwen/Qwen3-Embedding-8B")),
+            dim: 4096,
+            max_len: 32_768,
+            query_policy: QueryPolicy::InstructionPrefix(arc(QWEN3_CODE_QUERY_PREFIX)),
+            chunk_target_tokens: 768,
+            chunk_hard_max_tokens: 1024,
+            local_loader: None,
+        },
+    ]
+});
+
+const PROFILE_ALIASES: &[(&str, &str)] = &[
+    ("qwen3-local-gpu-small", "local-gpu-small"),
+    ("bge-small-cpu", "local-cpu-small"),
+    ("qwen3-8b-openrouter", "openrouter-qwen3-8b"),
+];
+
+fn arc(value: &str) -> Arc<str> {
+    Arc::<str>::from(value)
+}
+
 impl Qwen3Variant {
     pub fn dim(self) -> usize {
         match self {
             Self::Embedding0_6B => 1024,
             Self::Embedding4B => 2560,
             Self::Embedding8B => 4096,
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Embedding0_6B => "Qwen3-Embedding-0.6B",
+            Self::Embedding4B => "Qwen3-Embedding-4B",
+            Self::Embedding8B => "Qwen3-Embedding-8B",
         }
     }
 
@@ -76,164 +169,84 @@ impl Qwen3Variant {
     }
 }
 
-impl EmbeddingProfile {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::LocalGpuSmall => "local-gpu-small",
-            Self::LocalQwen3_4B => "local-qwen3-4b",
-            Self::LocalQwen3_8B => "local-qwen3-8b",
-            Self::LocalCpuSmall => "local-cpu-small",
-            Self::OpenRouterQwen3_8B => "openrouter-qwen3-8b",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s.to_ascii_lowercase().as_str() {
-            "local-gpu-small" | "qwen3-local-gpu-small" => Ok(Self::LocalGpuSmall),
-            "local-qwen3-4b" => Ok(Self::LocalQwen3_4B),
-            "local-qwen3-8b" => Ok(Self::LocalQwen3_8B),
-            "local-cpu-small" | "bge-small-cpu" => Ok(Self::LocalCpuSmall),
-            "openrouter-qwen3-8b" | "qwen3-8b-openrouter" => {
-                Ok(Self::OpenRouterQwen3_8B)
-            }
-            other => Err(format!(
-                "unknown embedding profile: {other}; expected one of: {}",
-                Self::accepted_names()
-            )),
-        }
-    }
-
-    pub fn accepted_names() -> &'static str {
-        "local-gpu-small, local-cpu-small, openrouter-qwen3-8b, local-qwen3-4b, local-qwen3-8b"
-    }
-
-    pub fn runtime(self) -> EmbeddingRuntime {
-        match self {
-            Self::LocalGpuSmall | Self::LocalQwen3_4B | Self::LocalQwen3_8B => {
-                EmbeddingRuntime::LocalQwen3CandleCuda
-            }
-            Self::LocalCpuSmall => EmbeddingRuntime::LocalFastembedOnnxCpu,
-            Self::OpenRouterQwen3_8B => EmbeddingRuntime::OpenRouter,
-        }
-    }
-
-    pub fn model(self) -> EmbeddingModelSpec {
-        match self {
-            Self::LocalGpuSmall => EmbeddingModelSpec::Qwen3Embedding0_6B,
-            Self::LocalQwen3_4B => EmbeddingModelSpec::Qwen3Embedding4B,
-            Self::LocalQwen3_8B | Self::OpenRouterQwen3_8B => {
-                EmbeddingModelSpec::Qwen3Embedding8B
-            }
-            Self::LocalCpuSmall => EmbeddingModelSpec::BgeSmallEnV15Q,
-        }
-    }
-
-    pub fn default_max_len(self) -> usize {
-        match self {
-            Self::LocalGpuSmall | Self::LocalQwen3_4B | Self::LocalQwen3_8B => 1024,
-            Self::LocalCpuSmall => 512,
-            Self::OpenRouterQwen3_8B => 32_768,
-        }
-    }
-
-    pub fn default_chunk_target_tokens(self) -> usize {
-        match self {
-            Self::LocalCpuSmall => 384,
-            Self::LocalGpuSmall
-            | Self::LocalQwen3_4B
-            | Self::LocalQwen3_8B
-            | Self::OpenRouterQwen3_8B => 768,
-        }
-    }
-
-    pub fn default_chunk_hard_max_tokens(self) -> usize {
-        match self {
-            Self::LocalCpuSmall => 512,
-            Self::LocalGpuSmall
-            | Self::LocalQwen3_4B
-            | Self::LocalQwen3_8B
-            | Self::OpenRouterQwen3_8B => 1024,
-        }
-    }
-
-    pub fn query_formatting(self) -> QueryFormatting {
-        match self {
-            Self::LocalCpuSmall => QueryFormatting::BgeSearchInstruction,
-            Self::LocalGpuSmall
-            | Self::LocalQwen3_4B
-            | Self::LocalQwen3_8B
-            | Self::OpenRouterQwen3_8B => QueryFormatting::Qwen3CodeInstruction,
-        }
-    }
-}
-
-impl EmbeddingModelSpec {
-    pub fn dim(self) -> usize {
-        match self {
-            Self::Qwen3Embedding0_6B => 1024,
-            Self::Qwen3Embedding4B => 2560,
-            Self::Qwen3Embedding8B => 4096,
-            Self::BgeSmallEnV15Q => 384,
-        }
-    }
-
+impl FastembedCpuModel {
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Qwen3Embedding0_6B => "Qwen3-Embedding-0.6B",
-            Self::Qwen3Embedding4B => "Qwen3-Embedding-4B",
-            Self::Qwen3Embedding8B => "Qwen3-Embedding-8B",
             Self::BgeSmallEnV15Q => "BGESmallENV15Q",
         }
     }
 
     pub fn provider_model_id(self) -> &'static str {
         match self {
-            Self::Qwen3Embedding0_6B => "Qwen/Qwen3-Embedding-0.6B",
-            Self::Qwen3Embedding4B => "Qwen/Qwen3-Embedding-4B",
-            Self::Qwen3Embedding8B => "Qwen/Qwen3-Embedding-8B",
             Self::BgeSmallEnV15Q => "Qdrant/bge-small-en-v1.5-onnx-Q",
-        }
-    }
-
-    pub fn openrouter_model_id(self) -> Option<&'static str> {
-        match self {
-            Self::Qwen3Embedding8B => Some("qwen/qwen3-embedding-8b"),
-            _ => None,
-        }
-    }
-
-    pub fn qwen3_variant(self) -> Option<Qwen3Variant> {
-        match self {
-            Self::Qwen3Embedding0_6B => Some(Qwen3Variant::Embedding0_6B),
-            Self::Qwen3Embedding4B => Some(Qwen3Variant::Embedding4B),
-            Self::Qwen3Embedding8B => Some(Qwen3Variant::Embedding8B),
-            Self::BgeSmallEnV15Q => None,
         }
     }
 }
 
-impl QueryFormatting {
-    pub fn format_query(self, text: &str) -> String {
+impl QueryPolicy {
+    pub fn format_query(&self, text: &str) -> String {
         match self {
-            Self::Qwen3CodeInstruction => format!("{QWEN3_CODE_QUERY_PREFIX}{text}"),
-            Self::BgeSearchInstruction => format!("{BGE_SEARCH_QUERY_PREFIX}{text}"),
+            Self::InstructionPrefix(prefix) => format!("{}{text}", prefix.as_ref()),
+            Self::None => text.to_string(),
         }
+    }
+}
+
+impl EmbeddingProfile {
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let requested = s.to_ascii_lowercase();
+        let canonical = PROFILE_ALIASES
+            .iter()
+            .find_map(|(alias, name)| (*alias == requested.as_str()).then_some(*name))
+            .unwrap_or(requested.as_str());
+
+        Self::built_in_profiles()
+            .iter()
+            .find(|profile| profile.name.as_ref() == canonical)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "unknown embedding profile: {s}; expected one of: {}",
+                    Self::accepted_names()
+                )
+            })
+    }
+
+    pub fn accepted_names() -> &'static str {
+        "local-gpu-small, local-cpu-small, openrouter-qwen3-8b, local-qwen3-4b, local-qwen3-8b"
+    }
+
+    pub fn default_chunk_target_tokens(&self) -> usize {
+        self.chunk_target_tokens
+    }
+
+    pub fn default_chunk_hard_max_tokens(&self) -> usize {
+        self.chunk_hard_max_tokens
+    }
+
+    pub(crate) fn built_in_profiles() -> &'static [Self] {
+        BUILT_IN_PROFILES.as_slice()
     }
 }
 
 impl Default for EmbeddingBackend {
     fn default() -> Self {
-        Self::from_profile(EmbeddingProfile::LocalGpuSmall)
+        let profile = EmbeddingProfile::parse("local-gpu-small")
+            .expect("built-in default embedding profile exists");
+        Self::from_profile(profile)
     }
 }
 
 impl EmbeddingBackend {
     pub fn from_profile(profile: EmbeddingProfile) -> Self {
         Self {
+            runtime: profile.runtime,
+            max_len: profile.max_len,
             profile,
-            runtime: profile.runtime(),
-            model: profile.model(),
-            max_len: profile.default_max_len(),
             force_cpu: false,
         }
     }
@@ -244,20 +257,44 @@ impl EmbeddingBackend {
     }
 
     pub fn from_qwen3_variant(variant: Qwen3Variant) -> Self {
-        let profile = match variant {
-            Qwen3Variant::Embedding0_6B => EmbeddingProfile::LocalGpuSmall,
-            Qwen3Variant::Embedding4B => EmbeddingProfile::LocalQwen3_4B,
-            Qwen3Variant::Embedding8B => EmbeddingProfile::LocalQwen3_8B,
-        };
+        let profile = EmbeddingProfile::built_in_profiles()
+            .iter()
+            .find(|profile| {
+                profile.local_loader == Some(LocalLoaderSpec::Qwen3(variant))
+            })
+            .cloned()
+            .expect("built-in Qwen3 embedding profile exists");
         Self::from_profile(profile)
     }
 
     pub fn dim(&self) -> usize {
-        self.model.dim()
+        self.profile.dim
+    }
+
+    pub fn model_id(&self) -> &str {
+        self.profile.model_id.as_ref()
+    }
+
+    pub fn tokenizer_model_id(&self) -> &str {
+        self.profile
+            .tokenizer_model_id
+            .as_deref()
+            .unwrap_or_else(|| self.model_id())
+    }
+
+    pub fn model_display_name(&self) -> &str {
+        match self.profile.local_loader {
+            Some(LocalLoaderSpec::Qwen3(variant)) => variant.display_name(),
+            Some(LocalLoaderSpec::FastembedCpu(model)) => model.display_name(),
+            None => self.model_id(),
+        }
     }
 
     pub fn qwen3_variant(&self) -> Option<Qwen3Variant> {
-        self.model.qwen3_variant()
+        match self.profile.local_loader {
+            Some(LocalLoaderSpec::Qwen3(variant)) => Some(variant),
+            _ => None,
+        }
     }
 
     pub fn require_qwen3_variant(&self) -> Result<Qwen3Variant, EmbeddingError> {
@@ -269,12 +306,24 @@ impl EmbeddingBackend {
         })
     }
 
-    pub fn query_formatting(&self) -> QueryFormatting {
-        self.profile.query_formatting()
+    pub fn fastembed_cpu_model(&self) -> Option<FastembedCpuModel> {
+        match self.profile.local_loader {
+            Some(LocalLoaderSpec::FastembedCpu(model)) => Some(model),
+            _ => None,
+        }
+    }
+
+    pub fn require_fastembed_cpu_model(&self) -> Result<FastembedCpuModel, EmbeddingError> {
+        self.fastembed_cpu_model().ok_or_else(|| {
+            EmbeddingError::model_init(format!(
+                "embedding profile `{}` does not use the fastembed ONNX CPU runtime",
+                self.profile.name()
+            ))
+        })
     }
 
     pub fn format_query(&self, text: &str) -> String {
-        self.query_formatting().format_query(text)
+        self.profile.query_policy.format_query(text)
     }
 
     /// Stable string used in cache paths and EMBEDDER_VERSION.
@@ -285,21 +334,19 @@ impl EmbeddingBackend {
         match self.runtime {
             EmbeddingRuntime::LocalQwen3CandleCuda => format!(
                 "fastembed-candle:{}:dim{}:max{}:v2",
-                self.model.display_name(),
+                self.model_display_name(),
                 self.dim(),
                 self.max_len,
             ),
             EmbeddingRuntime::LocalFastembedOnnxCpu => format!(
                 "fastembed-onnx-cpu:{}:dim{}:max{}:v1",
-                self.model.display_name(),
+                self.model_display_name(),
                 self.dim(),
                 self.max_len,
             ),
             EmbeddingRuntime::OpenRouter => format!(
                 "openrouter:{}:dim{}:max{}:v1",
-                self.model
-                    .openrouter_model_id()
-                    .unwrap_or(self.model.provider_model_id()),
+                self.model_id(),
                 self.dim(),
                 self.max_len,
             ),
@@ -349,7 +396,7 @@ impl EmbeddingBackend {
                     )));
                 }
                 match parts[1] {
-                    "BGESmallENV15Q" => Self::from_profile(EmbeddingProfile::LocalCpuSmall),
+                    "BGESmallENV15Q" => Self::from_profile_name("local-cpu-small")?,
                     other => {
                         return Err(EmbeddingError::invalid_identity(format!(
                             "unknown ONNX model `{}` in `{}`",
@@ -367,7 +414,7 @@ impl EmbeddingBackend {
                 }
                 match parts[1] {
                     "qwen/qwen3-embedding-8b" => {
-                        Self::from_profile(EmbeddingProfile::OpenRouterQwen3_8B)
+                        Self::from_profile_name("openrouter-qwen3-8b")?
                     }
                     other => {
                         return Err(EmbeddingError::invalid_identity(format!(
@@ -396,9 +443,9 @@ impl EmbeddingBackend {
         })?;
         if dim != backend.dim() {
             return Err(EmbeddingError::invalid_identity(format!(
-                "dim `{}` does not match model {:?} (expected {}) in `{}`",
+                "dim `{}` does not match profile `{}` (expected {}) in `{}`",
                 dim,
-                backend.model,
+                backend.profile.name(),
                 backend.dim(),
                 s
             )));
@@ -422,6 +469,10 @@ impl EmbeddingBackend {
 mod tests {
     use super::*;
 
+    fn profile(name: &str) -> EmbeddingProfile {
+        EmbeddingProfile::parse(name).unwrap()
+    }
+
     #[test]
     fn default_backend_dim_is_1024() {
         assert_eq!(EmbeddingBackend::default().dim(), 1024);
@@ -437,9 +488,9 @@ mod tests {
 
     #[test]
     fn profile_dimensions_match_expected_values() {
-        assert_eq!(EmbeddingBackend::from_profile(EmbeddingProfile::LocalCpuSmall).dim(), 384);
+        assert_eq!(EmbeddingBackend::from_profile(profile("local-cpu-small")).dim(), 384);
         assert_eq!(
-            EmbeddingBackend::from_profile(EmbeddingProfile::OpenRouterQwen3_8B).dim(),
+            EmbeddingBackend::from_profile(profile("openrouter-qwen3-8b")).dim(),
             4096
         );
         assert_eq!(Qwen3Variant::Embedding4B.dim(), 2560);
@@ -447,17 +498,34 @@ mod tests {
     }
 
     #[test]
+    fn built_in_profile_data_matches_previous_values() {
+        let local_gpu = profile("local-gpu-small");
+        assert_eq!(local_gpu.model_id.as_ref(), "Qwen/Qwen3-Embedding-0.6B");
+        assert_eq!(local_gpu.max_len, 1024);
+        assert_eq!(local_gpu.chunk_target_tokens, 768);
+        assert_eq!(local_gpu.chunk_hard_max_tokens, 1024);
+
+        let local_cpu = profile("local-cpu-small");
+        assert_eq!(
+            local_cpu.model_id.as_ref(),
+            "Qdrant/bge-small-en-v1.5-onnx-Q"
+        );
+        assert_eq!(local_cpu.dim, 384);
+        assert_eq!(local_cpu.max_len, 512);
+
+        let openrouter = profile("openrouter-qwen3-8b");
+        assert_eq!(openrouter.model_id.as_ref(), "qwen/qwen3-embedding-8b");
+        assert_eq!(
+            openrouter.tokenizer_model_id.as_deref(),
+            Some("Qwen/Qwen3-Embedding-8B")
+        );
+    }
+
+    #[test]
     fn identities_are_unique_by_profile() {
-        let profiles = [
-            EmbeddingProfile::LocalGpuSmall,
-            EmbeddingProfile::LocalQwen3_4B,
-            EmbeddingProfile::LocalQwen3_8B,
-            EmbeddingProfile::LocalCpuSmall,
-            EmbeddingProfile::OpenRouterQwen3_8B,
-        ];
         let mut identities = std::collections::HashSet::new();
 
-        for profile in profiles {
+        for profile in EmbeddingProfile::built_in_profiles().iter().cloned() {
             assert!(identities.insert(EmbeddingBackend::from_profile(profile).identity()));
         }
     }
@@ -465,28 +533,48 @@ mod tests {
     #[test]
     fn profile_parse_accepts_explicit_profiles() {
         assert_eq!(
-            EmbeddingProfile::parse("local-gpu-small").unwrap(),
-            EmbeddingProfile::LocalGpuSmall
+            EmbeddingProfile::parse("local-gpu-small").unwrap().name(),
+            "local-gpu-small"
         );
         assert_eq!(
-            EmbeddingProfile::parse("local-cpu-small").unwrap(),
-            EmbeddingProfile::LocalCpuSmall
+            EmbeddingProfile::parse("local-cpu-small").unwrap().name(),
+            "local-cpu-small"
         );
         assert_eq!(
-            EmbeddingProfile::parse("openrouter-qwen3-8b").unwrap(),
-            EmbeddingProfile::OpenRouterQwen3_8B
+            EmbeddingProfile::parse("openrouter-qwen3-8b").unwrap().name(),
+            "openrouter-qwen3-8b"
         );
     }
 
     #[test]
-    fn query_formatting_is_profile_aware() {
+    fn profile_parse_accepts_legacy_aliases() {
         assert_eq!(
-            EmbeddingBackend::from_profile(EmbeddingProfile::LocalGpuSmall)
+            EmbeddingProfile::parse("qwen3-local-gpu-small")
+                .unwrap()
+                .name(),
+            "local-gpu-small"
+        );
+        assert_eq!(
+            EmbeddingProfile::parse("bge-small-cpu").unwrap().name(),
+            "local-cpu-small"
+        );
+        assert_eq!(
+            EmbeddingProfile::parse("qwen3-8b-openrouter")
+                .unwrap()
+                .name(),
+            "openrouter-qwen3-8b"
+        );
+    }
+
+    #[test]
+    fn query_policy_is_profile_aware() {
+        assert_eq!(
+            EmbeddingBackend::from_profile(profile("local-gpu-small"))
                 .format_query("find parser"),
             "Instruct: Given a code search query, retrieve relevant code\nQuery: find parser"
         );
         assert_eq!(
-            EmbeddingBackend::from_profile(EmbeddingProfile::LocalCpuSmall)
+            EmbeddingBackend::from_profile(profile("local-cpu-small"))
                 .format_query("find parser"),
             "Represent this sentence for searching relevant passages: find parser"
         );
@@ -510,7 +598,7 @@ mod tests {
 
     #[test]
     fn from_identity_roundtrip_cpu_profile() {
-        let original = EmbeddingBackend::from_profile(EmbeddingProfile::LocalCpuSmall);
+        let original = EmbeddingBackend::from_profile(profile("local-cpu-small"));
         let parsed = EmbeddingBackend::from_identity(&original.identity()).unwrap();
         assert_eq!(parsed.profile, original.profile);
         assert_eq!(parsed.max_len, original.max_len);
@@ -518,7 +606,7 @@ mod tests {
 
     #[test]
     fn from_identity_roundtrip_openrouter_profile() {
-        let original = EmbeddingBackend::from_profile(EmbeddingProfile::OpenRouterQwen3_8B);
+        let original = EmbeddingBackend::from_profile(profile("openrouter-qwen3-8b"));
         let parsed = EmbeddingBackend::from_identity(&original.identity()).unwrap();
         assert_eq!(parsed.profile, original.profile);
         assert_eq!(parsed.max_len, original.max_len);

@@ -84,7 +84,7 @@ impl IndexerCore {
     ) -> Result<Self, IndexingError> {
         let config = config
             .unwrap_or_default()
-            .with_embedding_profile(backend.profile)
+            .with_embedding_profile(backend.profile.clone())
             .with_env_overrides();
 
         let chunk_split_config = ChunkSplitConfig::new(

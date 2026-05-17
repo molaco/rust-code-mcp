@@ -485,8 +485,8 @@ mod tests {
 
     #[test]
     fn cpu_embedding_profile_uses_smaller_chunk_defaults() {
-        let core =
-            IndexerCoreConfig::default().with_embedding_profile(EmbeddingProfile::LocalCpuSmall);
+        let profile = EmbeddingProfile::parse("local-cpu-small").unwrap();
+        let core = IndexerCoreConfig::default().with_embedding_profile(profile);
 
         assert_eq!(core.chunk_target_tokens, 384);
         assert_eq!(core.chunk_hard_max_tokens, 512);

@@ -366,7 +366,13 @@ pub async fn search(
         // Corrupt or missing — clean stale caches to force full reindex
         rebuilt = paths.tantivy_path.exists();
         clean_stale_index(&paths);
-        let st = ensure_indexed(dir_path, &paths, requested_backend, sync_manager).await?;
+        let st = ensure_indexed(
+            dir_path,
+            &paths,
+            requested_backend.clone(),
+            sync_manager,
+        )
+        .await?;
         bm25 = try_open_bm25(&paths);
         Some(st)
     };
@@ -381,7 +387,7 @@ pub async fn search(
         }
     }
 
-    let hybrid_search = create_hybrid_search(&paths, bm25, requested_backend).await?;
+    let hybrid_search = create_hybrid_search(&paths, bm25, requested_backend.clone()).await?;
 
     tracing::info!(
         profile = requested_backend.profile.name(),

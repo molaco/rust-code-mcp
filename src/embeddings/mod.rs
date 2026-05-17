@@ -15,8 +15,8 @@ pub use error::EmbeddingError;
 
 mod backend;
 pub use backend::{
-    EmbeddingBackend, EmbeddingModelSpec, EmbeddingProfile, EmbeddingRuntime,
-    Qwen3Variant, QueryFormatting,
+    EmbeddingBackend, EmbeddingProfile, EmbeddingRuntime, FastembedCpuModel,
+    LocalLoaderSpec, Qwen3Variant, QueryPolicy,
 };
 
 mod identity;

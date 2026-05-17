@@ -157,7 +157,7 @@ Acceptance criteria:
 
 ## Phase 2: Table-Driven Built-In Profile Data Model
 
-Status: Not started.
+Status: Implemented; build/test verification pending confirmed Nix shell.
 
 Design:
 
@@ -190,6 +190,9 @@ Design:
 - Built-in profiles are a registry built once
   (`std::sync::LazyLock<Vec<EmbeddingProfile>>`). One struct literal per
   profile replaces the 14 match arms.
+- Built-in profile data also carries tokenizer model metadata so the
+  OpenRouter Qwen3 profile keeps the existing tokenizer source while request
+  model ids remain provider-specific.
 - `EmbeddingBackend` loses `Copy`, gains `Clone`. Update by-value uses
   (`*backend` -> `backend.clone()` in `qwen3.rs`, `fastembed_cpu.rs`,
   `openrouter.rs`, plus anything the compiler surfaces).
