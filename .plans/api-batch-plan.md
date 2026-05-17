@@ -168,7 +168,22 @@ Acceptance criteria:
 
 ## Phase 3: Execute Remote Requests Concurrently
 
-Status: Planned.
+Status: Implemented.
+
+Implementation notes:
+
+- Replaced OpenRouter's top-level sequential request loop with the Phase 2 remote planner plus bounded `futures::stream::buffer_unordered`.
+- `RUST_CODE_MCP_OPENROUTER_CONCURRENCY` now controls the number of planned OpenRouter requests in flight.
+- Added `request_batch_with_split`, which preserves existing retry behavior through `request_batch`.
+- Payload-too-large handling still recursively splits only the offending request batch.
+- Completed request results are collected as `(original_index, embedding)` pairs and restored to the caller's input order.
+- Empty input still returns an empty embedding list.
+- Added an OpenRouter request-plan info log with input count, planned request count, concurrency, and batch limits.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 

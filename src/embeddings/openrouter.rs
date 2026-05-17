@@ -2,6 +2,7 @@
 
 use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime};
 use crate::embeddings::{Embedding, EmbeddingError, EmbeddingTokenCounter};
+use futures::stream::{self, StreamExt};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -214,28 +215,25 @@ impl OpenRouterEmbedder {
             return Ok(Vec::new());
         }
 
-        let mut output: Vec<Option<Embedding>> = vec![None; texts.len()];
-        let mut pending = VecDeque::from([(0usize, texts)]);
+        let expected_count = texts.len();
+        let batches = self.plan_remote_batches(texts);
+        tracing::info!(
+            inputs = expected_count,
+            request_batches = batches.len(),
+            concurrency = self.config.concurrency,
+            max_batch_inputs = self.config.max_batch_inputs,
+            max_batch_tokens = self.config.max_batch_tokens,
+            "OpenRouter embedding request plan"
+        );
 
-        while let Some((start, batch)) = pending.pop_front() {
-            match self.request_batch(&batch, input_type).await {
-                Ok(embeddings) => {
-                    for (offset, embedding) in embeddings.into_iter().enumerate() {
-                        output[start + offset] = Some(embedding);
-                    }
-                }
-                Err(OpenRouterBatchError::PayloadTooLarge(msg)) if batch.len() > 1 => {
-                    let mid = batch.len() / 2;
-                    let right = batch[mid..].to_vec();
-                    let left = batch[..mid].to_vec();
-                    pending.push_front((start + mid, right));
-                    pending.push_front((start, left));
-                    tracing::warn!(
-                        batch_len = batch.len(),
-                        "OpenRouter embedding batch was too large; splitting batch: {}",
-                        msg
-                    );
-                }
+        let mut request_stream = stream::iter(batches)
+            .map(|batch| self.request_batch_with_split(batch, input_type))
+            .buffer_unordered(self.config.concurrency);
+        let mut ordered_embeddings = Vec::with_capacity(expected_count);
+
+        while let Some(result) = request_stream.next().await {
+            match result {
+                Ok(mut embeddings) => ordered_embeddings.append(&mut embeddings),
                 Err(OpenRouterBatchError::PayloadTooLarge(msg)) => {
                     return Err(EmbeddingError::embed_failed(format!(
                         "OpenRouter rejected a single embedding input as too large: {msg}"
@@ -247,17 +245,46 @@ impl OpenRouterEmbedder {
             }
         }
 
-        output
-            .into_iter()
-            .enumerate()
-            .map(|(idx, maybe)| {
-                maybe.ok_or_else(|| {
-                    EmbeddingError::embed_failed(format!(
-                        "OpenRouter response did not include embedding at index {idx}"
-                    ))
-                })
-            })
-            .collect()
+        restore_original_embedding_order(expected_count, ordered_embeddings)
+            .map_err(EmbeddingError::embed_failed)
+    }
+
+    async fn request_batch_with_split(
+        &self,
+        batch: OpenRouterInputBatch,
+        input_type: &str,
+    ) -> Result<Vec<(usize, Embedding)>, OpenRouterBatchError> {
+        let mut ordered_embeddings = Vec::with_capacity(batch.len());
+        let mut pending = VecDeque::from([batch]);
+
+        while let Some(batch) = pending.pop_front() {
+            let texts = batch.texts();
+            match self.request_batch(&texts, input_type).await {
+                Ok(embeddings) => {
+                    ordered_embeddings.extend(
+                        batch
+                            .inputs
+                            .into_iter()
+                            .zip(embeddings)
+                            .map(|(input, embedding)| (input.original_index, embedding)),
+                    );
+                }
+                Err(OpenRouterBatchError::PayloadTooLarge(msg)) if batch.len() > 1 => {
+                    let batch_len = batch.len();
+                    let (left, right) = batch.split_at(batch_len / 2);
+                    pending.push_front(right);
+                    pending.push_front(left);
+                    tracing::warn!(
+                        batch_len,
+                        "OpenRouter embedding batch was too large; splitting batch: {}",
+                        msg
+                    );
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(ordered_embeddings)
     }
 
     async fn request_batch(
@@ -358,6 +385,12 @@ impl OpenRouterInputBatch {
 
     fn padded_tokens(&self) -> usize {
         self.len() * self.max_token_len()
+    }
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        let right = self.inputs[mid..].to_vec();
+        let left = self.inputs[..mid].to_vec();
+        (Self { inputs: left }, Self { inputs: right })
     }
 }
 
