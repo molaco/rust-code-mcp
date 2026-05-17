@@ -422,7 +422,14 @@ pub(crate) async fn build_codemap(
 
     let embeddings_computed: usize =
         if opts.embedding_policy == EmbeddingPolicy::ComputeMissing && !missing.is_empty() {
-            let resolved = crate::tools::graph_tools::ensure_embeddings_for(snap, &missing).await?;
+            // Codemap is not profile-parameterized; embed with the default
+            // backend, matching the prompt embedder constructed above.
+            let resolved = crate::tools::graph_tools::ensure_embeddings_for(
+                snap,
+                &missing,
+                &crate::embeddings::EmbeddingBackend::default(),
+            )
+            .await?;
             let added = resolved.len();
             for (nid, re) in resolved {
                 cached.insert(nid, re.vector);

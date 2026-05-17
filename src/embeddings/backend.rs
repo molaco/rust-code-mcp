@@ -397,6 +397,31 @@ impl EmbeddingBackend {
         self.profile.query_policy.format_query(text)
     }
 
+    /// Default cosine-similarity cutoff for the `semantic_overlaps`
+    /// duplicate-detection audit.
+    ///
+    /// Cosine-similarity score distributions are model-specific, so a fixed
+    /// cutoff is only meaningful relative to the model that produced the
+    /// vectors. This derives the default from the active model instead of
+    /// leaving a bare literal at the call site; callers may always pass an
+    /// explicit threshold to override it.
+    pub fn semantic_overlap_threshold(&self) -> f32 {
+        match self.profile.local_loader {
+            // Qwen3 code-embedding family: instruction-tuned, related code
+            // clusters tightly at high cosine similarity.
+            Some(LocalLoaderSpec::Qwen3(_)) => 0.85,
+            // BGE general-purpose sentence embeddings sit on a lower
+            // similarity scale than instruction-tuned code embeddings.
+            Some(LocalLoaderSpec::FastembedCpu(_)) => 0.80,
+            // API models have no local loader. The built-in OpenRouter
+            // Qwen3 model shares the Qwen3 scale; other API models (e.g.
+            // OpenAI text-embedding-3, whose similarity range is markedly
+            // compressed) should be given an explicit threshold until a
+            // value is measured for them.
+            None => 0.85,
+        }
+    }
+
     /// Stable string used in cache paths and EMBEDDER_VERSION.
     pub fn identity(&self) -> String {
         EmbeddingIdentity {

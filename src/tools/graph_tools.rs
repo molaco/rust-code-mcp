@@ -606,17 +606,18 @@ pub async fn similar_to_item(
         )
     })?.to_string();
 
-    // 3. Run vector-only search.
+    // 3. Run vector-only search against the index built with the
+    //    requested embedding profile (the default profile when unset).
+    let backend = resolve_graph_tool_backend(
+        params.embedding_profile.as_deref(),
+        &params.directory,
+    )?;
     let paths = crate::tools::project_paths::ProjectPaths::from_directory(
         Path::new(&params.directory),
-        &crate::embeddings::EmbeddingBackend::default(),
+        &backend,
     );
-    let hybrid_search = crate::tools::query_tools::create_hybrid_search(
-        &paths,
-        None,
-        crate::embeddings::EmbeddingBackend::default(),
-    )
-    .await?;
+    let hybrid_search =
+        crate::tools::query_tools::create_hybrid_search(&paths, None, backend).await?;
 
     let limit = params.limit.unwrap_or(10);
     let threshold = params.threshold.unwrap_or(0.0);
@@ -725,7 +726,16 @@ pub async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
-    let threshold = params.threshold.unwrap_or(0.85);
+    let backend = resolve_graph_tool_backend(
+        params.embedding_profile.as_deref(),
+        &directory,
+    )?;
+    // Default cutoff is model-derived: cosine-similarity scales differ
+    // between embedding models, and `ensure_embeddings_for` embeds with
+    // `backend`, so the default threshold is sourced from the same model.
+    let threshold = params
+        .threshold
+        .unwrap_or_else(|| backend.semantic_overlap_threshold());
     let max_pairs = params.max_pairs.unwrap_or(50);
     let max_cluster_size = params.max_cluster_size.unwrap_or(15);
     let output_mode = params
@@ -830,7 +840,7 @@ pub async fn semantic_overlaps(
     //    contains one entry per seed whose source was readable +
     //    non-empty + spannable.
     let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
-    let embeddings = ensure_embeddings_for(&snap, &seed_nids)
+    let embeddings = ensure_embeddings_for(&snap, &seed_nids, &backend)
         .await
         .map_err(internal_error("ensure_embeddings_for"))?;
 
@@ -1000,6 +1010,26 @@ pub(crate) fn embedder_version(backend: &crate::embeddings::EmbeddingBackend) ->
     backend.identity()
 }
 
+/// Resolve an optional `embedding_profile` argument into an
+/// `EmbeddingBackend`, falling back to the default profile when unset.
+///
+/// Shared by the hypergraph-backed similarity tools (`similar_to_item`,
+/// `semantic_overlaps`). A profile name is resolved against the registry
+/// — built-ins plus any `embedding_profiles.toml` in `directory`.
+fn resolve_graph_tool_backend(
+    embedding_profile: Option<&str>,
+    directory: &str,
+) -> Result<crate::embeddings::EmbeddingBackend, McpError> {
+    match embedding_profile {
+        Some(name) => {
+            let profile = crate::embeddings::resolve_profile(name, Path::new(directory))
+                .map_err(|msg| McpError::invalid_params(msg, None))?;
+            Ok(crate::embeddings::EmbeddingBackend::from_profile(profile))
+        }
+        None => Ok(crate::embeddings::EmbeddingBackend::default()),
+    }
+}
+
 /// Max texts per `embed_batch_async` call. Keeps memory bounded when the
 /// workspace has thousands of items.
 pub(crate) const EMBED_CHUNK: usize = 64;
@@ -1042,12 +1072,18 @@ pub(crate) struct ResolvedEmbedding {
 ///   - Phase C (sync): one write txn to persist the new
 ///     `EmbeddingRecord`s. Skipped entirely when there are no misses.
 ///
-/// `EmbeddingGenerator::new()` is invoked lazily, only when at least one
-/// NodeId actually needs computing. The all-cache-hit (and empty-input)
-/// path therefore avoids loading the embedding model.
+/// The embedder is constructed lazily, only when at least one NodeId
+/// actually needs computing. The all-cache-hit (and empty-input) path
+/// therefore avoids loading the embedding model.
+///
+/// `backend` selects the embedding model: it drives both the cache
+/// `embedder_version` check and the embedder constructed for cache
+/// misses, so a caller switching profiles transparently re-embeds rows
+/// left by a different model.
 pub(crate) async fn ensure_embeddings_for(
     snap: &OpenedSnapshot,
     nids: &[NodeId],
+    backend: &crate::embeddings::EmbeddingBackend,
 ) -> anyhow::Result<HashMap<NodeId, ResolvedEmbedding>> {
     use sha2::{Digest, Sha256};
 
@@ -1074,17 +1110,10 @@ pub(crate) async fn ensure_embeddings_for(
     let mut file_cache: HashMap<String, String> = HashMap::new();
 
     // Resolve the active embedder identity once. The cache classifier
-    // below treats a row as fresh only if its `embedder_version` matches.
-    // `EmbeddingGenerator::new()` (phase B) uses `EmbeddingBackend::default()`,
-    // so we read the same default here to keep them in lockstep.
-    //
-    // TODO(step7+): accept an explicit `&EmbeddingBackend` from the
-    // caller so non-default Qwen3 variants pick up a fresh embedder
-    // here. Plumbing requires updating `semantic_overlaps` and
-    // `codemap.rs::build_codemap`, which is a follow-up — for now this
-    // stays on the default to match the embedder constructed below.
-    let active_backend = crate::embeddings::EmbeddingBackend::default();
-    let active_version = embedder_version(&active_backend);
+    // below treats a row as fresh only if its `embedder_version` matches,
+    // and phase B builds the embedder from the same `backend` — so the
+    // classifier and the embedder are always in lockstep.
+    let active_version = embedder_version(backend);
 
     {
         let rtxn = snap.env.read_txn()?;
@@ -1164,7 +1193,7 @@ pub(crate) async fn ensure_embeddings_for(
 
     // Phase B: batched async embedding. No transaction held across the
     // await. Model is loaded lazily, only because we have work to do.
-    let embedder = crate::embeddings::EmbeddingGenerator::new()
+    let embedder = crate::embeddings::EmbeddingGenerator::with_backend(backend.clone())
         .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
 
     let now = std::time::SystemTime::now()

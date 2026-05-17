@@ -468,6 +468,9 @@ pub struct SimilarToItemParams {
     #[schemars(description = "Restrict results to items of this kind, matching the chunk's symbol_kind (\"Function\", \"Struct\", \"Enum\", \"Trait\", etc.). Case-insensitive. Default: no filter.")]
     #[serde(default)]
     pub item_kind: Option<String>,
+    #[schemars(description = "Embedding profile the codebase was indexed with (built-in name or a profile from embedding_profiles.toml). Must match the profile passed to `index_codebase`, since this tool reads that profile's vector index. Default: the built-in default model.")]
+    #[serde(default)]
+    pub embedding_profile: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -480,7 +483,7 @@ pub struct SemanticOverlapsParams {
     #[schemars(description = "Optional item-kind filter (\"Function\" | \"Struct\" | \"Enum\" | \"Trait\" | \"Method\"). Default: all kinds.")]
     #[serde(default)]
     pub item_kind: Option<String>,
-    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Default 0.85 (good balance of recall vs noise at workspace scale; drop to 0.80 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal).")]
+    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Omit to use the embedding model's tuned default cutoff (0.85 for the Qwen3 code-embedding model used by default). Cosine-similarity scales are model-specific, so an explicit value is interpreted relative to the active model: drop ~0.05 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal.")]
     #[serde(default)]
     pub threshold: Option<f32>,
     #[schemars(description = "Cap on returned pairs OR cluster member count. Default 50.")]
@@ -498,6 +501,9 @@ pub struct SemanticOverlapsParams {
     #[schemars(description = "Drop pairs whose two items share a crate. Default false.")]
     #[serde(default)]
     pub cross_crate_only: Option<bool>,
+    #[schemars(description = "Embedding profile to embed items with (built-in name or a profile from embedding_profiles.toml). Selects the model and the similarity scale `threshold` is interpreted on; switching profiles re-embeds via the per-Item cache. Default: the built-in default model (Qwen3-Embedding-0.6B, local GPU).")]
+    #[serde(default)]
+    pub embedding_profile: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
