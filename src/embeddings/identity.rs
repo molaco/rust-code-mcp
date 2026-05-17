@@ -121,7 +121,7 @@ fn decode_runtime(value: &str) -> Result<EmbeddingRuntime, String> {
     }
 }
 
-fn percent_encode(input: &str) -> String {
+pub(crate) fn percent_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
         if is_safe_byte(byte) {
@@ -135,7 +135,7 @@ fn percent_encode(input: &str) -> String {
     out
 }
 
-fn percent_decode(input: &str) -> Result<String, String> {
+pub(crate) fn percent_decode(input: &str) -> Result<String, String> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

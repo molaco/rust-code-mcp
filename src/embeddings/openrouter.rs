@@ -36,6 +36,8 @@ pub(super) struct OpenRouterEmbedder {
     base_url: String,
     model: String,
     dim: usize,
+    document_input_type: String,
+    query_input_type: String,
     config: OpenRouterRuntimeConfig,
     token_counter: Option<EmbeddingTokenCounter>,
 }
@@ -230,6 +232,16 @@ impl OpenRouterEmbedder {
         }
 
         let api_key = api_key_from_env()?;
+        let (document_input_type, query_input_type) = backend
+            .profile
+            .query_policy
+            .input_types()
+            .ok_or_else(|| {
+                EmbeddingError::model_init(format!(
+                    "embedding profile `{}` does not define OpenRouter input_type values",
+                    backend.profile.name()
+                ))
+            })?;
         let base_url = std::env::var(BASE_URL_ENV)
             .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
             .trim_end_matches('/')
@@ -272,6 +284,8 @@ impl OpenRouterEmbedder {
             base_url,
             model,
             dim: backend.dim(),
+            document_input_type: document_input_type.to_string(),
+            query_input_type: query_input_type.to_string(),
             config,
             token_counter,
         })
@@ -285,14 +299,14 @@ impl OpenRouterEmbedder {
         &self,
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
-        self.embed_with_split(texts, "search_document").await
+        self.embed_with_split(texts, &self.document_input_type).await
     }
 
     pub(super) async fn embed_queries(
         &self,
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
-        self.embed_with_split(texts, "search_query").await
+        self.embed_with_split(texts, &self.query_input_type).await
     }
 
     fn plan_remote_batches(&self, texts: Vec<String>) -> Vec<OpenRouterInputBatch> {

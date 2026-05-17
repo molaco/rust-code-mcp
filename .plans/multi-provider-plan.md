@@ -227,7 +227,7 @@ Acceptance criteria:
 
 ## Phase 3: Runtime-Aware Query Policy
 
-Status: Not started.
+Status: Implemented; build/test verification pending confirmed Nix shell.
 
 Design:
 

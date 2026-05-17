@@ -4,6 +4,7 @@
 //! stable identity strings used in cache paths and `EMBEDDER_VERSION`.
 
 use super::error::EmbeddingError;
+use super::identity::{percent_decode, percent_encode};
 use std::sync::{Arc, LazyLock};
 
 pub(crate) const QWEN3_CODE_QUERY_PREFIX: &str =
@@ -56,6 +57,7 @@ pub enum FastembedCpuModel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum QueryPolicy {
     InstructionPrefix(Arc<str>),
+    InputType { document: Arc<str>, query: Arc<str> },
     None,
 }
 
@@ -125,7 +127,10 @@ static BUILT_IN_PROFILES: LazyLock<Vec<EmbeddingProfile>> = LazyLock::new(|| {
             tokenizer_model_id: Some(arc("Qwen/Qwen3-Embedding-8B")),
             dim: 4096,
             max_len: 32_768,
-            query_policy: QueryPolicy::InstructionPrefix(arc(QWEN3_CODE_QUERY_PREFIX)),
+            query_policy: QueryPolicy::InputType {
+                document: arc("search_document"),
+                query: arc("search_query"),
+            },
             chunk_target_tokens: 768,
             chunk_hard_max_tokens: 1024,
             local_loader: None,
@@ -187,8 +192,49 @@ impl QueryPolicy {
     pub fn format_query(&self, text: &str) -> String {
         match self {
             Self::InstructionPrefix(prefix) => format!("{}{text}", prefix.as_ref()),
-            Self::None => text.to_string(),
+            Self::InputType { .. } | Self::None => text.to_string(),
         }
+    }
+
+    pub fn input_types(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::InputType { document, query } => Some((document.as_ref(), query.as_ref())),
+            _ => None,
+        }
+    }
+
+    pub fn encode_tag(&self) -> String {
+        match self {
+            Self::InstructionPrefix(prefix) => {
+                format!("prefix:{}", percent_encode(prefix.as_ref()))
+            }
+            Self::InputType { document, query } => format!(
+                "input-type:{}:{}",
+                percent_encode(document.as_ref()),
+                percent_encode(query.as_ref())
+            ),
+            Self::None => "none".to_string(),
+        }
+    }
+
+    pub fn decode_tag(tag: &str) -> Result<Self, String> {
+        if tag == "none" {
+            return Ok(Self::None);
+        }
+        if let Some(encoded) = tag.strip_prefix("prefix:") {
+            return Ok(Self::InstructionPrefix(arc(&percent_decode(encoded)?)));
+        }
+        if let Some(encoded) = tag.strip_prefix("input-type:") {
+            let (document, query) = encoded.split_once(':').ok_or_else(|| {
+                format!("malformed query policy input-type tag `{tag}`")
+            })?;
+            return Ok(Self::InputType {
+                document: arc(&percent_decode(document)?),
+                query: arc(&percent_decode(query)?),
+            });
+        }
+
+        Err(format!("unknown query policy tag `{tag}`"))
     }
 }
 
@@ -578,6 +624,38 @@ mod tests {
                 .format_query("find parser"),
             "Represent this sentence for searching relevant passages: find parser"
         );
+    }
+
+    #[test]
+    fn openrouter_profile_uses_input_type_policy() {
+        let profile = profile("openrouter-qwen3-8b");
+
+        assert_eq!(
+            profile.query_policy.input_types(),
+            Some(("search_document", "search_query"))
+        );
+        assert_eq!(
+            profile.query_policy.format_query("find parser"),
+            "find parser"
+        );
+    }
+
+    #[test]
+    fn query_policy_tags_roundtrip() {
+        let policies = [
+            QueryPolicy::InstructionPrefix(arc("prefix /:=;\n")),
+            QueryPolicy::InputType {
+                document: arc("doc=type;v1"),
+                query: arc("query/type\nv1"),
+            },
+            QueryPolicy::None,
+        ];
+
+        for policy in policies {
+            let tag = policy.encode_tag();
+            let decoded = QueryPolicy::decode_tag(&tag).unwrap();
+            assert_eq!(decoded, policy);
+        }
     }
 
     #[test]
