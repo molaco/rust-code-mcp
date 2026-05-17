@@ -271,9 +271,22 @@ Result:
 nix develop ../nix-devshells#cuda-code --command zsh -lc 'if [ -n "${RUST_CODE_MCP_OPENROUTER_API_KEY:-}${OPENROUTER_API_KEY:-}" ]; then tmp=$(mktemp -d); cd "$tmp"; /home/molaco/Documents/rust-code-mcp-final/target/release/examples/index_codebase --profile openrouter-qwen3-8b; else echo openrouter_benchmark=skipped_missing_api_key; fi'
 ```
 
-Result:
+Initial result:
 
 - `openrouter_benchmark=skipped_missing_api_key`
+
+Follow-up result with `OPENROUTER_API_KEY` set:
+
+- `embedding_profile=openrouter-qwen3-8b`
+- `identity=openrouter:qwen/qwen3-embedding-8b:dim4096:max32768:v1`
+- `vector_dim=4096`
+- `indexed_files=125`
+- `skipped_files=1`
+- `total_chunks=2084`
+- `duration_secs=139.628191`
+- `embed_duration_secs=138.053058`
+- Approximate aggregate padded tokens from per-batch logs: `631335`
+- Approximate aggregate padded tokens/sec: `4573.1`
 
 Redo benchmark/profile work only after the build fix is committed.
 

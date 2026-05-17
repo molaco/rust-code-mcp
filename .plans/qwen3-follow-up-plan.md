@@ -366,7 +366,14 @@ Verification:
   - total duration: `201.234437s`
   - embedding duration: `198.180663s`
   - approximate padded tokens/sec from per-batch logs: `8472`
-- OpenRouter benchmark was skipped because no `RUST_CODE_MCP_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` was present in the shell. The runtime smoke check confirmed the missing-key error is clear.
+- `index_codebase --profile openrouter-qwen3-8b` completed with `OPENROUTER_API_KEY` set:
+  - model identity: `openrouter:qwen/qwen3-embedding-8b:dim4096:max32768:v1`
+  - indexed files: `125`
+  - skipped files: `1`
+  - chunks: `2084`
+  - total duration: `139.628191s`
+  - embedding duration: `138.053058s`
+  - approximate padded tokens/sec from per-batch logs: `4573.1`
 
 Benchmark each profile separately.
 

@@ -102,8 +102,9 @@ Measured results:
 |---|---:|---:|---:|---:|---:|---:|---:|
 | local-gpu-small | 16 | 1024 | 2084 | 34.74s | 33.17s | 122693 | 19365.1 |
 | local-cpu-small | 32 | 384 | 4691 | 201.23s | 198.18s | ~1678944 | ~8472 |
+| openrouter-qwen3-8b | 32 | 4096 | 2084 | 139.63s | 138.05s | ~631335 | ~4573.1 |
 
-OpenRouter benchmark was skipped because neither `RUST_CODE_MCP_OPENROUTER_API_KEY` nor `OPENROUTER_API_KEY` was present.
+OpenRouter benchmark was initially skipped because neither `RUST_CODE_MCP_OPENROUTER_API_KEY` nor `OPENROUTER_API_KEY` was present. It was later rerun successfully with `OPENROUTER_API_KEY` set. The key was not written to the report.
 
 ## Remaining Notes
 
