@@ -438,7 +438,7 @@ Acceptance criteria:
 
 ## Phase 8: Tests And Verification
 
-Status: Not started.
+Status: Unit-test coverage added; verification commands pending confirmed Nix shell.
 
 Unit tests:
 

@@ -97,7 +97,13 @@ impl ProjectPaths {
     }
 
     pub fn indexed_profiles(dir: &Path) -> Result<Vec<IndexedProfilePaths>, String> {
-        let vectors_root = Self::vectors_root();
+        Self::indexed_profiles_in_root(dir, &Self::vectors_root())
+    }
+
+    fn indexed_profiles_in_root(
+        dir: &Path,
+        vectors_root: &Path,
+    ) -> Result<Vec<IndexedProfilePaths>, String> {
         if !vectors_root.exists() {
             return Ok(Vec::new());
         }
@@ -202,4 +208,77 @@ fn read_embedder_identity(vector_path: &Path) -> Result<Option<String>, String> 
         })?;
 
     Ok(Some(identity.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embeddings::{EmbeddingBackend, EmbeddingProfile};
+    use tempfile::TempDir;
+
+    fn write_metadata(collection: &Path, identity: &str) {
+        std::fs::create_dir_all(collection).unwrap();
+        std::fs::write(
+            collection.join("metadata.json"),
+            serde_json::json!({ "embedder_version": identity }).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn indexed_profiles_discovers_multiple_existing_profile_indexes() {
+        let vectors_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rust-code-mcp-indexed-profiles-test");
+        let prefix = collection_prefix(project_dir);
+        let default_backend = EmbeddingBackend::default();
+        let cpu_backend = EmbeddingBackend::from_profile(
+            EmbeddingProfile::parse("local-cpu-small").unwrap(),
+        );
+
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}default")),
+            &default_backend.identity(),
+        );
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}cpu")),
+            &cpu_backend.identity(),
+        );
+        write_metadata(
+            &vectors_root.path().join("code_chunks_other_ignored"),
+            &default_backend.identity(),
+        );
+
+        let mut indexes =
+            ProjectPaths::indexed_profiles_in_root(project_dir, vectors_root.path()).unwrap();
+        indexes.sort_by(|a, b| a.backend.model_id().cmp(b.backend.model_id()));
+
+        assert_eq!(indexes.len(), 2);
+        assert!(indexes
+            .iter()
+            .any(|indexed| indexed.backend.model_id() == default_backend.model_id()));
+        assert!(indexes
+            .iter()
+            .any(|indexed| indexed.backend.model_id() == cpu_backend.model_id()));
+    }
+
+    #[test]
+    fn indexed_profiles_preserves_legacy_stored_identity() {
+        let vectors_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rust-code-mcp-legacy-index-test");
+        let prefix = collection_prefix(project_dir);
+        let legacy_identity =
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2";
+
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}legacy")),
+            legacy_identity,
+        );
+
+        let indexes =
+            ProjectPaths::indexed_profiles_in_root(project_dir, vectors_root.path()).unwrap();
+
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].stored_identity, legacy_identity);
+        assert_eq!(indexes[0].backend.profile.name(), "local-gpu-small");
+    }
 }
