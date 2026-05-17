@@ -484,7 +484,8 @@ Acceptance criteria:
 
 ## Phase 9: Documentation
 
-Status: Not started.
+Status: Completed; embedding docs and `.docs/multi-provider-plan-report.md`
+added.
 
 - Document `embedding_profiles.toml` and `RUST_CODE_MCP_EMBEDDING_PROFILES`.
 - Document the v2 identity format and the built-in profile list.
