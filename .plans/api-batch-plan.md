@@ -117,7 +117,23 @@ Acceptance criteria:
 
 ## Phase 2: Add Remote Batch Planning
 
-Status: Planned.
+Status: Implemented.
+
+Implementation notes:
+
+- Added `OpenRouterInput`, `OpenRouterBatchPlan`, and `OpenRouterInputBatch` in `src/embeddings/openrouter.rs`.
+- Added remote planner logic that sorts inputs by estimated token length and original index.
+- Remote plans now respect `max_batch_inputs` and padded `max_batch_tokens`.
+- Oversized single inputs are kept as single-item batches so payload-too-large handling can produce the final split/error behavior.
+- Added tokenizer-backed token length estimation through `EmbeddingTokenCounter`.
+- Added deterministic fallback estimation based on text length when tokenizer loading or counting is unavailable.
+- Added `restore_original_embedding_order` helper for Phase 3 request execution.
+- Added planner unit coverage for sorting, input-count limits, token-budget limits, oversized inputs, original order restoration, benchmark-shaped request count, and fallback token estimation.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 

@@ -1,7 +1,7 @@
 //! OpenRouter embeddings backend.
 
 use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime};
-use crate::embeddings::{Embedding, EmbeddingError};
+use crate::embeddings::{Embedding, EmbeddingError, EmbeddingTokenCounter};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -23,7 +23,6 @@ const MAX_BATCH_INPUTS: usize = 512;
 const MAX_BATCH_TOKENS: usize = 1_048_576;
 const MAX_CONCURRENCY: usize = 16;
 
-#[derive(Clone)]
 pub(super) struct OpenRouterEmbedder {
     client: reqwest::Client,
     api_key: String,
@@ -31,6 +30,7 @@ pub(super) struct OpenRouterEmbedder {
     model: String,
     dim: usize,
     config: OpenRouterRuntimeConfig,
+    token_counter: Option<EmbeddingTokenCounter>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,19 @@ enum OpenRouterBatchError {
     Fatal(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenRouterInput {
+    original_index: usize,
+    text: String,
+    token_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenRouterBatchPlan {
+    start: usize,
+    end: usize,
+}
+
 impl OpenRouterEmbedder {
     pub(super) fn new(backend: &EmbeddingBackend) -> Result<Self, EmbeddingError> {
         if backend.runtime != EmbeddingRuntime::OpenRouter {
@@ -109,6 +122,22 @@ impl OpenRouterEmbedder {
             .build()
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;
         let config = openrouter_runtime_config_from_env();
+        let token_counter = match EmbeddingTokenCounter::from_backend(backend) {
+            Ok(counter) => {
+                tracing::info!(
+                    max_len = counter.max_len(),
+                    "OpenRouter token counter initialized"
+                );
+                Some(counter)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "OpenRouter token counter unavailable; remote batches will use text-length estimates"
+                );
+                None
+            }
+        };
 
         tracing::info!(
             max_batch_inputs = config.max_batch_inputs,
@@ -125,6 +154,7 @@ impl OpenRouterEmbedder {
             model,
             dim: backend.dim(),
             config,
+            token_counter,
         })
     }
 
@@ -144,6 +174,35 @@ impl OpenRouterEmbedder {
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
         self.embed_with_split(texts, "search_query").await
+    }
+
+    fn plan_remote_batches(&self, texts: Vec<String>) -> Vec<OpenRouterInputBatch> {
+        let token_lengths = self.estimate_token_lengths(&texts);
+        plan_remote_input_batches(texts, token_lengths, self.config)
+    }
+
+    fn estimate_token_lengths(&self, texts: &[String]) -> Vec<usize> {
+        if let Some(counter) = self.token_counter.as_ref() {
+            match counter.count_batch(texts) {
+                Ok(lengths) => {
+                    return lengths
+                        .into_iter()
+                        .map(|len| len.capped_tokens.max(1))
+                        .collect();
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "OpenRouter token counting failed; remote batches will use text-length estimates"
+                    );
+                }
+            }
+        }
+
+        texts
+            .iter()
+            .map(|text| fallback_token_estimate(text).max(1))
+            .collect()
     }
 
     async fn embed_with_split(
@@ -270,6 +329,144 @@ impl OpenRouterEmbedder {
             last_retryable.unwrap_or_else(|| "OpenRouter request failed".to_string()),
         ))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenRouterInputBatch {
+    inputs: Vec<OpenRouterInput>,
+}
+
+impl OpenRouterInputBatch {
+    fn texts(&self) -> Vec<String> {
+        self.inputs
+            .iter()
+            .map(|input| input.text.clone())
+            .collect()
+    }
+
+    fn len(&self) -> usize {
+        self.inputs.len()
+    }
+
+    fn max_token_len(&self) -> usize {
+        self.inputs
+            .iter()
+            .map(|input| input.token_len)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn padded_tokens(&self) -> usize {
+        self.len() * self.max_token_len()
+    }
+}
+
+fn plan_remote_input_batches(
+    texts: Vec<String>,
+    token_lengths: Vec<usize>,
+    config: OpenRouterRuntimeConfig,
+) -> Vec<OpenRouterInputBatch> {
+    assert_eq!(
+        texts.len(),
+        token_lengths.len(),
+        "OpenRouter planner requires one token length per text"
+    );
+
+    let mut inputs: Vec<OpenRouterInput> = texts
+        .into_iter()
+        .zip(token_lengths)
+        .enumerate()
+        .map(|(original_index, (text, token_len))| OpenRouterInput {
+            original_index,
+            text,
+            token_len: token_len.max(1),
+        })
+        .collect();
+
+    sort_openrouter_inputs(&mut inputs);
+    plan_openrouter_batches(&inputs, config)
+        .into_iter()
+        .map(|plan| OpenRouterInputBatch {
+            inputs: inputs[plan.start..plan.end].to_vec(),
+        })
+        .collect()
+}
+
+fn sort_openrouter_inputs(inputs: &mut [OpenRouterInput]) {
+    inputs.sort_by_key(|input| (input.token_len, input.original_index));
+}
+
+fn plan_openrouter_batches(
+    inputs: &[OpenRouterInput],
+    config: OpenRouterRuntimeConfig,
+) -> Vec<OpenRouterBatchPlan> {
+    if inputs.is_empty() {
+        return Vec::new();
+    }
+
+    let max_batch_inputs = config.max_batch_inputs.max(1);
+    let max_batch_tokens = config.max_batch_tokens.max(1);
+    let mut plans = Vec::new();
+    let mut start = 0usize;
+    let mut batch_len = 0usize;
+    let mut batch_max_tokens = 0usize;
+
+    for (idx, input) in inputs.iter().enumerate() {
+        let item_tokens = input.token_len.max(1);
+        let next_len = batch_len + 1;
+        let next_max_tokens = batch_max_tokens.max(item_tokens);
+        let exceeds_count = next_len > max_batch_inputs;
+        let exceeds_token_budget = next_len * next_max_tokens > max_batch_tokens;
+
+        if batch_len > 0 && (exceeds_count || exceeds_token_budget) {
+            plans.push(OpenRouterBatchPlan { start, end: idx });
+            start = idx;
+            batch_len = 0;
+            batch_max_tokens = 0;
+        }
+
+        batch_len += 1;
+        batch_max_tokens = batch_max_tokens.max(item_tokens);
+    }
+
+    if batch_len > 0 {
+        plans.push(OpenRouterBatchPlan {
+            start,
+            end: inputs.len(),
+        });
+    }
+
+    plans
+}
+
+fn fallback_token_estimate(text: &str) -> usize {
+    text.len().div_ceil(4).max(1)
+}
+
+fn restore_original_embedding_order(
+    expected_count: usize,
+    embeddings: Vec<(usize, Embedding)>,
+) -> Result<Vec<Embedding>, String> {
+    let mut output: Vec<Option<Embedding>> = vec![None; expected_count];
+    for (original_index, embedding) in embeddings {
+        if original_index >= expected_count {
+            return Err(format!(
+                "OpenRouter embedding result had out-of-range original index {} for {} inputs",
+                original_index, expected_count
+            ));
+        }
+        output[original_index] = Some(embedding);
+    }
+
+    output
+        .into_iter()
+        .enumerate()
+        .map(|(idx, maybe)| {
+            maybe.ok_or_else(|| {
+                format!("OpenRouter embedding result omitted original index {idx}")
+            })
+        })
+        .collect()
 }
 
 fn api_key_from_env() -> Result<String, EmbeddingError> {
@@ -587,6 +784,119 @@ mod tests {
         assert_eq!(config.concurrency, MAX_CONCURRENCY);
     }
 
+    #[test]
+    fn sorts_openrouter_inputs_by_token_length_then_original_index() {
+        let mut inputs = vec![
+            openrouter_input(2, "c", 4),
+            openrouter_input(0, "a", 8),
+            openrouter_input(1, "b", 4),
+        ];
+
+        sort_openrouter_inputs(&mut inputs);
+
+        let original_indices: Vec<usize> =
+            inputs.iter().map(|input| input.original_index).collect();
+        assert_eq!(original_indices, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn plans_openrouter_batches_by_input_count() {
+        let batches = plan_remote_input_batches(
+            vec!["a", "b", "c", "d", "e"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            vec![1, 1, 1, 1, 1],
+            test_config(2, 100, 4),
+        );
+
+        let batch_lens: Vec<usize> = batches.iter().map(OpenRouterInputBatch::len).collect();
+        assert_eq!(batch_lens, vec![2, 2, 1]);
+    }
+
+    #[test]
+    fn plans_openrouter_batches_by_padded_token_budget() {
+        let batches = plan_remote_input_batches(
+            vec!["a", "b", "c", "d"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            vec![4, 4, 8, 8],
+            test_config(4, 16, 4),
+        );
+
+        let batch_lens: Vec<usize> = batches.iter().map(OpenRouterInputBatch::len).collect();
+        let padded_tokens: Vec<usize> =
+            batches.iter().map(OpenRouterInputBatch::padded_tokens).collect();
+
+        assert_eq!(batch_lens, vec![2, 2]);
+        assert_eq!(padded_tokens, vec![8, 16]);
+    }
+
+    #[test]
+    fn plans_openrouter_oversize_input_as_single_batch() {
+        let batches = plan_remote_input_batches(
+            vec!["oversize", "small"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            vec![32, 2],
+            test_config(4, 16, 4),
+        );
+
+        assert!(batches.iter().any(|batch| {
+            batch.len() == 1
+                && batch.inputs[0].original_index == 0
+                && batch.inputs[0].token_len == 32
+        }));
+    }
+
+    #[test]
+    fn openrouter_planner_keeps_original_indices_for_order_restoration() {
+        let batches = plan_remote_input_batches(
+            vec!["third", "first", "second"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            vec![9, 3, 6],
+            test_config(8, 100, 4),
+        );
+        let pairs: Vec<(usize, Embedding)> = batches
+            .into_iter()
+            .flat_map(|batch| batch.inputs)
+            .map(|input| (input.original_index, vec![input.original_index as f32]))
+            .collect();
+
+        let restored = restore_original_embedding_order(3, pairs).unwrap();
+
+        assert_eq!(restored, vec![vec![0.0], vec![1.0], vec![2.0]]);
+    }
+
+    #[test]
+    fn openrouter_planner_benchmark_shape_targets_fewer_requests() {
+        let text_count = 2084;
+        let batches = plan_remote_input_batches(
+            (0..text_count)
+                .map(|idx| format!("chunk {idx}"))
+                .collect(),
+            vec![300; text_count],
+            test_config(128, 131_072, 4),
+        );
+
+        assert!(
+            (8..=20).contains(&batches.len()),
+            "expected 8-20 batches, got {}",
+            batches.len()
+        );
+    }
+
+    #[test]
+    fn fallback_token_estimate_is_deterministic_and_nonzero() {
+        assert_eq!(fallback_token_estimate(""), 1);
+        assert_eq!(fallback_token_estimate("abcd"), 1);
+        assert_eq!(fallback_token_estimate("abcde"), 2);
+    }
+
     fn config_from_pairs(pairs: &[(&str, &str)]) -> OpenRouterRuntimeConfig {
         resolve_openrouter_runtime_config(|key| {
             pairs
@@ -600,5 +910,26 @@ mod tests {
                 })
                 .ok_or(std::env::VarError::NotPresent)
         })
+    }
+
+    fn openrouter_input(original_index: usize, text: &str, token_len: usize) -> OpenRouterInput {
+        OpenRouterInput {
+            original_index,
+            text: text.to_string(),
+            token_len,
+        }
+    }
+
+    fn test_config(
+        max_batch_inputs: usize,
+        max_batch_tokens: usize,
+        concurrency: usize,
+    ) -> OpenRouterRuntimeConfig {
+        OpenRouterRuntimeConfig {
+            max_batch_inputs,
+            max_batch_tokens,
+            concurrency,
+            encoding_format: OpenRouterEncodingFormat::Float,
+        }
     }
 }
