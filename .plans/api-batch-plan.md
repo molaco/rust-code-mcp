@@ -460,7 +460,24 @@ Acceptance criteria:
 
 ## Phase 8: Optional Base64 Encoding Benchmark
 
-Status: Planned after float batching is stable.
+Status: Implemented as opt-in support; default remains `float`.
+
+Implementation notes:
+
+- Kept `float` as the default `RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT`.
+- Added `base64` as an accepted OpenRouter encoding override.
+- Added `EmbeddingResponseEmbedding` as an untagged response enum for float vectors or base64 strings.
+- Added local standard-base64 decoding to avoid adding a new direct dependency or changing Cargo/Nix for this phase.
+- Decoded base64 bytes are interpreted as little-endian `f32` values.
+- Dimension validation is shared with float vectors.
+- Added tests for valid base64 response parsing, invalid base64 errors, and `base64` config parsing.
+- Added `--encoding float|base64` to `examples/openrouter_batch_matrix.rs`.
+- The benchmark still defaults to `float`; `base64` must be requested explicitly.
+
+Verification notes:
+
+- Source review completed.
+- Cargo tests were not run in this phase because the Nix build shell has not been confirmed for this execution.
 
 Files:
 

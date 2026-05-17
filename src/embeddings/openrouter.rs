@@ -52,12 +52,14 @@ pub struct OpenRouterRuntimeConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenRouterEncodingFormat {
     Float,
+    Base64,
 }
 
 impl OpenRouterEncodingFormat {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Float => "float",
+            Self::Base64 => "base64",
         }
     }
 }
@@ -108,8 +110,24 @@ struct EmbeddingResponse {
 
 #[derive(Debug, Deserialize)]
 struct EmbeddingResponseItem {
-    embedding: Vec<f32>,
+    embedding: EmbeddingResponseEmbedding,
     index: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EmbeddingResponseEmbedding {
+    Float(Vec<f32>),
+    Base64(String),
+}
+
+impl EmbeddingResponseEmbedding {
+    fn into_embedding(self) -> Result<Embedding, String> {
+        match self {
+            Self::Float(embedding) => Ok(embedding),
+            Self::Base64(encoded) => decode_base64_f32_embedding(&encoded),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -912,6 +930,7 @@ where
 
     match raw.trim().to_ascii_lowercase().as_str() {
         "float" => OpenRouterEncodingFormat::Float,
+        "base64" => OpenRouterEncodingFormat::Base64,
         _ => {
             tracing::warn!(
                 env_var = ENCODING_FORMAT_ENV,
@@ -1111,15 +1130,21 @@ fn parse_embeddings_response(
                 item.index, expected_count
             ));
         }
-        if item.embedding.len() != expected_dim {
+        let embedding = item.embedding.into_embedding().map_err(|err| {
+            format!(
+                "OpenRouter returned invalid base64 embedding at index {}: {err}",
+                item.index
+            )
+        })?;
+        if embedding.len() != expected_dim {
             return Err(format!(
                 "OpenRouter returned embedding dimension {} at index {}, expected {}",
-                item.embedding.len(),
+                embedding.len(),
                 item.index,
                 expected_dim
             ));
         }
-        output[item.index] = Some(item.embedding);
+        output[item.index] = Some(embedding);
     }
 
     output
@@ -1131,6 +1156,94 @@ fn parse_embeddings_response(
             })
         })
         .collect()
+}
+
+fn decode_base64_f32_embedding(encoded: &str) -> Result<Vec<f32>, String> {
+    let bytes = decode_base64_standard(encoded)?;
+    if bytes.len() % 4 != 0 {
+        return Err(format!(
+            "decoded byte length {} is not divisible by 4",
+            bytes.len()
+        ));
+    }
+
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect())
+}
+
+fn decode_base64_standard(encoded: &str) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut quartet = [0u8; 4];
+    let mut quartet_len = 0usize;
+    let mut saw_padding = false;
+
+    for byte in encoded.bytes() {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if saw_padding && byte != b'=' {
+            return Err("non-padding character after base64 padding".to_string());
+        }
+
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => {
+                saw_padding = true;
+                64
+            }
+            _ => {
+                return Err(format!("invalid base64 byte 0x{byte:02x}"));
+            }
+        };
+
+        quartet[quartet_len] = value;
+        quartet_len += 1;
+
+        if quartet_len == 4 {
+            let padding = quartet.iter().filter(|value| **value == 64).count();
+            if padding > 2 {
+                return Err("invalid base64 padding length".to_string());
+            }
+            if quartet[0] == 64 || quartet[1] == 64 {
+                return Err("invalid base64 padding position".to_string());
+            }
+            if padding == 1 && quartet[3] != 64 {
+                return Err("invalid base64 padding position".to_string());
+            }
+            if padding == 2 && (quartet[2] != 64 || quartet[3] != 64) {
+                return Err("invalid base64 padding position".to_string());
+            }
+
+            let b0 = quartet[0] as u32;
+            let b1 = quartet[1] as u32;
+            let b2 = if quartet[2] == 64 { 0 } else { quartet[2] as u32 };
+            let b3 = if quartet[3] == 64 { 0 } else { quartet[3] as u32 };
+            let triple = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
+
+            output.push(((triple >> 16) & 0xff) as u8);
+            if padding < 2 {
+                output.push(((triple >> 8) & 0xff) as u8);
+            }
+            if padding == 0 {
+                output.push((triple & 0xff) as u8);
+            }
+
+            quartet_len = 0;
+            quartet = [0; 4];
+        }
+    }
+
+    if quartet_len != 0 {
+        return Err("incomplete base64 quartet".to_string());
+    }
+
+    Ok(output)
 }
 
 fn body_snippet(body: &str) -> String {
@@ -1199,6 +1312,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_base64_embeddings_response() {
+        let body = r#"{
+            "data": [
+                {"embedding": "AACAPwAAAEA=", "index": 0}
+            ]
+        }"#;
+
+        let embeddings = parse_embeddings_response(body, 2, 1).unwrap();
+
+        assert_eq!(embeddings, vec![vec![1.0, 2.0]]);
+    }
+
+    #[test]
+    fn rejects_invalid_base64_embeddings_response() {
+        let body = r#"{
+            "data": [
+                {"embedding": "???", "index": 0}
+            ]
+        }"#;
+
+        let err = parse_embeddings_response(body, 2, 1).unwrap_err();
+
+        assert!(err.contains("invalid base64"));
+    }
+
+    #[test]
     fn missing_api_key_is_clear() {
         let err = resolve_api_key(|_| Err(std::env::VarError::NotPresent)).unwrap_err();
 
@@ -1249,7 +1388,7 @@ mod tests {
             (MAX_BATCH_INPUTS_ENV, "0"),
             (MAX_BATCH_TOKENS_ENV, "abc"),
             (CONCURRENCY_ENV, ""),
-            (ENCODING_FORMAT_ENV, "base64"),
+            (ENCODING_FORMAT_ENV, "xml"),
             (PROVIDER_SORT_ENV, "fastest"),
             (PROVIDER_MIN_THROUGHPUT_ENV, "0"),
             (PROVIDER_MAX_LATENCY_ENV, "nan"),
@@ -1260,6 +1399,14 @@ mod tests {
         assert_eq!(config.concurrency, DEFAULT_CONCURRENCY);
         assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Float);
         assert_eq!(config.provider, None);
+    }
+
+    #[test]
+    fn runtime_config_accepts_base64_encoding() {
+        let config = config_from_pairs(&[(ENCODING_FORMAT_ENV, "base64")]);
+
+        assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Base64);
+        assert_eq!(config.encoding_format.as_str(), "base64");
     }
 
     #[test]

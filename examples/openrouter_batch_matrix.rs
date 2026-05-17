@@ -11,6 +11,7 @@
 //! ```sh
 //! ./target/release/examples/openrouter_batch_matrix
 //! ./target/release/examples/openrouter_batch_matrix --inputs 64,128 --tokens 65536,131072 --concurrency 2,4
+//! ./target/release/examples/openrouter_batch_matrix --encoding base64 --inputs 128 --tokens 131072 --concurrency 4
 //! ```
 
 use anyhow::{Context, Result, bail};
@@ -26,6 +27,7 @@ struct BenchmarkResult {
     max_batch_inputs: usize,
     max_batch_tokens: usize,
     concurrency: usize,
+    encoding_format: String,
     total_chunks: usize,
     duration_secs: f64,
     embed_duration_secs: f64,
@@ -55,10 +57,11 @@ fn main() -> Result<()> {
     println!("max batch inputs: {:?}", args.max_batch_inputs);
     println!("max batch tokens: {:?}", args.max_batch_tokens);
     println!("concurrency: {:?}\n", args.concurrency);
+    println!("encoding format: {}\n", args.encoding_format);
     println!(
-        "| inputs | tokens | concurrency | provider | chunks | index wall | embed time | requests | retries | splits | failed | avg req latency | estimated tokens | padded tokens/sec | child wall |"
+        "| inputs | tokens | concurrency | encoding | provider | chunks | index wall | embed time | requests | retries | splits | failed | avg req latency | estimated tokens | padded tokens/sec | child wall |"
     );
-    println!("|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
 
     for max_batch_inputs in &args.max_batch_inputs {
         for max_batch_tokens in &args.max_batch_tokens {
@@ -68,12 +71,14 @@ fn main() -> Result<()> {
                     *max_batch_inputs,
                     *max_batch_tokens,
                     *concurrency,
+                    &args.encoding_format,
                 )?;
                 println!(
-                    "| {} | {} | {} | {} | {} | {:.2}s | {:.2}s | {} | {} | {} | {} | {:.3}s | {} | {:.1} | {:.2}s |",
+                    "| {} | {} | {} | {} | {} | {} | {:.2}s | {:.2}s | {} | {} | {} | {} | {:.3}s | {} | {:.1} | {:.2}s |",
                     result.max_batch_inputs,
                     result.max_batch_tokens,
                     result.concurrency,
+                    result.encoding_format,
                     result.provider_preferences,
                     result.total_chunks,
                     result.duration_secs,
@@ -99,6 +104,7 @@ struct MatrixArgs {
     max_batch_inputs: Vec<usize>,
     max_batch_tokens: Vec<usize>,
     concurrency: Vec<usize>,
+    encoding_format: String,
 }
 
 impl MatrixArgs {
@@ -106,6 +112,7 @@ impl MatrixArgs {
         let mut max_batch_inputs = vec![32, 64, 128];
         let mut max_batch_tokens = vec![32_768, 65_536, 131_072];
         let mut concurrency = vec![1, 2, 4, 8];
+        let mut encoding_format = "float".to_string();
         let mut args = env::args().skip(1);
 
         while let Some(arg) = args.next() {
@@ -126,6 +133,10 @@ impl MatrixArgs {
                     let value = args.next().context("--concurrency requires a comma list")?;
                     concurrency = parse_usize_list(&value, "--concurrency")?;
                 }
+                "--encoding" => {
+                    let value = args.next().context("--encoding requires a value")?;
+                    encoding_format = parse_encoding_format(&value)?;
+                }
                 other => bail!("unknown argument `{other}`"),
             }
         }
@@ -134,13 +145,14 @@ impl MatrixArgs {
             max_batch_inputs,
             max_batch_tokens,
             concurrency,
+            encoding_format,
         })
     }
 }
 
 fn print_usage() {
     println!(
-        "Usage: openrouter_batch_matrix [--inputs LIST] [--tokens LIST] [--concurrency LIST]"
+        "Usage: openrouter_batch_matrix [--inputs LIST] [--tokens LIST] [--concurrency LIST] [--encoding float|base64]"
     );
     println!("Defaults to: --inputs 32,64,128 --tokens 32768,65536,131072 --concurrency 1,2,4,8");
 }
@@ -161,6 +173,14 @@ fn parse_usize_list(raw: &str, label: &str) -> Result<Vec<usize>> {
         bail!("{label} requires at least one value");
     }
     Ok(values)
+}
+
+fn parse_encoding_format(raw: &str) -> Result<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "float" => Ok("float".to_string()),
+        "base64" => Ok("base64".to_string()),
+        other => bail!("unsupported --encoding `{other}`; expected float or base64"),
+    }
 }
 
 fn has_openrouter_key() -> bool {
@@ -189,6 +209,7 @@ fn run_benchmark(
     max_batch_inputs: usize,
     max_batch_tokens: usize,
     concurrency: usize,
+    encoding_format: &str,
 ) -> Result<BenchmarkResult> {
     let tempdir = tempfile::tempdir().context("failed to create benchmark tempdir")?;
     let start = Instant::now();
@@ -207,7 +228,7 @@ fn run_benchmark(
             "RUST_CODE_MCP_OPENROUTER_CONCURRENCY",
             concurrency.to_string(),
         )
-        .env("RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT", "float")
+        .env("RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT", encoding_format)
         .output()
         .with_context(|| format!("failed to run {}", index_bin.display()))?;
     let child_wall_secs = start.elapsed().as_secs_f64();
@@ -255,6 +276,7 @@ fn run_benchmark(
         max_batch_inputs,
         max_batch_tokens,
         concurrency,
+        encoding_format: encoding_format.to_string(),
         total_chunks,
         duration_secs,
         embed_duration_secs,
