@@ -19,6 +19,7 @@ pub use backend::{
     Qwen3Variant, QueryFormatting,
 };
 
+mod openrouter;
 mod qwen3;
 
 mod token_lengths;
@@ -41,8 +42,14 @@ pub struct ChunkWithEmbedding {
 /// Embedding generator backed by Qwen3 over fastembed's Candle path.
 #[derive(Clone)]
 pub struct EmbeddingGenerator {
-    inner: Arc<qwen3::Qwen3Embedder>,
+    inner: EmbeddingGeneratorInner,
     backend: EmbeddingBackend,
+}
+
+#[derive(Clone)]
+enum EmbeddingGeneratorInner {
+    Qwen3(Arc<qwen3::Qwen3Embedder>),
+    OpenRouter(Arc<openrouter::OpenRouterEmbedder>),
 }
 
 impl EmbeddingGenerator {
@@ -54,13 +61,28 @@ impl EmbeddingGenerator {
 
     /// Construct with an explicit backend configuration.
     pub fn with_backend(backend: EmbeddingBackend) -> Result<Self, EmbeddingError> {
-        let inner = Arc::new(qwen3::Qwen3Embedder::new(&backend)?);
+        let inner = match backend.runtime {
+            EmbeddingRuntime::LocalQwen3CandleCuda => {
+                EmbeddingGeneratorInner::Qwen3(Arc::new(qwen3::Qwen3Embedder::new(&backend)?))
+            }
+            EmbeddingRuntime::OpenRouter => EmbeddingGeneratorInner::OpenRouter(Arc::new(
+                openrouter::OpenRouterEmbedder::new(&backend)?,
+            )),
+            EmbeddingRuntime::LocalFastembedOnnxCpu => {
+                return Err(EmbeddingError::model_init(
+                    "local-cpu-small embedding backend is not implemented yet",
+                ));
+            }
+        };
         Ok(Self { inner, backend })
     }
 
     /// Output vector dimension for the active backend.
     pub fn dimensions(&self) -> usize {
-        self.inner.dim()
+        match &self.inner {
+            EmbeddingGeneratorInner::Qwen3(inner) => inner.dim(),
+            EmbeddingGeneratorInner::OpenRouter(inner) => inner.dim(),
+        }
     }
 
     /// Borrow the active backend configuration.
@@ -74,13 +96,20 @@ impl EmbeddingGenerator {
         &self,
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            inner.embed_documents(&refs)
-        })
-        .await
-        .map_err(|e| EmbeddingError::task_join(e.to_string()))?
+        match &self.inner {
+            EmbeddingGeneratorInner::Qwen3(inner) => {
+                let inner = inner.clone();
+                tokio::task::spawn_blocking(move || {
+                    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                    inner.embed_documents(&refs)
+                })
+                .await
+                .map_err(|e| EmbeddingError::task_join(e.to_string()))?
+            }
+            EmbeddingGeneratorInner::OpenRouter(inner) => {
+                inner.embed_documents(texts).await
+            }
+        }
     }
 
     /// Query-side embedding (Qwen3 instruction prefix applied).
@@ -89,13 +118,18 @@ impl EmbeddingGenerator {
         &self,
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
-        let inner = self.inner.clone();
-        tokio::task::spawn_blocking(move || {
-            let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            inner.embed_queries(&refs)
-        })
-        .await
-        .map_err(|e| EmbeddingError::task_join(e.to_string()))?
+        match &self.inner {
+            EmbeddingGeneratorInner::Qwen3(inner) => {
+                let inner = inner.clone();
+                tokio::task::spawn_blocking(move || {
+                    let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                    inner.embed_queries(&refs)
+                })
+                .await
+                .map_err(|e| EmbeddingError::task_join(e.to_string()))?
+            }
+            EmbeddingGeneratorInner::OpenRouter(inner) => inner.embed_queries(texts).await,
+        }
     }
 
     /// Embed a slice of code chunks for the index.

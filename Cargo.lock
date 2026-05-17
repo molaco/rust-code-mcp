@@ -2482,6 +2482,7 @@ dependencies = [
  "ra_ap_vfs",
  "rayon",
  "regex",
+ "reqwest",
  "rmcp",
  "rs_merkle",
  "serde",

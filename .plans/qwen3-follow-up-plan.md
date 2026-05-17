@@ -144,6 +144,8 @@ Verification:
 
 ## Phase 4: Implement OpenRouter Qwen3-Embedding-8B
 
+Status: Complete.
+
 Add a remote embedding backend for quality-first API embeddings.
 
 Configuration:
@@ -186,6 +188,22 @@ Acceptance criteria:
 - Mocked OpenRouter responses parse correctly.
 - Dimension mismatches fail loudly.
 - Network retries do not reorder embeddings.
+
+Completed work:
+
+- Added `src/embeddings/openrouter.rs` with an async OpenRouter embeddings backend.
+- Added direct `reqwest` dependency for JSON API calls.
+- Wired `EmbeddingGenerator` to dispatch by runtime between local Qwen3 and OpenRouter.
+- Implemented `RUST_CODE_MCP_OPENROUTER_API_KEY`, `OPENROUTER_API_KEY`, and optional `RUST_CODE_MCP_OPENROUTER_BASE_URL`.
+- Sends `model`, `input`, `encoding_format`, `dimensions`, and `input_type` to `/api/v1/embeddings`.
+- Preserves response ordering by `index`, validates vector dimensions, retries transient `429`/`5xx`/`529` responses, and splits payload-too-large batches.
+- Added unit coverage for OpenRouter response parsing, dimension mismatch, and missing API key messaging.
+
+Verification:
+
+- Confirmed OpenRouter embeddings API supports `dimensions`, `encoding_format`, and `input_type`.
+- `CUDARC_CUDA_VERSION=12080 cargo check --lib` passed with pre-existing warnings.
+- Live OpenRouter indexing was not run because no API key is configured in this session.
 
 ## Phase 5: Implement Local CPU Small with BGESmallENV15Q
 
