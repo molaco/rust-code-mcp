@@ -359,15 +359,15 @@ mod tests {
         let crate_node = model
             .nodes
             .values()
-            .find(|n| n.kind == NodeKind::Crate && n.qualified_name == "file_search_mcp")
-            .expect("file_search_mcp crate node");
+            .find(|n| n.kind == NodeKind::Crate && n.qualified_name == "rust_code_mcp")
+            .expect("rust_code_mcp crate node");
 
         let root_module = model
             .nodes
             .values()
             .find(|n| {
                 n.kind == NodeKind::Module
-                    && n.qualified_name == "file_search_mcp"
+                    && n.qualified_name == "rust_code_mcp"
                     && n.parent_id == Some(crate_node.id)
             })
             .expect("root module under crate");
@@ -375,7 +375,7 @@ mod tests {
         let graph_module = model
             .nodes
             .values()
-            .find(|n| n.kind == NodeKind::Module && n.qualified_name == "file_search_mcp::graph")
+            .find(|n| n.kind == NodeKind::Module && n.qualified_name == "rust_code_mcp::graph")
             .expect("graph module");
         assert_eq!(graph_module.parent_id, Some(root_module.id));
 
@@ -402,7 +402,7 @@ mod tests {
             .find(|n| {
                 n.kind == NodeKind::Item
                     && matches!(n.item_kind, Some(ItemKind::Struct))
-                    && n.qualified_name == "file_search_mcp::graph::snapshot::OpenedSnapshot"
+                    && n.qualified_name == "rust_code_mcp::graph::snapshot::OpenedSnapshot"
             })
             .expect("OpenedSnapshot struct Item node");
 
@@ -424,7 +424,7 @@ mod tests {
             );
         assert_eq!(
             method.qualified_name,
-            "file_search_mcp::graph::snapshot::OpenedSnapshot::usages_of"
+            "rust_code_mcp::graph::snapshot::OpenedSnapshot::usages_of"
         );
         // Layer 4 backfills file/span via try_to_nav.
         assert!(method.file.is_some(), "method Item should have a file path");
@@ -438,7 +438,7 @@ mod tests {
         // Item: the `load` function we defined in src/graph/loader.rs.
         let load_fn = model.nodes.values().find(|n| {
             n.kind == NodeKind::Item
-                && n.qualified_name == "file_search_mcp::graph::loader::load"
+                && n.qualified_name == "rust_code_mcp::graph::loader::load"
         });
         assert!(load_fn.is_some(), "expected graph::loader::load Item node");
 

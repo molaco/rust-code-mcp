@@ -2451,59 +2451,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "file-search-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "bincode 1.3.3",
- "candle-core",
- "directories",
- "fastembed",
- "futures",
- "glob",
- "heed",
- "hf-hub",
- "lancedb",
- "notify 6.1.1",
- "num_cpus",
- "ra_ap_base_db",
- "ra_ap_hir",
- "ra_ap_hir_def",
- "ra_ap_ide",
- "ra_ap_ide_db",
- "ra_ap_load-cargo",
- "ra_ap_paths",
- "ra_ap_project_model",
- "ra_ap_syntax",
- "ra_ap_vfs",
- "rayon",
- "regex",
- "reqwest",
- "rmcp",
- "rs_merkle",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha2",
- "sled",
- "sysinfo",
- "tantivy",
- "tempfile",
- "text-splitter",
- "thiserror 1.0.69",
- "tokenizers",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "filetime"
 version = "0.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7338,6 +7285,59 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb09b49230ba22e8c676e7b75dfe2887dea8121f18b530ae0ba519ce442d2b21"
 dependencies = [
  "sha2",
+]
+
+[[package]]
+name = "rust-code-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "bincode 1.3.3",
+ "candle-core",
+ "directories",
+ "fastembed",
+ "futures",
+ "glob",
+ "heed",
+ "hf-hub",
+ "lancedb",
+ "notify 6.1.1",
+ "num_cpus",
+ "ra_ap_base_db",
+ "ra_ap_hir",
+ "ra_ap_hir_def",
+ "ra_ap_ide",
+ "ra_ap_ide_db",
+ "ra_ap_load-cargo",
+ "ra_ap_paths",
+ "ra_ap_project_model",
+ "ra_ap_syntax",
+ "ra_ap_vfs",
+ "rayon",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "rs_merkle",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "sled",
+ "sysinfo",
+ "tantivy",
+ "tempfile",
+ "text-splitter",
+ "thiserror 1.0.69",
+ "tokenizers",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]

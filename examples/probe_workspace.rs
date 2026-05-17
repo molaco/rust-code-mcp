@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use file_search_mcp::graph::{
+use rust_code_mcp::graph::{
     BuildOptions, GraphEnvOptions, GraphPaths, build_and_persist, open_current,
 };
 

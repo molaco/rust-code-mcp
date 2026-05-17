@@ -77,7 +77,7 @@ each layer.
   `qualified_name = crate_name`. Their `NodeId`s differ (separate `"crate"` vs
   `"module"` kind labels), but `lookup_by_qualified_name` does a linear scan of
   `nodes_by_id` and returns the first match in hash-order. Calling
-  `who_imports("file_search_mcp")` therefore returns either the Crate or the
+  `who_imports("rust_code_mcp")` therefore returns either the Crate or the
   root Module non-deterministically; if it lands on the Crate, the result is
   empty (no binding ever targets a Crate node) instead of "all importers of the
   root module". This is what commit `e3b1666c` partially fixes — but only inside
@@ -164,12 +164,12 @@ parse `Cargo.toml` by hand to compare against the loader's view.
 
 - **minor — Phase 2 fallback never triggers when Phase 1 returns the WRONG
   match.** The Phase 1 scan walks all nodes and returns the first node
-  whose `qualified_name == name`. For an ambiguous name (`file_search_mcp`,
+  whose `qualified_name == name`. For an ambiguous name (`rust_code_mcp`,
   matching both Crate and root Module), Phase 1 picks one of them and Phase
   2 never runs. Whether the caller gets the "right" answer depends on
   iteration order. The fix in `resolve_required_node` papers over this for
   `expect_kind == Module`, but `who_imports` calls `lookup_by_qualified_name`
-  *without* the wrapper, so `who_imports("file_search_mcp")` can still
+  *without* the wrapper, so `who_imports("rust_code_mcp")` can still
   silently return an empty list because it resolved to the Crate node.
 - **minor — Performance: Phase 2 recursion does an O(N) `nodes_by_id`
   iterator scan per hop.** With `MAX_REEXPORT_HOPS = 8` and N ≈ 40K on

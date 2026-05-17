@@ -1,5 +1,5 @@
-use file_search_mcp::indexing::unified::UnifiedIndexer;
-use file_search_mcp::search::HybridSearch;
+use rust_code_mcp::indexing::unified::UnifiedIndexer;
+use rust_code_mcp::search::HybridSearch;
 use std::path::Path;
 use tempfile::TempDir;
 

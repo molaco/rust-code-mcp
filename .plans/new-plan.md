@@ -30,7 +30,7 @@ refactor after this one is green.
 2. Tests in multiple files depend on
    `crate::graph::queries::tests::shared_snapshot`.
 3. Some tests hard-code canonical names under
-   `file_search_mcp::graph::queries`.
+   `rust_code_mcp::graph::queries`.
 4. Private helper methods and functions will become inaccessible across
    sibling modules unless their visibility is widened narrowly.
 
@@ -453,7 +453,7 @@ contains module declarations and facade re-exports only.
 ## Phase 6: update hard-coded canonical paths in tests
 
 Some tests currently assume declarations live directly in
-`file_search_mcp::graph::queries`. After the split, canonical declaration paths
+`rust_code_mcp::graph::queries`. After the split, canonical declaration paths
 will include the submodule name.
 
 Update these cases intentionally:
@@ -465,13 +465,13 @@ Update these cases intentionally:
    Change the private-import probe from:
 
    ```text
-   file_search_mcp::graph::queries
+   rust_code_mcp::graph::queries
    ```
 
    to a stable submodule that has private imports, such as:
 
    ```text
-   file_search_mcp::graph::queries::lookup
+   rust_code_mcp::graph::queries::lookup
    ```
 
    or whichever split file contains ordinary `use` statements after the move.
@@ -481,13 +481,13 @@ Update these cases intentionally:
    Current target:
 
    ```text
-   file_search_mcp::graph::queries::ForbiddenDependencyRule
+   rust_code_mcp::graph::queries::ForbiddenDependencyRule
    ```
 
    New canonical target should be the declaration path, likely:
 
    ```text
-   file_search_mcp::graph::queries::crate_graph::ForbiddenDependencyRule
+   rust_code_mcp::graph::queries::crate_graph::ForbiddenDependencyRule
    ```
 
    Keep the assertion that `src/graph/mod.rs` re-exports it through
@@ -499,7 +499,7 @@ Update these cases intentionally:
    remains:
 
    ```text
-   file_search_mcp::graph::snapshot::OpenedSnapshot::usages_of
+   rust_code_mcp::graph::snapshot::OpenedSnapshot::usages_of
    ```
 
    but the source file will now be one of the `queries/*.rs` files.

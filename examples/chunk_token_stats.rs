@@ -13,9 +13,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use file_search_mcp::chunker::{ChunkSplitConfig, Chunker};
-use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingTokenCounter};
-use file_search_mcp::parser::RustParser;
+use rust_code_mcp::chunker::{ChunkSplitConfig, Chunker};
+use rust_code_mcp::embeddings::{EmbeddingBackend, EmbeddingTokenCounter};
+use rust_code_mcp::parser::RustParser;
 use walkdir::WalkDir;
 
 /// One observation: token count for a single chunk and where it came from.

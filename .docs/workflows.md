@@ -11,7 +11,7 @@
   - Browse hierarchy. module_tree(crate) → discover symbols by walking the tree. Often the most direct route once you know the crate.
   - Read raw source. read_file_content(path) → just the file contents, when you have a path but no symbol yet.
 
-  Common bridge pattern: search("HybridSearch") → find_definition to confirm location → derive qualified name from path/structure → who_uses("file_search_mcp::search::HybridSearch") for the structural answer.
+  Common bridge pattern: search("HybridSearch") → find_definition to confirm location → derive qualified name from path/structure → who_uses("rust_code_mcp::search::HybridSearch") for the structural answer.
 
   Hypergraph vs RA tools: for aggregate / workspace-wide answers, hypergraph tools (module_tree, crate_edges, who_uses, who_uses_summary) are faster and more precise than find_definition / find_references. Use the RA-driven tools for IDE-like single-symbol browsing, not for "where in the workspace is X?" questions.
 

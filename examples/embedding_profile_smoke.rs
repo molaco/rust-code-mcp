@@ -5,8 +5,8 @@
 //! cargo run --example embedding_profile_smoke -- local-cpu-small
 //! cargo run --example embedding_profile_smoke -- openrouter-qwen3-8b --expect-missing-key
 
-use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingProfile};
-use file_search_mcp::indexing::IncrementalIndexer;
+use rust_code_mcp::embeddings::{EmbeddingBackend, EmbeddingProfile};
+use rust_code_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 
 #[tokio::main(flavor = "current_thread")]

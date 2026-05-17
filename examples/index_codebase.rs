@@ -1,11 +1,11 @@
 //! Index rust-code-mcp codebase for embedding benchmark runs.
 
 use anyhow::{Context, Result, bail};
-use file_search_mcp::embeddings::{
+use rust_code_mcp::embeddings::{
     openrouter_runtime_config, resolve_profile, EmbeddingBackend, EmbeddingProfile,
     EmbeddingRuntime,
 };
-use file_search_mcp::indexing::IncrementalIndexer;
+use rust_code_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
 

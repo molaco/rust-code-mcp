@@ -2621,7 +2621,7 @@ pub(crate) mod tests {
     fn lookup_by_qualified_name_resolves_known_modules() {
         let snap = shared_snapshot();
         let (_id, node) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader")
             .unwrap()
             .expect("graph::loader module found");
         assert_eq!(node.kind, NodeKind::Module);
@@ -2631,7 +2631,7 @@ pub(crate) mod tests {
     fn imports_of_graph_mod_includes_loader_load() {
         let snap = shared_snapshot();
         let (graph_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph")
+            .lookup_by_qualified_name("rust_code_mcp::graph")
             .unwrap()
             .unwrap();
         let imports = snap.imports_of(graph_mod_id).unwrap();
@@ -2645,7 +2645,7 @@ pub(crate) mod tests {
     fn who_imports_finds_target() {
         let snap = shared_snapshot();
         let (load_fn_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
             .unwrap()
             .unwrap();
         let importers = snap.who_imports(load_fn_id).unwrap();
@@ -2656,7 +2656,7 @@ pub(crate) mod tests {
         // The graph::mod re-export should be among them.
         let from_modules: Vec<NodeId> = importers.iter().map(|b| b.from_module).collect();
         let (graph_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph")
+            .lookup_by_qualified_name("rust_code_mcp::graph")
             .unwrap()
             .unwrap();
         assert!(
@@ -2669,11 +2669,11 @@ pub(crate) mod tests {
     fn exports_of_loader_visible_from_graph_mod() {
         let snap = shared_snapshot();
         let (loader_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader")
             .unwrap()
             .unwrap();
         let (graph_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph")
+            .lookup_by_qualified_name("rust_code_mcp::graph")
             .unwrap()
             .unwrap();
         let exports = snap.exports_of(loader_mod_id, graph_mod_id).unwrap();
@@ -2685,18 +2685,18 @@ pub(crate) mod tests {
 
     #[test]
     fn lookup_by_qualified_name_resolves_reexport_facade() {
-        // `file_search_mcp::graph::load` is exposed via `pub use loader::load;`
+        // `rust_code_mcp::graph::load` is exposed via `pub use loader::load;`
         // in src/graph/mod.rs. The canonical declaration lives at
-        // `file_search_mcp::graph::loader::load`. The fallback should follow the
+        // `rust_code_mcp::graph::loader::load`. The fallback should follow the
         // re-export and return the canonical Item node.
         let snap = shared_snapshot();
         let (_id, node) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::load")
             .unwrap()
             .expect("re-export facade should resolve to the canonical Item");
         assert_eq!(node.kind, NodeKind::Item);
         assert_eq!(
-            node.qualified_name, "file_search_mcp::graph::loader::load",
+            node.qualified_name, "rust_code_mcp::graph::loader::load",
             "facade should resolve to the canonical declaration site"
         );
     }
@@ -2707,11 +2707,11 @@ pub(crate) mod tests {
         // and is not affected by the re-export fallback.
         let snap = shared_snapshot();
         let (_id, node) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
             .unwrap()
             .expect("canonical name should resolve directly");
         assert_eq!(node.kind, NodeKind::Item);
-        assert_eq!(node.qualified_name, "file_search_mcp::graph::loader::load");
+        assert_eq!(node.qualified_name, "rust_code_mcp::graph::loader::load");
     }
 
     #[test]
@@ -2721,7 +2721,7 @@ pub(crate) mod tests {
         // rather than spinning.
         let snap = shared_snapshot();
         let result = snap
-            .lookup_by_qualified_name("file_search_mcp::nonexistent::thing")
+            .lookup_by_qualified_name("rust_code_mcp::nonexistent::thing")
             .unwrap();
         assert!(
             result.is_none(),
@@ -2731,16 +2731,16 @@ pub(crate) mod tests {
 
     #[test]
     fn private_visibility_blocks_export() {
-        // file_search_mcp::graph::extract has private helpers like `crate_display_name`.
-        // From outside the loader/extract sibling (e.g., file_search_mcp root module),
+        // rust_code_mcp::graph::extract has private helpers like `crate_display_name`.
+        // From outside the loader/extract sibling (e.g., rust_code_mcp root module),
         // those should NOT be exported.
         let snap = shared_snapshot();
         let (extract_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::extract")
+            .lookup_by_qualified_name("rust_code_mcp::graph::extract")
             .unwrap()
             .unwrap();
         let (root_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp")
             .unwrap()
             .unwrap();
         let exports = snap.exports_of(extract_id, root_id).unwrap();
@@ -2757,7 +2757,7 @@ pub(crate) mod tests {
         // Phase 2 must record at least one Usage row.
         let snap = shared_snapshot();
         let (load_fn_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
             .unwrap()
             .unwrap();
         let usages = snap.usages_of(load_fn_id).unwrap();
@@ -2779,7 +2779,7 @@ pub(crate) mod tests {
         // snapshot module's NodeId.
         let snap = shared_snapshot();
         let (snapshot_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::snapshot")
+            .lookup_by_qualified_name("rust_code_mcp::graph::snapshot")
             .unwrap()
             .unwrap();
         let usages = snap.usages_in(snapshot_mod_id).unwrap();
@@ -2799,7 +2799,7 @@ pub(crate) mod tests {
         // qualified_name here.
         let snap = shared_snapshot();
         let (crate_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp")
             .unwrap()
             .unwrap();
         // The lookup above resolves to the crate root MODULE; map up to the
@@ -2842,7 +2842,7 @@ pub(crate) mod tests {
         let edges = snap.crate_edges().unwrap();
         // The lib uses several external crates (heed, anyhow, serde, ra-ap-*),
         // and a self-only workspace might still have at least one
-        // external→file_search_mcp edge. We only assert non-empty here.
+        // external→rust_code_mcp edge. We only assert non-empty here.
         assert!(
             !edges.is_empty(),
             "expected at least one cross-crate edge in the workspace"
@@ -2984,8 +2984,8 @@ pub(crate) mod tests {
     #[test]
     fn module_tree_roots_at_requested_crate() {
         let snap = shared_snapshot();
-        let tree = snap.module_tree("file_search_mcp", None).unwrap();
-        assert_eq!(tree.qualified_name, "file_search_mcp");
+        let tree = snap.module_tree("rust_code_mcp", None).unwrap();
+        assert_eq!(tree.qualified_name, "rust_code_mcp");
         assert_eq!(tree.kind, "Crate");
         assert!(
             !tree.children.is_empty(),
@@ -2996,19 +2996,19 @@ pub(crate) mod tests {
     #[test]
     fn module_tree_respects_depth_limit() {
         let snap = shared_snapshot();
-        let tree = snap.module_tree("file_search_mcp", Some(0)).unwrap();
+        let tree = snap.module_tree("rust_code_mcp", Some(0)).unwrap();
         // Depth 0 => no children walked.
         assert!(tree.children.is_empty(), "depth=0 must not recurse");
     }
 
     #[test]
     fn declared_reexports_of_lists_all_pub_uses() {
-        // `file_search_mcp::graph` has `pub use loader::load;` (and other
+        // `rust_code_mcp::graph` has `pub use loader::load;` (and other
         // `pub use`s). declared_reexports_of(graph_mod_id) must include `load`
         // and every binding in the result must satisfy is_explicit_pub_use.
         let snap = shared_snapshot();
         let (graph_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph")
+            .lookup_by_qualified_name("rust_code_mcp::graph")
             .unwrap()
             .unwrap();
         let reexports = snap.declared_reexports_of(graph_mod_id).unwrap();
@@ -3032,13 +3032,13 @@ pub(crate) mod tests {
 
     #[test]
     fn explicit_pub_use_is_marked_on_pub_use_bindings() {
-        // `file_search_mcp::graph::mod` carries `pub use loader::load;`. The
+        // `rust_code_mcp::graph::mod` carries `pub use loader::load;`. The
         // resulting binding must have `is_explicit_pub_use == true`. The
         // declared binding for `loader` (sibling module declaration with no
         // `pub use`) must have `is_explicit_pub_use == false`.
         let snap = shared_snapshot();
         let (graph_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph")
+            .lookup_by_qualified_name("rust_code_mcp::graph")
             .unwrap()
             .unwrap();
         let imports = snap.imports_of(graph_mod_id).unwrap();
@@ -3052,9 +3052,9 @@ pub(crate) mod tests {
         );
 
         // A non-pub `use` should land with is_explicit_pub_use == false.
-        // `file_search_mcp::graph::queries` has plenty of private `use` lines.
+        // `rust_code_mcp::graph::queries` has plenty of private `use` lines.
         let (queries_mod_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::queries")
+            .lookup_by_qualified_name("rust_code_mcp::graph::queries")
             .unwrap()
             .unwrap();
         let queries_imports = snap.imports_of(queries_mod_id).unwrap();
@@ -3072,7 +3072,7 @@ pub(crate) mod tests {
     fn who_uses_summary_aggregates_by_consumer() {
         let snap = shared_snapshot();
         let (load_fn_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
             .unwrap()
             .unwrap();
         let summary = snap.who_uses_summary(load_fn_id).unwrap();
@@ -3114,7 +3114,7 @@ pub(crate) mod tests {
         // body — at minimum the loader::load call must be present).
         let snap = shared_snapshot();
         let (caller_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::snapshot::build_and_persist")
+            .lookup_by_qualified_name("rust_code_mcp::graph::snapshot::build_and_persist")
             .unwrap()
             .expect("build_and_persist not in graph");
         let calls = snap
@@ -3135,7 +3135,7 @@ pub(crate) mod tests {
         for c in &calls {
             assert_eq!(
                 c.caller_qualified_name.as_deref(),
-                Some("file_search_mcp::graph::snapshot::build_and_persist"),
+                Some("rust_code_mcp::graph::snapshot::build_and_persist"),
                 "caller mismatch on {:?}",
                 c
             );
@@ -3160,7 +3160,7 @@ pub(crate) mod tests {
         // a depth-2 descent must produce a non-empty `callees` vec on the root.
         let snap = shared_snapshot();
         let (root_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::snapshot::build_and_persist")
+            .lookup_by_qualified_name("rust_code_mcp::graph::snapshot::build_and_persist")
             .unwrap()
             .expect("build_and_persist not in graph");
         let tree = snap
@@ -3168,7 +3168,7 @@ pub(crate) mod tests {
             .expect("call_graph failed");
         assert_eq!(
             tree.fn_qualified_name,
-            "file_search_mcp::graph::snapshot::build_and_persist"
+            "rust_code_mcp::graph::snapshot::build_and_persist"
         );
         assert!(
             !tree.callees.is_empty(),
@@ -3191,7 +3191,7 @@ pub(crate) mod tests {
         // outgoing edges).
         let snap = shared_snapshot();
         let (root_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::snapshot::build_and_persist")
+            .lookup_by_qualified_name("rust_code_mcp::graph::snapshot::build_and_persist")
             .unwrap()
             .expect("build_and_persist not in graph");
         let tree = snap
@@ -3206,17 +3206,17 @@ pub(crate) mod tests {
 
     #[test]
     fn callers_in_crate_filters_correctly() {
-        // `loader::load` is referenced from inside `file_search_mcp` itself
+        // `loader::load` is referenced from inside `rust_code_mcp` itself
         // (e.g., from `build_and_persist`). Filtering by the workspace's own
         // crate must return a strict subset of who_calls — equal or smaller.
         let snap = shared_snapshot();
         let (target_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
             .unwrap()
             .expect("loader::load not in graph");
         let all = snap.who_calls(target_id).expect("who_calls failed");
         let filtered = snap
-            .callers_in_crate(target_id, "file_search_mcp")
+            .callers_in_crate(target_id, "rust_code_mcp")
             .expect("callers_in_crate failed");
         assert!(
             filtered.len() <= all.len(),
@@ -3229,9 +3229,9 @@ pub(crate) mod tests {
             assert!(
                 row.caller_qualified_name
                     .as_deref()
-                    .map(|s| s.starts_with("file_search_mcp"))
+                    .map(|s| s.starts_with("rust_code_mcp"))
                     .unwrap_or(false),
-                "caller {:?} not in file_search_mcp",
+                "caller {:?} not in rust_code_mcp",
                 row.caller_qualified_name
             );
         }
@@ -3251,7 +3251,7 @@ pub(crate) mod tests {
     fn enum_variants_returns_expected_set() {
         let snap = shared_snapshot();
         let (enum_id, enum_node) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::model::BindingKind")
+            .lookup_by_qualified_name("rust_code_mcp::graph::model::BindingKind")
             .unwrap()
             .expect("BindingKind enum not in graph");
         assert_eq!(enum_node.kind, NodeKind::Item);
@@ -3279,7 +3279,7 @@ pub(crate) mod tests {
             assert_eq!(v.parent_id, Some(enum_id));
             assert_eq!(
                 v.qualified_name,
-                format!("file_search_mcp::graph::model::BindingKind::{}", v.display_name)
+                format!("rust_code_mcp::graph::model::BindingKind::{}", v.display_name)
             );
             assert!(v.file.is_some(), "variant should have a file path");
             assert!(v.span.is_some(), "variant should have a span");
@@ -3294,7 +3294,7 @@ pub(crate) mod tests {
     fn item_attributes_of_node_struct_includes_derive() {
         let snap = shared_snapshot();
         let (id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::model::Node")
+            .lookup_by_qualified_name("rust_code_mcp::graph::model::Node")
             .unwrap()
             .expect("Node struct not in snapshot");
         let attrs = snap.item_attributes(id).expect("item_attributes failed");
@@ -3313,15 +3313,15 @@ pub(crate) mod tests {
     /// v8: `items_with_attribute(crate, pattern)` anchor-matches the
     /// attribute strings on every Item in the crate. Searching for
     /// `#[derive(` (anchored at the attribute start) across
-    /// `file_search_mcp` should find at least the `Node` and `ItemKind`
+    /// `rust_code_mcp` should find at least the `Node` and `ItemKind`
     /// types.
     #[test]
     fn items_with_attribute_finds_derive_users() {
         let snap = shared_snapshot();
-        // Resolve the crate node — `file_search_mcp` resolves to the crate
+        // Resolve the crate node — `rust_code_mcp` resolves to the crate
         // root MODULE; promote to the actual Crate node via parent_id.
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp")
             .unwrap()
             .unwrap();
         let crate_id = if root_node.kind == NodeKind::Crate {
@@ -3334,19 +3334,19 @@ pub(crate) mod tests {
             .expect("items_with_attribute failed");
         assert!(
             !hits.is_empty(),
-            "expected at least one derive-bearing item in file_search_mcp"
+            "expected at least one derive-bearing item in rust_code_mcp"
         );
         let qnames: Vec<String> = hits.iter().map(|h| h.qualified_name.clone()).collect();
         assert!(
             qnames
                 .iter()
-                .any(|q| q == "file_search_mcp::graph::model::Node"),
+                .any(|q| q == "rust_code_mcp::graph::model::Node"),
             "expected Node among derive-bearing items, got {qnames:?}"
         );
         assert!(
             qnames
                 .iter()
-                .any(|q| q == "file_search_mcp::graph::model::ItemKind"),
+                .any(|q| q == "rust_code_mcp::graph::model::ItemKind"),
             "expected ItemKind among derive-bearing items, got {qnames:?}"
         );
         // Every hit must carry a derive in its matched_attribute. With the
@@ -3378,7 +3378,7 @@ pub(crate) mod tests {
     fn items_with_attribute_does_not_match_pattern_inside_attr_body() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp")
             .unwrap()
             .unwrap();
         let crate_id = if root_node.kind == NodeKind::Crate {
@@ -3426,7 +3426,7 @@ pub(crate) mod tests {
     fn items_with_attribute_empty_pattern_returns_nothing() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp")
             .unwrap()
             .unwrap();
         let crate_id = if root_node.kind == NodeKind::Crate {
@@ -3445,7 +3445,7 @@ pub(crate) mod tests {
     }
 
     /// Phase 4a smoke: `pub_use_pub_type_audit` returns without error
-    /// against the `file_search_mcp` workspace. Result set may be empty
+    /// against the `rust_code_mcp` workspace. Result set may be empty
     /// (this codebase doesn't necessarily contain the antipattern); when
     /// non-empty, every entry must carry a non-empty qualified name and
     /// distinct alias / pub_use_target NodeIds.
@@ -3453,7 +3453,7 @@ pub(crate) mod tests {
     fn pub_use_pub_type_audit_smoke() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("file_search_mcp")
+            .lookup_by_qualified_name("rust_code_mcp")
             .unwrap()
             .unwrap();
         let crate_id = if root_node.kind == NodeKind::Crate {
@@ -3491,7 +3491,7 @@ pub(crate) mod tests {
         let snap = shared_snapshot();
         let (target_id, _) = snap
             .lookup_by_qualified_name(
-                "file_search_mcp::graph::queries::ForbiddenDependencyRule",
+                "rust_code_mcp::graph::queries::ForbiddenDependencyRule",
             )
             .unwrap()
             .expect("ForbiddenDependencyRule canonical decl not in snapshot");
@@ -3567,7 +3567,7 @@ pub(crate) mod tests {
         // count must be >= depth=1 count.
         let snap = shared_snapshot();
         let (target_id, _) = snap
-            .lookup_by_qualified_name("file_search_mcp::graph::loader::load")
+            .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
             .unwrap()
             .expect("loader::load not in graph");
         let depth1 = snap

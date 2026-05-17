@@ -4,9 +4,9 @@
 //! Human-readable diagnostics must go to stderr/tracing or tool results.
 
 use anyhow::{Context, Result, anyhow};
-use file_search_mcp::embeddings::EmbeddingBackend;
-use file_search_mcp::indexing::incremental::get_snapshot_path;
-use file_search_mcp::tools::project_paths::ProjectPaths;
+use rust_code_mcp::embeddings::EmbeddingBackend;
+use rust_code_mcp::indexing::incremental::get_snapshot_path;
+use rust_code_mcp::tools::project_paths::ProjectPaths;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -80,7 +80,7 @@ fn test_index_codebase_force_reindex_stdout_is_json_only() -> Result<()> {
     )?;
 
     let mut child = ChildGuard {
-        child: Command::new(env!("CARGO_BIN_EXE_file-search-mcp"))
+        child: Command::new(env!("CARGO_BIN_EXE_rust-code-mcp"))
             .env("RUST_LOG", "error")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

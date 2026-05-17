@@ -3,7 +3,7 @@
 //! embed_documents vs embed_queries produce DIFFERENT vectors for
 //! the same input (proves the instruction prefix is applied).
 
-use file_search_mcp::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+use rust_code_mcp::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 

@@ -6,7 +6,7 @@
 //! 3. Scaling characteristics
 
 use anyhow::Result;
-use file_search_mcp::indexing::IncrementalIndexer;
+use rust_code_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use tempfile::TempDir;
 

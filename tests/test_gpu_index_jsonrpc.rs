@@ -82,7 +82,7 @@ async fn call_index_tool_direct(
     codebase_path: &str,
     force_reindex: bool,
 ) -> Result<rmcp::model::CallToolResult> {
-    use file_search_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+    use rust_code_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
 
     let params = IndexCodebaseParams {
         directory: codebase_path.to_string(),
@@ -328,7 +328,7 @@ async fn test_json_rpc_error_handling() -> Result<()> {
 #[tokio::test]
 #[ignore]
 async fn test_gpu_memory_monitoring() -> Result<()> {
-    use file_search_mcp::metrics::memory::MemoryMonitor;
+    use rust_code_mcp::metrics::memory::MemoryMonitor;
 
     println!("\n========================================");
     println!("GPU Memory Monitoring Test");

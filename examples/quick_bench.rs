@@ -1,7 +1,7 @@
 //! Quick GPU benchmark - run with: cargo run --release --bin quick_bench
 
-use file_search_mcp::embeddings::EMBEDDING_DIM;
-use file_search_mcp::indexing::IncrementalIndexer;
+use rust_code_mcp::embeddings::EMBEDDING_DIM;
+use rust_code_mcp::indexing::IncrementalIndexer;
 use std::path::PathBuf;
 use std::time::Instant;
 

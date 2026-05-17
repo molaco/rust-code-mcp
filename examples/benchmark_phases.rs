@@ -1,12 +1,12 @@
 //! Benchmark each indexing phase separately
 
-use file_search_mcp::indexing::incremental::IncrementalIndexer;
-use file_search_mcp::indexing::merkle::FileSystemMerkle;
-use file_search_mcp::parser::RustParser;
-use file_search_mcp::chunker::Chunker;
-use file_search_mcp::embeddings::EmbeddingGenerator;
-use file_search_mcp::security::SensitiveFileFilter;
-use file_search_mcp::security::secrets::SecretsScanner;
+use rust_code_mcp::indexing::incremental::IncrementalIndexer;
+use rust_code_mcp::indexing::merkle::FileSystemMerkle;
+use rust_code_mcp::parser::RustParser;
+use rust_code_mcp::chunker::Chunker;
+use rust_code_mcp::embeddings::EmbeddingGenerator;
+use rust_code_mcp::security::SensitiveFileFilter;
+use rust_code_mcp::security::secrets::SecretsScanner;
 use std::path::PathBuf;
 use std::time::Instant;
 use walkdir::WalkDir;
@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // We'll use the actual incremental indexer for accurate timing
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        use file_search_mcp::vector_store::VectorStore;
+        use rust_code_mcp::vector_store::VectorStore;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
@@ -189,11 +189,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("\nPHASE 4: TANTIVY INDEXING");
     let tantivy_start = Instant::now();
     {
-        use file_search_mcp::indexing::tantivy_adapter::TantivyAdapter;
+        use rust_code_mcp::indexing::tantivy_adapter::TantivyAdapter;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        let config = file_search_mcp::config::TantivyConfig::for_codebase_size(
+        let config = rust_code_mcp::config::TantivyConfig::for_codebase_size(
             temp_dir.path(), None
         );
         let mut adapter = TantivyAdapter::new(config).unwrap();
@@ -239,7 +239,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("    collection: {}", collection_name);
 
         // Delete existing snapshot to force full reindex
-        let snapshot_path = file_search_mcp::indexing::incremental::get_snapshot_path(&dir);
+        let snapshot_path = rust_code_mcp::indexing::incremental::get_snapshot_path(&dir);
         let _ = std::fs::remove_file(&snapshot_path);
         println!("  Deleted snapshot to force full reindex");
 

@@ -8,8 +8,8 @@
 //! 5. Result formatting
 
 use anyhow::Result;
-use file_search_mcp::mcp::SyncManager;
-use file_search_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+use rust_code_mcp::mcp::SyncManager;
+use rust_code_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;

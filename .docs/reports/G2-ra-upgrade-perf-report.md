@@ -77,7 +77,7 @@ claim `no_deps=true`.
   correctly drops them. Worth double-checking that `is_local()` matches the
   old `member_roots` set on the existing snapshot; the kept
   `loads_self_workspace` test gives some confidence but only checks
-  non-emptiness + presence of `file_search_mcp`.
+  non-emptiness + presence of `rust_code_mcp`.
 - **Nit — bounded-ness of cross-crate resolution**: with `no_deps: false`
   + `sysroot: Discover` + `all_targets: true`, RA loads the full dep graph and
   sysroot. The walk downstream is bounded by `local_crates` (filtered to
@@ -95,7 +95,7 @@ is the only real wart. Major.
 **What it does**
 
 Replaces the previous `EnvFilter::from_default_env().add_directive(Level::DEBUG)`
-default with `EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,file_search_mcp=info"))`.
+default with `EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,rust_code_mcp=info"))`.
 Comment explains the 7s → 7+ minute regression that DEBUG-level RA tracing
 caused on the formatter+stderr pipeline.
 
@@ -107,7 +107,7 @@ caused on the formatter+stderr pipeline.
   (the explicit `Level::DEBUG.into()` directive would still apply if env
   parsing failed). Net same. No issue.
 - **Nit — important-warnings exposure**: our crate's own `info!`/`debug!`
-  emissions are still surfaced (`file_search_mcp=info`). `warn!` from any
+  emissions are still surfaced (`rust_code_mcp=info`). `warn!` from any
   crate is preserved. Errors and warnings still surface. The only thing
   silenced relative to the prior default is library-crate `debug!`/`trace!`,
   which is exactly what we want.

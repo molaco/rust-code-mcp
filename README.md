@@ -8,11 +8,12 @@ An MCP server for searching and analyzing Rust codebases. Combines hybrid BM25 +
 
 ![Architecture](architecture.mmd.svg)
 
-See [.docs/ARCHITECTURE.md](.docs/ARCHITECTURE.md) for the per-module breakdown, [TOOLS.md](TOOLS.md) for the full MCP tool reference, and [THEORY.md](THEORY.md) for the principles each diagnostic maps to.
+See [.docs/ARCHITECTURE.md](.docs/ARCHITECTURE.md) for the per-module breakdown, [TOOLS.md](TOOLS.md) for the full MCP tool reference, [.docs/configure-models-guide.md](.docs/configure-models-guide.md) for embedding-model configuration, and [THEORY.md](THEORY.md) for the principles each diagnostic maps to.
 
 ## Features
 
 - **Hybrid search** - BM25 keyword search + semantic vector similarity (RRF fusion)
+- **Pluggable embedding models** - local GPU (Qwen3 via Candle/CUDA), local CPU (BGE via ONNX), or API-backed (OpenRouter); new API models are added through a config file with no recompile
 - **Symbol navigation** - rust-analyzer–backed `find_definition` / `find_references` / `rename_symbol` (rename returns a preview; no files are modified)
 - **Persisted hypergraph** - HIR-driven workspace snapshot (LMDB) with cross-crate imports, exports, re-exports, call edges, attributes, signatures, statics, and `unsafe` blocks
 - **Call-graph traversal** - `who_calls` / `calls_from` / `call_graph` / `callers_in_crate` / `recursive_callers_count`
@@ -97,12 +98,18 @@ cd rust-code-mcp
 cargo build --release
 ```
 
-The binary is at `target/release/file-search-mcp`.
+The binary is at `target/release/rust-code-mcp`.
+
+> **Build prerequisite:** the default embedding backend (Qwen3) runs on Candle
+> with CUDA, so the build needs the CUDA toolkit (`nvcc`) on `PATH`. The
+> simplest way to get a correct toolchain is the Nix dev shell (see [Nix](#nix))
+> — `nix develop` provides nightly Rust plus the CUDA toolkit, cuDNN, and
+> cuBLAS. See [GPU & CUDA](#gpu--cuda) for details.
 
 Optionally, copy it somewhere on your PATH:
 
 ```bash
-cp target/release/file-search-mcp ~/.local/bin/
+cp target/release/rust-code-mcp ~/.local/bin/
 ```
 
 ### 2. Add to Claude Code
@@ -113,7 +120,7 @@ In your Rust project directory, create `.mcp.json`:
 {
   "mcpServers": {
     "rust-code-mcp": {
-      "command": "/absolute/path/to/file-search-mcp"
+      "command": "/absolute/path/to/rust-code-mcp"
     }
   }
 }
@@ -125,7 +132,7 @@ Or add it globally in `~/.claude.json` so it's available in all projects:
 {
   "mcpServers": {
     "rust-code-mcp": {
-      "command": "/absolute/path/to/file-search-mcp"
+      "command": "/absolute/path/to/rust-code-mcp"
     }
   }
 }
@@ -139,7 +146,7 @@ Once Claude Code starts, the server is running. Use the `index_codebase` tool to
 > index my codebase at /absolute/path/to/my-rust-project
 ```
 
-Or call the tool directly with the `directory` parameter set to your project root. Indexing is incremental — subsequent runs only process changed files (via Merkle tree change detection). A background sync also re-indexes every 5 minutes automatically.
+Or call the tool directly with the `directory` parameter set to your project root. Pass an optional `embedding_profile` to choose the embedding model (see [Embedding Models](#embedding-models)); the default is a local GPU model. Indexing is incremental — subsequent runs only process changed files (via Merkle tree change detection). A background sync also re-indexes every 5 minutes automatically, using the profile each index was built with.
 
 ### 4. Start using it
 
@@ -154,7 +161,39 @@ All tools accept a `directory` parameter pointing to your project root. Examples
 
 For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses a fingerprinted snapshot on subsequent calls), then run audits like `unsafe_audit`, `dead_pub_report`, `overlaps`, `crate_dependency_metric`, or `semantic_overlaps`. The codemap tool (`build_codemap`) produces a Mermaid-renderable subgraph seeded by symbols of interest.
 
-Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path — it never writes to your project directory. The persisted hypergraph lives alongside it (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
+Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path **and the active embedding profile** — so different profiles get independent indexes, and it never writes to your project directory. The persisted hypergraph lives alongside it (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
+
+## Embedding Models
+
+Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to_item`, `semantic_overlaps`) run on a configurable embedding **profile**. Built-in profiles:
+
+| Profile | Model | Runtime | Dim |
+|---------|-------|---------|----:|
+| `local-gpu-small` *(default)* | Qwen3-Embedding-0.6B | local Candle/CUDA | 1024 |
+| `local-qwen3-4b` | Qwen3-Embedding-4B | local Candle/CUDA | 2560 |
+| `local-qwen3-8b` | Qwen3-Embedding-8B | local Candle/CUDA | 4096 |
+| `local-cpu-small` | BGE-small-en-v1.5 | local ONNX/CPU | 384 |
+| `openrouter-qwen3-8b` | Qwen3-Embedding-8B | OpenRouter API | 4096 |
+
+Select one by passing `embedding_profile` to `index_codebase` and the search tools. Each profile gets its own independent index, and search must use the profile its index was built with.
+
+**API models** (OpenRouter) require an API key in the environment — keys are never read from config files:
+
+```sh
+export OPENROUTER_API_KEY=sk-or-...
+```
+
+**Adding an API model is a config change, no recompile** — drop an `embedding_profiles.toml` in your project root:
+
+```toml
+[[profile]]
+name     = "openrouter-text-embedding-3-small"
+model_id = "openai/text-embedding-3-small"
+dim      = 1536
+max_len  = 8191
+```
+
+Local models (Candle/ONNX) are code-bound and ship as built-ins. See [.docs/configure-models-guide.md](.docs/configure-models-guide.md) for the full TOML schema, OpenRouter tuning knobs, and the trade-offs between models.
 
 ## Nix
 
@@ -168,82 +207,73 @@ nix develop github:molaco/rust-code-mcp
 nix build github:molaco/rust-code-mcp
 ```
 
-The dev shell includes nightly Rust and CUDA support.
+The dev shell includes nightly Rust and the full CUDA toolchain (toolkit, cuDNN, cuBLAS) needed to build and run the GPU embedding path.
 
-## GPU Acceleration
+## GPU & CUDA
 
-Embedding generation uses ONNX Runtime with CUDA support for 10-15x faster indexing on NVIDIA GPUs.
+The default embedding profile (`local-gpu-small`, Qwen3) runs on [Candle](https://github.com/huggingface/candle) with CUDA. The local CPU profile (`local-cpu-small`) runs on ONNX and needs no GPU; OpenRouter profiles offload embedding to the API and need no local GPU either.
 
 ### Requirements
 
-- NVIDIA GPU (Maxwell or newer)
-- CUDA 12.x + cuDNN 9.x
-- The `ort` crate downloads ONNX Runtime binaries to `~/.cache/ort.pyke.io/`
+- NVIDIA GPU — ≥8 GB VRAM is comfortable for the default 0.6B model; the local 8B profile needs ~16 GB
+- CUDA toolkit (`nvcc`) at **build** time — Candle's CUDA backend (`cudarc`) requires it during compilation
+- CUDA runtime + cuDNN + cuBLAS libraries at **run** time
 
-### MCP Server CUDA Configuration
+### Setup
 
-For CUDA to work when the MCP server is spawned by Claude Code (or other MCP clients), the `LD_LIBRARY_PATH` must include:
-
-1. **ORT cache** - Contains `libonnxruntime_providers_shared.so` and `libonnxruntime_providers_cuda.so`
-2. **CUDA libraries** - `libcudart.so`, `libcublas.so`, `libcublasLt.so`
-3. **cuDNN libraries** - `libcudnn.so`
-
-#### Option 1: Using flake.nix (recommended)
-
-The included `flake.nix` automatically generates `.mcp.json` with the correct `LD_LIBRARY_PATH`:
+The Nix dev shell provides the full CUDA build and runtime environment — this is the supported path:
 
 ```bash
-nix develop
-# Generates .mcp.json with dynamically discovered ORT cache path
+nix develop          # nightly Rust + CUDA toolkit + cuDNN/cuBLAS
+cargo build --release
 ```
 
-#### Option 2: Manual configuration
-
-First, find your ORT cache path:
-
-```bash
-find ~/.cache/ort.pyke.io/dfbin -name "libonnxruntime_providers_shared.so" -printf '%h\n' | head -1
-# Example output: /home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/8BBB.../onnxruntime/lib
-```
-
-Then configure your MCP client (e.g., `~/.claude.json` for Claude Code):
+When the MCP server is spawned by Claude Code (rather than launched from the Nix shell), its process still needs the CUDA runtime libraries on `LD_LIBRARY_PATH`. Set them in your MCP client config:
 
 ```json
 {
   "mcpServers": {
     "rust-code-mcp": {
-      "command": "/path/to/file-search-mcp",
-      "args": [],
+      "command": "/path/to/rust-code-mcp",
       "env": {
         "RUST_LOG": "info",
         "CUDA_HOME": "/usr/local/cuda",
-        "CUDA_PATH": "/usr/local/cuda",
-        "LD_LIBRARY_PATH": "/home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/<HASH>/onnxruntime/lib:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
+        "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
       }
     }
   }
 }
 ```
 
-Replace:
-- `/path/to/file-search-mcp` with your binary path
-- `<HASH>` with the hash from the `find` command above
-- CUDA paths with your system's CUDA installation
+Adjust the paths to your CUDA installation.
 
-> **Note:** The ORT cache hash changes when ONNX Runtime is updated. If CUDA stops working, re-run the `find` command to get the new path.
+### Running without a GPU
 
-### Performance
+A GPU is not required. Two options, neither needs CUDA at run time:
 
-| Mode | Throughput |
-|------|-----------|
-| CPU only | ~50 chunks/sec |
-| GPU (RTX 3090) | ~500 chunks/sec (full pipeline) |
-| GPU isolated embedding | ~8000 chunks/sec |
+1. **Keep the GPU-capable build, use a CPU or API profile.** Index and search with `embedding_profile = "local-cpu-small"` (BGE on ONNX/CPU) or any OpenRouter profile — the GPU code paths are simply never exercised.
+2. **CPU-only build.** For a machine with no CUDA toolkit at all, remove the `cuda` feature from the `fastembed` dependency in `Cargo.toml`. The `local-gpu-*` / `local-qwen3-*` profiles become unavailable, but the ONNX and OpenRouter profiles work and the build no longer needs `nvcc` or the CUDA libraries.
+
+The Nix dev shell's `shellHook` documents the same options inline.
+
+## Performance
+
+Indexing throughput measured on this repository (~2,280 chunks) with an RTX 3090:
+
+| Profile | Indexing throughput | Notes |
+|---------|--------------------:|-------|
+| `local-gpu-small` (Qwen3-0.6B) | ~55 chunks/sec | local GPU; private, deterministic |
+| `openrouter-qwen3-8b` (Qwen3-8B) | ~45–50 chunks/sec | API; per-request latency varies run-to-run |
+| `openrouter` text-embedding-3-small | ~220 chunks/sec | API; fastest, general-purpose (not code-tuned) |
+
+Embedding is ~95%+ of indexing time. Larger / higher-quality models embed more slowly; `text-embedding-3-small` is fastest but not code-tuned. Vector search is exact brute-force KNN — fast at workspace scale regardless of dimension. Pick a profile for your quality / speed / privacy trade-off; see the [config guide](.docs/configure-models-guide.md).
 
 ## Stack
 
-- [tantivy](https://github.com/quickwit-oss/tantivy) - Full-text search
-- [fastembed](https://github.com/Anush008/fastembed-rs) - Local embeddings (ONNX)
+- [tantivy](https://github.com/quickwit-oss/tantivy) - Full-text BM25 search
+- [fastembed](https://github.com/Anush008/fastembed-rs) - Embedding models: Qwen3 via Candle (GPU), BGE via ONNX (CPU)
+- [candle](https://github.com/huggingface/candle) - GPU embedding runtime for Qwen3 (CUDA)
+- [reqwest](https://github.com/seanmonstar/reqwest) - OpenRouter API embedding client
 - [lancedb](https://lancedb.com/) - Embedded vector storage
 - [ra_ap_syntax](https://github.com/rust-lang/rust-analyzer) - AST parsing
 - [ra_ap_ide](https://github.com/rust-lang/rust-analyzer) - Semantic analysis (goto definition, find references, rename)

@@ -101,8 +101,8 @@ mod tests {
             })
             .collect();
         assert!(
-            names.iter().any(|n| n == "file_search_mcp"),
-            "expected file_search_mcp in local crates, got {names:?}"
+            names.iter().any(|n| n == "rust_code_mcp"),
+            "expected rust_code_mcp in local crates, got {names:?}"
         );
     }
 }

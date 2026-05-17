@@ -12,7 +12,7 @@ use std::time::Instant;
 use ra_ap_hir::{ModuleDef, Semantics, attach_db};
 use ra_ap_ide_db::defs::Definition;
 
-use file_search_mcp::graph::loader;
+use rust_code_mcp::graph::loader;
 
 fn main() {
     let workspace = std::env::args()

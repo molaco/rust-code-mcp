@@ -1,6 +1,6 @@
-# Proposal: task-conditioned codemap tool for `file-search-mcp`
+# Proposal: task-conditioned codemap tool for `rust-code-mcp`
 
-**Target:** single-crate workspace at `/home/molaco/Documents/rust-code-mcp-final` (crate `file-search-mcp`, modules under `src/`).
+**Target:** single-crate workspace at `/home/molaco/Documents/rust-code-mcp-final` (crate `rust-code-mcp`, modules under `src/`).
 **Status:** v2.4. Revises an earlier draft after five rounds of review. v1→v2 fixed five algorithm-breaking issues; v2→v2.1 tightened four details; v2.2 audited every new piece against existing infrastructure to remove duplication; v2.3 cross-validated every cited API against the live workspace index and addressed async-hygiene + `#[non_exhaustive]` concerns; v2.4 scrubs stale `trait_dispatch_unresolved` references, narrows the trait-dispatch limitation to reflect what `Usage` extraction actually captures, drops the unimplementable RA fallback for seed override, defines the incoming-degree ranking, and pins the line-indexing convention. See §11 "Reuse map" for the explicit reuse contract and the appendix for revision history.
 
 ## 1. Goal

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use file_search_mcp::graph::{BuildOptions, build_and_persist, open_current, GraphPaths, GraphEnvOptions};
+use rust_code_mcp::graph::{BuildOptions, build_and_persist, open_current, GraphPaths, GraphEnvOptions};
 
 fn main() {
     let mut args = std::env::args().skip(1);

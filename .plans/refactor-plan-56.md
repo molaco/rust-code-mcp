@@ -124,8 +124,8 @@ Steps:
 2. Record current graph evidence.
    - `build_hypergraph(directory=...)`
    - `workspace_stats(directory=...)`
-   - `module_tree(directory=..., krate="file_search_mcp", depth=2)`
-   - `dead_pub_in_crate(directory=..., krate="file_search_mcp")`
+   - `module_tree(directory=..., krate="rust_code_mcp", depth=2)`
+   - `dead_pub_in_crate(directory=..., krate="rust_code_mcp")`
    - Exit condition: before-state metrics are saved in the work log or PR notes.
 
 3. Establish verification commands.
@@ -227,7 +227,7 @@ Step-by-step:
 
 4. Verify.
    - `analyze_complexity` on all new tools files.
-   - `get_imports(directory=..., module="file_search_mcp::tools")`
+   - `get_imports(directory=..., module="rust_code_mcp::tools")`
    - `get_imports` on each new `tools::*` module.
    - Existing MCP/tool tests.
 
@@ -342,7 +342,7 @@ Step-by-step:
 
 8. Verify.
    - `analyze_complexity` on `src/graph/query/*.rs`.
-   - `get_declared_reexports(directory=..., module="file_search_mcp::graph")`
+   - `get_declared_reexports(directory=..., module="rust_code_mcp::graph")`
    - `who_imports` for key public query result types.
    - Existing graph query tests.
 
@@ -642,7 +642,7 @@ pub_crate_share: ~0.047
 Step-by-step:
 
 1. Run dead-public report after phases 1-5.
-   - `dead_pub_in_crate(directory=..., krate="file_search_mcp")`
+   - `dead_pub_in_crate(directory=..., krate="rust_code_mcp")`
    - `dead_pub_report(directory=...)`
    - Exit condition: report is reviewed with examples/vendor noise excluded.
 
@@ -844,7 +844,7 @@ After all module splits:
 
 - `build_hypergraph(directory=...)`
 - `workspace_stats(directory=...)`
-- `dead_pub_in_crate(directory=..., krate="file_search_mcp")`
+- `dead_pub_in_crate(directory=..., krate="rust_code_mcp")`
 - `get_declared_reexports` for main facade modules
 - compare public surface against Phase 0 baseline
 
@@ -868,7 +868,7 @@ Boundary:
 Visibility:
 
 - `pub_crate_share` increases meaningfully from ~0.047.
-- Dead-public findings in `file_search_mcp` decrease after examples/vendor are
+- Dead-public findings in `rust_code_mcp` decrease after examples/vendor are
   excluded.
 - Public facade exports are intentional and documented by one-sentence surfaces.
 

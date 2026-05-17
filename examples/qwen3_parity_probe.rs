@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 
-use file_search_mcp::embeddings::EmbeddingGenerator;
+use rust_code_mcp::embeddings::EmbeddingGenerator;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]

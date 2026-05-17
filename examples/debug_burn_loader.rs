@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use file_search_mcp::graph::{LoadedWorkspace, load};
+use rust_code_mcp::graph::{LoadedWorkspace, load};
 
 fn main() {
     let workspace = std::env::args()

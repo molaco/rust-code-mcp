@@ -61,12 +61,12 @@ Do not run formatting commands.
 
 - `cargo check --lib` passes after every phase.
 - Public compatibility paths keep working, especially:
-  - `file_search_mcp::graph::queries::*`
-  - `file_search_mcp::tools::search_tool::*`
-  - `file_search_mcp::tools::graph_tools::*` during the transition
-  - `file_search_mcp::chunker::{Chunker, CodeChunk, ChunkId, ChunkSplitConfig}`
-  - `file_search_mcp::parser::{RustParser, ParseResult, Symbol, SymbolKind}`
-  - `file_search_mcp::search::{HybridSearch, SearchResult, HybridSearchConfig}`
+  - `rust_code_mcp::graph::queries::*`
+  - `rust_code_mcp::tools::search_tool::*`
+  - `rust_code_mcp::tools::graph_tools::*` during the transition
+  - `rust_code_mcp::chunker::{Chunker, CodeChunk, ChunkId, ChunkSplitConfig}`
+  - `rust_code_mcp::parser::{RustParser, ParseResult, Symbol, SymbolKind}`
+  - `rust_code_mcp::search::{HybridSearch, SearchResult, HybridSearchConfig}`
 - `src/graph/codemap.rs` no longer imports or calls `crate::tools::*`.
 - `src/graph` has no dependency on `tools`.
 - `graph_tools.rs`, `queries.rs`, and `codemap.rs` are reduced to facades or
@@ -422,8 +422,8 @@ Steps:
 
 Acceptance:
 
-- `file_search_mcp::search::HybridSearch` still compiles.
-- `file_search_mcp::search::SearchResult` still compiles.
+- `rust_code_mcp::search::HybridSearch` still compiles.
+- `rust_code_mcp::search::SearchResult` still compiles.
 - Search behavior is unchanged.
 
 ## Phase 6: Split `chunker::mod`
@@ -596,7 +596,7 @@ Steps:
 
    ```text
    workspace_stats(directory)
-   dead_pub_in_crate(directory, "file_search_mcp")
+   dead_pub_in_crate(directory, "rust_code_mcp")
    ```
 
 3. Convert candidates from `pub` to `pub(crate)` only when they are not part of:

@@ -7,8 +7,8 @@
 //! - Recall@20: Coverage of relevant results
 //! - Precision@10: Accuracy of top 10 results
 
-use file_search_mcp::indexing::UnifiedIndexer;
-use file_search_mcp::search::{HybridSearch, SearchResult};
+use rust_code_mcp::indexing::UnifiedIndexer;
+use rust_code_mcp::search::{HybridSearch, SearchResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tempfile::TempDir;

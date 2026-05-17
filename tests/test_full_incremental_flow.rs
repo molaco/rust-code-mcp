@@ -9,7 +9,7 @@
 //! 6. Reindex and verify 0 files indexed (< 10ms)
 
 use anyhow::Result;
-use file_search_mcp::indexing::{get_snapshot_path, IncrementalIndexer};
+use rust_code_mcp::indexing::{get_snapshot_path, IncrementalIndexer};
 use std::path::PathBuf;
 use tempfile::TempDir;
 

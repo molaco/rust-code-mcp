@@ -34,14 +34,30 @@
         ];
       };
 
-      # CUDA library paths (without ORT - that's added dynamically in shellHook)
-      cudaLibPath = pkgs.lib.makeLibraryPath [
-        pkgs.cudaPackages.cudatoolkit
-        pkgs.cudaPackages.cudnn.lib
-        pkgs.stdenv.cc.cc.lib
+      # Runtime library path. Mirrors ../nix-devshells/devshells/cuda-code.nix:
+      #   - onnxruntime/lib        : ORT shared lib for the local CPU (BGE)
+      #                              embedding profile (`local-cpu-small`)
+      #   - /run/opengl-driver/lib : NixOS user-space libcuda.so — the GPU
+      #                              driver lib, NOT in cudatoolkit; required
+      #                              at runtime by any CUDA process
+      #   - cudatoolkit / cuda_cudart / libcublas / cudnn : Candle's CUDA deps
+      #                              for the local Qwen3 GPU profiles
+      ldLibraryPath = pkgs.lib.concatStringsSep ":" [
+        "${pkgs.onnxruntime}/lib"
+        "/run/opengl-driver/lib"
+        "${pkgs.cudaPackages.cudatoolkit}/lib"
+        "${pkgs.cudaPackages.cuda_cudart}/lib"
+        "${pkgs.cudaPackages.libcublas}/lib"
+        "${pkgs.cudaPackages.cudnn.lib}/lib"
+        "${pkgs.stdenv.cc.cc.lib}/lib"
       ];
 
-      # Base MCP config from mcp-servers-nix (LD_LIBRARY_PATH set dynamically in shellHook)
+      # fastembed's `ort-load-dynamic` feature dlopens ONNX Runtime at this path.
+      ortDylibPath = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
+
+      # Base MCP config (sequential-thinking + fetch helper servers). The
+      # rust-code-mcp server entry below carries the CUDA/ONNX runtime env so
+      # Claude Code can spawn it directly.
       mcpConfigBase = mcp-servers-nix.lib.mkConfig pkgs {
         programs = {
           sequential-thinking.enable = true;
@@ -49,14 +65,14 @@
         };
         settings.servers = {
           rust-code-mcp = {
-            command = "./target/release/file-search-mcp";
+            command = "./target/release/rust-code-mcp";
             args = [ ];
             env = {
               RUST_LOG = "info";
               CUDA_HOME = "${pkgs.cudaPackages.cudatoolkit}";
               CUDA_PATH = "${pkgs.cudaPackages.cudatoolkit}";
-              # ORT cache (libonnxruntime_providers_shared.so) + cuda-merged (all CUDA libs) + cudnn
-              LD_LIBRARY_PATH = "/home/user/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/8BBB8416566A668A240B72A56DBBB82F99F430AF86F64D776D7EBF53E144EFC9/onnxruntime/lib:${pkgs.cudaPackages.cudatoolkit}/lib:${pkgs.cudaPackages.cudnn.lib}/lib:${pkgs.stdenv.cc.cc.lib}/lib";
+              ORT_DYLIB_PATH = ortDylibPath;
+              LD_LIBRARY_PATH = ldLibraryPath;
             };
           };
         };
@@ -82,9 +98,14 @@
           pkg-config
           openssl
           sqlite
-          protobuf # Required by LanceDB
+          protobuf # required by LanceDB
+          mold # fast linker
 
-          # CUDA / GPU (for fastembed ONNX)
+          # ONNX Runtime — backs the local CPU embedding profile (BGE).
+          onnxruntime
+
+          # CUDA / GPU — backs the default local Qwen3 (Candle) profiles.
+          # cudatoolkit also provides nvcc for cudarc's build script.
           cudaPackages.cudatoolkit
           cudaPackages.cuda_cudart
           cudaPackages.libcublas
@@ -95,58 +116,63 @@
         ];
 
         LIBCLANG_PATH = "${pkgs.llvmPackages_latest.libclang.lib}/lib";
-
+        CUDA_HOME = "${pkgs.cudaPackages.cudatoolkit}";
         CUDA_PATH = "${pkgs.cudaPackages.cudatoolkit}";
-
-        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
-          pkgs.cudaPackages.cudatoolkit
-          pkgs.cudaPackages.cuda_cudart
-          pkgs.cudaPackages.libcublas
-          pkgs.cudaPackages.cudnn.lib
-          pkgs.stdenv.cc.cc.lib
-          pkgs.openssl
-        ];
+        ORT_DYLIB_PATH = ortDylibPath;
+        LD_LIBRARY_PATH = ldLibraryPath;
 
         shellHook = ''
-          export CUDA_HOME=${pkgs.cudaPackages.cudatoolkit}
-          export PATH=${pkgs.cudaPackages.cudatoolkit}/bin:$PATH
+          # nvcc on PATH for cudarc's build script.
+          export PATH="${pkgs.cudaPackages.cudatoolkit}/bin:$PATH"
 
-          # # Find ORT cache path dynamically (contains libonnxruntime_providers_shared.so)
-          # ORT_LIB_PATH=$(find "$HOME/.cache/ort.pyke.io/dfbin" -name "libonnxruntime_providers_shared.so" -printf '%h\n' 2>/dev/null | head -1)
-          #
-          # if [ -n "$ORT_LIB_PATH" ]; then
-          #   echo "Found ORT libraries: $ORT_LIB_PATH"
-          #   FULL_LD_PATH="$ORT_LIB_PATH:${cudaLibPath}"
-          # else
-          #   echo "Warning: ORT cache not found. Run 'cargo build --release' first to download ONNX Runtime."
-          #   echo "CUDA will not work until ORT libraries are cached."
-          #   FULL_LD_PATH="${cudaLibPath}"
-          # fi
-          #
-          # # Generate .mcp.json with dynamic LD_LIBRARY_PATH
-          # cat > .mcp.json << EOF
-          # {
-          #   "mcpServers": {
-          #     "rust-code-mcp": {
-          #       "command": "./target/release/file-search-mcp",
-          #       "args": [],
-          #       "env": {
-          #         "RUST_LOG": "info",
-          #         "CUDA_HOME": "${pkgs.cudaPackages.cudatoolkit}",
-          #         "CUDA_PATH": "${pkgs.cudaPackages.cudatoolkit}",
-          #         "LD_LIBRARY_PATH": "$FULL_LD_PATH"
-          #       }
-          #     },
-          #     "sequential-thinking": $(cat ${mcpConfigBase} | ${pkgs.jq}/bin/jq '.mcpServers["sequential-thinking"]'),
-          #     "fetch": $(cat ${mcpConfigBase} | ${pkgs.jq}/bin/jq '.mcpServers["fetch"]')
-          #   }
-          # }
-          # EOF
+          # Generate .mcp.json (gitignored) so Claude Code can spawn the
+          # server with the CUDA/ONNX runtime environment baked in. Only
+          # written if absent, so a hand-edited config is never clobbered.
+          if [ ! -f .mcp.json ]; then
+            cat > .mcp.json <<EOF
+          {
+            "mcpServers": {
+              "rust-code-mcp": {
+                "command": "./target/release/rust-code-mcp",
+                "args": [],
+                "env": {
+                  "RUST_LOG": "info",
+                  "CUDA_HOME": "${pkgs.cudaPackages.cudatoolkit}",
+                  "CUDA_PATH": "${pkgs.cudaPackages.cudatoolkit}",
+                  "ORT_DYLIB_PATH": "${ortDylibPath}",
+                  "LD_LIBRARY_PATH": "${ldLibraryPath}"
+                }
+              },
+              "sequential-thinking": $(${pkgs.jq}/bin/jq '.mcpServers["sequential-thinking"]' ${mcpConfigBase}),
+              "fetch": $(${pkgs.jq}/bin/jq '.mcpServers["fetch"]' ${mcpConfigBase})
+            }
+          }
+          EOF
+            echo ".mcp.json generated."
+          else
+            echo ".mcp.json already exists; leaving it untouched."
+          fi
 
-          echo "you should set up ort lib path to use cuda in line 59 LD_LIBRARY_PATH"
-          echo "rust-code-mcp dev shell"
-          echo "Run 'cargo build --release' to build"
-          # echo "MCP config generated with CUDA support"
+          echo "rust-code-mcp dev shell (CUDA + ONNX)"
+          echo "  build:  cargo build --release   ->   ./target/release/rust-code-mcp"
+
+          # ── Running without a GPU (CPU-only) ───────────────────────────────
+          # The default embedding profile is GPU (Qwen3 on Candle/CUDA). To run
+          # without an NVIDIA GPU, neither of these needs CUDA at run time:
+          #
+          #   1. Keep this (GPU-capable) build, but index/search with a CPU or
+          #      API profile — the GPU code paths are simply never exercised:
+          #        embedding_profile = "local-cpu-small"     (BGE, ONNX on CPU)
+          #        embedding_profile = "openrouter-qwen3-8b" (or any OpenRouter
+          #                                                   profile; needs
+          #                                                   OPENROUTER_API_KEY)
+          #
+          #   2. For a machine with NO CUDA toolkit at all, produce a fully
+          #      CPU-only *build* by removing the `cuda` feature from the
+          #      `fastembed` dependency in Cargo.toml. The `local-gpu-*` /
+          #      `local-qwen3-*` profiles are then unavailable, but the ONNX
+          #      and OpenRouter profiles work and the build no longer needs
+          #      nvcc or the CUDA libraries above.
         '';
       };
 
@@ -160,12 +186,13 @@
           cmake
           pkg-config
           clang
-          protobuf # Required by LanceDB
+          protobuf # required by LanceDB
         ];
 
         buildInputs = with pkgs; [
           openssl
           sqlite
+          onnxruntime
           cudaPackages.cudatoolkit
           cudaPackages.cuda_cudart
           cudaPackages.libcublas

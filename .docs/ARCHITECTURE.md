@@ -1,8 +1,8 @@
-# file-search-mcp — Architecture
+# rust-code-mcp — Architecture
 
 ## Overview
 
-`file-search-mcp` (crate `rust-code-mcp-final`) is a single-crate Rust Model Context Protocol server (built on the `rmcp` SDK) that exposes 50+ tools for code search, on-demand indexing, and rust-analyzer-driven HIR analysis of Rust workspaces. It runs as a stdio JSON-RPC server, indexes source trees with Tantivy BM25 + locally-loaded `fastembed` dense embeddings stored in LanceDB, and builds a content-addressed, heed/LMDB-backed persisted **hypergraph snapshot** of every workspace it touches. Cross-crate queries (imports/exports, call graph, dead-pub, overlaps, module tree, workspace stats, re-export chains) and audit passes (unsafe, mut-static, derive, missing-docs, channel-capacity, fn-body, recursion) read exclusively from that snapshot, while the rename, find_definition, and find_references tools route through a process-wide `AnalysisHost` cache.
+`rust-code-mcp` (crate `rust-code-mcp-final`) is a single-crate Rust Model Context Protocol server (built on the `rmcp` SDK) that exposes 50+ tools for code search, on-demand indexing, and rust-analyzer-driven HIR analysis of Rust workspaces. It runs as a stdio JSON-RPC server, indexes source trees with Tantivy BM25 + locally-loaded `fastembed` dense embeddings stored in LanceDB, and builds a content-addressed, heed/LMDB-backed persisted **hypergraph snapshot** of every workspace it touches. Cross-crate queries (imports/exports, call graph, dead-pub, overlaps, module tree, workspace stats, re-export chains) and audit passes (unsafe, mut-static, derive, missing-docs, channel-capacity, fn-body, recursion) read exclusively from that snapshot, while the rename, find_definition, and find_references tools route through a process-wide `AnalysisHost` cache.
 
 ## System diagram
 

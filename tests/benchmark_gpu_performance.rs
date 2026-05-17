@@ -6,7 +6,7 @@
 //! Run with: cargo test --release benchmark_gpu_performance --ignored -- --nocapture
 
 use anyhow::Result;
-use file_search_mcp::indexing::{IncrementalIndexer, IndexStats};
+use rust_code_mcp::indexing::{IncrementalIndexer, IndexStats};
 use std::path::PathBuf;
 use std::time::Instant;
 use tempfile::TempDir;

@@ -76,7 +76,7 @@ impl SyncManager {
     ///
     /// # Example
     /// ```no_run
-    /// use file_search_mcp::mcp::SyncManager;
+    /// use rust_code_mcp::mcp::SyncManager;
     /// use std::sync::Arc;
     /// let sync_manager = Arc::new(SyncManager::with_defaults(300));
     /// tokio::spawn(async move {

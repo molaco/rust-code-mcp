@@ -1,4 +1,4 @@
-use file_search_mcp::parser::RustParser;
+use rust_code_mcp::parser::RustParser;
 use std::fs;
 use std::path::Path;
 
@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let lines_of_code = source.lines().count();
                     let non_empty_loc = source.lines().filter(|l| !l.trim().is_empty()).count();
                     let function_count = parse_result.symbols.iter()
-                        .filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Function { .. }))
+                        .filter(|s| matches!(s.kind, rust_code_mcp::parser::SymbolKind::Function { .. }))
                         .count();
 
                     println!("✓ Complexity analysis for '{}':", search_file);

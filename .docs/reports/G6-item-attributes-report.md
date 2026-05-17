@@ -119,7 +119,7 @@ Coverage:
 - `attributes_of_known_enum` — same for `ItemKind` enum.
 - `attributes_of_item_with_no_attrs_is_empty` — `set_attrs_for` itself has no non-doc attrs.
 - `item_attributes_of_node_struct_includes_derive` — duplicates the attributes test from a query-side perspective.
-- `items_with_attribute_finds_derive_users` — passes `"derive"` substring across the whole `file_search_mcp` crate, asserts Node and ItemKind both appear and that every hit's `matched_attribute` contains "derive".
+- `items_with_attribute_finds_derive_users` — passes `"derive"` substring across the whole `rust_code_mcp` crate, asserts Node and ItemKind both appear and that every hit's `matched_attribute` contains "derive".
 
 Findings:
 - **MINOR — No negative tests** — no test for "this item that does NOT have a `#[must_use]` is correctly excluded". The `attributes_of_item_with_no_attrs_is_empty` test is the closest but it's positive on absence rather than negative on exclusion.

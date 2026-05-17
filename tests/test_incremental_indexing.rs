@@ -9,7 +9,7 @@
 //! 6. Merkle snapshots persist across indexer instances
 
 use anyhow::Result;
-use file_search_mcp::indexing::{IncrementalIndexer, IndexStats};
+use rust_code_mcp::indexing::{IncrementalIndexer, IndexStats};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 

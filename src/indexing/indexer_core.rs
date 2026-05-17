@@ -18,7 +18,7 @@
 //! ## Examples
 //!
 //! ```rust,no_run
-//! use file_search_mcp::indexing::indexer_core::IndexerCore;
+//! use rust_code_mcp::indexing::indexer_core::IndexerCore;
 //! use std::path::Path;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {

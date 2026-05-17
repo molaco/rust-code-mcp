@@ -39,7 +39,7 @@ Use when you know what you want.
 ```
 build_codemap(
   directory = "/home/molaco/Documents/rust-code-mcp-final",
-  seed_qualified_names = ["file_search_mcp::tools::graph_tools::ensure_embeddings_for"],
+  seed_qualified_names = ["rust_code_mcp::tools::graph_tools::ensure_embeddings_for"],
   depth = 1,
   format = "outline"
 )
@@ -98,7 +98,7 @@ The cache lives in the same heed sub-DB as `semantic_overlaps`'s embedding cache
   "nodes": [
     {
       "id": [0x0a, 0xf4, ...],
-      "qualified_name": "file_search_mcp::graph::codemap::build_codemap",
+      "qualified_name": "rust_code_mcp::graph::codemap::build_codemap",
       "kind": "Item",
       "item_kind": "Function",
       "file": "src/graph/codemap.rs",
@@ -126,11 +126,11 @@ Canonical for downstream consumers. `NodeId` serializes as a 32-byte JSON array 
 ### `format = "outline"`
 
 ```
-      file_search_mcp::embeddings::EmbeddingGenerator  [Struct]  src/embeddings/mod.rs:26
+      rust_code_mcp::embeddings::EmbeddingGenerator  [Struct]  src/embeddings/mod.rs:26
         | /// Embedding generator using fastembed
         | #[derive(Clone)]
         | pub struct EmbeddingGenerator {
-      * file_search_mcp::graph::codemap::build_codemap  [Function]  src/graph/codemap.rs:200
+      * rust_code_mcp::graph::codemap::build_codemap  [Function]  src/graph/codemap.rs:200
 ```
 
 Human-readable, navigable. `* ` prefix marks seeds. Indent reflects the filtered hierarchy tree depth. Lines are `<qualified_name>  [<ItemKind>]  <file>:<line>`. With `include_snippets=true`, source lines appear under each item with `| ` prefix. Best for "look at this in a chat or terminal."
@@ -139,7 +139,7 @@ Human-readable, navigable. `* ` prefix marks seeds. Indent reflects the filtered
 
 ```
 flowchart LR
-  subgraph m_file_search_mcp__graph__codemap ["mod file_search_mcp::graph::codemap"]
+  subgraph m_rust_code_mcp__graph__codemap ["mod rust_code_mcp::graph::codemap"]
     n_0af479ba["build_codemap"]:::seed
   end
   n_0af479ba -->|calls| n_1f0ebe02

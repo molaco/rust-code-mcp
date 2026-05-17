@@ -2049,7 +2049,7 @@ pub fn caller() {
 
         // Phase 6 end-to-end validation against the live workspace snapshot is
         // intentionally NOT included as an automated test: opening the
-        // file-search-mcp workspace's own snapshot at test time would require
+        // rust-code-mcp workspace's own snapshot at test time would require
         // having previously built it (and would couple the test to a particular
         // dev environment). The renderer smoke tests above plus the existing
         // synthetic-fixture build_codemap tests give enough coverage of the

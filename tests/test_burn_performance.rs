@@ -17,7 +17,7 @@ use anyhow::Result;
 use std::time::Instant;
 
 async fn index_burn_codebase(force: bool) -> Result<(String, std::time::Duration)> {
-    use file_search_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+    use rust_code_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
 
     let params = IndexCodebaseParams {
         directory: "/home/molaco/Documents/burn".to_string(),

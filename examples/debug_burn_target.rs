@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use file_search_mcp::graph::{
+use rust_code_mcp::graph::{
     BindingId, GraphEnvOptions, GraphPaths, NodeId, open_current,
 };
 
@@ -140,7 +140,7 @@ fn main() {
     }
 }
 
-fn bindings_by_from_crate(opened: &file_search_mcp::graph::OpenedSnapshot) {
+fn bindings_by_from_crate(opened: &rust_code_mcp::graph::OpenedSnapshot) {
     let rtxn = opened.read_txn().unwrap();
     let mut by_crate: BTreeMap<String, usize> = BTreeMap::new();
     for entry in opened.dbs.bindings_by_id.iter(&rtxn).unwrap() {
@@ -158,8 +158,8 @@ fn bindings_by_from_crate(opened: &file_search_mcp::graph::OpenedSnapshot) {
     }
 }
 
-fn scan_externals(opened: &file_search_mcp::graph::OpenedSnapshot) {
-    use file_search_mcp::graph::NodeKind;
+fn scan_externals(opened: &rust_code_mcp::graph::OpenedSnapshot) {
+    use rust_code_mcp::graph::NodeKind;
     let rtxn = opened.read_txn().unwrap();
     let mut by_prefix: BTreeMap<String, usize> = BTreeMap::new();
     let mut total = 0usize;
@@ -194,7 +194,7 @@ fn scan_externals(opened: &file_search_mcp::graph::OpenedSnapshot) {
     }
 }
 
-fn scan_tensor_nodes(opened: &file_search_mcp::graph::OpenedSnapshot) {
+fn scan_tensor_nodes(opened: &rust_code_mcp::graph::OpenedSnapshot) {
     let rtxn = opened.read_txn().unwrap();
     let mut hits: Vec<(String, String, usize)> = Vec::new();
     for entry in opened.dbs.nodes_by_id.iter(&rtxn).unwrap() {

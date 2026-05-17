@@ -1,7 +1,7 @@
 //! One-shot: force-rebuild the burn snapshot to the *default* data dir so the
 //! debug_burn_target tool (which reads default-dir) sees the latest output.
 use std::path::Path;
-use file_search_mcp::graph::{BuildOptions, build_and_persist};
+use rust_code_mcp::graph::{BuildOptions, build_and_persist};
 
 fn main() {
     let r = build_and_persist(

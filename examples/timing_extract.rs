@@ -12,11 +12,11 @@
 use std::path::Path;
 use std::time::Instant;
 
-use file_search_mcp::graph::{
+use rust_code_mcp::graph::{
     BuildOptions, GraphEnvOptions, GraphPaths, NodeId, NodeKind, OpenedSnapshot, build_and_persist,
     extract, loader, open_current,
 };
-use file_search_mcp::graph::model::Node;
+use rust_code_mcp::graph::model::Node;
 
 fn pick_high_traffic_target(snap: &OpenedSnapshot) -> Option<(NodeId, Node)> {
     // Find some Item with the largest number of usages_by_target entries.

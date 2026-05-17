@@ -1,7 +1,7 @@
 //! Dump every ItemScope entry for every module in burn_core, to see whether
 //! RA actually resolves cross-crate imports like `use burn_tensor::Tensor`.
 
-use file_search_mcp::graph::loader;
+use rust_code_mcp::graph::loader;
 use ra_ap_hir::Crate;
 use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_hir_def::ModuleDefId;

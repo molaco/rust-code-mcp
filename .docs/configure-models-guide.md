@@ -158,6 +158,13 @@ Note: for a large compute-bound model, raising concurrency can make indexing
    for code search than a code-tuned model — verify retrieval quality, not
    just indexing speed, before switching a default.
 
+5. **Higher dimensions cost more.** A profile's `dim` is the vector size: a
+   4096-dim model (Qwen3-8B) stores ~10x the bytes per vector and costs ~10x
+   the per-query search compute of a 384-dim model (BGE). Vector search is
+   exact brute-force KNN — fast at workspace scale (thousands of chunks)
+   regardless of dimension — but for very large monorepos, prefer a
+   lower-dimension profile.
+
 ## Quick reference
 
 | Task | What to do |

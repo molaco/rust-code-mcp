@@ -8,7 +8,7 @@
 //! 4. Manual sync triggers work correctly
 
 use anyhow::Result;
-use file_search_mcp::mcp::SyncManager;
+use rust_code_mcp::mcp::SyncManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

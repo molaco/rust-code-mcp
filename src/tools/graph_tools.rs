@@ -2229,7 +2229,7 @@ fn resolve_required_node(
     }
     // Transparent crate→root-module fallback: every Crate has a root Module
     // sharing its qualified_name, so when callers pass a crate name where a
-    // module is expected (e.g., `consumer: "file_search_mcp"`), promote the
+    // module is expected (e.g., `consumer: "rust_code_mcp"`), promote the
     // lookup to that root module instead of failing.
     if expect_kind == NodeKind::Module && node.kind == NodeKind::Crate {
         if let Some(root_module_id) = snap
@@ -3269,7 +3269,7 @@ mod tests {
 
         let imports = get_imports(GraphImportsParams {
             directory: manifest_dir.to_string(),
-            module: "file_search_mcp::graph".to_string(),
+            module: "rust_code_mcp::graph".to_string(),
         })
         .await
         .expect("get_imports");
@@ -3281,18 +3281,18 @@ mod tests {
 
         let importers = who_imports(WhoImportsParams {
             directory: manifest_dir.to_string(),
-            target: "file_search_mcp::graph::loader::load".to_string(),
+            target: "rust_code_mcp::graph::loader::load".to_string(),
         })
         .await
         .expect("who_imports");
         let body = first_text(&importers);
         assert!(
-            body.contains("file_search_mcp::graph"),
+            body.contains("rust_code_mcp::graph"),
             "expected graph mod among importers of loader::load: {body}"
         );
     }
 
-    /// Regression: passing a Crate qualified name (e.g. `file_search_mcp`)
+    /// Regression: passing a Crate qualified name (e.g. `rust_code_mcp`)
     /// where a Module is expected (`get_exports`'s `consumer`) should be
     /// transparent — the resolver should fall through to the crate's root
     /// module rather than erroring with "is a Crate, expected Module".
@@ -3313,12 +3313,12 @@ mod tests {
 
         let exports = get_exports(GraphExportsParams {
             directory: manifest_dir.to_string(),
-            // `file_search_mcp::graph` re-exports `load` (from loader),
+            // `rust_code_mcp::graph` re-exports `load` (from loader),
             // visible from anywhere inside the crate.
-            module: "file_search_mcp::graph".to_string(),
+            module: "rust_code_mcp::graph".to_string(),
             // Crate name, NOT a module path — must be transparently
             // promoted to the crate's root module.
-            consumer: "file_search_mcp".to_string(),
+            consumer: "rust_code_mcp".to_string(),
         })
         .await
         .expect("get_exports should accept a crate name as consumer");
@@ -3355,7 +3355,7 @@ mod tests {
         // who_uses against a fn we know is referenced inside the lib.
         let users = who_uses(WhoUsesParams {
             directory: manifest_dir.to_string(),
-            target: "file_search_mcp::graph::loader::load".to_string(),
+            target: "rust_code_mcp::graph::loader::load".to_string(),
         })
         .await
         .expect("who_uses");
@@ -3374,7 +3374,7 @@ mod tests {
         // test that the tool returns a structured findings array.
         let dead = dead_pub_in_crate(DeadPubParams {
             directory: manifest_dir.to_string(),
-            krate: "file_search_mcp".to_string(),
+            krate: "rust_code_mcp".to_string(),
         })
         .await
         .expect("dead_pub_in_crate");
@@ -3385,7 +3385,7 @@ mod tests {
         );
 
         // dead_pub_report aggregates the same query across all local crates and
-        // stamps a `total_findings` count. file_search_mcp has at least one
+        // stamps a `total_findings` count. rust_code_mcp has at least one
         // local crate (itself), so `crates` is non-empty.
         let report = dead_pub_report(DeadPubReportParams {
             directory: manifest_dir.to_string(),
@@ -3426,7 +3426,7 @@ mod tests {
 
         let result = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
-            krate: "file_search_mcp".to_string(),
+            krate: "rust_code_mcp".to_string(),
             min_param_count: None,
             has_param_type: None,
             returns_type_pattern: None,
@@ -3495,7 +3495,7 @@ mod tests {
 
         let result = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
-            krate: "file_search_mcp".to_string(),
+            krate: "rust_code_mcp".to_string(),
             min_param_count: None,
             has_param_type: None,
             returns_type_pattern: None,
@@ -3556,7 +3556,7 @@ mod tests {
         // First page.
         let page1 = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
-            krate: "file_search_mcp".to_string(),
+            krate: "rust_code_mcp".to_string(),
             min_param_count: None,
             has_param_type: None,
             returns_type_pattern: None,
@@ -3585,7 +3585,7 @@ mod tests {
         // Second page (offset = 5).
         let page2 = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
-            krate: "file_search_mcp".to_string(),
+            krate: "rust_code_mcp".to_string(),
             min_param_count: None,
             has_param_type: None,
             returns_type_pattern: None,

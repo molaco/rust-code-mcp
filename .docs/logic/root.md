@@ -21,7 +21,7 @@ The binary entrypoint for the MCP server. Wires up tracing, constructs the backg
 **Annotations:** Decorated with `#[tokio::main]`, so the async function is wrapped in a Tokio multi-thread runtime by the macro at compile time.
 
 **Steps:**
-1. Build a `tracing` `EnvFilter`. Try to parse the filter from the `RUST_LOG` environment variable via `EnvFilter::try_from_default_env`; on error fall back to a hard-coded default `"warn,file_search_mcp=info"` (WARN globally, INFO for the crate). The in-source rationale comment notes that rust-analyzer floods debug logs and that keeping the global level at WARN avoids a 7s -> 7+ minute regression in `build_hypergraph` caused purely by log formatting overhead.
+1. Build a `tracing` `EnvFilter`. Try to parse the filter from the `RUST_LOG` environment variable via `EnvFilter::try_from_default_env`; on error fall back to a hard-coded default `"warn,rust_code_mcp=info"` (WARN globally, INFO for the crate). The in-source rationale comment notes that rust-analyzer floods debug logs and that keeping the global level at WARN avoids a 7s -> 7+ minute regression in `build_hypergraph` caused purely by log formatting overhead.
 2. Initialize the global tracing subscriber: `tracing_subscriber::fmt()` with the chosen `EnvFilter`, writer set to `std::io::stderr` (stdout is reserved for the MCP stdio protocol), and ANSI escapes disabled (`with_ansi(false)`); call `.init()` to install it as the global default.
 3. Emit `tracing::info!("Starting MCP Server...")`.
 4. Construct the background sync manager: `SyncManager::with_defaults(300)` (5-minute interval) wrapped in an `Arc` so it can be shared with the spawned task and the `SearchTool`. Log `"Created background sync manager (5-minute interval)"`.
@@ -327,7 +327,7 @@ A standalone binary that exercises the `RustParser` and standard-library file IO
    c. On success, also call `parser.parse_file_complete(Path::new(&search_file))`. On parse success:
       - `lines_of_code = source.lines().count()`.
       - `non_empty_loc = source.lines().filter(|l| !l.trim().is_empty()).count()`.
-      - `function_count = parse_result.symbols.iter().filter(|s| matches!(s.kind, file_search_mcp::parser::SymbolKind::Function { .. })).count()` — counts only `Function` variants of the `SymbolKind` enum.
+      - `function_count = parse_result.symbols.iter().filter(|s| matches!(s.kind, rust_code_mcp::parser::SymbolKind::Function { .. })).count()` — counts only `Function` variants of the `SymbolKind` enum.
       - Edge count via `parse_result.call_graph.edge_count()`.
       - Print the four metrics.
    d. On parse error: print it. On read error: print it.

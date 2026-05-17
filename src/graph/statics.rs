@@ -149,12 +149,12 @@ mod tests {
             .mut_static_audit()
             .expect("mut_static_audit should not error");
         let semantic = findings.iter().find(|f| {
-            f.qualified_name == "file_search_mcp::semantic::SEMANTIC"
+            f.qualified_name == "rust_code_mcp::semantic::SEMANTIC"
                 && f.matched_pattern == "LazyLock"
         });
         assert!(
             semantic.is_some(),
-            "expected `file_search_mcp::semantic::SEMANTIC` to surface as LazyLock; found: {:?}",
+            "expected `rust_code_mcp::semantic::SEMANTIC` to surface as LazyLock; found: {:?}",
             findings
                 .iter()
                 .map(|f| (&f.qualified_name, &f.matched_pattern))
@@ -166,9 +166,9 @@ mod tests {
     fn static_metadata_round_trip_for_semantic() {
         let snap = shared_snapshot();
         let (id, _node) = snap
-            .lookup_by_qualified_name("file_search_mcp::semantic::SEMANTIC")
+            .lookup_by_qualified_name("rust_code_mcp::semantic::SEMANTIC")
             .expect("lookup_by_qualified_name failed")
-            .expect("file_search_mcp::semantic::SEMANTIC not in snapshot");
+            .expect("rust_code_mcp::semantic::SEMANTIC not in snapshot");
         let meta = snap
             .static_metadata(id)
             .expect("static_metadata failed")
