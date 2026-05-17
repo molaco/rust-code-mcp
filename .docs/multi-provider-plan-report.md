@@ -19,7 +19,7 @@ No formatting command was run.
 | 7 | `79fd605e` | `phase 7 profile aware sync` |
 | 8a | `ffd455c9` | `phase 8 test coverage` |
 | 8b | `0a100e01` | `phase 8 verification` |
-| 9 | this change | `phase 9 documentation` |
+| 9 | `6040e6e0` | `phase 9 documentation` |
 
 Each implementation phase began with `jj show --summary`, updated `.plans/multi-provider-plan.md`, and was committed separately. Phase 8 needed a second commit after the Nix shell was confirmed and final verification could run.
 

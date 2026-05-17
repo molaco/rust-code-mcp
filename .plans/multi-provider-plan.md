@@ -103,7 +103,7 @@ P1 and P2 are independent and may be done in either order. P4 needs P1+P2+P3.
 
 ## Phase 1: Identity Codec (Isolated)
 
-Status: Implemented; build/test verification pending confirmed Nix shell.
+Status: Implemented; verified by Phase 8 `cuda-code` checks.
 
 Rationale: a pure string codec with no dependency on the profile/backend data
 model. This removes the Round-2/S1 sequencing trap — it is tested on raw field
@@ -157,7 +157,7 @@ Acceptance criteria:
 
 ## Phase 2: Table-Driven Built-In Profile Data Model
 
-Status: Implemented; build/test verification pending confirmed Nix shell.
+Status: Implemented; verified by Phase 8 `cuda-code` checks.
 
 Design:
 
@@ -227,7 +227,7 @@ Acceptance criteria:
 
 ## Phase 3: Runtime-Aware Query Policy
 
-Status: Implemented; build/test verification pending confirmed Nix shell.
+Status: Implemented; verified by Phase 8 `cuda-code` checks.
 
 Design:
 
@@ -267,7 +267,7 @@ Acceptance criteria:
 
 ## Phase 4: Wire Identity Into `EmbeddingBackend`
 
-Status: Implemented; build/test verification pending confirmed Nix shell.
+Status: Implemented; verified by Phase 8 `cuda-code` checks.
 
 Design:
 
@@ -307,7 +307,7 @@ Acceptance criteria:
 
 ## Phase 5: Dynamic (User-Defined) API Profiles
 
-Status: Implemented; build/test verification pending confirmed Nix shell.
+Status: Implemented; verified by Phase 8 `cuda-code` checks.
 
 Design:
 
@@ -374,7 +374,8 @@ Acceptance criteria:
 
 ## Phase 6: Generalize the OpenRouter Model Path
 
-Status: Implemented; OpenRouter now sends `profile.model_id` directly. Build/test verification pending confirmed Nix shell.
+Status: Implemented; OpenRouter now sends `profile.model_id` directly.
+Verified by Phase 8 `cuda-code` checks.
 
 Design:
 
@@ -400,7 +401,7 @@ Acceptance criteria:
 
 ## Phase 7: Profile-Aware Background Sync
 
-Status: Implemented; build/test verification pending confirmed Nix shell.
+Status: Implemented; verified by Phase 8 `cuda-code` checks.
 
 Rationale: Round-2/S4. `sync_directory` (`src/mcp/sync.rs:132`) builds
 `EmbeddingBackend::default()` unconditionally. A directory indexed with a
