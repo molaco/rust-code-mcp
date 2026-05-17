@@ -4,6 +4,7 @@
 //! Human-readable diagnostics must go to stderr/tracing or tool results.
 
 use anyhow::{Context, Result, anyhow};
+use file_search_mcp::embeddings::EmbeddingBackend;
 use file_search_mcp::indexing::incremental::get_snapshot_path;
 use file_search_mcp::tools::project_paths::ProjectPaths;
 use serde_json::{Value, json};
@@ -44,7 +45,10 @@ impl StdioIndexEnv {
 
 impl Drop for StdioIndexEnv {
     fn drop(&mut self) {
-        let paths = ProjectPaths::from_directory(&self.codebase_path);
+        let paths = ProjectPaths::from_directory(
+            &self.codebase_path,
+            &EmbeddingBackend::default(),
+        );
         let _ = std::fs::remove_dir_all(paths.cache_path);
         let _ = std::fs::remove_dir_all(paths.tantivy_path);
         let _ = std::fs::remove_dir_all(paths.vector_path);

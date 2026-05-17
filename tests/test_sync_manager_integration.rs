@@ -1,4 +1,5 @@
 //! Integration tests for SyncManager background sync functionality
+#![recursion_limit = "256"]
 //!
 //! Tests verify:
 //! 1. Background sync runs periodically

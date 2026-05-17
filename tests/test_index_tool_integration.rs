@@ -48,6 +48,8 @@ impl IndexToolTestEnv {
         IndexCodebaseParams {
             directory: self.get_path_string(),
             force_reindex: if force { Some(true) } else { None },
+            model: None,
+            embedding_profile: None,
         }
     }
 }
@@ -57,6 +59,8 @@ async fn test_index_tool_invalid_directory() {
     let params = IndexCodebaseParams {
         directory: "/nonexistent/path/that/does/not/exist".to_string(),
         force_reindex: None,
+        model: None,
+        embedding_profile: None,
     };
 
     let result = index_codebase(params, None).await;
@@ -74,6 +78,8 @@ async fn test_index_tool_not_a_directory() -> Result<()> {
     let params = IndexCodebaseParams {
         directory: file_path.to_string_lossy().to_string(),
         force_reindex: None,
+        model: None,
+        embedding_profile: None,
     };
 
     let result = index_codebase(params, None).await;
@@ -105,6 +111,8 @@ async fn test_index_tool_basic_indexing() -> Result<()> {
     let params = IndexCodebaseParams {
         directory: env.get_path_string(),
         force_reindex: None,
+        model: None,
+        embedding_profile: None,
     };
 
     let result = index_codebase(params, None).await;
@@ -129,6 +137,8 @@ async fn test_index_tool_empty_directory() -> Result<()> {
     let params = IndexCodebaseParams {
         directory: env.get_path_string(),
         force_reindex: None,
+        model: None,
+        embedding_profile: None,
     };
 
     let result = index_codebase(params, None).await;
@@ -196,6 +206,8 @@ async fn test_index_tool_with_sync_manager() -> Result<()> {
     let params = IndexCodebaseParams {
         directory: env.get_path_string(),
         force_reindex: None,
+        model: None,
+        embedding_profile: None,
     };
 
     // Index with sync manager

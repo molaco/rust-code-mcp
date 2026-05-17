@@ -265,6 +265,7 @@ async fn setup_hybrid_search() -> Result<HybridSearch, Box<dyn std::error::Error
         tantivy_dir.path(),
         "evaluation_test",
         384,
+        "test-embedder:v1",
         None,
     )
     .await

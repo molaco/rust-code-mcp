@@ -48,6 +48,7 @@ impl TestEnv {
             &self.tantivy_path,
             &self.collection_name,
             384,
+            "test-embedder:v1",
             None,
         )
         .await

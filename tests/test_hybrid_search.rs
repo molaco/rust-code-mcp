@@ -20,6 +20,7 @@ async fn test_manual_hybrid_search() {
         tantivy_dir.path(),
         "test_manual_search",
         384,
+        "test-embedder:v1",
         None,
     )
     .await
@@ -143,6 +144,7 @@ async fn test_incremental_indexing() {
         tantivy_dir.path(),
         "test_incremental",
         384,
+        "test-embedder:v1",
         None,
     )
     .await
@@ -179,6 +181,7 @@ async fn test_vector_store_connection() {
         tantivy_dir.path(),
         "test_connection",
         384,
+        "test-embedder:v1",
         None,
     )
     .await;

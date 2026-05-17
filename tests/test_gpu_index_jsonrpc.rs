@@ -87,6 +87,8 @@ async fn call_index_tool_direct(
     let params = IndexCodebaseParams {
         directory: codebase_path.to_string(),
         force_reindex: Some(force_reindex),
+        model: None,
+        embedding_profile: None,
     };
 
     index_codebase(params, None)

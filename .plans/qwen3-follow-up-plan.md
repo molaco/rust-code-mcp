@@ -304,6 +304,8 @@ Verification:
 
 ## Phase 7: Add Tests
 
+Status: Complete.
+
 Add focused tests before benchmarking.
 
 Test coverage:
@@ -323,6 +325,20 @@ Acceptance criteria:
 - `cargo check --lib` passes.
 - Unit tests cover the new profile resolution behavior.
 - No formatting command is run.
+
+Completed work:
+
+- Updated integration and benchmark test constructors for the new `embedding_profile` field.
+- Updated incremental indexer test fixtures to pass an explicit test embedder identity.
+- Updated hybrid-search/evaluation tests for the new profile-aware embedded indexer constructor.
+- Updated MCP stdio transport tests to build `ProjectPaths` with an explicit default backend.
+- Added a test recursion limit for the sync-manager integration test so the expanded router type checks.
+- Existing focused unit coverage now covers profile parsing, legacy aliases, identity uniqueness, snapshot path uniqueness, profile dimensions, query formatting, OpenRouter response parsing, dimension mismatch handling, missing API key messaging, and CPU profile chunking salt.
+- Adjusted OpenRouter query embeddings to rely on provider `input_type: "search_query"` instead of adding the local Qwen3 query prefix.
+
+Verification:
+
+- `CUDARC_CUDA_VERSION=12080 cargo check --tests` passed with pre-existing warnings.
 
 ## Phase 8: Benchmark and Tune
 

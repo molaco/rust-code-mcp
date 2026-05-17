@@ -19,7 +19,6 @@ pub(super) struct OpenRouterEmbedder {
     api_key: String,
     base_url: String,
     model: String,
-    backend: EmbeddingBackend,
     dim: usize,
 }
 
@@ -83,7 +82,6 @@ impl OpenRouterEmbedder {
             api_key,
             base_url,
             model,
-            backend: *backend,
             dim: backend.dim(),
         })
     }
@@ -103,11 +101,7 @@ impl OpenRouterEmbedder {
         &self,
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
-        let formatted: Vec<String> = texts
-            .iter()
-            .map(|text| self.backend.format_query(text))
-            .collect();
-        self.embed_with_split(formatted, "search_query").await
+        self.embed_with_split(texts, "search_query").await
     }
 
     async fn embed_with_split(

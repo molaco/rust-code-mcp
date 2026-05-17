@@ -35,6 +35,7 @@ impl BenchmarkConfig {
             &self.tantivy_path,
             &self.collection_name,
             384,
+            "test-embedder:v1",
             None,
         )
         .await
@@ -191,6 +192,7 @@ async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
         &tantivy_path_seq,
         &collection_seq,
         384,
+        "test-embedder:v1",
         None,
     )
     .await?;
@@ -215,6 +217,7 @@ async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
         &tantivy_path_par,
         &collection_par,
         384,
+        "test-embedder:v1",
         None,
     )
     .await?;
