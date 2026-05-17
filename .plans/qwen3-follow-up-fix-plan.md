@@ -220,7 +220,60 @@ Acceptance criteria:
 
 ## Phase 5: Redo Phase 8 Benchmark Work
 
-Status: Pending; should remain separate from this build fix.
+Status: Verified.
+
+Implementation notes:
+
+- Updated `examples/index_codebase.rs` to accept `--profile PROFILE` and `--codebase PATH`.
+- Updated `examples/index_codebase.rs` to use `IncrementalIndexer::with_backend`, so benchmark runs use the same profile identity/dimensions as the runtime path.
+- Added machine-readable benchmark output for profile, vector dimension, file/chunk counts, total duration, parse duration, embedding duration, indexing duration, and peak memory.
+- Updated `examples/gpu_batch_matrix.rs` to pass `--profile` to `index_codebase`, report vector dimension, and parse padded token metrics from tracing output.
+- Kept benchmark changes separate from the build-fix commit.
+- Did not reintroduce the uncommitted Cargo `cuda` feature split.
+
+Verification commands and results:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'cargo build --release --example index_codebase --example gpu_batch_matrix'
+```
+
+Result:
+
+- Passed with existing warnings.
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc './target/release/examples/gpu_batch_matrix --profile local-gpu-small 16'
+```
+
+Result:
+
+| profile | batch size | dim | chunks | index wall | embed time | chunks/sec | padded tokens | padded tokens/sec | child wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| local-gpu-small | 16 | 1024 | 2084 | 34.74s | 33.17s | 60.0 | 122693 | 19365.1 | 35.82s |
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'tmp=$(mktemp -d); cd "$tmp"; /home/molaco/Documents/rust-code-mcp-final/target/release/examples/index_codebase --profile local-cpu-small'
+```
+
+Result:
+
+- `embedding_profile=local-cpu-small`
+- `vector_dim=384`
+- `indexed_files=125`
+- `skipped_files=1`
+- `total_chunks=4691`
+- `duration_secs=201.234437`
+- `embed_duration_secs=198.180663`
+- Approximate aggregate padded tokens from per-batch logs: `1678944`
+- Approximate aggregate padded tokens/sec: `8472`
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc 'if [ -n "${RUST_CODE_MCP_OPENROUTER_API_KEY:-}${OPENROUTER_API_KEY:-}" ]; then tmp=$(mktemp -d); cd "$tmp"; /home/molaco/Documents/rust-code-mcp-final/target/release/examples/index_codebase --profile openrouter-qwen3-8b; else echo openrouter_benchmark=skipped_missing_api_key; fi'
+```
+
+Result:
+
+- `openrouter_benchmark=skipped_missing_api_key`
 
 Redo benchmark/profile work only after the build fix is committed.
 

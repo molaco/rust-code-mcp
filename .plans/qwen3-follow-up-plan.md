@@ -342,6 +342,32 @@ Verification:
 
 ## Phase 8: Benchmark and Tune
 
+Status: Completed after the ONNX Runtime build fix.
+
+Implementation notes:
+
+- `examples/index_codebase.rs` now accepts `--profile PROFILE` and `--codebase PATH`.
+- `examples/index_codebase.rs` now emits machine-readable benchmark metrics.
+- `examples/gpu_batch_matrix.rs` now passes `--profile` to `index_codebase`, reports vector dimension, and includes padded-token metrics when available.
+- Benchmark runs were executed only through `nix develop ../nix-devshells#cuda-code`.
+
+Verification:
+
+- `cargo build --release --example index_codebase --example gpu_batch_matrix` passed in `../nix-devshells#cuda-code`.
+- `./target/release/examples/gpu_batch_matrix --profile local-gpu-small 16` completed:
+  - chunks: `2084`
+  - embedding time: `33.17s`
+  - padded tokens: `122693`
+  - padded tokens/sec: `19365.1`
+- `index_codebase --profile local-cpu-small` completed:
+  - indexed files: `125`
+  - skipped files: `1`
+  - chunks: `4691`
+  - total duration: `201.234437s`
+  - embedding duration: `198.180663s`
+  - approximate padded tokens/sec from per-batch logs: `8472`
+- OpenRouter benchmark was skipped because no `RUST_CODE_MCP_OPENROUTER_API_KEY` or `OPENROUTER_API_KEY` was present in the shell. The runtime smoke check confirmed the missing-key error is clear.
+
 Benchmark each profile separately.
 
 Local GPU small:
