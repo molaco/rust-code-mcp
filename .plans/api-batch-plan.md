@@ -511,7 +511,44 @@ Acceptance criteria:
 
 ## Phase 9: Verification
 
-Status: Planned.
+Status: Verified except live OpenRouter benchmark, which was skipped because no OpenRouter API key is configured in this shell.
+
+Verification shell:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command zsh -lc '<command>'
+```
+
+Verification results:
+
+- `cargo test embeddings::openrouter --lib` passed:
+  - 20 passed
+  - 0 failed
+  - existing warnings only
+- `cargo test indexing::embedding_batcher --lib` passed:
+  - 8 passed
+  - 0 failed
+  - existing warnings only
+- `cargo check --lib` passed with existing warnings.
+- `cargo check --tests` passed with existing warnings.
+- `cargo build --release --example index_codebase --example openrouter_batch_matrix` passed with existing warnings.
+- Missing-key benchmark path passed:
+
+```sh
+env -u RUST_CODE_MCP_OPENROUTER_API_KEY -u OPENROUTER_API_KEY ./target/release/examples/openrouter_batch_matrix --inputs 128 --tokens 131072 --concurrency 4
+```
+
+Output:
+
+```text
+openrouter_benchmark=skipped_missing_api_key
+```
+
+Live OpenRouter benchmark status:
+
+- Not run in this phase.
+- `RUST_CODE_MCP_OPENROUTER_API_KEY` and `OPENROUTER_API_KEY` were not configured in the shell.
+- No API key was written into files or command output.
 
 Before running any command, confirm the Nix shell with the user.
 
