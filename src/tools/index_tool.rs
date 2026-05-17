@@ -3,7 +3,7 @@
 //! Provides the `index_codebase` tool which allows manual triggering of
 //! incremental indexing with optional force reindex.
 
-use crate::embeddings::{EmbeddingBackend, EmbeddingProfile, Qwen3Variant};
+use crate::embeddings::{resolve_profile, EmbeddingBackend, Qwen3Variant};
 use crate::indexing::incremental::IncrementalIndexer;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStoreError;
@@ -46,9 +46,10 @@ fn parse_variant(s: &str) -> Result<Qwen3Variant, String> {
 fn resolve_backend(
     embedding_profile: Option<&str>,
     model: Option<&str>,
+    project_root: &std::path::Path,
 ) -> Result<EmbeddingBackend, McpError> {
     if let Some(profile) = embedding_profile {
-        let profile = EmbeddingProfile::parse(profile)
+        let profile = resolve_profile(profile, project_root)
             .map_err(|msg| McpError::invalid_params(msg, None))?;
         return Ok(EmbeddingBackend::from_profile(profile));
     }
@@ -94,6 +95,7 @@ pub async fn index_codebase(
     let backend = resolve_backend(
         params.embedding_profile.as_deref(),
         params.model.as_deref(),
+        &dir,
     )?;
     let embedder_identity = backend.identity();
     let paths = ProjectPaths::from_directory(&dir, &backend);
@@ -387,7 +389,8 @@ mod tests {
 
     #[test]
     fn resolve_backend_explicit_model_keeps_default_limits() {
-        let backend = resolve_backend(None, Some("qwen3-0.6b")).unwrap();
+        let backend =
+            resolve_backend(None, Some("qwen3-0.6b"), std::path::Path::new(".")).unwrap();
         let default = EmbeddingBackend::default();
 
         assert_eq!(backend.qwen3_variant(), Some(Qwen3Variant::Embedding0_6B));
@@ -397,7 +400,12 @@ mod tests {
 
     #[test]
     fn resolve_backend_profile_wins_over_legacy_model() {
-        let backend = resolve_backend(Some("local-cpu-small"), Some("qwen3-0.6b")).unwrap();
+        let backend = resolve_backend(
+            Some("local-cpu-small"),
+            Some("qwen3-0.6b"),
+            std::path::Path::new("."),
+        )
+        .unwrap();
 
         assert_eq!(backend.profile.name(), "local-cpu-small");
         assert_eq!(backend.dim(), 384);
@@ -405,7 +413,7 @@ mod tests {
 
     #[test]
     fn resolve_backend_rejects_invalid_profile() {
-        let err = resolve_backend(Some("nope"), None).unwrap_err();
+        let err = resolve_backend(Some("nope"), None, std::path::Path::new(".")).unwrap_err();
         let text = err.to_string();
 
         assert!(text.contains("unknown embedding profile"));

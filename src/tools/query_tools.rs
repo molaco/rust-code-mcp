@@ -11,7 +11,7 @@ use tokio::fs;
 use std::path::Path;
 use tracing;
 
-use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator, EmbeddingProfile};
+use crate::embeddings::{resolve_profile, EmbeddingBackend, EmbeddingGenerator};
 use crate::search::HybridSearch;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStore;
@@ -263,9 +263,10 @@ pub(crate) async fn create_hybrid_search(
 
 fn resolve_requested_backend(
     embedding_profile: Option<&str>,
+    dir_path: &Path,
 ) -> Result<EmbeddingBackend, McpError> {
     if let Some(profile) = embedding_profile {
-        let profile = EmbeddingProfile::parse(profile)
+        let profile = resolve_profile(profile, dir_path)
             .map_err(|msg| McpError::invalid_params(msg, None))?;
         return Ok(EmbeddingBackend::from_profile(profile));
     }
@@ -351,7 +352,7 @@ pub async fn search(
         ));
     }
 
-    let requested_backend = resolve_requested_backend(embedding_profile)?;
+    let requested_backend = resolve_requested_backend(embedding_profile, dir_path)?;
     let paths = ProjectPaths::from_directory(dir_path, &requested_backend);
 
     // Try existing index; if corrupt or missing, rebuild
@@ -419,7 +420,7 @@ pub async fn get_similar_code(
         ));
     }
 
-    let requested_backend = resolve_requested_backend(embedding_profile)?;
+    let requested_backend = resolve_requested_backend(embedding_profile, dir_path)?;
     let paths = ProjectPaths::from_directory(dir_path, &requested_backend);
 
     let hybrid_search = create_hybrid_search(&paths, None, requested_backend).await?;

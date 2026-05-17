@@ -307,7 +307,7 @@ Acceptance criteria:
 
 ## Phase 5: Dynamic (User-Defined) API Profiles
 
-Status: Not started. Depends on Phase 4.
+Status: Implemented; build/test verification pending confirmed Nix shell.
 
 Design:
 

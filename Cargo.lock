@@ -2495,6 +2495,7 @@ dependencies = [
  "text-splitter",
  "thiserror 1.0.69",
  "tokenizers",
+ "toml",
  "tokio",
  "tracing",
  "tracing-subscriber",
