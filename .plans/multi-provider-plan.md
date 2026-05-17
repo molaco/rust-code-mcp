@@ -267,7 +267,7 @@ Acceptance criteria:
 
 ## Phase 4: Wire Identity Into `EmbeddingBackend`
 
-Status: Not started. Depends on Phases 1-3.
+Status: Implemented; build/test verification pending confirmed Nix shell.
 
 Design:
 

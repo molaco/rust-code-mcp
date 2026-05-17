@@ -4,7 +4,7 @@
 //! stable identity strings used in cache paths and `EMBEDDER_VERSION`.
 
 use super::error::EmbeddingError;
-use super::identity::{percent_decode, percent_encode};
+use super::identity::{percent_decode, percent_encode, EmbeddingIdentity};
 use std::sync::{Arc, LazyLock};
 
 pub(crate) const QWEN3_CODE_QUERY_PREFIX: &str =
@@ -277,6 +277,31 @@ impl EmbeddingProfile {
     pub(crate) fn built_in_profiles() -> &'static [Self] {
         BUILT_IN_PROFILES.as_slice()
     }
+
+    fn built_in_local_for_identity(
+        runtime: EmbeddingRuntime,
+        model_id: &str,
+    ) -> Option<Self> {
+        Self::built_in_profiles()
+            .iter()
+            .find(|profile| {
+                profile.runtime == runtime
+                    && profile.model_id.as_ref() == model_id
+                    && profile.local_loader.is_some()
+            })
+            .cloned()
+    }
+
+    fn built_in_api_for_identity(runtime: EmbeddingRuntime, model_id: &str) -> Option<Self> {
+        Self::built_in_profiles()
+            .iter()
+            .find(|profile| {
+                profile.runtime == runtime
+                    && profile.model_id.as_ref() == model_id
+                    && profile.local_loader.is_none()
+            })
+            .cloned()
+    }
 }
 
 impl Default for EmbeddingBackend {
@@ -373,30 +398,15 @@ impl EmbeddingBackend {
     }
 
     /// Stable string used in cache paths and EMBEDDER_VERSION.
-    ///
-    /// The default local Qwen3-Embedding-0.6B identity intentionally keeps the
-    /// existing `v2` string so current indexes remain compatible.
     pub fn identity(&self) -> String {
-        match self.runtime {
-            EmbeddingRuntime::LocalQwen3CandleCuda => format!(
-                "fastembed-candle:{}:dim{}:max{}:v2",
-                self.model_display_name(),
-                self.dim(),
-                self.max_len,
-            ),
-            EmbeddingRuntime::LocalFastembedOnnxCpu => format!(
-                "fastembed-onnx-cpu:{}:dim{}:max{}:v1",
-                self.model_display_name(),
-                self.dim(),
-                self.max_len,
-            ),
-            EmbeddingRuntime::OpenRouter => format!(
-                "openrouter:{}:dim{}:max{}:v1",
-                self.model_id(),
-                self.dim(),
-                self.max_len,
-            ),
+        EmbeddingIdentity {
+            runtime: self.runtime,
+            model_id: self.model_id().to_string(),
+            dim: self.dim(),
+            max_len: self.max_len,
+            query: self.profile.query_policy.encode_tag(),
         }
+        .encode()
     }
 
     /// Parse an `identity()` string back into an `EmbeddingBackend`.
@@ -404,6 +414,72 @@ impl EmbeddingBackend {
     /// Used to reconcile the embedder recorded in a vector store's
     /// `metadata.json` with the embedder a search-time caller wants.
     pub fn from_identity(s: &str) -> Result<Self, EmbeddingError> {
+        if s.starts_with("emb;") {
+            return Self::from_v2_identity(s);
+        }
+
+        Self::from_legacy_identity(s)
+    }
+
+    fn from_v2_identity(s: &str) -> Result<Self, EmbeddingError> {
+        let identity = EmbeddingIdentity::decode(s).map_err(EmbeddingError::invalid_identity)?;
+        let query_policy =
+            QueryPolicy::decode_tag(&identity.query).map_err(EmbeddingError::invalid_identity)?;
+
+        match identity.runtime {
+            EmbeddingRuntime::OpenRouter => {
+                let mut profile = EmbeddingProfile::built_in_api_for_identity(
+                    EmbeddingRuntime::OpenRouter,
+                    &identity.model_id,
+                )
+                .unwrap_or_else(|| EmbeddingProfile {
+                    name: arc(&format!("openrouter:{}", identity.model_id)),
+                    runtime: EmbeddingRuntime::OpenRouter,
+                    model_id: arc(&identity.model_id),
+                    tokenizer_model_id: None,
+                    dim: identity.dim,
+                    max_len: identity.max_len,
+                    query_policy: query_policy.clone(),
+                    chunk_target_tokens: 768,
+                    chunk_hard_max_tokens: 1024,
+                    local_loader: None,
+                });
+                profile.dim = identity.dim;
+                profile.max_len = identity.max_len;
+                profile.query_policy = query_policy;
+                profile.local_loader = None;
+                Ok(Self::from_profile(profile))
+            }
+            runtime => {
+                let mut profile = EmbeddingProfile::built_in_local_for_identity(
+                    runtime,
+                    &identity.model_id,
+                )
+                .ok_or_else(|| {
+                    EmbeddingError::invalid_identity(format!(
+                        "local embedding identity references unknown built-in model `{}` for runtime {:?}; \
+                         run `clear_cache` for this directory to discard the stale or foreign index",
+                        identity.model_id, runtime
+                    ))
+                })?;
+                if identity.dim != profile.dim {
+                    return Err(EmbeddingError::invalid_identity(format!(
+                        "dim `{}` does not match built-in profile `{}` (expected {}) in `{}`",
+                        identity.dim,
+                        profile.name(),
+                        profile.dim,
+                        s
+                    )));
+                }
+                profile.query_policy = query_policy;
+                let mut backend = Self::from_profile(profile);
+                backend.max_len = identity.max_len;
+                Ok(backend)
+            }
+        }
+    }
+
+    fn from_legacy_identity(s: &str) -> Result<Self, EmbeddingError> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 5 {
             return Err(EmbeddingError::invalid_identity(format!(
@@ -525,11 +601,15 @@ mod tests {
     }
 
     #[test]
-    fn default_backend_identity_matches_existing_qwen3_identity() {
-        assert_eq!(
-            EmbeddingBackend::default().identity(),
-            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2"
-        );
+    fn default_backend_identity_uses_v2_codec() {
+        let identity = EmbeddingBackend::default().identity();
+        let decoded = EmbeddingIdentity::decode(&identity).unwrap();
+
+        assert!(identity.starts_with("emb;v=2;"));
+        assert_eq!(decoded.runtime, EmbeddingRuntime::LocalQwen3CandleCuda);
+        assert_eq!(decoded.model_id, "Qwen/Qwen3-Embedding-0.6B");
+        assert_eq!(decoded.dim, 1024);
+        assert_eq!(decoded.max_len, 1024);
     }
 
     #[test]
@@ -686,8 +766,96 @@ mod tests {
     fn from_identity_roundtrip_openrouter_profile() {
         let original = EmbeddingBackend::from_profile(profile("openrouter-qwen3-8b"));
         let parsed = EmbeddingBackend::from_identity(&original.identity()).unwrap();
-        assert_eq!(parsed.profile, original.profile);
+        assert_eq!(parsed.runtime, original.runtime);
+        assert_eq!(parsed.model_id(), original.model_id());
+        assert_eq!(parsed.dim(), original.dim());
         assert_eq!(parsed.max_len, original.max_len);
+        assert_eq!(parsed.profile.query_policy, original.profile.query_policy);
+    }
+
+    #[test]
+    fn from_identity_roundtrips_all_built_in_profiles() {
+        for profile in EmbeddingProfile::built_in_profiles().iter().cloned() {
+            let original = EmbeddingBackend::from_profile(profile);
+            let parsed = EmbeddingBackend::from_identity(&original.identity()).unwrap();
+
+            assert_eq!(parsed.runtime, original.runtime);
+            assert_eq!(parsed.model_id(), original.model_id());
+            assert_eq!(parsed.dim(), original.dim());
+            assert_eq!(parsed.max_len, original.max_len);
+            assert_eq!(parsed.profile.query_policy, original.profile.query_policy);
+        }
+    }
+
+    #[test]
+    fn from_identity_roundtrips_api_model_ids_with_reserved_chars() {
+        let profile = EmbeddingProfile {
+            name: arc("dynamic-openrouter"),
+            runtime: EmbeddingRuntime::OpenRouter,
+            model_id: arc("provider/model:revision"),
+            tokenizer_model_id: None,
+            dim: 1536,
+            max_len: 8192,
+            query_policy: QueryPolicy::InputType {
+                document: arc("document=type;v1"),
+                query: arc("query/type\nv1"),
+            },
+            chunk_target_tokens: 768,
+            chunk_hard_max_tokens: 1024,
+            local_loader: None,
+        };
+        let original = EmbeddingBackend::from_profile(profile);
+        let parsed = EmbeddingBackend::from_identity(&original.identity()).unwrap();
+
+        assert_eq!(parsed.runtime, EmbeddingRuntime::OpenRouter);
+        assert_eq!(parsed.model_id(), "provider/model:revision");
+        assert_eq!(parsed.dim(), 1536);
+        assert_eq!(parsed.max_len, 8192);
+        assert_eq!(parsed.profile.query_policy, original.profile.query_policy);
+    }
+
+    #[test]
+    fn from_identity_accepts_legacy_identities() {
+        let default =
+            "fastembed-candle:Qwen3-Embedding-0.6B:dim1024:max1024:v2";
+        let cpu = "fastembed-onnx-cpu:BGESmallENV15Q:dim384:max512:v1";
+        let openrouter = "openrouter:qwen/qwen3-embedding-8b:dim4096:max32768:v1";
+
+        assert_eq!(
+            EmbeddingBackend::from_identity(default)
+                .unwrap()
+                .profile
+                .name(),
+            "local-gpu-small"
+        );
+        assert_eq!(
+            EmbeddingBackend::from_identity(cpu).unwrap().profile.name(),
+            "local-cpu-small"
+        );
+        assert_eq!(
+            EmbeddingBackend::from_identity(openrouter)
+                .unwrap()
+                .profile
+                .name(),
+            "openrouter-qwen3-8b"
+        );
+    }
+
+    #[test]
+    fn from_identity_rejects_unknown_v2_local_model() {
+        let identity = EmbeddingIdentity {
+            runtime: EmbeddingRuntime::LocalQwen3CandleCuda,
+            model_id: "Qwen/Unknown".to_string(),
+            dim: 1024,
+            max_len: 1024,
+            query: QueryPolicy::InstructionPrefix(arc(QWEN3_CODE_QUERY_PREFIX)).encode_tag(),
+        }
+        .encode();
+        let err = EmbeddingBackend::from_identity(&identity).unwrap_err();
+        let text = err.to_string();
+
+        assert!(text.contains("unknown built-in model"));
+        assert!(text.contains("clear_cache"));
     }
 
     #[test]
