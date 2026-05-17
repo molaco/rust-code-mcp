@@ -583,7 +583,39 @@ Acceptance criteria:
 
 ## Phase 10: Tune Defaults And Record Results
 
-Status: Planned after live benchmark.
+Status: Completed conservatively; live tuning is deferred until an OpenRouter API key is configured.
+
+Implementation notes:
+
+- No live OpenRouter matrix was run because no API key is configured in the shell.
+- The implementation keeps the conservative defaults from the proposal:
+  - `RUST_CODE_MCP_OPENROUTER_MAX_BATCH_INPUTS=128`
+  - `RUST_CODE_MCP_OPENROUTER_MAX_BATCH_TOKENS=131072`
+  - `RUST_CODE_MCP_OPENROUTER_CONCURRENCY=4`
+  - `RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT=float`
+- Provider routing remains opt-in.
+- Base64 remains opt-in through `--encoding base64` or `RUST_CODE_MCP_OPENROUTER_ENCODING_FORMAT=base64`.
+- No aggressive preset was selected because that requires live benchmark evidence.
+- The local GPU path was not retuned or changed.
+
+Benchmark status:
+
+- Baseline to compare against remains:
+  - `embedding time: 138.05s`
+  - `padded tokens/sec: 4573.1`
+  - `requests: about 68`
+- After this implementation, the first live matrix should start with:
+
+```sh
+./target/release/examples/openrouter_batch_matrix --inputs 64,128 --tokens 65536,131072 --concurrency 2,4
+```
+
+Recommended decision rule remains:
+
+- If concurrency `4` with `128` inputs and `131072` token budget is stable, keep it as the default.
+- If retries or `429` responses appear, reduce concurrency before reducing batch size.
+- If payload-too-large splits appear often, reduce `max_batch_tokens` before reducing `max_batch_inputs`.
+- If provider routing improves throughput without increasing failures, document it as an opt-in preset first.
 
 Implementation steps:
 
