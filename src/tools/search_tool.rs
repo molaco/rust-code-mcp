@@ -101,12 +101,27 @@ pub struct BuildHypergraphParams {
     pub force_rebuild: Option<bool>,
 }
 
+#[derive(Debug, Default, Clone, Copy, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ListPaginationParams {
+    #[schemars(description = "Optional cap on returned items after slicing. Default: 50.")]
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[schemars(description = "Optional offset into the sorted item list, applied before `limit`. Default: 0.")]
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[schemars(description = "Optional summary mode. When true, tools omit bulky per-item payload fields where applicable. Default: false.")]
+    #[serde(default)]
+    pub summary: Option<bool>,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GraphImportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Module qualified name, e.g. `my_crate::sub::module`")]
     pub module: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -117,6 +132,8 @@ pub struct GraphExportsParams {
     pub module: String,
     #[schemars(description = "Consumer module from whose viewpoint visibility is checked (qualified name)")]
     pub consumer: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -127,6 +144,8 @@ pub struct GraphReexportsParams {
     pub module: String,
     #[schemars(description = "Consumer module from whose viewpoint visibility is checked (qualified name)")]
     pub consumer: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -135,6 +154,8 @@ pub struct GraphDeclaredReexportsParams {
     pub directory: String,
     #[schemars(description = "Module to enumerate explicit `pub use` declarations from (qualified name)")]
     pub module: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -143,6 +164,8 @@ pub struct WhoImportsParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the symbol whose importers you want")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -151,6 +174,8 @@ pub struct WhoUsesParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the symbol whose non-import references you want (file:byte-range hits)")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -159,6 +184,8 @@ pub struct WhoUsesSummaryParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the symbol whose non-import references you want, aggregated per consumer module with per-category counts")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -167,6 +194,8 @@ pub struct WhoCallsParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the target function whose callers you want (Layer 10 call graph)")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -175,6 +204,8 @@ pub struct CallsFromParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the caller function whose outgoing references you want (Layer 10 call graph)")]
     pub caller: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -195,6 +226,8 @@ pub struct CallersInCrateParams {
     pub target: String,
     #[schemars(description = "Qualified name of the crate to filter callers by (matches the *caller's* crate, not the target's)")]
     pub krate: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -213,18 +246,24 @@ pub struct DeadPubParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the local crate to scan (e.g. `my_crate`). Items declared `pub` with no cross-crate consumers are returned as candidates for downgrading to `pub(crate)`.")]
     pub krate: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct DeadPubReportParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml). Runs dead_pub_in_crate over every local crate and returns aggregated findings per crate.")]
     pub directory: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CrateEdgesParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -255,6 +294,8 @@ pub struct ForbiddenDependencyCheckParams {
     pub directory: String,
     #[schemars(description = "Architectural rules to enforce against the workspace's cross-crate edges")]
     pub rules: Vec<ForbiddenDependencyRuleParam>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -263,6 +304,8 @@ pub struct EnumVariantsParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the enum whose variants you want (e.g. `my_crate::module::MyEnum`)")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -271,6 +314,8 @@ pub struct ItemAttributesParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the item whose outer attributes (and doc-comment lines) you want, e.g. `my_crate::Foo`")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -281,6 +326,8 @@ pub struct ItemsWithAttributeParams {
     pub crate_name: String,
     #[schemars(description = "Substring to match against each item's attribute strings, e.g. `#[must_use]`, `must_use`, `derive(Debug`, or `/// SAFETY:`")]
     pub attribute_pattern: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -289,6 +336,8 @@ pub struct PubUsePubTypeAuditParams {
     pub directory: String,
     #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
     pub crate_name: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -297,6 +346,8 @@ pub struct ReExportChainParams {
     pub directory: String,
     #[schemars(description = "Qualified name of the canonical declaration whose re-export chain you want to walk (e.g. `my_crate::module::Token`)")]
     pub target: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -309,6 +360,8 @@ pub struct CrateDependencyMetricParams {
     #[schemars(description = "Optional sort key applied before `top_n` slicing. One of `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending). Unknown values produce an `invalid_params` error.")]
     #[serde(default)]
     pub sort_by: Option<String>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -339,12 +392,16 @@ pub struct FunctionSignatureParams {
 pub struct UnsafeAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct MutStaticAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -360,6 +417,8 @@ pub struct MissingDocsAuditParams {
     #[schemars(description = "Drop items inside `::tests::` modules. Default true.")]
     #[serde(default)]
     pub skip_test_items: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -380,6 +439,8 @@ pub struct DeriveAuditParams {
     #[schemars(description = "Drop items inside `::tests::` modules. Default true.")]
     #[serde(default)]
     pub skip_test_items: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -392,6 +453,8 @@ pub struct RecursionCheckParams {
     #[schemars(description = "Maximum cycle length to detect. Default 5 (covers self-loop + indirect recursion through a few hops). Hard cap: 12.")]
     #[serde(default)]
     pub max_cycle_length: Option<usize>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -404,6 +467,8 @@ pub struct ChannelCapacityAuditParams {
     #[schemars(description = "Drop findings inside `#[cfg(test)]` modules / fns. Default true.")]
     #[serde(default)]
     pub skip_test_fns: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -419,6 +484,8 @@ pub struct FnBodyAuditParams {
     #[schemars(description = "Drop findings inside `#[cfg(test)]` modules / fns. Default true.")]
     #[serde(default)]
     pub skip_test_fns: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

@@ -1,6 +1,6 @@
 # Tool-Fix Plan: rust-code-mcp MCP Server Tools
 
-Status: in progress — Phase 1/T1 complete
+Status: in progress — Phase 1 complete
 Basis: full-session exercise of 49 of the 50 rust-code-mcp tools against the
 live workspace (2026-05-18); `clear_cache` not run (destructive). Companion to
 `.plans/refactor-plan.md` and `.plans/dup-plan.md` — same crate, different
@@ -66,7 +66,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T | Tool | Severity | Phase | Effort |
 |---|---|---|---|---|
 | T1 | `semantic_overlaps` | P1 | 1 | complete |
-| T7 | all enumerating tools | P2 | 1 | medium |
+| T7 | all enumerating tools | P2 | 1 | complete |
 | T5 | `find_definition` / `find_references` | P2 | 2 | small |
 | T10 | `items_with_attribute` | P2 | 2 | small |
 | T3 | `forbidden_dependency_check` | P1 | 2 | medium |
@@ -114,6 +114,18 @@ shared response-builder helper. Files: response helpers in
 `src/tools/graph_tools.rs` + the audit/analysis endpoints; param structs in
 `src/tools/search_tool.rs`. Compat: additive. Ship T1 first, then T7
 generalizes the same contract.
+
+Progress (2026-05-18): added shared `ListPaginationParams` with `limit`
+(default 50), `offset`, and `summary`; added shared response metadata
+(`total_match_count`, `offset`, `limit`, `summary`, `returned_match_count`) and
+applied it to list-shaped graph/audit responses including imports/exports,
+who-uses/call-site lists, dead-pub tools, crate edges, enum variants,
+attributes, attribute scans, forbidden-dependency violations, pub-type audit,
+re-export chains, crate metrics, unsafe/mut-static/docs/derive/recursion/
+channel/fn-body audits. Summary mode drops file/span on the response shapes
+where those fields are the main payload bulk. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test page_list --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 ### Cluster B — match semantics
 

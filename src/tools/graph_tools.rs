@@ -33,7 +33,7 @@ use crate::tools::search_tool::{
     CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
     EnumVariantsParams, ForbiddenDependencyCheckParams, FunctionSignatureParams,
     FunctionsWithFilterParams, GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams,
-    GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ModuleTreeParams,
+    GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ListPaginationParams, ModuleTreeParams,
     OverlapsParams, PubUsePubTypeAuditParams, ReExportChainParams, RecursiveCallersCountParams,
     SemanticOverlapsParams, SimilarToItemParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
     WhoUsesSummaryParams, WorkspaceStatsParams,
@@ -86,11 +86,13 @@ pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, M
         .map(|(_, n)| n.qualified_name)
         .unwrap_or(params.module.clone());
 
+    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
+        page,
         module: Some(module_name),
         consumer: None,
         target: None,
-        bindings: enrich_bindings(&snap, bindings),
+        bindings,
     })
 }
 
@@ -102,11 +104,13 @@ pub async fn get_exports(params: GraphExportsParams) -> Result<CallToolResult, M
         .exports_of(module_id, consumer_id)
         .map_err(internal_error("exports_of"))?;
 
+    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
+        page,
         module: Some(params.module),
         consumer: Some(params.consumer),
         target: None,
-        bindings: enrich_bindings(&snap, bindings),
+        bindings,
     })
 }
 
@@ -118,11 +122,13 @@ pub async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResul
         .reexports_of(module_id, consumer_id)
         .map_err(internal_error("reexports_of"))?;
 
+    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
+        page,
         module: Some(params.module),
         consumer: Some(params.consumer),
         target: None,
-        bindings: enrich_bindings(&snap, bindings),
+        bindings,
     })
 }
 
@@ -135,11 +141,13 @@ pub async fn get_declared_reexports(
         .declared_reexports_of(module_id)
         .map_err(internal_error("declared_reexports_of"))?;
 
+    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
+        page,
         module: Some(params.module),
         consumer: None,
         target: None,
-        bindings: enrich_bindings(&snap, bindings),
+        bindings,
     })
 }
 
@@ -159,11 +167,13 @@ pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, Mcp
         .who_imports(target_id)
         .map_err(internal_error("who_imports"))?;
 
+    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
+        page,
         module: None,
         consumer: None,
         target: Some(target_node.qualified_name),
-        bindings: enrich_bindings(&snap, bindings),
+        bindings,
     })
 }
 
@@ -182,9 +192,11 @@ pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError>
         .usages_of(target_id)
         .map_err(internal_error("usages_of"))?;
 
+    let (page, usages) = page_list(enrich_usages(&snap, usages), list_page(&params.pagination));
     json_result(&UsagesListResponse {
         target: target_node.qualified_name,
-        usages: enrich_usages(&snap, usages),
+        page,
+        usages,
     })
 }
 
@@ -205,8 +217,10 @@ pub async fn who_uses_summary(
         .who_uses_summary(target_id)
         .map_err(internal_error("who_uses_summary"))?;
 
+    let (page, rows) = page_list(rows, list_page(&params.pagination));
     json_result(&UsageSummaryResponse {
         target: target_node.qualified_name,
+        page,
         rows,
     })
 }
@@ -225,10 +239,12 @@ pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpErro
     let sites = snap
         .who_calls(target_id)
         .map_err(internal_error("who_calls"))?;
+    let (page, call_sites) = page_list(sites, list_page(&params.pagination));
     json_result(&CallSitesResponse {
         target: Some(target_node.qualified_name),
         caller: None,
-        call_sites: sites,
+        page,
+        call_sites,
     })
 }
 
@@ -246,10 +262,12 @@ pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpEr
     let sites = snap
         .calls_from(caller_id)
         .map_err(internal_error("calls_from"))?;
+    let (page, call_sites) = page_list(sites, list_page(&params.pagination));
     json_result(&CallSitesResponse {
         target: None,
         caller: Some(caller_node.qualified_name),
-        call_sites: sites,
+        page,
+        call_sites,
     })
 }
 
@@ -293,10 +311,12 @@ pub async fn callers_in_crate(
     let sites = snap
         .callers_in_crate(target_id, &params.krate)
         .map_err(internal_error("callers_in_crate"))?;
+    let (page, call_sites) = page_list(sites, list_page(&params.pagination));
     json_result(&CallersInCrateResponse {
         target: target_node.qualified_name,
         krate: params.krate,
-        call_sites: sites,
+        page,
+        call_sites,
     })
 }
 
@@ -363,12 +383,22 @@ pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, 
         .dead_pub_in_crate(crate_id)
         .map_err(internal_error("dead_pub_in_crate"))?;
 
+    let page_req = list_page(&params.pagination);
+    let mut enriched: Vec<EnrichedDeadPub> = findings
+        .into_iter()
+        .map(|f| enrich_dead_pub(&snap, f))
+        .collect();
+    if page_req.summary {
+        for finding in &mut enriched {
+            finding.file = None;
+            finding.span = None;
+        }
+    }
+    let (page, findings) = page_list(enriched, page_req);
     json_result(&DeadPubResponse {
         krate: params.krate,
-        findings: findings
-            .into_iter()
-            .map(|f| enrich_dead_pub(&snap, f))
-            .collect(),
+        page,
+        findings,
     })
 }
 
@@ -383,9 +413,35 @@ pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResu
         .map(|c| enrich_crate_dead_pub(&snap, c))
         .collect();
     let total: usize = crates.iter().map(|c| c.findings.len()).sum();
+    let page_req = list_page(&params.pagination);
+    let mut flat: Vec<(String, EnrichedDeadPub)> = Vec::new();
+    for c in crates {
+        for mut finding in c.findings {
+            if page_req.summary {
+                finding.file = None;
+                finding.span = None;
+            }
+            flat.push((c.krate.clone(), finding));
+        }
+    }
+    let (page, flat) = page_list(flat, page_req);
+    let mut crates: Vec<EnrichedCrateDeadPub> = Vec::new();
+    for (krate, finding) in flat {
+        if let Some(last) = crates.last_mut() {
+            if last.krate == krate {
+                last.findings.push(finding);
+                continue;
+            }
+        }
+        crates.push(EnrichedCrateDeadPub {
+            krate,
+            findings: vec![finding],
+        });
+    }
     json_result(&DeadPubReportResponse {
         workspace: params.directory,
         total_findings: total,
+        page,
         crates,
     })
 }
@@ -395,7 +451,8 @@ pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, Mcp
     let edges: Vec<CrateEdge> = snap
         .crate_edges()
         .map_err(internal_error("crate_edges"))?;
-    json_result(&CrateEdgesResponse { edges })
+    let (page, edges) = page_list(edges, list_page(&params.pagination));
+    json_result(&CrateEdgesResponse { page, edges })
 }
 
 pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult, McpError> {
@@ -422,7 +479,7 @@ pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult,
         .enum_variants(enum_id)
         .map_err(internal_error("enum_variants"))?;
 
-    let enriched: Vec<EnrichedEnumVariant> = variants
+    let mut enriched: Vec<EnrichedEnumVariant> = variants
         .into_iter()
         .map(|n| EnrichedEnumVariant {
             display_name: n.display_name,
@@ -431,10 +488,20 @@ pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult,
             span: n.span,
         })
         .collect();
+    let page_req = list_page(&params.pagination);
+    if page_req.summary {
+        for variant in &mut enriched {
+            variant.file = None;
+            variant.span = None;
+        }
+    }
+    let variant_count = enriched.len();
+    let (page, variants) = page_list(enriched, page_req);
     json_result(&EnumVariantsResponse {
         enum_qualified_name: enum_node.qualified_name,
-        variant_count: enriched.len(),
-        variants: enriched,
+        variant_count,
+        page,
+        variants,
     })
 }
 
@@ -454,13 +521,15 @@ pub async fn item_attributes(
     let attrs = snap
         .item_attributes(target_id)
         .map_err(internal_error("item_attributes"))?;
+    let (page, attributes) = page_list(attrs, list_page(&params.pagination));
     json_result(&ItemAttributesResponse {
         target: target_node.qualified_name,
         item_kind: target_node.item_kind.map(item_kind_label),
         file: target_node.file,
         span: target_node.span,
-        attribute_count: attrs.len(),
-        attributes: attrs,
+        attribute_count: page.total_match_count,
+        page,
+        attributes,
     })
 }
 
@@ -501,7 +570,7 @@ pub async fn items_with_attribute(
     let hits: Vec<ItemWithAttribute> = snap
         .items_with_attribute(crate_id, &params.attribute_pattern)
         .map_err(internal_error("items_with_attribute"))?;
-    let enriched: Vec<EnrichedItemWithAttribute> = hits
+    let mut enriched: Vec<EnrichedItemWithAttribute> = hits
         .into_iter()
         .map(|h| EnrichedItemWithAttribute {
             qualified_name: h.qualified_name,
@@ -512,11 +581,21 @@ pub async fn items_with_attribute(
             span: h.span,
         })
         .collect();
+    let page_req = list_page(&params.pagination);
+    if page_req.summary {
+        for item in &mut enriched {
+            item.file = None;
+            item.span = None;
+        }
+    }
+    let total = enriched.len();
+    let (page, items) = page_list(enriched, page_req);
     json_result(&ItemsWithAttributeResponse {
         krate: params.crate_name,
         attribute_pattern: params.attribute_pattern,
-        match_count: enriched.len(),
-        items: enriched,
+        match_count: total,
+        page,
+        items,
     })
 }
 
@@ -1379,9 +1458,12 @@ pub async fn forbidden_dependency_check(
     let violations: Vec<ForbiddenDependencyViolation> = snap
         .forbidden_dependency_check(&rules)
         .map_err(internal_error("forbidden_dependency_check"))?;
+    let violation_count = violations.len();
+    let (page, violations) = page_list(violations, list_page(&params.pagination));
     json_result(&ForbiddenDependencyCheckResponse {
         rule_count: rules.len(),
-        violation_count: violations.len(),
+        violation_count,
+        page,
         violations,
     })
 }
@@ -1423,7 +1505,7 @@ pub async fn pub_use_pub_type_audit(
     let findings: Vec<PubTypeAliasMasqueradingAsReexport> = snap
         .pub_use_pub_type_audit(crate_id)
         .map_err(internal_error("pub_use_pub_type_audit"))?;
-    let enriched: Vec<EnrichedPubTypeAuditFinding> = {
+    let mut enriched: Vec<EnrichedPubTypeAuditFinding> = {
         let rtxn = snap.read_txn().ok();
         findings
             .into_iter()
@@ -1444,10 +1526,20 @@ pub async fn pub_use_pub_type_audit(
             })
             .collect()
     };
+    let page_req = list_page(&params.pagination);
+    if page_req.summary {
+        for finding in &mut enriched {
+            finding.file = None;
+            finding.span = None;
+        }
+    }
+    let finding_count = enriched.len();
+    let (page, findings) = page_list(enriched, page_req);
     json_result(&PubUsePubTypeAuditResponse {
         krate: params.crate_name,
-        finding_count: enriched.len(),
-        findings: enriched,
+        finding_count,
+        page,
+        findings,
     })
 }
 
@@ -1476,9 +1568,12 @@ pub async fn re_export_chain(
             depth: l.depth,
         })
         .collect();
+    let link_count = links.len();
+    let (page, links) = page_list(links, list_page(&params.pagination));
     json_result(&ReExportChainResponse {
         canonical: target_node.qualified_name,
-        link_count: links.len(),
+        link_count,
+        page,
         links,
     })
 }
@@ -1518,10 +1613,6 @@ pub async fn crate_dependency_metric(
         }
     }
 
-    if let Some(n) = params.top_n {
-        metrics.truncate(n);
-    }
-
     // Render NodeIds as hex strings rather than the raw 32-byte arrays
     // serde_bytes_32 emits for [u8; 32].
     let rendered: Vec<CrateMetricRendered> = metrics
@@ -1536,9 +1627,16 @@ pub async fn crate_dependency_metric(
             item_count: m.item_count,
         })
         .collect();
+    let mut page_req = list_page(&params.pagination);
+    if let Some(n) = params.top_n {
+        page_req.limit = n;
+    }
+    let (page, metrics) = page_list(rendered, page_req);
+    let crate_count = metrics.len();
     json_result(&CrateDependencyMetricResponse {
-        crate_count: rendered.len(),
-        metrics: rendered,
+        crate_count,
+        page,
+        metrics,
     })
 }
 
@@ -1599,6 +1697,8 @@ pub async fn unsafe_audit(
     struct Resp {
         directory: String,
         finding_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         findings: Vec<UnsafeFindingRendered>,
     }
     let rendered: Vec<UnsafeFindingRendered> = findings
@@ -1612,10 +1712,13 @@ pub async fn unsafe_audit(
             has_safety_comment: f.has_safety_comment,
         })
         .collect();
+    let finding_count = rendered.len();
+    let (page, findings) = page_list(rendered, list_page(&params.pagination));
     json_result(&Resp {
         directory: params.directory,
-        finding_count: rendered.len(),
-        findings: rendered,
+        finding_count,
+        page,
+        findings,
     })
 }
 
@@ -1641,9 +1744,11 @@ pub async fn mut_static_audit(
     struct Resp {
         directory: String,
         finding_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         findings: Vec<MutStaticFindingRendered>,
     }
-    let rendered: Vec<MutStaticFindingRendered> = findings
+    let mut rendered: Vec<MutStaticFindingRendered> = findings
         .into_iter()
         .map(|f| MutStaticFindingRendered {
             item: f.item.to_hex(),
@@ -1654,10 +1759,20 @@ pub async fn mut_static_audit(
             span: f.span,
         })
         .collect();
+    let page_req = list_page(&params.pagination);
+    if page_req.summary {
+        for finding in &mut rendered {
+            finding.file = None;
+            finding.span = None;
+        }
+    }
+    let finding_count = rendered.len();
+    let (page, findings) = page_list(rendered, page_req);
     json_result(&Resp {
         directory: params.directory,
-        finding_count: rendered.len(),
-        findings: rendered,
+        finding_count,
+        page,
+        findings,
     })
 }
 
@@ -1741,10 +1856,12 @@ pub async fn missing_docs_audit(
     struct Resp {
         scope: ScopeSummary,
         finding_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         findings: Vec<MissingDocsFindingRendered>,
     }
 
-    let rendered: Vec<MissingDocsFindingRendered> = findings
+    let mut rendered: Vec<MissingDocsFindingRendered> = findings
         .into_iter()
         .map(|f| MissingDocsFindingRendered {
             target: f.target.to_hex(),
@@ -1755,14 +1872,24 @@ pub async fn missing_docs_audit(
             span: f.span,
         })
         .collect();
+    let page_req = list_page(&params.pagination);
+    if page_req.summary {
+        for finding in &mut rendered {
+            finding.file = None;
+            finding.span = None;
+        }
+    }
+    let finding_count = rendered.len();
+    let (page, findings) = page_list(rendered, page_req);
 
     json_result(&Resp {
         scope: ScopeSummary {
             directory: params.directory,
             crate_name: params.crate_name,
         },
-        finding_count: rendered.len(),
-        findings: rendered,
+        finding_count,
+        page,
+        findings,
     })
 }
 
@@ -1871,10 +1998,12 @@ pub async fn derive_audit(
         scope: ScopeSummary,
         required_derives: Vec<String>,
         finding_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         findings: Vec<DeriveFindingRendered>,
     }
 
-    let rendered: Vec<DeriveFindingRendered> = findings
+    let mut rendered: Vec<DeriveFindingRendered> = findings
         .into_iter()
         .map(|f| DeriveFindingRendered {
             target: f.target.to_hex(),
@@ -1887,6 +2016,15 @@ pub async fn derive_audit(
             missing_derives: f.missing_derives,
         })
         .collect();
+    let page_req = list_page(&params.pagination);
+    if page_req.summary {
+        for finding in &mut rendered {
+            finding.file = None;
+            finding.span = None;
+        }
+    }
+    let finding_count = rendered.len();
+    let (page, findings) = page_list(rendered, page_req);
 
     json_result(&Resp {
         scope: ScopeSummary {
@@ -1894,8 +2032,9 @@ pub async fn derive_audit(
             crate_name: params.crate_name,
         },
         required_derives: params.required_derives,
-        finding_count: rendered.len(),
-        findings: rendered,
+        finding_count,
+        page,
+        findings,
     })
 }
 
@@ -1973,8 +2112,12 @@ pub async fn recursion_check(
         scope: ScopeSummary,
         max_cycle_length: usize,
         cycle_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         cycles: Vec<RecursionCycleRendered>,
     }
+    let cycle_count = rendered.len();
+    let (page, cycles) = page_list(rendered, list_page(&params.pagination));
 
     json_result(&Resp {
         scope: ScopeSummary {
@@ -1982,8 +2125,9 @@ pub async fn recursion_check(
             crate_name: params.crate_name,
         },
         max_cycle_length,
-        cycle_count: rendered.len(),
-        cycles: rendered,
+        cycle_count,
+        page,
+        cycles,
     })
 }
 
@@ -2072,6 +2216,8 @@ pub async fn channel_capacity_audit(
     struct Resp {
         scope: ScopeSummary,
         finding_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         findings: Vec<ChannelFindingRendered>,
     }
 
@@ -2088,14 +2234,17 @@ pub async fn channel_capacity_audit(
             enclosing_function_name: f.enclosing_function_name,
         })
         .collect();
+    let finding_count = rendered.len();
+    let (page, findings) = page_list(rendered, list_page(&params.pagination));
 
     json_result(&Resp {
         scope: ScopeSummary {
             directory: params.directory,
             crate_name: params.crate_name,
         },
-        finding_count: rendered.len(),
-        findings: rendered,
+        finding_count,
+        page,
+        findings,
     })
 }
 
@@ -2185,6 +2334,8 @@ pub async fn fn_body_audit(
         scope: ScopeSummary,
         patterns_used: Vec<String>,
         finding_count: usize,
+        #[serde(flatten)]
+        page: ListMeta,
         findings: Vec<FnBodyFindingRendered>,
     }
 
@@ -2199,6 +2350,8 @@ pub async fn fn_body_audit(
             context: f.context,
         })
         .collect();
+    let finding_count = rendered.len();
+    let (page, findings) = page_list(rendered, list_page(&params.pagination));
 
     json_result(&Resp {
         scope: ScopeSummary {
@@ -2206,12 +2359,56 @@ pub async fn fn_body_audit(
             crate_name: params.crate_name,
         },
         patterns_used,
-        finding_count: rendered.len(),
-        findings: rendered,
+        finding_count,
+        page,
+        findings,
     })
 }
 
 // ----- helpers -----
+
+const DEFAULT_LIST_LIMIT: usize = 50;
+
+#[derive(Debug, Clone, Copy)]
+struct ListPage {
+    offset: usize,
+    limit: usize,
+    summary: bool,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+struct ListMeta {
+    total_match_count: usize,
+    offset: usize,
+    limit: usize,
+    summary: bool,
+    returned_match_count: usize,
+}
+
+fn list_page(params: &ListPaginationParams) -> ListPage {
+    ListPage {
+        offset: params.offset.unwrap_or(0),
+        limit: params.limit.unwrap_or(DEFAULT_LIST_LIMIT),
+        summary: params.summary.unwrap_or(false),
+    }
+}
+
+fn page_list<T>(items: Vec<T>, page: ListPage) -> (ListMeta, Vec<T>) {
+    let total_match_count = items.len();
+    let paged: Vec<T> = items
+        .into_iter()
+        .skip(page.offset)
+        .take(page.limit)
+        .collect();
+    let meta = ListMeta {
+        total_match_count,
+        offset: page.offset,
+        limit: page.limit,
+        summary: page.summary,
+        returned_match_count: paged.len(),
+    };
+    (meta, paged)
+}
 
 fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {
     let dir = PathBuf::from(directory);
@@ -2770,6 +2967,8 @@ struct BuildHypergraphResponse {
 
 #[derive(Debug, Serialize)]
 struct BindingsListResponse {
+    #[serde(flatten)]
+    page: ListMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     module: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2796,6 +2995,8 @@ struct EnrichedBinding {
 #[derive(Debug, Serialize)]
 struct UsagesListResponse {
     target: String,
+    #[serde(flatten)]
+    page: ListMeta,
     usages: Vec<EnrichedUsage>,
 }
 
@@ -2821,6 +3022,8 @@ struct CallSitesResponse {
     /// name. None when serving `who_calls(target)`.
     #[serde(skip_serializing_if = "Option::is_none")]
     caller: Option<String>,
+    #[serde(flatten)]
+    page: ListMeta,
     call_sites: Vec<EnrichedCallSite>,
 }
 
@@ -2828,6 +3031,8 @@ struct CallSitesResponse {
 struct DeadPubResponse {
     #[serde(rename = "crate")]
     krate: String,
+    #[serde(flatten)]
+    page: ListMeta,
     findings: Vec<EnrichedDeadPub>,
 }
 
@@ -2846,6 +3051,8 @@ struct EnrichedDeadPub {
 struct DeadPubReportResponse {
     workspace: String,
     total_findings: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     crates: Vec<EnrichedCrateDeadPub>,
 }
 
@@ -2858,6 +3065,8 @@ struct EnrichedCrateDeadPub {
 
 #[derive(Debug, Serialize)]
 struct CrateEdgesResponse {
+    #[serde(flatten)]
+    page: ListMeta,
     edges: Vec<CrateEdge>,
 }
 
@@ -2865,6 +3074,8 @@ struct CrateEdgesResponse {
 struct EnumVariantsResponse {
     enum_qualified_name: String,
     variant_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     variants: Vec<EnrichedEnumVariant>,
 }
 
@@ -2882,6 +3093,8 @@ struct EnrichedEnumVariant {
 struct ForbiddenDependencyCheckResponse {
     rule_count: usize,
     violation_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     violations: Vec<ForbiddenDependencyViolation>,
 }
 
@@ -2895,6 +3108,8 @@ struct ItemAttributesResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     span: Option<(u32, u32)>,
     attribute_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     attributes: Vec<String>,
 }
 
@@ -2904,6 +3119,8 @@ struct ItemsWithAttributeResponse {
     krate: String,
     attribute_pattern: String,
     match_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     items: Vec<EnrichedItemWithAttribute>,
 }
 
@@ -2927,6 +3144,8 @@ struct PubUsePubTypeAuditResponse {
     #[serde(rename = "crate")]
     krate: String,
     finding_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     findings: Vec<EnrichedPubTypeAuditFinding>,
 }
 
@@ -2946,6 +3165,8 @@ struct EnrichedPubTypeAuditFinding {
 struct ReExportChainResponse {
     canonical: String,
     link_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     links: Vec<EnrichedReExportLink>,
 }
 
@@ -2959,6 +3180,8 @@ struct EnrichedReExportLink {
 #[derive(Debug, Serialize)]
 struct CrateDependencyMetricResponse {
     crate_count: usize,
+    #[serde(flatten)]
+    page: ListMeta,
     metrics: Vec<CrateMetricRendered>,
 }
 
@@ -2979,6 +3202,8 @@ struct CrateMetricRendered {
 #[derive(Debug, Serialize)]
 struct UsageSummaryResponse {
     target: String,
+    #[serde(flatten)]
+    page: ListMeta,
     rows: Vec<UsageSummaryRow>,
 }
 
@@ -2994,6 +3219,8 @@ struct CallersInCrateResponse {
     target: String,
     #[serde(rename = "crate")]
     krate: String,
+    #[serde(flatten)]
+    page: ListMeta,
     call_sites: Vec<EnrichedCallSite>,
 }
 
@@ -3297,7 +3524,7 @@ mod tests {
     use super::*;
     use crate::tools::search_tool::{
         BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
-        GraphImportsParams, WhoImportsParams, WhoUsesParams,
+        GraphImportsParams, ListPaginationParams, WhoImportsParams, WhoUsesParams,
     };
     use std::sync::Mutex;
 
@@ -3331,6 +3558,7 @@ mod tests {
         let imports = get_imports(GraphImportsParams {
             directory: manifest_dir.to_string(),
             module: "rust_code_mcp::graph".to_string(),
+            pagination: ListPaginationParams::default(),
         })
         .await
         .expect("get_imports");
@@ -3343,6 +3571,7 @@ mod tests {
         let importers = who_imports(WhoImportsParams {
             directory: manifest_dir.to_string(),
             target: "rust_code_mcp::graph::loader::load".to_string(),
+            pagination: ListPaginationParams::default(),
         })
         .await
         .expect("who_imports");
@@ -3380,6 +3609,7 @@ mod tests {
             // Crate name, NOT a module path — must be transparently
             // promoted to the crate's root module.
             consumer: "rust_code_mcp".to_string(),
+            pagination: ListPaginationParams::default(),
         })
         .await
         .expect("get_exports should accept a crate name as consumer");
@@ -3417,6 +3647,7 @@ mod tests {
         let users = who_uses(WhoUsesParams {
             directory: manifest_dir.to_string(),
             target: "rust_code_mcp::graph::loader::load".to_string(),
+            pagination: ListPaginationParams::default(),
         })
         .await
         .expect("who_uses");
@@ -3436,6 +3667,7 @@ mod tests {
         let dead = dead_pub_in_crate(DeadPubParams {
             directory: manifest_dir.to_string(),
             krate: "rust_code_mcp".to_string(),
+            pagination: ListPaginationParams::default(),
         })
         .await
         .expect("dead_pub_in_crate");
@@ -3450,6 +3682,7 @@ mod tests {
         // local crate (itself), so `crates` is non-empty.
         let report = dead_pub_report(DeadPubReportParams {
             directory: manifest_dir.to_string(),
+            pagination: ListPaginationParams::default(),
         })
         .await
         .expect("dead_pub_report");
@@ -3702,6 +3935,7 @@ mod tests {
                 directory: manifest_dir.to_string(),
                 top_n: Some(3),
                 sort_by: Some("item_count".to_string()),
+                pagination: ListPaginationParams::default(),
             },
         )
         .await
@@ -3750,6 +3984,7 @@ mod tests {
                 directory: manifest_dir.to_string(),
                 top_n: None,
                 sort_by: Some("instability".to_string()),
+                pagination: ListPaginationParams::default(),
             },
         )
         .await
@@ -3799,6 +4034,7 @@ mod tests {
                 directory: manifest_dir.to_string(),
                 top_n: None,
                 sort_by: Some("garbage_key".to_string()),
+                pagination: ListPaginationParams::default(),
             },
         )
         .await;
@@ -4020,6 +4256,38 @@ mod tests {
 
         assert_eq!(paged.len(), 1);
         assert_eq!(paged[0].members[0].qualified_name, "keep");
+    }
+
+    #[test]
+    fn page_list_default_limit_caps_and_reports_total() {
+        let items: Vec<usize> = (0..75).collect();
+        let (page, paged) = page_list(items, list_page(&ListPaginationParams::default()));
+
+        assert_eq!(page.total_match_count, 75);
+        assert_eq!(page.offset, 0);
+        assert_eq!(page.limit, 50);
+        assert!(!page.summary);
+        assert_eq!(page.returned_match_count, 50);
+        assert_eq!(paged.len(), 50);
+        assert_eq!(paged[0], 0);
+        assert_eq!(paged[49], 49);
+    }
+
+    #[test]
+    fn page_list_offset_and_limit_slice_results() {
+        let params = ListPaginationParams {
+            limit: Some(3),
+            offset: Some(4),
+            summary: Some(true),
+        };
+        let (page, paged) = page_list((0..10).collect::<Vec<_>>(), list_page(&params));
+
+        assert_eq!(page.total_match_count, 10);
+        assert_eq!(page.offset, 4);
+        assert_eq!(page.limit, 3);
+        assert!(page.summary);
+        assert_eq!(page.returned_match_count, 3);
+        assert_eq!(paged, vec![4, 5, 6]);
     }
 
     #[test]

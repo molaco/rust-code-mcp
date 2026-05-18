@@ -715,7 +715,7 @@ impl ServerHandler for SearchToolRouter {
                 .enable_tools()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("Rust code intelligence server for searching code, reading files, resolving symbols and references, previewing renames, inspecting dependencies and call graphs, semantic similarity, persisted hypergraph queries, workspace audits, and cache/index maintenance. See each tool's description for parameters and limitations; run `build_hypergraph` before graph-backed tools that require it."
+            instructions: Some("Rust code intelligence server for searching code, reading files, resolving symbols and references, previewing renames, inspecting dependencies and call graphs, semantic similarity, persisted hypergraph queries, workspace audits, and cache/index maintenance. List-shaped graph and audit tools accept `limit` (default 50), `offset`, and `summary`; responses include `total_match_count` plus returned-count metadata. See each tool's description for parameters and limitations; run `build_hypergraph` before graph-backed tools that require it."
                 .into(),
             ),
         }
