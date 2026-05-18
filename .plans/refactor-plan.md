@@ -5,8 +5,10 @@ Basis: `rust-code-mcp` workspace analysis, current checkout (post package
 rename, post multi-provider work). Cross-validated 2026-05-18 against the live
 workspace (rust-code-mcp tools + a Qwen3-Embedding-8B semantic scan); evidence
 corrections applied throughout; duplication findings tracked separately in
-`.plans/dup-plan.md`.
-Snapshot: 2892 nodes, 4863 bindings, 7569 usages.
+`.plans/dup-plan.md`. Evidence refreshed 2026-05-18 after the
+`.plans/tool-fix-plan.md` and `.plans/dup-plan.md` work landed (Phase 0.5
+complete).
+Snapshot: 2973 nodes, 5056 bindings, 7935 usages.
 
 ## 0. Goal
 
@@ -26,26 +28,27 @@ the size/complexity evidence actually flags.
 Non-generated source files over 500 lines:
 
 ```text
-3976  src/tools/graph_tools.rs        <- mega-file, mixed endpoint families
-3604  src/graph/queries.rs            <- mega-file, ~53 query fns (+36 test fns)
+4488  src/tools/graph_tools.rs        <- mega-file, mixed endpoint families
+4371  src/graph/queries.rs            <- mega-file, ~73 query fns (+47 test fns)
 2058  src/graph/codemap.rs            <- mega-file, model+build+seed+render
-1654  src/embeddings/openrouter.rs    <- hotspot, config+http+batch+retry+parse
- 898  src/embeddings/backend.rs       <- borderline, profile/runtime data model
+1618  src/embeddings/openrouter.rs    <- hotspot, config+http+batch+retry+parse
+ 895  src/embeddings/backend.rs       <- borderline, profile/runtime data model
  805  src/chunker/mod.rs              <- facade-heavy mod.rs
- 802  src/indexing/embedding_batcher.rs  <- borderline, review only
- 792  src/graph/fn_body_audit.rs      <- borderline, review only
- 743  src/tools/search_tool_router.rs <- router (rename, not split)
+ 767  src/indexing/embedding_batcher.rs  <- borderline, review only
+ 765  src/tools/search_tool_router.rs <- router (rename, not split)
  742  src/indexing/unified.rs         <- orchestrator with mixed helpers
+ 681  src/graph/fn_body_audit.rs      <- under threshold (was 792 — dup-plan trimmed)
  680  src/vector_store/lancedb.rs     <- under threshold, leave
  667  src/graph/snapshot.rs           <- under threshold, leave
- 654  src/graph/storage.rs            <- under threshold, leave
+ 661  src/graph/storage.rs            <- under threshold, leave
+ 629  src/tools/search_tool.rs        <- param schemas (rename, not split)
  621  src/parser/mod.rs               <- facade-heavy mod.rs
- 592  src/tools/query_tools.rs        <- under threshold, leave
- 550  src/tools/search_tool.rs        <- param schemas (rename, not split)
+ 561  src/tools/query_tools.rs        <- under threshold, leave
  534  src/config/indexer.rs           <- under threshold, leave
+ 526  src/tools/index_tool.rs         <- endpoint file (Phase 1 rename)
 ```
 
-Public surface: `530 pub` vs `30 pub(crate)`, `pub_crate_share ≈ 0.054`.
+Public surface: `540 pub` vs `43 pub(crate)`, `pub_crate_share ≈ 0.074`.
 Encapsulation is weak; visibility cleanup happens **after** splits (Phase 6),
 never before — moving code first invalidates any earlier visibility work.
 
@@ -54,13 +57,14 @@ never before — moving code first invalidates any earlier visibility work.
 A 10/10 plan proposes only work the evidence justifies. The following are
 explicitly out of scope; touching them would be churn, not improvement:
 
-- **`src/graph/` extract & audit files.** Already decomposed into flat files,
-  all comfortably sized: `extract.rs` 460, `bindings.rs` 485, `usages.rs` 481,
-  `impls.rs` 362, `signatures.rs` 341, `attributes.rs` 350, `ast_resolve.rs`
-  28; audits `channel_audit.rs` 454, `derive_audit.rs` 403, `unsafe_audit.rs`
-  340, `recursion_check.rs` 336, `docs_audit.rs` 268. Do **not** wrap these in
-  `extract/` or `audit/` subdirectories — it is pure relocation with no
-  decomposition value.
+- **`src/graph/` extract, audit & helper files.** Already decomposed into flat
+  files, all comfortably sized: `extract.rs` 480, `bindings.rs` 436,
+  `usages.rs` 471, `impls.rs` 351, `signatures.rs` 341, `attributes.rs` 350,
+  `ast_resolve.rs` 28; audits `channel_audit.rs` 344, `derive_audit.rs` 404,
+  `unsafe_audit.rs` 326, `recursion_check.rs` 336, `docs_audit.rs` 269; plus
+  the dup-plan's shared helpers `audit_util.rs` 125 and `labels.rs` 133. Do
+  **not** wrap these in `extract/` or `audit/` subdirectories — it is pure
+  relocation with no decomposition value.
 - **`src/search/`** — `mod.rs` is under 500 lines and the module is already
   split (`bm25.rs`, `resilient.rs`, `rrf_tuner.rs`, `error.rs`). Leave it.
 - **`src/embeddings/mod.rs`** — 243 lines. Small. It stays the facade; do not
@@ -115,8 +119,8 @@ These hold for **every** phase:
    facade `pub use`. Renaming is Phase 6's job, behind facades.
 4. **No internal refactor before boundaries are stable.** Do not rewrite
    function bodies while moving them; move first, refactor never (in this
-   plan). The duplication this defers is inventoried in `.plans/dup-plan.md`
-   (see §12, Phase 0.5).
+   plan). The duplication this would otherwise defer was consolidated by
+   `.plans/dup-plan.md` (complete — see §12, Phase 0.5).
 5. **No crate split** before Phase 7, and Phase 7 is optional.
 6. **`vendor/fastembed/` is never edited.**
 7. **One concern per commit.** Each commit is a single coherent move; it must
@@ -168,7 +172,7 @@ Exit condition: baseline metrics saved; verification command confirmed green.
 ## 5. Phase 1: Split the `tools` Adapter Layer
 
 Purpose: `tools` is the MCP adapter layer and must be thin. Today
-`graph_tools.rs` (3976) carries many unrelated endpoint families.
+`graph_tools.rs` (4488) carries many unrelated endpoint families.
 
 Operation: `Split` + two `Rename`s. Lowest-risk phase (adapter code, mechanical).
 
@@ -247,10 +251,10 @@ all MCP tool names unchanged.
 
 ## 6. Phase 2: Split `graph::queries`
 
-Purpose: `queries.rs` (3604 lines) is the central query mega-file — ~53
-production query fns (≈40 `OpenedSnapshot` query methods + ~13 free helpers)
-plus a separate 36-fn `#[cfg(test)]` module. (An fn-count tool reports "92";
-that figure includes the 36 test fns.)
+Purpose: `queries.rs` (4371 lines) is the central query mega-file — ~73
+production query fns (`OpenedSnapshot` query methods + free helpers) plus a
+separate ~47-fn `#[cfg(test)]` module. (`analyze_complexity` reports 120 fns
+total for the file; that figure includes the test module.)
 
 Operation: `Split`. Highest-risk phase — many tools and types consume it.
 
@@ -341,12 +345,14 @@ Exit: codemap is split by model / build / seeds / hierarchy / render.
 
 ## 8. Phase 4: Split `embeddings::openrouter`
 
-Purpose: `openrouter.rs` (1654) mixes runtime config, env parsing, the HTTP
+Purpose: `openrouter.rs` (1618) mixes runtime config, env parsing, the HTTP
 client, request/response DTOs, batch planning, retry policy, and metrics.
 Note: this is a breadth / line-count hotspot (70 fns across ~7 concerns), not
-a control-flow hotspot — its cyclomatic complexity (~144) is low, below the
-"review-only" `fn_body_audit.rs` (~171). The split is justified by line count
-and concern count, not by complexity.
+a control-flow hotspot — its total cyclomatic complexity is low (~138, avg
+~2 per fn). The split is justified by line count and concern count, not by
+complexity. The generic batch planner has already moved out to
+`embeddings::batching` (`.plans/dup-plan.md`); only OpenRouter-specific input
+ordering and a thin adapter remain in this file.
 
 Operation: `Split`.
 
@@ -359,7 +365,9 @@ src/embeddings/openrouter/
   client.rs      # OpenRouterEmbedder, HTTP client, embed_documents/queries
   request.rs     # request DTOs
   response.rs    # response parsing, float + base64 decoding
-  batching.rs    # remote batch planner, input ordering / restore
+  batch.rs       # input ordering / restore + a thin adapter over the generic
+                 #   embeddings::batching planner (dup-plan extracted it; fold
+                 #   into client.rs if it stays under ~150 lines)
   retry.rs       # retryability classification, payload-too-large split
   metrics.rs     # OpenRouterRequestMetrics, record_request
                  #   (fold into client.rs if it stays under ~150 lines)
@@ -369,7 +377,7 @@ src/embeddings/openrouter/
 external paths (`OpenRouterRuntimeConfig`, `openrouter_runtime_config`, …)
 unchanged.
 
-Steps (each a commit): config -> request/response DTOs -> batching -> retry ->
+Steps (each a commit): config -> request/response DTOs -> batch glue -> retry ->
 metrics -> client (the remaining `OpenRouterEmbedder` orchestration).
 
 Risk: Medium. Self-contained module; few external consumers beyond
@@ -417,8 +425,10 @@ count — merge a target file away if its concern is small):
   re-exports so no path breaks.
 
 Borderline files — **review, do not split unless they mix concerns**:
-`indexing/embedding_batcher.rs` (802) and `graph/fn_body_audit.rs` (792). If
-each is one coherent concern, leave it and record that decision.
+`indexing/embedding_batcher.rs` (767). `graph/fn_body_audit.rs` was on this
+list at 792 but the dup-plan trimmed it to 681 — comfortably under threshold,
+so it drops off. If `embedding_batcher.rs` is one coherent concern, leave it
+and record that decision.
 
 Risk: Medium. These are facade modules with many internal + test imports.
 
@@ -459,7 +469,9 @@ Steps:
    fully resolves them. But `vector_store::SearchResult` is a strict
    field-subset of `search::SearchResult` (semantic similarity ≈0.9) — genuine
    structural duplication. The rename disambiguates the name; the structural
-   dedup is out of scope here (Guardrail 4) and tracked in `.plans/dup-plan.md`.
+   dedup is out of scope here (Guardrail 4). `.plans/dup-plan.md` is now
+   complete and did **not** cover this pair, so the `SearchResult` structural
+   dedup is an open, untracked follow-up — not a dup-plan item.
 5. Keep intentional facade exports: `graph::OpenedSnapshot`,
    `graph::BuildOptions`, `indexing::{UnifiedIndexer, IncrementalIndexer}`,
    `embeddings::EmbeddingGenerator`, `search::HybridSearch`,
@@ -473,7 +485,7 @@ Verification: `workspace_stats` shows a higher `pub_crate_share`;
 `dead_pub_in_crate` shrinks for non-facade modules; `cargo check --all-targets`
 stays green.
 
-Exit: `pub_crate_share` meaningfully above the 0.054 baseline; facade modules
+Exit: `pub_crate_share` meaningfully above the 0.074 baseline; facade modules
 have one-sentence public surfaces.
 
 ## 11. Phase 7: Optional Crate Lift
@@ -504,7 +516,7 @@ full workspace `cargo check --all-targets`.
 
 ```text
 Phase 0    Baseline & guardrails
-Phase 0.5  Private-helper de-duplication   (.plans/dup-plan.md — recommended)
+Phase 0.5  Private-helper de-duplication   (.plans/dup-plan.md — DONE)
 Phase 1    Split tools adapter layer       (lowest risk — start here)
 Phase 2    Split graph::queries            (highest risk)
 Phase 3    Split graph::codemap
@@ -521,10 +533,14 @@ boundaries are stable across one clean verification pass.
 Phase 0.5 is the duplication consolidation specified in `.plans/dup-plan.md`:
 ~16 copy-pasted private-helper clusters, concentrated on the same files this
 plan splits (the `graph`↔`tools` label twins; the shared `graph/*_audit.rs`
-toolkit). It is optional but recommended — running it before Phase 1 shrinks
-the mega-files and stops the duplicate clusters from scattering across the new
-files. If skipped, `.plans/dup-plan.md` stands as the "known duplication,
-deferred" inventory that Guardrail 4 otherwise leaves implicit.
+toolkit). **It is complete** — all 9 commits landed and were verified
+(`.docs/dup-plan-report.md`), and an independent semantic re-scan confirmed the
+exact-clone clusters cleared (0 Function pairs at threshold 0.99). It ran
+before Phase 1 as intended, so the duplicate clusters are already collapsed and
+will not scatter across the new files when the mega-files are split. The
+consolidation added four flat helper files — `graph/audit_util.rs`,
+`graph/labels.rs`, `embeddings/batching.rs`, `embeddings/util.rs` — shown in
+the §15 target tree.
 
 ## 13. Per-Phase Output Template
 
@@ -578,9 +594,9 @@ After all splits (end of Phase 5):
 Structural:
 
 - No non-generated source file over ~1000 lines. Target ~800, with documented
-  exceptions: a coherent single-concern file slightly above 800 (e.g.
-  `embedding_batcher.rs` 802, `fn_body_audit.rs` 792) may stay when Phase 5
-  records that decision — no line-count-shaving for its own sake.
+  exceptions: a coherent single-concern file near 800 (e.g.
+  `embedding_batcher.rs`, currently 767) may stay when Phase 5 records that
+  decision — no line-count-shaving for its own sake.
 - `tools/graph_tools.rs`, `graph/queries.rs`, `graph/codemap.rs`,
   `embeddings/openrouter.rs` no longer exist as mega-files.
 - `mod.rs` files are facades, not implementations.
@@ -594,7 +610,7 @@ Boundary:
 
 Visibility:
 
-- `pub_crate_share` meaningfully above 0.054.
+- `pub_crate_share` meaningfully above 0.074.
 - Dead-public findings shrink for non-facade modules (examples/tests excluded).
 
 Regression:
@@ -622,7 +638,7 @@ Agent ergonomics:
     bin/
       test_tools_direct.rs
 
-    tools/                          ── Phase 1: graph_tools.rs (3976) dissolved
+    tools/                          ── Phase 1: graph_tools.rs (4488) dissolved
       mod.rs                        # facade
       router.rs                     NEW  ← search_tool_router.rs
       project_paths.rs
@@ -672,7 +688,9 @@ Agent ergonomics:
       fn_body_audit.rs
       channel_audit.rs
       recursion_check.rs
-      query/                        NEW  ← queries.rs (3604), split by family
+      audit_util.rs                 # dup-plan helper (Phase 0.5) — audit utils
+      labels.rs                     # dup-plan helper (Phase 0.5) — label vocab
+      query/                        NEW  ← queries.rs (4371), split by family
         mod.rs
         model.rs                    # query result structs/enums
         imports.rs
@@ -697,18 +715,20 @@ Agent ergonomics:
       backend.rs                    # EmbeddingBackend + identity wiring (slimmed)
       profile.rs                    NEW  ← EmbeddingProfile, built-in registry, QueryPolicy, enums
       profile_registry.rs           # TOML dynamic-profile registry (existing)
+      batching.rs                   # dup-plan helper (Phase 0.5) — generic plan_batches
+      util.rs                       # dup-plan helper (Phase 0.5) — shared arc helper
       identity.rs
       qwen3.rs
       fastembed_cpu.rs
       token_lengths.rs
       error.rs
-      openrouter/                   NEW  ← openrouter.rs (1654), split by concern
+      openrouter/                   NEW  ← openrouter.rs (1618), split by concern
         mod.rs
         config.rs                   # runtime config, env vars, provider prefs
         client.rs                   # OpenRouterEmbedder + HTTP client
         request.rs
         response.rs                 # float + base64 decoding
-        batching.rs                 # remote batch planner
+        batch.rs                    # input ordering/restore + adapter; planner extracted to embeddings::batching
         retry.rs
         metrics.rs                  # (fold into client.rs if <~150 lines)
 
@@ -764,6 +784,7 @@ Agent ergonomics:
 
   Notes:
   - Transient (not in this tree): during the plan, tools/graph_tools.rs, tools/search_tool.rs, tools/search_tool_router.rs, and graph/queries.rs survive as pub use facades, then are deleted in Phase 6.
+  - graph/audit_util.rs, graph/labels.rs, embeddings/batching.rs, and embeddings/util.rs were created by Phase 0.5 (.plans/dup-plan.md, complete). They pre-date Phases 1-6, so they appear as existing files, not NEW.
   - indexing/unified.rs may also yield an optional indexing/types.rs if IndexStats/IndexFileResult separate cleanly — the plan leaves that to judgment.
   - Phase 7 (optional, not part of this target) would lift graph/ out to crates/rmc-graph/src/… with the same internal layout; the rest stays in the main crate.
 
