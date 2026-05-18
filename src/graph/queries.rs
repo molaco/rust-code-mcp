@@ -136,6 +136,13 @@ pub struct OverlapsReport {
     pub common_fn_names: Vec<CommonFnName>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverlapScope {
+    All,
+    Local,
+    LocalNoVendor,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeCollision {
     pub name: String,
@@ -1987,21 +1994,52 @@ impl OpenedSnapshot {
     /// module shadowing of crate names, within-crate type duplicates, and
     /// fn names that appear in 4+ crates.
     pub fn overlaps(&self) -> Result<OverlapsReport> {
+        self.overlaps_with_scope(OverlapScope::All)
+    }
+
+    pub fn overlaps_with_scope(&self, scope: OverlapScope) -> Result<OverlapsReport> {
         let rtxn = self.env.read_txn()?;
 
         let mut crate_name_for: HashMap<NodeId, String> = HashMap::new();
-        let mut crate_names: HashSet<String> = HashSet::new();
+        let mut crate_target_kind_for: HashMap<NodeId, String> = HashMap::new();
+        let mut vendor_crates: HashSet<NodeId> = HashSet::new();
 
-        // First pass: build crate-id → display_name index.
+        // First pass: build crate indexes and detect crates whose local
+        // source lives under vendor/.
         for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
             let (key, node) = entry?;
             if node.kind == NodeKind::Crate {
                 let mut id = [0u8; 32];
                 id.copy_from_slice(key);
-                crate_name_for.insert(NodeId(id), node.display_name.clone());
-                crate_names.insert(node.display_name.clone());
+                let crate_id = NodeId(id);
+                crate_name_for.insert(crate_id, node.display_name.clone());
+                crate_target_kind_for.insert(
+                    crate_id,
+                    node.crate_target_kind.unwrap_or_else(|| "lib".to_string()),
+                );
+            }
+            if let (Some(crate_id), Some(file)) = (node.crate_id, node.file.as_deref()) {
+                if file.starts_with("vendor/") {
+                    vendor_crates.insert(crate_id);
+                }
             }
         }
+        let allowed_crates: HashSet<NodeId> = crate_name_for
+            .keys()
+            .copied()
+            .filter(|crate_id| {
+                overlap_scope_allows_crate(
+                    scope,
+                    *crate_id,
+                    &crate_target_kind_for,
+                    &vendor_crates,
+                )
+            })
+            .collect();
+        let crate_names: HashSet<String> = allowed_crates
+            .iter()
+            .filter_map(|crate_id| crate_name_for.get(crate_id).cloned())
+            .collect();
 
         // Group containers we'll fill on the second pass.
         let mut type_groups: HashMap<String, Vec<(NodeId, Node, NodeId)>> = HashMap::new();
@@ -2017,6 +2055,9 @@ impl OpenedSnapshot {
 
             if node.kind == NodeKind::Module {
                 if let Some(crate_id) = node.crate_id {
+                    if !allowed_crates.contains(&crate_id) {
+                        continue;
+                    }
                     let owning_crate = crate_name_for.get(&crate_id).cloned().unwrap_or_default();
                     if crate_names.contains(&node.display_name)
                         && node.display_name != owning_crate
@@ -2039,6 +2080,9 @@ impl OpenedSnapshot {
             let Some(crate_id) = node.crate_id else {
                 continue;
             };
+            if !allowed_crates.contains(&crate_id) {
+                continue;
+            }
 
             // Type-kind items participate in collision and within-crate dup checks.
             if matches!(
@@ -2579,6 +2623,25 @@ fn count_declared_visibility(counts: &mut VisibilityCounts, binding: &Binding) {
         BindingVisibility::Private => {
             counts.pub_self += 1;
             counts.private += 1;
+        }
+    }
+}
+
+fn overlap_scope_allows_crate(
+    scope: OverlapScope,
+    crate_id: NodeId,
+    crate_target_kind_for: &HashMap<NodeId, String>,
+    vendor_crates: &HashSet<NodeId>,
+) -> bool {
+    match scope {
+        OverlapScope::All => true,
+        OverlapScope::Local | OverlapScope::LocalNoVendor => {
+            let target_kind = crate_target_kind_for
+                .get(&crate_id)
+                .map(String::as_str)
+                .unwrap_or("lib");
+            let local_target = matches!(target_kind, "lib" | "bin");
+            local_target && (scope == OverlapScope::Local || !vendor_crates.contains(&crate_id))
         }
     }
 }
@@ -3437,6 +3500,49 @@ pub(crate) mod tests {
         for f in &report.common_fn_names {
             assert!(f.crates.len() >= 4);
         }
+    }
+
+    #[test]
+    fn overlap_scope_filters_examples_and_vendor() {
+        let lib_crate = NodeId([1u8; 32]);
+        let example_crate = NodeId([2u8; 32]);
+        let vendor_crate = NodeId([3u8; 32]);
+        let mut target_kinds = HashMap::new();
+        target_kinds.insert(lib_crate, "lib".to_string());
+        target_kinds.insert(example_crate, "example".to_string());
+        target_kinds.insert(vendor_crate, "lib".to_string());
+        let vendor_crates = HashSet::from([vendor_crate]);
+
+        assert!(super::overlap_scope_allows_crate(
+            OverlapScope::All,
+            example_crate,
+            &target_kinds,
+            &vendor_crates,
+        ));
+        assert!(super::overlap_scope_allows_crate(
+            OverlapScope::Local,
+            vendor_crate,
+            &target_kinds,
+            &vendor_crates,
+        ));
+        assert!(!super::overlap_scope_allows_crate(
+            OverlapScope::Local,
+            example_crate,
+            &target_kinds,
+            &vendor_crates,
+        ));
+        assert!(!super::overlap_scope_allows_crate(
+            OverlapScope::LocalNoVendor,
+            vendor_crate,
+            &target_kinds,
+            &vendor_crates,
+        ));
+        assert!(super::overlap_scope_allows_crate(
+            OverlapScope::LocalNoVendor,
+            lib_crate,
+            &target_kinds,
+            &vendor_crates,
+        ));
     }
 
     #[test]

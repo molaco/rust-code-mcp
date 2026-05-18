@@ -38,7 +38,7 @@ pub use queries::{
     CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
     EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
     FunctionWithSignature, ModuleDependency, ModuleDependencySymbol, ModuleShadow, ModuleTreeNode,
-    MutStaticFinding, NodeKindCounts, OverlapsReport, PubTypeAliasMasqueradingAsReexport,
+    MutStaticFinding, NodeKindCounts, OverlapScope, OverlapsReport, PubTypeAliasMasqueradingAsReexport,
     ReExportChain, ReExportLink, RecursiveCallersCount, SelfKindFilter, TypeCollision,
     TypeLocation, UsageSummaryRow, VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
 };

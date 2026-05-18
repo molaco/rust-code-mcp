@@ -520,7 +520,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Workspace-wide name-collision report: cross-crate type collisions, module names that shadow another crate, within-crate type duplicates, and fn names that appear in 4+ crates."
+        description = "Workspace-wide name-collision report: cross-crate type collisions, module names that shadow another crate, within-crate type duplicates, and fn names that appear in 4+ crates. Optional `scope`: `all` (default, current behavior), `local` (lib/bin targets only), or `local_no_vendor` (lib/bin targets excluding source under vendor/)."
     )]
     async fn overlaps(
         &self,

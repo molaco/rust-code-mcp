@@ -23,7 +23,7 @@ use crate::graph::{
     DeadPubFinding, EmbeddingRecord, EnrichedCallSite, ForbiddenDependencyRule,
     ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
     GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
-    OpenedSnapshot, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
+    OpenedSnapshot, OverlapScope, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
     RecursiveCallersCount, SelfKindFilter, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
     ModuleDependency, ModuleDependencySymbol, build_and_persist, open_current,
     snapshot::BuildOptions,
@@ -1672,7 +1672,10 @@ pub async fn crate_dependency_metric(
 
 pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
-    let report: OverlapsReport = snap.overlaps().map_err(internal_error("overlaps"))?;
+    let scope = parse_overlap_scope(params.scope.as_deref())?;
+    let report: OverlapsReport = snap
+        .overlaps_with_scope(scope)
+        .map_err(internal_error("overlaps"))?;
     json_result(&report)
 }
 
@@ -2734,6 +2737,18 @@ fn parse_item_kind_filter(s: Option<&str>) -> Result<Option<ItemKind>, McpError>
         }
     };
     Ok(Some(kind))
+}
+
+fn parse_overlap_scope(input: Option<&str>) -> Result<OverlapScope, McpError> {
+    match input.unwrap_or("all") {
+        "all" => Ok(OverlapScope::All),
+        "local" => Ok(OverlapScope::Local),
+        "local_no_vendor" => Ok(OverlapScope::LocalNoVendor),
+        other => Err(McpError::invalid_params(
+            format!("unknown scope `{other}`; expected all | local | local_no_vendor"),
+            None,
+        )),
+    }
 }
 
 /// Pure helper: returns true iff `[a_start, a_end]` and `[b_start, b_end]`

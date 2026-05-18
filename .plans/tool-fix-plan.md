@@ -73,7 +73,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | complete |
 | T4 | Layer-4 → impl-method extraction | P2 | 3 | complete |
 | T8 | `workspace_stats` | P3 | 4 | complete |
-| T9 | `overlaps` | P3 | 4 | small |
+| T9 | `overlaps` | P3 | 4 | complete |
 | T11 | `index_codebase` | P3 | 4 | small |
 | T6 | `similar_to_item` | P3 | 5 | small |
 | T12 | `clear_cache` (optional enhancement) | P3 | 4 | small |
@@ -276,6 +276,15 @@ and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
 "local_no_vendor"` (default keeps current behavior for compat); detect
 vendored crates by path (`vendor/`). Files: `src/graph/queries.rs`
 (`overlaps`), `src/tools/graph_tools.rs`. Compat: additive.
+
+Progress (2026-05-18): added optional `scope` to `overlaps`. `all` preserves
+the previous behavior, `local` restricts the report to lib/bin target crates,
+and `local_no_vendor` additionally removes crates with source under `vendor/`.
+Filtering happens before collision grouping so example and vendored crates do
+not contribute names to cross-crate collisions, module shadows, within-crate
+duplicates, or common function names. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test overlap_scope_filters_examples_and_vendor --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 **T11 — `index_codebase` misleading no-op message.** `force_reindex:false` on
 the fully-indexed workspace returns success in 33 ms but says "No Rust files

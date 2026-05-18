@@ -286,6 +286,8 @@ pub struct CrateEdgesParams {
 pub struct OverlapsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
+    #[schemars(description = "Optional scope: `all` (default, current behavior), `local` (lib/bin targets only), or `local_no_vendor` (lib/bin targets excluding source under vendor/)")]
+    pub scope: Option<String>,
 }
 
 /// One architectural rule for `forbidden_dependency_check`. Patterns in
