@@ -2,9 +2,11 @@
 
 Status: ready to execute
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
-`openrouter-qwen3-8b` profile), current checkout, every cluster cross-validated
-against source. Companion to `.plans/refactor-plan.md` — see §8 for ordering.
-Snapshot: 2892 nodes, 4863 bindings, 7569 usages.
+`openrouter-qwen3-8b` profile), every cluster cross-validated against source.
+Companion to `.plans/refactor-plan.md` — see §8 for ordering.
+Census refreshed 2026-05-18 against the post-tool-fix checkout (after the
+`.plans/tool-fix-plan.md` work landed).
+Snapshot: 2986 nodes, 5041 bindings, 7993 usages.
 
 ## 0. Goal
 
@@ -24,16 +26,19 @@ Census — `semantic_overlaps`, profile `openrouter-qwen3-8b`, threshold 0.85,
 crate `rust_code_mcp`:
 
 ```text
-Function   113 similarity pairs   ~56 clusters
-Method     202 pairs               87 clusters
-Struct      77 pairs               28 clusters
-Enum         1 pair                (below 0.92 — none actionable)
+Function   127 similarity pairs   59 clusters   (382 seeds)
+Method     210 pairs              90 clusters   (507 seeds)
+Struct      80 pairs              29 clusters   (265 seeds)
+Enum         1 pair               (0.886 — below 0.92, not actionable)
 Trait        0 pairs
 ```
 
-393 similarity pairs total. After verifying every cluster against source:
+418 similarity pairs total. After verifying every cluster against source:
 **~16 actionable clusters**. The remaining ~94% is architecturally-intended
-twinning (see §2).
+twinning (see §2). Counts refreshed 2026-05-18 against the post-tool-fix
+checkout; the original pre-tool-fix scan was 393 pairs (Function 113 / Method
+202 / Struct 77). The tool-fix work de-duplicated nothing — every actionable
+cluster below persisted — and added two repetitions of its own (see §4.1).
 
 Calibration: the qwen3-8b ≥0.99 similarity band was 100% true clones; the
 0.85–0.95 band was mixed — same structural *shape*, sometimes different
@@ -82,7 +87,7 @@ These surface in the scan but are intentional; touching them is churn:
 | ID | Helper | Copies | Cosine | Verdict |
 |----|--------|--------|--------|---------|
 | C1 | `canonical_function_path` | channel_audit, fn_body_audit | 1.00 | byte-identical |
-| C4 | `resolve_workspace_relative` | fn_body_audit, unsafe_audit, channel_audit, impls, usages | 0.998 | 5-way identical |
+| C4 | `resolve_workspace_relative` | fn_body_audit, unsafe_audit, channel_audit, impls, usages, extract | 0.998 | 6-way identical — `extract` copy added by the tool-fix T3 work (was 5-way; see §4.1) |
 | C6 | `item_has_cfg_test` + `enclosed_by_cfg_test` | channel_audit, fn_body_audit | 0.91 | identical (import-qualifier only) |
 | C16 | `enclosing_fn_for_body_offset` / `resolve_enclosing_function` | fn_body_audit, channel_audit | 0.931 | identical body, different name |
 
@@ -116,6 +121,27 @@ These surface in the scan but are intentional; touching them is churn:
 | C11 | batch planner — `openrouter` ↔ `indexing::embedding_batcher` | 0.883 | identical greedy bin-pack, different types → generic in `embeddings` (see §5) |
 | S1 | `ForbiddenDependencyRuleParam` ≡ `graph::queries::ForbiddenDependencyRule` | 0.956 | field-for-field identical (schemars param mirror) |
 | S2 | `CallSitesResponse` ≈ `CallersInCrateResponse` (both `graph_tools.rs`) | 0.902 | near-identical response DTOs |
+
+### 4.1 Repetition introduced by the tool-fix work
+
+`.plans/tool-fix-plan.md` was a behavior-fix pass, not a dedup pass — it left
+every cluster above intact and added two repetitions of its own:
+
+- **C4 grew 5-way → 6-way.** `graph::extract::resolve_workspace_relative`
+  joined the cluster when T3 added crate-kind extraction to `extract.rs`. No
+  extra work — it consolidates into `audit_util.rs` with the other five
+  (Commit 1), just one more copy to delete.
+- **T7 `summary`-drop copy-paste (not a scan cluster).** The T7 pagination
+  work inlined the same `if summary { x.file = None; x.span = None; }` block
+  into ~8 enumerating endpoints in `tools/graph_tools.rs` (`dead_pub_in_crate`,
+  `dead_pub_report`, `enum_variants`, `items_with_attribute`,
+  `pub_use_pub_type_audit`, `mut_static_audit`, `missing_docs_audit`,
+  `derive_audit`). It is *intra-function* copy-paste, so `semantic_overlaps`
+  does not surface it as an Item cluster — it is code-review-found. The T7
+  follow-up commit `62ebd363` already solved this correctly for the call/usage
+  tools via a shared `call_site_views` helper + an `enrich_usages(summary)`
+  param; apply the same centralization to the remaining ~8. Small and
+  `tools`-local — fold into Commit 4 or 5.
 
 ## 5. Dependency-direction constraints
 
@@ -216,6 +242,7 @@ After all commits:
 
 - re-run `semantic_overlaps(item_kind="Function", embedding_profile="openrouter-qwen3-8b")`
   and confirm the exact-clone clusters (C1, C3, C4, C5, C15, C16) are gone.
+  Post-tool-fix baseline to beat: 127 Function pairs / 59 clusters.
 - `who_imports` on the new `graph::audit_util` / `graph::labels` /
   `tools::project_paths` symbols shows only intended consumers.
 
