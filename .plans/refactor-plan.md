@@ -2,7 +2,10 @@
 
 Status: ready to execute
 Basis: `rust-code-mcp` workspace analysis, current checkout (post package
-rename, post multi-provider work).
+rename, post multi-provider work). Cross-validated 2026-05-18 against the live
+workspace (rust-code-mcp tools + a Qwen3-Embedding-8B semantic scan); evidence
+corrections applied throughout; duplication findings tracked separately in
+`.plans/dup-plan.md`.
 Snapshot: 2892 nodes, 4863 bindings, 7569 usages.
 
 ## 0. Goal
@@ -24,7 +27,7 @@ Non-generated source files over 500 lines:
 
 ```text
 3976  src/tools/graph_tools.rs        <- mega-file, mixed endpoint families
-3604  src/graph/queries.rs            <- mega-file, 92 query fns
+3604  src/graph/queries.rs            <- mega-file, ~53 query fns (+36 test fns)
 2058  src/graph/codemap.rs            <- mega-file, model+build+seed+render
 1654  src/embeddings/openrouter.rs    <- hotspot, config+http+batch+retry+parse
  898  src/embeddings/backend.rs       <- borderline, profile/runtime data model
@@ -70,12 +73,13 @@ explicitly out of scope; touching them would be churn, not improvement:
 
 ## 2. Boundary Read
 
-`rust-code-mcp` stays one crate for this plan. The library has ~31 incoming
-consumers across `benches/`, `tests/`, and `examples/`; a crate split now
-would generate large API churn before the internal boundaries are even stable.
-All ~31 consumers are in-repo — `rust-code-mcp` is an application (an MCP
-server binary), not a published library, so it has no external crate
-consumers. Phase 6's facade deletion is therefore an internal-only change,
+`rust-code-mcp` stays one crate for this plan. The library has ~39 incoming
+consumers — 26 `examples/`, 12 `tests/`, and 1 `src/bin/` target (there is no
+`benches/` directory; benchmark-named files live under `tests/`); a crate
+split now would generate large API churn before the internal boundaries are
+even stable. All ~39 consumers are in-repo — `rust-code-mcp` is both an
+application (an MCP server binary) and a library (`src/lib.rs`) consumed only
+in-repo, not a published crate, so it has no external consumers. Phase 6's facade deletion is therefore an internal-only change,
 safe once the in-repo consumers have migrated.
 
 Intended dependency direction (acyclic):
@@ -110,13 +114,15 @@ These hold for **every** phase:
 3. **No public-path renames.** A symbol's external path is preserved by a
    facade `pub use`. Renaming is Phase 6's job, behind facades.
 4. **No internal refactor before boundaries are stable.** Do not rewrite
-   function bodies while moving them; move first, refactor never (in this plan).
+   function bodies while moving them; move first, refactor never (in this
+   plan). The duplication this defers is inventoried in `.plans/dup-plan.md`
+   (see §12, Phase 0.5).
 5. **No crate split** before Phase 7, and Phase 7 is optional.
 6. **`vendor/fastembed/` is never edited.**
 7. **One concern per commit.** Each commit is a single coherent move; it must
    compile and pass verification before the next.
-8. **Examples, tests, and benches are first-class.** `examples/`, `tests/`,
-   and `benches/` all import public library paths (doc-tests too). Every phase
+8. **Examples and tests are first-class.** All 26 `examples/` and 12 `tests/`
+   import public library paths (doc-tests too). Every phase
    keeps `cargo check --all-targets` green — not just at the end of the phase,
    but after each commit. This is the most likely thing to break; treat it as
    the primary regression signal.
@@ -129,8 +135,9 @@ All checks run through the project Nix devshell, from the repo root:
 nix develop ../nix-devshells#cuda-code --command cargo check --all-targets
 ```
 
-`--all-targets` covers the library, binaries, tests, benches, and examples —
-every target that consumes the public surface. `cargo fmt` is never run.
+`--all-targets` covers the library, binaries, tests, and examples — every
+target that consumes the public surface (there are no `benches/` targets).
+`cargo fmt` is never run.
 Targeted unit tests for a touched module family are run with
 `cargo test <module>:: --lib` through the same devshell.
 
@@ -240,7 +247,10 @@ all MCP tool names unchanged.
 
 ## 6. Phase 2: Split `graph::queries`
 
-Purpose: `queries.rs` (3604, 92 fns) is the central query mega-file.
+Purpose: `queries.rs` (3604 lines) is the central query mega-file — ~53
+production query fns (≈40 `OpenedSnapshot` query methods + ~13 free helpers)
+plus a separate 36-fn `#[cfg(test)]` module. (An fn-count tool reports "92";
+that figure includes the 36 test fns.)
 
 Operation: `Split`. Highest-risk phase — many tools and types consume it.
 
@@ -254,7 +264,9 @@ src/graph/query/
   usage.rs       # who_imports, who_uses, who_uses_summary
   calls.rs       # who_calls, calls_from, call_graph, recursive_callers_count
   crates.rs      # crate_edges, crate_dependency_metric, forbidden deps
-  surface.rs     # dead_pub*, item attributes, pub-use/pub-type, re_export_chain
+  surface.rs     # dead_pub*, item attributes, enum_variants, pub-use/pub-type,
+                 #   re_export_chain
+  audits.rs      # unsafe_audit, mut_static_audit, static_metadata
   functions.rs   # function_signature, functions_with_filter
   modules.rs     # module_tree
   overlaps.rs    # overlaps report
@@ -267,7 +279,7 @@ Compatibility facade — `src/graph/queries.rs` stays until Phase 6:
 // must be `super::query` (or `crate::graph::query`), not bare `query`.
 pub use super::query::{
     model::*, imports::*, usage::*, calls::*, crates::*,
-    surface::*, functions::*, modules::*, overlaps::*,
+    surface::*, audits::*, functions::*, modules::*, overlaps::*,
 };
 ```
 
@@ -278,7 +290,10 @@ Steps (each a commit):
    `CrateEdge`, `UsageSummaryRow`, `FunctionWithSignature`, `ModuleTreeNode`,
    `OverlapsReport`, …). Keep `graph::queries::*` re-exporting them.
 3. Move query functions one family at a time: imports -> usage -> calls ->
-   crates -> surface -> functions/modules/overlaps. Compile after each.
+   crates -> surface -> audits -> functions/modules/overlaps. Compile after
+   each. `unsafe_audit` / `mut_static_audit` / `static_metadata` are the
+   `audits.rs` family; `enum_variants` lands in `surface.rs`. Neither fits the
+   other families — do not leave them orphaned.
 
 Risk: High. `queries.rs` result types are imported across `tools` and tests.
 
@@ -328,6 +343,10 @@ Exit: codemap is split by model / build / seeds / hierarchy / render.
 
 Purpose: `openrouter.rs` (1654) mixes runtime config, env parsing, the HTTP
 client, request/response DTOs, batch planning, retry policy, and metrics.
+Note: this is a breadth / line-count hotspot (70 fns across ~7 concerns), not
+a control-flow hotspot — its cyclomatic complexity (~144) is low, below the
+"review-only" `fn_body_audit.rs` (~171). The split is justified by line count
+and concern count, not by complexity.
 
 Operation: `Split`.
 
@@ -427,7 +446,7 @@ Steps:
    `who_uses` / `find_references` before each demotion.
 3. Delete the Phase 1/2 migration facades (`search_tool.rs`,
    `search_tool_router.rs`, `graph_tools.rs`, `graph/queries.rs`) **only**
-   once no in-repo path (`examples/`, `tests/`, `benches/`) still imports
+   once no in-repo path (`examples/`, `tests/`) still imports
    through them — verified with `who_imports`. This is safe because
    `rust-code-mcp` has no external crate consumers (§2); were that ever to
    change, mark the facades `#[deprecated]` for one release instead of
@@ -435,6 +454,12 @@ Steps:
 4. Resolve duplicate type names where it removes ambiguity:
    `search::SearchResult` vs `vector_store::SearchResult`;
    `graph::derive_audit::AuditOpts` vs `graph::docs_audit::AuditOpts`.
+   Scope note — this step is a *rename* for disambiguation only. The two
+   `AuditOpts` are a true name-only collision (their fields differ); a rename
+   fully resolves them. But `vector_store::SearchResult` is a strict
+   field-subset of `search::SearchResult` (semantic similarity ≈0.9) — genuine
+   structural duplication. The rename disambiguates the name; the structural
+   dedup is out of scope here (Guardrail 4) and tracked in `.plans/dup-plan.md`.
 5. Keep intentional facade exports: `graph::OpenedSnapshot`,
    `graph::BuildOptions`, `indexing::{UnifiedIndexer, IncrementalIndexer}`,
    `embeddings::EmbeddingGenerator`, `search::HybridSearch`,
@@ -478,19 +503,28 @@ full workspace `cargo check --all-targets`.
 ## 12. Execution Order
 
 ```text
-Phase 0  Baseline & guardrails
-Phase 1  Split tools adapter layer        (lowest risk — start here)
-Phase 2  Split graph::queries             (highest risk)
-Phase 3  Split graph::codemap
-Phase 4  Split embeddings::openrouter
-Phase 5  Facade & borderline splits
-Phase 6  Visibility & public-surface cleanup
-Phase 7  Optional crate lift
+Phase 0    Baseline & guardrails
+Phase 0.5  Private-helper de-duplication   (.plans/dup-plan.md — recommended)
+Phase 1    Split tools adapter layer       (lowest risk — start here)
+Phase 2    Split graph::queries            (highest risk)
+Phase 3    Split graph::codemap
+Phase 4    Split embeddings::openrouter
+Phase 5    Facade & borderline splits
+Phase 6    Visibility & public-surface cleanup
+Phase 7    Optional crate lift
 ```
 
 Phase 6 must not move earlier than Phase 5 — visibility cleanup before the
 moves are done just has to be redone. Phase 7 must not start until module
 boundaries are stable across one clean verification pass.
+
+Phase 0.5 is the duplication consolidation specified in `.plans/dup-plan.md`:
+~16 copy-pasted private-helper clusters, concentrated on the same files this
+plan splits (the `graph`↔`tools` label twins; the shared `graph/*_audit.rs`
+toolkit). It is optional but recommended — running it before Phase 1 shrinks
+the mega-files and stops the duplicate clusters from scattering across the new
+files. If skipped, `.plans/dup-plan.md` stands as the "known duplication,
+deferred" inventory that Guardrail 4 otherwise leaves implicit.
 
 ## 13. Per-Phase Output Template
 
@@ -525,6 +559,13 @@ After each phase:
   modules) shows no `tools`/`mcp` import — the §2 forbidden edges. This is the
   interim stand-in for `forbidden_dependency_check`, which is crate-level and
   only applies after the Phase 7 crate lift.
+  CAVEAT: `get_imports` reflects only `use` / `extern crate` declarations — it
+  does NOT see fully-qualified inline paths (`crate::tools::…` written inside a
+  fn body; the live `indexing -> search` edge is carried this way today and is
+  invisible to `get_imports`). A forbidden edge introduced as an inline path
+  would pass this check. Pair it with a `find_references` / grep sweep for
+  `crate::tools` and `crate::mcp` references inside `graph` and the engine
+  modules.
 
 After all splits (end of Phase 5):
 
@@ -558,8 +599,8 @@ Visibility:
 
 Regression:
 
-- `cargo check --all-targets` green at every commit — examples, tests, and
-  benches never break.
+- `cargo check --all-targets` green at every commit — examples and tests
+  never break.
 - MCP tool names and param-struct external paths unchanged throughout.
 
 Agent ergonomics:
@@ -638,7 +679,8 @@ Agent ergonomics:
         usage.rs
         calls.rs
         crates.rs
-        surface.rs
+        surface.rs                  # dead_pub*, attributes, enum_variants, reexport
+        audits.rs                   # unsafe_audit, mut_static_audit, static_metadata
         functions.rs
         modules.rs
         overlaps.rs
