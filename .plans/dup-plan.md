@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — steps 1-9 complete
+Status: complete — steps 1-9 and final report complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -246,11 +246,23 @@ After each commit:
 
 After all commits:
 
-- re-run `semantic_overlaps(item_kind="Function", embedding_profile="openrouter-qwen3-8b")`
-  and confirm the exact-clone clusters (C1, C3, C4, C5, C15, C16) are gone.
-  Post-tool-fix baseline to beat: 127 Function pairs / 59 clusters.
-- `who_imports` on the new `graph::audit_util` / `graph::labels` /
-  `tools::project_paths` symbols shows only intended consumers.
+- Final verification (2026-05-18):
+  - `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+    stayed green after every implementation commit.
+  - `build_hypergraph(force_rebuild=true)` rebuilt graph
+    `39f296bbda88732ac8a306a8e9d687c1` with 2973 nodes, 5056 bindings, and
+    7935 usages.
+  - `semantic_overlaps(item_kind="Function", embedding_profile="openrouter-qwen3-8b", threshold=0.99)`
+    returned 0 pairs / 0 clusters, confirming the exact-clone function
+    clusters are gone.
+  - `semantic_overlaps(item_kind="Function", embedding_profile="openrouter-qwen3-8b", threshold=0.85)`
+    returned 88 pairs / 47 clusters, improved from the post-tool-fix baseline
+    of 127 pairs / 59 clusters.
+  - `who_imports` on the new `graph::audit_util`, `graph::labels`, and
+    `tools::project_paths` symbols showed only intended consumers.
+  - `who_uses_summary` on the new shared helpers showed the expected
+    tool/graph/embedding/parser consumers.
+  - Final report: `.docs/dup-plan-report.md`.
 
 ## 10. Success criteria
 
