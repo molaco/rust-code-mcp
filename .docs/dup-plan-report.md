@@ -164,6 +164,42 @@ Semantic overlap checks:
 - Broad function pass: threshold `0.85` returned `88` pairs and `47` clusters,
   down from the plan baseline of `127` pairs and `59` clusters.
 
+An independent re-scan (a fresh `build_hypergraph --force_rebuild`, identical
+`2973 / 5056 / 7935` node/binding/usage counts, profile `openrouter-qwen3-8b`)
+extended the check to the `Struct` and `Method` item kinds:
+
+- `Struct` returned `0` pairs / `0` clusters at `0.99`, and `78` pairs /
+  `28` clusters at `0.85` (down from the `80` / `29` baseline). The seed count
+  fell `265` to `262`, consistent with S1 (`ForbiddenDependencyRuleParam`
+  collapsed to a type alias) and S2 (`CallersInCrateResponse` removed).
+- `Method` returned `42` pairs / `5` clusters at `0.99`, and `236` pairs /
+  `88` clusters at `0.85` versus the `210` / `90` baseline. The rise is a
+  macro-expansion artifact, explained next.
+
+The `Method` count rising (`210` to `236`) needs interpretation. The dominant
+`0.99` cluster has `9` members at cosine `1.0`: `NodeId`, `BindingId`, and
+`UsageId`, each contributing `from_components`, `to_hex`, and `as_bytes`. That
+is the M1-M3 cluster the plan targeted, and it is resolved in source.
+`src/graph/ids.rs` now has a single `define_id!` macro and three invocations,
+with the three hand-written `impl` blocks deleted.
+
+`semantic_overlaps` still reports the cluster because it embeds each Item's
+attributed source, and for macro-generated methods that source is the macro
+invocation (`define_id!(NodeId)` and so on). All nine generated methods
+therefore read as one of three near-identical one-liners and collapse into a
+single nine-member clique. A nine-clique contributes `36` internal pairs;
+before the macro the same nine methods formed three separate three-member
+clusters (`from_components`, `to_hex`, and `as_bytes`, three of each)
+contributing about nine pairs. That transition from three clusters to one
+clique accounts for the `+26` pair / `-2` cluster delta.
+
+The rise is therefore an artifact of the fix rather than new duplication: the
+source duplication is gone, and `semantic_overlaps` does not see through macro
+expansion. The other four `Method` clusters at `0.99` are `Embedder::dim` and
+`embed_queries` across the three embedder backends, plus the `schema` and
+`backend` accessors; those are trait-impl polymorphism and facade accessors,
+the intentional twins already listed under the plan non-goals.
+
 Import and usage audits confirmed the new helper consumers stayed inside the
 intended boundaries:
 
