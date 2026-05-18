@@ -252,6 +252,11 @@ pub struct WorkspaceStats {
     pub items_by_kind: BTreeMap<String, usize>,
     pub bindings_by_kind: BTreeMap<String, usize>,
     pub visibility: VisibilityCounts,
+    /// Human-readable field roles for `visibility`. Kept separate from the
+    /// numeric counters so existing clients can ignore it while humans can see
+    /// which fields are canonical and which ones are compatibility aliases.
+    #[serde(default)]
+    pub visibility_notes: BTreeMap<String, String>,
     /// Of the items the author actively made non-private, what fraction is
     /// crate-scoped? Computed as `pub_crate / (pub_ + pub_crate)`. Returns
     /// `0.0` when both counts are zero (degenerate workspace with no
@@ -2479,6 +2484,7 @@ impl OpenedSnapshot {
             items_by_kind,
             bindings_by_kind,
             visibility,
+            visibility_notes: visibility_count_notes(),
             pub_crate_share,
         })
     }
@@ -2719,6 +2725,31 @@ fn count_declared_visibility(counts: &mut VisibilityCounts, binding: &Binding) {
             counts.private += 1;
         }
     }
+}
+
+fn visibility_count_notes() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "module_private".to_string(),
+            "canonical count for declarations visible only inside their declaring module"
+                .to_string(),
+        ),
+        (
+            "pub_self".to_string(),
+            "back-compat alias for module-private declarations; prefer module_private"
+                .to_string(),
+        ),
+        (
+            "private".to_string(),
+            "legacy private bucket: module_private plus unresolved private restrictions"
+                .to_string(),
+        ),
+        (
+            "restricted_to".to_string(),
+            "broader module-subtree restrictions only, such as pub(super) or pub(in path)"
+                .to_string(),
+        ),
+    ])
 }
 
 fn overlap_scope_allows_crate(
@@ -3914,6 +3945,15 @@ pub(crate) mod tests {
         assert_eq!(counts.pub_self, 1);
         assert_eq!(counts.private, 1);
         assert_eq!(counts.restricted_to, 1);
+    }
+
+    #[test]
+    fn visibility_count_notes_flag_alias_fields() {
+        let notes = visibility_count_notes();
+        assert!(notes["module_private"].contains("canonical"));
+        assert!(notes["pub_self"].contains("back-compat alias"));
+        assert!(notes["private"].contains("legacy private bucket"));
+        assert!(notes["restricted_to"].contains("broader module-subtree"));
     }
 
     #[test]

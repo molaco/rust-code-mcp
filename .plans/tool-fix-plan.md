@@ -267,7 +267,10 @@ adding `visibility.module_private` and making `restricted_to` mean broader
 module-subtree restrictions (`pub(super)` / `pub(in path)`) rather than
 implicit private declarations. `private` and `pub_self` now include
 module-private declarations instead of staying effectively zero; the tool
-description documents the buckets. Verified with
+description documents the buckets. Follow-up: added `visibility_notes` to flag
+`module_private` as the canonical field and `pub_self` / `private` as
+compatibility or legacy buckets, avoiding silent duplicate-looking counters in
+human output. Verified with
 `nix develop ../nix-devshells#cuda-code --command cargo test visibility_counts_separate_module_private_from_restricted --lib`
 and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
@@ -347,7 +350,7 @@ and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
 ```text
 Phase 1  Response budget        T1  -> T7              (P1; contained, no graph risk)
 Phase 2  Match semantics        T5, T10 -> T3          (P1/P2; small query fixes)
-Phase 3  Graph soundness        T2 -> T4 (4a -> 4b)    (P1/P2; T4 is the big/risky one)
+Phase 3  Graph soundness        T2 -> T4               (P1/P2; T4 proved to be a wording fix)
 Phase 4  Output clarity         T8, T9, T11, T12       (P3; cosmetic, interleavable)
 Phase 5  Investigate            T6                     (verify after Phase 3 / T4)
 ```
@@ -356,14 +359,13 @@ Rationale: Phase 1 first — it is the only thing that *broke* calls this
 session and is pure response-serialization (zero graph-model risk); T1 is the
 acute fix, T7 generalizes its contract. Phase 2 — independent, low-risk query
 fixes; T3 last in the phase as it needs the crate-kind extraction. Phase 3 —
-T2 is additive; T4 is the largest and riskiest, split 4a (cheap interim
-caveat) then 4b (the extraction, behind a full re-index). Phase 4 — small
-output/UX fixes, may interleave with any earlier phase. Phase 5 — T6 last, as
-T4 likely resolves it.
+T2 is additive; T4 was verified as stale wording over already-present method
+extraction and dispatch tests. Phase 4 — small output/UX fixes, may interleave
+with any earlier phase. Phase 5 — T6 last, after the T4 verification clarified
+the real qualified-name edge case.
 
 Dependencies: T7 builds on T1's contract · T3 needs the crate-kind extraction ·
-T6 depends on T4 · T4b must be gated on a full `index_codebase --force` +
-`build_hypergraph --force_rebuild`.
+T6 depends on the T4 verification result.
 
 ## 6. Verification
 
@@ -377,10 +379,7 @@ After each commit:
 After each phase: re-run the smoke test for the tools that phase touched.
 
 End of plan: full smoke test of all 50 tools — the 38 confirmed-correct, the 11
-fixed, and `clear_cache` via its new `dry_run`. For T4 specifically: full
-`index_codebase --force` + `build_hypergraph --force_rebuild`, then re-run
-`who_uses` / `dead_pub_in_crate` and confirm usage counts rose and no
-method-only-used item is still reported "dead".
+fixed, and `clear_cache` via its new `dry_run`.
 
 ## 7. Success criteria
 
@@ -390,8 +389,9 @@ method-only-used item is still reported "dead".
 - The 38 confirmed-correct tools are behavior-unchanged.
 - Every workspace-enumerating tool has `limit`/`offset`/`summary` and does not
   overflow the response budget on this workspace.
-- `who_uses` / `dead_pub_in_crate` no longer miss method/trait-dispatch usage
-  (T4); the Layer-4 caveat is either resolved or prominently surfaced.
+- Tool descriptions no longer claim local method calls or local trait-dispatch
+  references are uncaptured; T4 now documents only the remaining verified blind
+  spots.
 - One regression test per fix; `cargo check --all-targets` green at every
   commit.
 
