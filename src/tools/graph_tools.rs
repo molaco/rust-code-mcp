@@ -221,7 +221,8 @@ pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError>
         .usages_of(target_id)
         .map_err(internal_error("usages_of"))?;
 
-    let (page, usages) = page_list(enrich_usages(&snap, usages), list_page(&params.pagination));
+    let page_req = list_page(&params.pagination);
+    let (page, usages) = page_list(enrich_usages(&snap, usages, page_req.summary), page_req);
     json_result(&UsagesListResponse {
         target: target_node.qualified_name,
         page,
@@ -268,7 +269,9 @@ pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpErro
     let sites = snap
         .who_calls(target_id)
         .map_err(internal_error("who_calls"))?;
-    let (page, call_sites) = page_list(sites, list_page(&params.pagination));
+    let page_req = list_page(&params.pagination);
+    let (page, sites) = page_list(sites, page_req);
+    let call_sites = call_site_views(sites, page_req.summary);
     json_result(&CallSitesResponse {
         target: Some(target_node.qualified_name),
         caller: None,
@@ -291,7 +294,9 @@ pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpEr
     let sites = snap
         .calls_from(caller_id)
         .map_err(internal_error("calls_from"))?;
-    let (page, call_sites) = page_list(sites, list_page(&params.pagination));
+    let page_req = list_page(&params.pagination);
+    let (page, sites) = page_list(sites, page_req);
+    let call_sites = call_site_views(sites, page_req.summary);
     json_result(&CallSitesResponse {
         target: None,
         caller: Some(caller_node.qualified_name),
@@ -340,7 +345,9 @@ pub async fn callers_in_crate(
     let sites = snap
         .callers_in_crate(target_id, &params.krate)
         .map_err(internal_error("callers_in_crate"))?;
-    let (page, call_sites) = page_list(sites, list_page(&params.pagination));
+    let page_req = list_page(&params.pagination);
+    let (page, sites) = page_list(sites, page_req);
+    let call_sites = call_site_views(sites, page_req.summary);
     json_result(&CallersInCrateResponse {
         target: target_node.qualified_name,
         krate: params.krate,
@@ -2522,7 +2529,7 @@ fn enrich_bindings(snap: &OpenedSnapshot, bindings: Vec<Binding>) -> Vec<Enriche
         .collect()
 }
 
-fn enrich_usages(snap: &OpenedSnapshot, usages: Vec<Usage>) -> Vec<EnrichedUsage> {
+fn enrich_usages(snap: &OpenedSnapshot, usages: Vec<Usage>, summary: bool) -> Vec<EnrichedUsage> {
     let rtxn = match snap.read_txn() {
         Ok(t) => t,
         Err(_) => return Vec::new(),
@@ -2538,13 +2545,27 @@ fn enrich_usages(snap: &OpenedSnapshot, usages: Vec<Usage>) -> Vec<EnrichedUsage
                     .map(|n| n.qualified_name)
             });
             EnrichedUsage {
-                file: u.file,
-                start: u.start,
-                end: u.end,
+                file: if summary { None } else { Some(u.file) },
+                start: if summary { None } else { Some(u.start) },
+                end: if summary { None } else { Some(u.end) },
                 category: usage_category_label(u.category),
                 consumer_module: consumer_node.as_ref().map(|n| n.qualified_name.clone()),
                 consumer_function: consumer_function_name,
             }
+        })
+        .collect()
+}
+
+fn call_site_views(sites: Vec<EnrichedCallSite>, summary: bool) -> Vec<CallSiteView> {
+    sites
+        .into_iter()
+        .map(|site| CallSiteView {
+            caller_qualified_name: site.caller_qualified_name,
+            callee_qualified_name: site.callee_qualified_name,
+            file: if summary { None } else { Some(site.file) },
+            start: if summary { None } else { Some(site.start) },
+            end: if summary { None } else { Some(site.end) },
+            category: site.category,
         })
         .collect()
 }
@@ -3081,9 +3102,12 @@ struct UsagesListResponse {
 
 #[derive(Debug, Serialize)]
 struct EnrichedUsage {
-    file: String,
-    start: u32,
-    end: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end: Option<u32>,
     category: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     consumer_module: Option<String>,
@@ -3103,7 +3127,21 @@ struct CallSitesResponse {
     caller: Option<String>,
     #[serde(flatten)]
     page: ListMeta,
-    call_sites: Vec<EnrichedCallSite>,
+    call_sites: Vec<CallSiteView>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallSiteView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_qualified_name: Option<String>,
+    callee_qualified_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end: Option<u32>,
+    category: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -3300,7 +3338,7 @@ struct CallersInCrateResponse {
     krate: String,
     #[serde(flatten)]
     page: ListMeta,
-    call_sites: Vec<EnrichedCallSite>,
+    call_sites: Vec<CallSiteView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4386,6 +4424,51 @@ mod tests {
         assert!(page.summary);
         assert_eq!(page.returned_match_count, 3);
         assert_eq!(paged, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn usage_summary_omits_navigation_fields() {
+        let usage = EnrichedUsage {
+            file: None,
+            start: None,
+            end: None,
+            category: "Read",
+            consumer_module: Some("crate::module".to_string()),
+            consumer_function: Some("crate::module::caller".to_string()),
+        };
+
+        let body = serde_json::to_value(&usage).unwrap();
+        assert!(body.get("file").is_none());
+        assert!(body.get("start").is_none());
+        assert!(body.get("end").is_none());
+        assert_eq!(body["category"], "Read");
+        assert_eq!(body["consumer_module"], "crate::module");
+        assert_eq!(body["consumer_function"], "crate::module::caller");
+    }
+
+    #[test]
+    fn call_site_summary_omits_navigation_fields() {
+        let site = EnrichedCallSite {
+            caller_qualified_name: Some("crate::caller".to_string()),
+            callee_qualified_name: "crate::callee".to_string(),
+            file: "src/lib.rs".to_string(),
+            start: 10,
+            end: 20,
+            category: "Read".to_string(),
+        };
+
+        let summary = serde_json::to_value(&call_site_views(vec![site.clone()], true)[0]).unwrap();
+        assert!(summary.get("file").is_none());
+        assert!(summary.get("start").is_none());
+        assert!(summary.get("end").is_none());
+        assert_eq!(summary["caller_qualified_name"], "crate::caller");
+        assert_eq!(summary["callee_qualified_name"], "crate::callee");
+        assert_eq!(summary["category"], "Read");
+
+        let full = serde_json::to_value(&call_site_views(vec![site], false)[0]).unwrap();
+        assert_eq!(full["file"], "src/lib.rs");
+        assert_eq!(full["start"], 10);
+        assert_eq!(full["end"], 20);
     }
 
     #[test]

@@ -96,8 +96,16 @@ fn load_crate_target_kinds(
     let manifest_path = workspace_root.join("Cargo.toml");
     let mut command = MetadataCommand::new();
     command.manifest_path(manifest_path).no_deps();
-    let Ok(metadata) = command.exec() else {
-        return (HashMap::new(), HashMap::new());
+    let metadata = match command.exec() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            tracing::warn!(
+                "failed to load cargo metadata for {}; crate target-kind filters will fall back to unknown/default handling: {}",
+                workspace_root.display(),
+                error
+            );
+            return (HashMap::new(), HashMap::new());
+        }
     };
 
     let workspace_members: HashSet<_> = metadata.workspace_members.iter().cloned().collect();
