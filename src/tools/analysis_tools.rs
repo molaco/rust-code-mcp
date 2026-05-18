@@ -97,16 +97,25 @@ pub async fn find_definition(
     symbol_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
+    find_definition_with_options(symbol_name, directory, false).await
+}
+
+/// Find the definition of a symbol by name with exact-match control.
+pub async fn find_definition_with_options(
+    symbol_name: &str,
+    directory: &str,
+    exact: bool,
+) -> Result<CallToolResult, McpError> {
     use std::path::Path;
 
     let project_path = Path::new(directory);
 
-    tracing::debug!("Searching for definition of '{}'", symbol_name);
+    tracing::debug!("Searching for definition of '{}' (exact={})", symbol_name, exact);
 
     let locations = SEMANTIC
         .lock()
         .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .symbol_search(project_path, symbol_name, 50)
+        .symbol_search_with_exact(project_path, symbol_name, 50, exact)
         .map_err(|e| McpError::internal_error(format!("Symbol search failed: {}", e), None))?;
 
     if locations.is_empty() {
@@ -135,16 +144,25 @@ pub async fn find_references(
     symbol_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
+    find_references_with_options(symbol_name, directory, false).await
+}
+
+/// Find all references to a symbol by name with exact-match control.
+pub async fn find_references_with_options(
+    symbol_name: &str,
+    directory: &str,
+    exact: bool,
+) -> Result<CallToolResult, McpError> {
     use std::path::Path;
 
     let project_path = Path::new(directory);
 
-    tracing::debug!("Searching for references to '{}'", symbol_name);
+    tracing::debug!("Searching for references to '{}' (exact={})", symbol_name, exact);
 
     let locations = SEMANTIC
         .lock()
         .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .find_references_by_name(project_path, symbol_name)
+        .find_references_by_name_with_exact(project_path, symbol_name, exact)
         .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))?;
 
     if locations.is_empty() {

@@ -67,7 +67,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 |---|---|---|---|---|
 | T1 | `semantic_overlaps` | P1 | 1 | complete |
 | T7 | all enumerating tools | P2 | 1 | complete |
-| T5 | `find_definition` / `find_references` | P2 | 2 | small |
+| T5 | `find_definition` / `find_references` | P2 | 2 | complete |
 | T10 | `items_with_attribute` | P2 | 2 | small |
 | T3 | `forbidden_dependency_check` | P1 | 2 | medium |
 | T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | medium |
@@ -135,6 +135,14 @@ unanchored substring name match, no exact option. Fix: add `exact: bool`
 name; always rank exact hits first; tag each result `exact: true/false`. Files:
 `src/tools/analysis_tools.rs` (endpoints), `src/semantic/position.rs`
 (resolver). Compat: additive.
+
+Progress (2026-05-18): added optional `exact` params to both MCP tools,
+preserving substring/fuzzy search by default. Exact hits are now ranked before
+substring hits, `exact=true` filters to full-name matches only, and each text
+result line includes an `exact=true/false` tag. Added focused unit coverage for
+the exact ranking/filtering helper. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test rank_and_filter_exact --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 **T10 — `items_with_attribute` prefix-matches the raw `#[…]` string.** Cause:
 attributes stored as `"#[derive(Error, Debug)]"`; the `pattern` is

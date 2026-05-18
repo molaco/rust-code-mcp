@@ -12,11 +12,20 @@ pub struct Location {
     pub line: u32,      // 1-based
     pub column: u32,    // 1-based
     pub name: String,
+    pub exact: bool,
 }
 
 impl std::fmt::Display for Location {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}:{} ({})", self.file_path.display(), self.line, self.column, self.name)
+        write!(
+            f,
+            "{}:{}:{} ({}, exact={})",
+            self.file_path.display(),
+            self.line,
+            self.column,
+            self.name,
+            self.exact
+        )
     }
 }
 
@@ -72,6 +81,7 @@ fn nav_target_to_location(
         line: line_col.line + 1,
         column: line_col.col + 1,
         name: target.name.to_string(),
+        exact: false,
     })
 }
 
@@ -160,6 +170,7 @@ pub fn find_references(
                         line: line_col.line + 1,
                         column: line_col.col + 1,
                         name: "reference".to_string(),
+                        exact: false,
                     });
                 }
             }
@@ -176,16 +187,33 @@ pub fn symbol_search(
     symbol_name: &str,
     limit: usize,
 ) -> Result<Vec<Location>> {
+    symbol_search_with_exact(host, vfs, symbol_name, limit, false)
+}
+
+/// Search for symbols by name, optionally retaining only full-name matches.
+pub fn symbol_search_with_exact(
+    host: &AnalysisHost,
+    vfs: &Vfs,
+    symbol_name: &str,
+    limit: usize,
+    exact_only: bool,
+) -> Result<Vec<Location>> {
     let analysis = host.analysis();
 
     let query = Query::new(symbol_name.to_string());
     let results = analysis.symbol_search(query, limit)
         .context("symbol_search query failed")?;
 
-    results
+    let locations = results
         .iter()
-        .map(|target| nav_target_to_location(vfs, &analysis, target))
-        .collect()
+        .map(|target| {
+            let mut location = nav_target_to_location(vfs, &analysis, target)?;
+            location.exact = location.name == symbol_name;
+            Ok(location)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(rank_and_filter_exact(locations, exact_only))
 }
 
 /// Find all references to symbols matching a name
@@ -195,17 +223,33 @@ pub fn find_references_by_name(
     vfs: &Vfs,
     symbol_name: &str,
 ) -> Result<Vec<Location>> {
+    find_references_by_name_with_exact(host, vfs, symbol_name, false)
+}
+
+/// Find all references to symbols matching a name, optionally retaining only
+/// full-name symbol matches before resolving references.
+pub fn find_references_by_name_with_exact(
+    host: &AnalysisHost,
+    vfs: &Vfs,
+    symbol_name: &str,
+    exact_only: bool,
+) -> Result<Vec<Location>> {
     let analysis = host.analysis();
 
     // First, find all symbols matching the name
     let query = Query::new(symbol_name.to_string());
-    let symbols = analysis.symbol_search(query, 50)
+    let mut symbols = analysis.symbol_search(query, 50)
         .context("symbol_search query failed")?;
+    symbols.sort_by_key(|symbol| symbol.name.to_string() != symbol_name);
 
     let mut all_locations = Vec::new();
 
     // For each symbol found, find its references
     for symbol in &symbols {
+        let symbol_exact = symbol.name.to_string() == symbol_name;
+        if exact_only && !symbol_exact {
+            continue;
+        }
         // Get the position of this symbol definition
         let file_id = symbol.file_id;
         let offset = symbol.focus_range.unwrap_or(symbol.full_range).start();
@@ -225,7 +269,8 @@ pub fn find_references_by_name(
             for search_result in search_results {
                 // Add the declaration if present
                 if let Some(decl) = &search_result.declaration {
-                    let decl_location = nav_target_to_location(vfs, &analysis, &decl.nav)?;
+                    let mut decl_location = nav_target_to_location(vfs, &analysis, &decl.nav)?;
+                    decl_location.exact = symbol_exact;
                     all_locations.push(decl_location);
                 }
 
@@ -246,6 +291,7 @@ pub fn find_references_by_name(
                             line: line_col.line + 1,
                             column: line_col.col + 1,
                             name: "reference".to_string(),
+                            exact: symbol_exact,
                         });
                     }
                 }
@@ -255,11 +301,64 @@ pub fn find_references_by_name(
 
     // Deduplicate locations (same file:line:col)
     all_locations.sort_by(|a, b| {
-        (&a.file_path, a.line, a.column).cmp(&(&b.file_path, b.line, b.column))
+        (&a.file_path, a.line, a.column, !a.exact)
+            .cmp(&(&b.file_path, b.line, b.column, !b.exact))
     });
     all_locations.dedup_by(|a, b| {
         a.file_path == b.file_path && a.line == b.line && a.column == b.column
     });
+    all_locations.sort_by_key(|location| !location.exact);
 
     Ok(all_locations)
+}
+
+fn rank_and_filter_exact(mut locations: Vec<Location>, exact_only: bool) -> Vec<Location> {
+    if exact_only {
+        locations.retain(|location| location.exact);
+    }
+    locations.sort_by_key(|location| !location.exact);
+    locations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loc(name: &str, exact: bool, line: u32) -> Location {
+        Location {
+            file_path: PathBuf::from(format!("{name}.rs")),
+            line,
+            column: 1,
+            name: name.to_string(),
+            exact,
+        }
+    }
+
+    #[test]
+    fn rank_and_filter_exact_keeps_substrings_by_default_but_ranks_exact_first() {
+        let locations = vec![
+            loc("VectorSearchResult", false, 2),
+            loc("SearchResult", true, 1),
+        ];
+        let ranked = rank_and_filter_exact(locations, false);
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].name, "SearchResult");
+        assert!(ranked[0].exact);
+        assert_eq!(ranked[1].name, "VectorSearchResult");
+        assert!(!ranked[1].exact);
+    }
+
+    #[test]
+    fn rank_and_filter_exact_can_drop_substring_matches() {
+        let locations = vec![
+            loc("VectorSearchResult", false, 2),
+            loc("SearchResult", true, 1),
+        ];
+        let ranked = rank_and_filter_exact(locations, true);
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].name, "SearchResult");
+        assert!(ranked[0].exact);
+    }
 }

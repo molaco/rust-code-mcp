@@ -39,6 +39,9 @@ pub struct FindDefinitionParams {
     pub symbol_name: String,
     #[schemars(description = "Project root directory containing Cargo.toml")]
     pub directory: String,
+    #[schemars(description = "When true, only return full symbol-name matches. Default false preserves substring/fuzzy search behavior.")]
+    #[serde(default)]
+    pub exact: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -47,6 +50,9 @@ pub struct FindReferencesParams {
     pub symbol_name: String,
     #[schemars(description = "Project root directory containing Cargo.toml")]
     pub directory: String,
+    #[schemars(description = "When true, only resolve references for full symbol-name matches. Default false preserves substring/fuzzy search behavior.")]
+    #[serde(default)]
+    pub exact: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

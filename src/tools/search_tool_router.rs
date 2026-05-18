@@ -142,28 +142,40 @@ impl SearchToolRouter {
 
     /// Find the definition of a symbol by name
     #[tool(
-        description = "Find where a Rust symbol (function, struct, trait, const, etc.) is defined"
+        description = "Find where a Rust symbol (function, struct, trait, const, etc.) is defined. Default matching preserves rust-analyzer substring/fuzzy search and ranks exact hits first; set `exact=true` to return only full-name matches. Each result line is tagged with `exact=true/false`."
     )]
     async fn find_definition(
         &self,
         Parameters(FindDefinitionParams {
             symbol_name,
             directory,
+            exact,
         }): Parameters<FindDefinitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_definition(&symbol_name, &directory).await
+        crate::tools::analysis_tools::find_definition_with_options(
+            &symbol_name,
+            &directory,
+            exact.unwrap_or(false),
+        )
+        .await
     }
 
     /// Find all references to a symbol by name
-    #[tool(description = "Find all places where a symbol is used (calls, type references, etc.)")]
+    #[tool(description = "Find all places where a symbol is used (calls, type references, etc.). Default matching preserves rust-analyzer substring/fuzzy search and ranks exact source symbols first; set `exact=true` to resolve only full-name matches. Each result line is tagged with `exact=true/false`.")]
     async fn find_references(
         &self,
         Parameters(FindReferencesParams {
             symbol_name,
             directory,
+            exact,
         }): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_references(&symbol_name, &directory).await
+        crate::tools::analysis_tools::find_references_with_options(
+            &symbol_name,
+            &directory,
+            exact.unwrap_or(false),
+        )
+        .await
     }
 
     /// Preview a rename of a symbol across the project (read-only, no files modified)

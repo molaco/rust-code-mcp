@@ -59,13 +59,24 @@ impl SemanticService {
         symbol_name: &str,
         limit: usize,
     ) -> Result<Vec<Location>> {
+        self.symbol_search_with_exact(project_path, symbol_name, limit, false)
+    }
+
+    /// Search for symbols by name with optional full-name filtering.
+    pub fn symbol_search_with_exact(
+        &mut self,
+        project_path: &Path,
+        symbol_name: &str,
+        limit: usize,
+        exact: bool,
+    ) -> Result<Vec<Location>> {
         self.get_or_load(project_path)?;
 
         let canonical = project_path.canonicalize()?;
         let ctx = self.projects.get(&canonical)
             .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
 
-        position::symbol_search(&ctx.host, &ctx.vfs, symbol_name, limit)
+        position::symbol_search_with_exact(&ctx.host, &ctx.vfs, symbol_name, limit, exact)
     }
 
     /// Find all references to symbols matching a name
@@ -75,13 +86,23 @@ impl SemanticService {
         project_path: &Path,
         symbol_name: &str,
     ) -> Result<Vec<Location>> {
+        self.find_references_by_name_with_exact(project_path, symbol_name, false)
+    }
+
+    /// Find all references to symbols matching a name with optional exact filtering.
+    pub fn find_references_by_name_with_exact(
+        &mut self,
+        project_path: &Path,
+        symbol_name: &str,
+        exact: bool,
+    ) -> Result<Vec<Location>> {
         self.get_or_load(project_path)?;
 
         let canonical = project_path.canonicalize()?;
         let ctx = self.projects.get(&canonical)
             .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
 
-        position::find_references_by_name(&ctx.host, &ctx.vfs, symbol_name)
+        position::find_references_by_name_with_exact(&ctx.host, &ctx.vfs, symbol_name, exact)
     }
 
     /// Preview rename of a symbol by name. Does not modify any files.
