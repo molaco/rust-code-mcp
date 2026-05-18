@@ -1,6 +1,6 @@
 # Tool-Fix Plan: rust-code-mcp MCP Server Tools
 
-Status: ready to execute
+Status: in progress — Phase 1/T1 complete
 Basis: full-session exercise of 49 of the 50 rust-code-mcp tools against the
 live workspace (2026-05-18); `clear_cache` not run (destructive). Companion to
 `.plans/refactor-plan.md` and `.plans/dup-plan.md` — same crate, different
@@ -65,7 +65,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 
 | T | Tool | Severity | Phase | Effort |
 |---|---|---|---|---|
-| T1 | `semantic_overlaps` | P1 | 1 | small |
+| T1 | `semantic_overlaps` | P1 | 1 | complete |
 | T7 | all enumerating tools | P2 | 1 | medium |
 | T5 | `find_definition` / `find_references` | P2 | 2 | small |
 | T10 | `items_with_attribute` | P2 | 2 | small |
@@ -89,6 +89,19 @@ make `max_pairs` a hard cap on emitted members; add `offset`; always return
 `total_cluster_count` + `total_pair_count`. Files: `src/tools/graph_tools.rs`
 (endpoint + response structs), `src/tools/search_tool.rs` (param struct).
 Compat: additive.
+
+Progress (2026-05-18): implemented additive `offset` and `summary` params;
+`max_pairs` now caps returned pairs in pairs mode and total emitted cluster
+members in clusters mode; responses now include `total_pair_count`,
+`total_cluster_count`, `offset`, `limit`, and `summary` while preserving
+`pair_count`. Added focused regression tests for member limiting, cluster
+offsets, and summary serialization. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test page_clusters --lib`,
+`nix develop ../nix-devshells#cuda-code --command cargo test item_ref_summary_omits_file_and_span --lib`,
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
+A broader `cargo test tools::graph_tools::tests:: --lib` run was stopped after
+the new T1 tests passed because unrelated snapshot-heavy tests continued
+running for several minutes.
 
 **T7 — uniform large-output convention.** Cause: only `functions_with_filter`
 has `limit`/`offset`/`summary`; every other enumerating tool returns

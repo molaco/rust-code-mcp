@@ -736,7 +736,9 @@ pub async fn semantic_overlaps(
     let threshold = params
         .threshold
         .unwrap_or_else(|| backend.semantic_overlap_threshold());
-    let max_pairs = params.max_pairs.unwrap_or(50);
+    let limit = params.max_pairs.unwrap_or(50);
+    let offset = params.offset.unwrap_or(0);
+    let summary = params.summary.unwrap_or(false);
     let max_cluster_size = params.max_cluster_size.unwrap_or(15);
     let output_mode = params
         .output_mode
@@ -943,7 +945,7 @@ pub async fn semantic_overlaps(
         })
         .collect();
     pairs.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal));
-    let pair_count = pairs.len();
+    let total_pair_count = pairs.len();
 
     // 9. Build response. v1.1 only ever produces edges between seeds, so
     //    the lookup table is the seeds themselves — no fallback `node_by_id`
@@ -952,7 +954,9 @@ pub async fn semantic_overlaps(
     let seed_index: HashMap<NodeId, &Node> =
         seeds_ctx.iter().map(|c| (c.id, &c.node)).collect();
     let lookup_ref = |id: NodeId| -> Option<ItemRef> {
-        seed_index.get(&id).map(|node| node_to_item_ref(node))
+        seed_index
+            .get(&id)
+            .map(|node| node_to_item_ref(node, summary))
     };
 
     let scope = ScopeSummary {
@@ -962,9 +966,17 @@ pub async fn semantic_overlaps(
         seed_count,
     };
 
+    let mut clusters = build_clusters(&pairs, usize::MAX, lookup_ref);
+    if max_cluster_size > 0 {
+        clusters.retain(|c| c.size <= max_cluster_size);
+    }
+    let total_cluster_count = clusters.len();
+
     if output_mode == "pairs" {
-        let truncated = pairs.into_iter().take(max_pairs);
-        let pair_refs: Vec<SimilarityPair> = truncated
+        let pair_refs: Vec<SimilarityPair> = pairs
+            .into_iter()
+            .skip(offset)
+            .take(limit)
             .filter_map(|(a, b, s)| {
                 Some(SimilarityPair {
                     a: lookup_ref(a)?,
@@ -976,7 +988,12 @@ pub async fn semantic_overlaps(
         return json_result(&SemanticOverlapsResp {
             scope,
             threshold,
-            pair_count,
+            pair_count: total_pair_count,
+            total_pair_count,
+            total_cluster_count,
+            offset,
+            limit,
+            summary,
             output_mode,
             pairs: Some(pair_refs),
             clusters: None,
@@ -984,14 +1001,16 @@ pub async fn semantic_overlaps(
     }
 
     // Clusters mode (default).
-    let mut clusters = build_clusters(&pairs, max_pairs, lookup_ref);
-    if max_cluster_size > 0 {
-        clusters.retain(|c| c.size <= max_cluster_size);
-    }
+    let clusters = page_clusters_by_member_limit(clusters, offset, limit);
     json_result(&SemanticOverlapsResp {
         scope,
         threshold,
-        pair_count,
+        pair_count: total_pair_count,
+        total_pair_count,
+        total_cluster_count,
+        offset,
+        limit,
+        summary,
         output_mode,
         pairs: None,
         clusters: Some(clusters),
@@ -2576,12 +2595,20 @@ fn resolve_chunk_to_item(
 }
 
 /// Build a small ItemRef from a Node (used in semantic_overlaps response).
-fn node_to_item_ref(node: &Node) -> ItemRef {
+fn node_to_item_ref(node: &Node, summary: bool) -> ItemRef {
     ItemRef {
         qualified_name: node.qualified_name.clone(),
         item_kind: node.item_kind.map(|k| short_item_kind_label(k).to_string()),
-        file: node.file.clone().unwrap_or_default(),
-        span: node.span.unwrap_or((0, 0)),
+        file: if summary {
+            None
+        } else {
+            Some(node.file.clone().unwrap_or_default())
+        },
+        span: if summary {
+            None
+        } else {
+            Some(node.span.unwrap_or((0, 0)))
+        },
     }
 }
 
@@ -2699,6 +2726,32 @@ where
             })
     });
     clusters
+}
+
+/// Apply `semantic_overlaps` cluster pagination. `offset` skips complete
+/// clusters, then `member_limit` caps the total number of emitted member refs
+/// across all returned clusters.
+fn page_clusters_by_member_limit(
+    clusters: Vec<SimilarityCluster>,
+    offset: usize,
+    member_limit: usize,
+) -> Vec<SimilarityCluster> {
+    let mut remaining = member_limit;
+    let mut paged = Vec::new();
+    for mut cluster in clusters.into_iter().skip(offset) {
+        if remaining == 0 {
+            break;
+        }
+        if cluster.members.len() > remaining {
+            cluster.members.truncate(remaining);
+            cluster.truncated = true;
+            paged.push(cluster);
+            break;
+        }
+        remaining -= cluster.members.len();
+        paged.push(cluster);
+    }
+    paged
 }
 
 // ----- response shapes -----
@@ -2992,7 +3045,13 @@ struct SimilarMatch {
 struct SemanticOverlapsResp {
     scope: ScopeSummary,
     threshold: f32,
+    /// Back-compatible alias for `total_pair_count`.
     pair_count: usize,
+    total_pair_count: usize,
+    total_cluster_count: usize,
+    offset: usize,
+    limit: usize,
+    summary: bool,
     output_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pairs: Option<Vec<SimilarityPair>>,
@@ -3030,8 +3089,10 @@ struct SimilarityCluster {
 struct ItemRef {
     qualified_name: String,
     item_kind: Option<String>,
-    file: String,
-    span: (u32, u32),
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3823,8 +3884,8 @@ mod tests {
             Some(ItemRef {
                 qualified_name: format!("n_{}", id.as_bytes()[0]),
                 item_kind: Some("Fn".to_string()),
-                file: "x.rs".to_string(),
-                span: (0, 0),
+                file: Some("x.rs".to_string()),
+                span: Some((0, 0)),
             })
         };
 
@@ -3863,8 +3924,8 @@ mod tests {
             Some(ItemRef {
                 qualified_name: format!("n_{}", id.as_bytes()[0]),
                 item_kind: None,
-                file: "x.rs".to_string(),
-                span: (0, 0),
+                file: Some("x.rs".to_string()),
+                span: Some((0, 0)),
             })
         };
         let clusters = build_clusters(&edges, 2, lookup);
@@ -3872,6 +3933,93 @@ mod tests {
         assert_eq!(clusters[0].size, 4);
         assert_eq!(clusters[0].members.len(), 2);
         assert!(clusters[0].truncated);
+    }
+
+    #[test]
+    fn item_ref_summary_omits_file_and_span() {
+        let node = Node {
+            id: nid(1),
+            kind: NodeKind::Item,
+            display_name: "thing".to_string(),
+            qualified_name: "crate::thing".to_string(),
+            crate_id: None,
+            parent_id: None,
+            item_kind: Some(ItemKind::Function),
+            file: Some("src/lib.rs".to_string()),
+            span: Some((10, 20)),
+            visibility: Some("pub".to_string()),
+            attributes: Vec::new(),
+        };
+
+        let full = serde_json::to_value(node_to_item_ref(&node, false)).unwrap();
+        assert_eq!(full["file"], "src/lib.rs");
+        assert_eq!(full["span"][0], 10);
+        assert_eq!(full["span"][1], 20);
+
+        let summary = serde_json::to_value(node_to_item_ref(&node, true)).unwrap();
+        assert_eq!(summary["qualified_name"], "crate::thing");
+        assert!(summary.get("file").is_none());
+        assert!(summary.get("span").is_none());
+    }
+
+    #[test]
+    fn page_clusters_caps_total_emitted_members() {
+        let mk_ref = |name: &str| ItemRef {
+            qualified_name: name.to_string(),
+            item_kind: Some("Fn".to_string()),
+            file: Some("x.rs".to_string()),
+            span: Some((0, 0)),
+        };
+        let clusters = vec![
+            SimilarityCluster {
+                members: vec![mk_ref("a"), mk_ref("b"), mk_ref("c")],
+                avg_similarity: 0.95,
+                min_similarity: 0.90,
+                size: 3,
+                truncated: false,
+            },
+            SimilarityCluster {
+                members: vec![mk_ref("d"), mk_ref("e")],
+                avg_similarity: 0.90,
+                min_similarity: 0.85,
+                size: 2,
+                truncated: false,
+            },
+        ];
+
+        let paged = page_clusters_by_member_limit(clusters, 0, 4);
+
+        assert_eq!(paged.len(), 2);
+        assert_eq!(paged[0].members.len(), 3);
+        assert!(!paged[0].truncated);
+        assert_eq!(paged[1].members.len(), 1);
+        assert!(paged[1].truncated);
+        let emitted: usize = paged.iter().map(|c| c.members.len()).sum();
+        assert_eq!(emitted, 4);
+    }
+
+    #[test]
+    fn page_clusters_offset_skips_whole_clusters() {
+        let mk_cluster = |name: &str| SimilarityCluster {
+            members: vec![ItemRef {
+                qualified_name: name.to_string(),
+                item_kind: None,
+                file: Some("x.rs".to_string()),
+                span: Some((0, 0)),
+            }],
+            avg_similarity: 0.9,
+            min_similarity: 0.9,
+            size: 1,
+            truncated: false,
+        };
+        let paged = page_clusters_by_member_limit(
+            vec![mk_cluster("skip"), mk_cluster("keep")],
+            1,
+            50,
+        );
+
+        assert_eq!(paged.len(), 1);
+        assert_eq!(paged[0].members[0].qualified_name, "keep");
     }
 
     #[test]

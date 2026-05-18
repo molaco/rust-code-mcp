@@ -486,9 +486,15 @@ pub struct SemanticOverlapsParams {
     #[schemars(description = "Minimum cosine similarity (0.0-1.0). Omit to use the embedding model's tuned default cutoff (0.85 for the Qwen3 code-embedding model used by default). Cosine-similarity scales are model-specific, so an explicit value is interpreted relative to the active model: drop ~0.05 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal.")]
     #[serde(default)]
     pub threshold: Option<f32>,
-    #[schemars(description = "Cap on returned pairs OR cluster member count. Default 50.")]
+    #[schemars(description = "Cap on returned pairs in pairs mode, or total emitted cluster members in clusters mode. Default 50.")]
     #[serde(default)]
     pub max_pairs: Option<usize>,
+    #[schemars(description = "Optional offset into the sorted result list. In pairs mode this skips pairs; in clusters mode this skips clusters before the member cap is applied. Default 0.")]
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[schemars(description = "Optional summary mode. When true, pair endpoints and cluster members omit file/span payloads and keep only qualified_name + item_kind. Default false.")]
+    #[serde(default)]
+    pub summary: Option<bool>,
     #[schemars(description = "Drop clusters whose member count exceeds this cap (single-linkage chaining produces large noisy clusters; default 15 trims them while keeping high-signal pair/trio clusters). Set to 0 to disable.")]
     #[serde(default)]
     pub max_cluster_size: Option<usize>,
