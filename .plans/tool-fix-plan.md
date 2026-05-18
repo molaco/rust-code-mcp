@@ -76,7 +76,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T9 | `overlaps` | P3 | 4 | complete |
 | T11 | `index_codebase` | P3 | 4 | complete |
 | T6 | `similar_to_item` | P3 | 5 | complete |
-| T12 | `clear_cache` (optional enhancement) | P3 | 4 | small |
+| T12 | `clear_cache` (optional enhancement) | P3 | 4 | complete |
 
 ### Cluster A — response budget
 
@@ -333,6 +333,14 @@ A direct snapshot-backed regression test was attempted but stopped at the
 cache, forcing a costly OpenRouter re-index). Suggested: add `dry_run: bool`
 reporting what *would* be cleared (paths, sizes) without deleting. Files:
 `src/tools/clear_cache_tool.rs`. Compat: additive.
+
+Progress (2026-05-18): added optional `dry_run` to `clear_cache`. In dry-run
+mode the tool walks the same metadata-cache, Tantivy, vector-store, and
+hypergraph paths but reports "would clear" without deleting anything; response
+footer text now says projects/hypergraphs "would" be re-indexed when dry-run is
+active. The router description documents the new flag. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test clear_cache --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 ## 5. Execution order
 
