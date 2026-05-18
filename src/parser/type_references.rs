@@ -14,6 +14,8 @@ use ra_ap_syntax::{
     AstNode, Edition, SourceFile,
 };
 
+use super::line_of_offset;
+
 /// A reference to a type in the code
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeReference {
@@ -203,15 +205,6 @@ pub(crate) fn build_type_references_from_ast(file: &SourceFile, source: &str) ->
     }
 
     refs
-}
-
-/// Calculate line number (1-indexed) from byte offset
-fn line_of_offset(source: &str, offset: usize) -> usize {
-    source[..offset.min(source.len())]
-        .chars()
-        .filter(|&c| c == '\n')
-        .count()
-        + 1
 }
 
 /// Extract types from a type AST node

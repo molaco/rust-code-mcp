@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — steps 1-7 complete
+Status: in progress — steps 1-8 complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -117,7 +117,7 @@ These surface in the scan but are intentional; touching them is churn:
 |----|------|--------|----------------|
 | C2 | `arc` helper — `embeddings::backend` ↔ `embeddings::profile_registry` | 1.00 | byte-identical → `embeddings` (`pub(in crate::embeddings)`) |
 | M1–3 | `graph::ids` — `NodeId`/`BindingId`/`UsageId` each clone `from_components` + `to_hex` + `as_bytes` | 0.99–1.0 | ~9 identical method bodies → one `define_id!` macro in `graph/ids.rs` |
-| C10 | `line_of_offset` — `parser/mod` ↔ `parser/type_references` | 1.00 | identical → `parser/mod.rs` (codemap's `line_of_byte` is a *different* algorithm — exclude) |
+| C10 | `line_of_offset` — `parser/mod` ↔ `parser/type_references` | 1.00 | DONE — identical → `parser/mod.rs` (codemap's `line_of_byte` is a *different* algorithm — excluded) |
 | C11 | batch planner — `openrouter` ↔ `indexing::embedding_batcher` | 0.883 | identical greedy bin-pack, different types → generic in `embeddings` (see §5) |
 | S1 | `ForbiddenDependencyRuleParam` ≡ `graph::queries::ForbiddenDependencyRule` | 0.956 | field-for-field identical (schemars param mirror) |
 | S2 | `CallSitesResponse` ≈ `CallersInCrateResponse` (both `graph_tools.rs`) | 0.902 | near-identical response DTOs |
@@ -210,6 +210,9 @@ Each commit is one zone, compiles independently, keeps `cargo check
 7. **DONE — `tools: collapse duplicate DTO structs`** — S1 (`*RuleParam`
    derives from / newtypes the graph struct), S2 (merge the two response
    DTOs). *Effort: small.*
+8. **DONE — `parser: dedupe line_of_offset helper`** — C10. `parser/mod.rs`
+   now owns the shared helper; `parser/type_references.rs` imports it. The
+   distinct `graph::codemap::line_of_byte` algorithm was left untouched.
 
 Commits 1–5 are the core deliverable; 6–7 are follow-ups.
 

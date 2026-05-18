@@ -203,7 +203,7 @@ impl RustParser {
 // ============================================================================
 
 /// Calculate line number (1-indexed) from byte offset
-fn line_of_offset(source: &str, offset: usize) -> usize {
+pub(in crate::parser) fn line_of_offset(source: &str, offset: usize) -> usize {
     source[..offset.min(source.len())]
         .chars()
         .filter(|&c| c == '\n')
