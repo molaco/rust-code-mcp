@@ -566,3 +566,163 @@ Agent ergonomics:
 
 - A change to one tool family, query family, audit, or the OpenRouter client
   can be made in one focused file without reading a 3000+-line file.
+
+
+- Here is the end-state target tree after the plan's Phases 0–6 execute (single-crate restructure). Migration facades created mid-plan are deleted in Phase 6, so they are not shown. NEW = created by the plan; everything else is
+  unchanged.
+
+  src/
+    lib.rs
+    main.rs
+    config.rs
+    metadata_cache.rs
+    schema.rs
+
+    bin/
+      test_tools_direct.rs
+
+    tools/                          ── Phase 1: graph_tools.rs (3976) dissolved
+      mod.rs                        # facade
+      router.rs                     NEW  ← search_tool_router.rs
+      project_paths.rs
+      params/                       NEW  ← search_tool.rs, split by family
+        mod.rs
+        search.rs
+        graph.rs
+        audit.rs
+        indexing.rs
+      endpoints/                    NEW  ← standalone endpoint files
+        mod.rs
+        analysis.rs                 ← analysis_tools.rs
+        cache.rs                    ← clear_cache_tool.rs
+        health.rs                   ← health_tool.rs
+        index.rs                    ← index_tool.rs
+        indexing_support.rs         ← indexing_tools.rs
+        query.rs                    ← query_tools.rs
+      graph/                        NEW  ← graph_tools.rs, split by endpoint family
+        mod.rs
+        core.rs                     # imports/exports/reexports, who_*, calls, module_tree
+        crates.rs                   # crate_edges, dependency metric, forbidden deps
+        surface.rs                  # dead_pub*, attributes, docs, derive, reexport
+        audits.rs                   # unsafe, mut_static, recursion, channel, fn_body
+        similarity.rs               # similar_to_item, semantic_overlaps, embedding helpers
+        codemap.rs                  # build_codemap endpoint bridge
+        response.rs                 # shared JSON/enrichment/render helpers
+
+    graph/                          ── Phases 2-3: queries.rs + codemap.rs dissolved
+      mod.rs
+      ids.rs
+      model.rs
+      storage.rs
+      snapshot.rs
+      loader.rs
+      hir_trim.rs
+      ast_resolve.rs
+      extract.rs                    # extract/audit files already split — left as-is
+      bindings.rs
+      usages.rs
+      impls.rs
+      signatures.rs
+      attributes.rs
+      statics.rs
+      docs_audit.rs
+      derive_audit.rs
+      unsafe_audit.rs
+      fn_body_audit.rs
+      channel_audit.rs
+      recursion_check.rs
+      query/                        NEW  ← queries.rs (3604), split by family
+        mod.rs
+        model.rs                    # query result structs/enums
+        imports.rs
+        usage.rs
+        calls.rs
+        crates.rs
+        surface.rs
+        functions.rs
+        modules.rs
+        overlaps.rs
+      codemap/                      NEW  ← codemap.rs (2058), split by concern
+        mod.rs
+        model.rs
+        seeds.rs
+        build.rs
+        hierarchy.rs
+        render.rs
+
+    embeddings/                     ── Phase 4: openrouter.rs dissolved; Phase 5: backend split
+      mod.rs                        # facade (243 lines — left as-is)
+      backend.rs                    # EmbeddingBackend + identity wiring (slimmed)
+      profile.rs                    NEW  ← EmbeddingProfile, built-in registry, QueryPolicy, enums
+      profile_registry.rs           # TOML dynamic-profile registry (existing)
+      identity.rs
+      qwen3.rs
+      fastembed_cpu.rs
+      token_lengths.rs
+      error.rs
+      openrouter/                   NEW  ← openrouter.rs (1654), split by concern
+        mod.rs
+        config.rs                   # runtime config, env vars, provider prefs
+        client.rs                   # OpenRouterEmbedder + HTTP client
+        request.rs
+        response.rs                 # float + base64 decoding
+        batching.rs                 # remote batch planner
+        retry.rs
+        metrics.rs                  # (fold into client.rs if <~150 lines)
+
+    chunker/                        ── Phase 5: mod.rs (805) thinned to a facade
+      mod.rs                        # facade
+      types.rs                      NEW  ← ChunkId, CodeChunk, ChunkContext, config
+      chunker.rs                    NEW  ← Chunker impl
+      split.rs                      NEW  ← oversized-chunk / token-split logic
+
+    parser/                         ── Phase 5: mod.rs (621) thinned
+      mod.rs                        # facade
+      types.rs                      NEW  ← parse result / symbol types
+      rust_parser.rs                NEW  ← RustParser impl
+      call_graph.rs                 # existing — left untouched
+      imports.rs                    # existing — left untouched
+      type_references.rs            # existing — left untouched
+
+    indexing/                       ── Phase 5: unified.rs split; errors.rs renamed
+      mod.rs
+      unified.rs                    # UnifiedIndexer orchestration (slimmed)
+      unified_parallel.rs           NEW  ← parallel-traversal helpers
+      indexer_core.rs
+      embedding_batcher.rs          # 802 — review only, likely left as-is
+      file_processor.rs
+      incremental.rs
+      merkle.rs
+      tantivy_adapter.rs
+      consistency.rs
+      identity.rs
+      retry.rs
+      error.rs                      # IndexingError enum (unchanged)
+      error_collection.rs           NEW  ← renamed from errors.rs (thread-safe collector)
+
+    search/                         # under threshold — NOT touched
+      mod.rs
+      bm25.rs
+      resilient.rs
+      rrf_tuner.rs
+      error.rs
+
+    vector_store/                   # under threshold — NOT touched
+      mod.rs
+      lancedb.rs
+      traits.rs
+      error.rs
+
+    config/        { errors.rs, indexer.rs }            # NOT touched
+    mcp/           { mod.rs, sync.rs }                  # NOT touched
+    metrics/       { mod.rs, memory.rs }                # NOT touched
+    monitoring/    { mod.rs, health.rs, backup.rs }     # NOT touched
+    security/      { mod.rs, secrets.rs }               # NOT touched
+    semantic/      { mod.rs, loader.rs, position.rs, rename.rs }   # NOT touched
+
+  Notes:
+  - Transient (not in this tree): during the plan, tools/graph_tools.rs, tools/search_tool.rs, tools/search_tool_router.rs, and graph/queries.rs survive as pub use facades, then are deleted in Phase 6.
+  - indexing/unified.rs may also yield an optional indexing/types.rs if IndexStats/IndexFileResult separate cleanly — the plan leaves that to judgment.
+  - Phase 7 (optional, not part of this target) would lift graph/ out to crates/rmc-graph/src/… with the same internal layout; the rest stays in the main crate.
+
+  The deliberate non-targets — search/, vector_store/, embeddings/mod.rs, and the already-split graph/ extract/audit files — stay flat by design; the plan's §1.1 explains why splitting them would be churn, not improvement.
