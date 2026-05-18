@@ -16,6 +16,7 @@ pub mod fn_body_audit;
 pub mod hir_trim;
 pub mod ids;
 pub mod impls;
+pub mod labels;
 pub mod loader;
 pub mod model;
 pub mod queries;

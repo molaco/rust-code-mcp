@@ -17,9 +17,13 @@ use heed::RoTxn;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{BindingId, NodeId};
+use super::labels::{
+    binding_kind_label as label_binding_kind, item_kind_short_label as label_item_kind,
+    node_kind_label, usage_category_label,
+};
 use super::model::{
     Binding, BindingKind, BindingVisibility, FunctionSignature, ItemKind, Node, NodeKind, SelfKind,
-    StaticMetadata, Usage, UsageCategory,
+    StaticMetadata, Usage,
 };
 use super::snapshot::OpenedSnapshot;
 
@@ -1882,7 +1886,7 @@ impl OpenedSnapshot {
                 node_to_crate.insert(nid, cid);
             }
             node_qual.insert(nid, node.qualified_name.clone());
-            node_kind_label_map.insert(nid, label_node_kind(&node));
+            node_kind_label_map.insert(nid, node_kind_label(&node, label_item_kind));
         }
 
         // (consumer_crate, producer_crate, target, binding_kind) → import_count
@@ -2421,7 +2425,7 @@ impl OpenedSnapshot {
         Ok(ModuleTreeNode {
             qualified_name: node.qualified_name.clone(),
             display_name: node.display_name.clone(),
-            kind: label_node_kind(&node),
+            kind: node_kind_label(&node, label_item_kind),
             item_kind: item_kind_label,
             visibility,
             children: children_nodes,
@@ -2670,46 +2674,6 @@ impl OpenedSnapshot {
     }
 }
 
-fn label_node_kind(node: &Node) -> String {
-    match node.kind {
-        NodeKind::Workspace => "Workspace".to_string(),
-        NodeKind::Crate => "Crate".to_string(),
-        NodeKind::Module => "Module".to_string(),
-        NodeKind::Item => match node.item_kind {
-            Some(k) => format!("Item.{}", label_item_kind(k)),
-            None => "Item".to_string(),
-        },
-        NodeKind::ExternalSymbol => "ExternalSymbol".to_string(),
-    }
-}
-
-fn label_item_kind(k: ItemKind) -> &'static str {
-    match k {
-        ItemKind::Function => "Fn",
-        ItemKind::Struct => "Struct",
-        ItemKind::Enum => "Enum",
-        ItemKind::Union => "Union",
-        ItemKind::Trait => "Trait",
-        ItemKind::TypeAlias => "TypeAlias",
-        ItemKind::Const => "Const",
-        ItemKind::Static => "Static",
-        ItemKind::AssocFunction => "AssocFn",
-        ItemKind::AssocConst => "AssocConst",
-        ItemKind::AssocType => "AssocType",
-        ItemKind::Method => "Method",
-        ItemKind::EnumVariant => "EnumVariant",
-    }
-}
-
-fn label_binding_kind(k: BindingKind) -> &'static str {
-    match k {
-        BindingKind::Declared => "Declared",
-        BindingKind::NamedImport => "NamedImport",
-        BindingKind::GlobImport => "GlobImport",
-        BindingKind::ExternCrateImport => "ExternCrateImport",
-    }
-}
-
 fn count_declared_visibility(counts: &mut VisibilityCounts, binding: &Binding) {
     match binding.visibility {
         BindingVisibility::Public => counts.pub_ += 1,
@@ -2785,7 +2749,7 @@ impl ModuleDependencyAccumulator {
     fn new(node: &Node, crate_names: &HashMap<NodeId, String>) -> Self {
         Self {
             target_module: node.qualified_name.clone(),
-            target_kind: label_node_kind(node),
+            target_kind: node_kind_label(node, label_item_kind),
             target_crate: node.crate_id.and_then(|id| crate_names.get(&id).cloned()),
             import_count: 0,
             usage_count: 0,
@@ -2826,7 +2790,7 @@ impl ModuleDependencySymbolAccumulator {
                 .map(|node| node.qualified_name.clone())
                 .unwrap_or_else(|| target.to_hex()),
             target_kind: node
-                .map(label_node_kind)
+                .map(|node| node_kind_label(node, label_item_kind))
                 .unwrap_or_else(|| "Unknown".to_string()),
             import_count: 0,
             usage_count: 0,
@@ -2924,15 +2888,6 @@ fn normalize_consumer_kind(kind: &str) -> String {
     match kind.trim() {
         "custom-build" => "build".to_string(),
         other => other.to_ascii_lowercase(),
-    }
-}
-
-fn usage_category_label(c: UsageCategory) -> &'static str {
-    match c {
-        UsageCategory::Read => "Read",
-        UsageCategory::Write => "Write",
-        UsageCategory::Test => "Test",
-        UsageCategory::Other => "Other",
     }
 }
 

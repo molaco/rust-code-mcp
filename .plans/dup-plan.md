@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — step 1 complete
+Status: in progress — steps 1-2 complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -190,7 +190,7 @@ Each commit is one zone, compiles independently, keeps `cargo check
    C6 + C16. New `src/graph/audit_util.rs` (`pub(in crate::graph)`); delete
    ~13 copied bodies across channel_audit, fn_body_audit, unsafe_audit, impls,
    usages. *Largest payoff, all trivial-identical. Effort: small.*
-2. **`graph: add labels.rs, unify label/path helpers`** — C3 + C5 + C8 + C18.
+2. **DONE — `graph: add labels.rs, unify label/path helpers`** — C3 + C5 + C8 + C18.
    New `src/graph/labels.rs`: `usage_category_label`, `binding_kind_label`, one
    parameterized `node_kind_label`, the 3 distinctly-named `item_kind_*`
    formatters, `crate_display_name`, `module_path_segments`. queries.rs and

@@ -17,6 +17,7 @@ use super::audit_util::resolve_workspace_relative;
 use super::attributes::extract_attributes;
 use super::bindings::extract_bindings;
 use super::ids::{NodeId, workspace_hash};
+use super::labels::{crate_display_name, module_path_segments};
 use super::impls::extract_impl_items;
 use super::loader::LoadedWorkspace;
 use super::model::{ExtractionModel, Node, NodeKind};
@@ -346,30 +347,6 @@ fn crate_target_kind_for(
         .and_then(|root_file| crate_target_kinds_by_root_file.get(&root_file).cloned())
         .or_else(|| crate_target_kinds_by_name.get(crate_name).cloned())
         .or_else(|| Some("lib".to_string()))
-}
-
-fn crate_display_name(db: &RootDatabase, krate: Crate) -> String {
-    krate
-        .display_name(db)
-        .map(|n| n.canonical_name().as_str().to_string())
-        .unwrap_or_else(|| "unknown_crate".to_string())
-}
-
-/// Build the module path from crate root to `module_id`, e.g. `["graph", "loader"]`
-/// for `crate::graph::loader`. Returns empty for the crate root itself.
-fn module_path_segments(db: &RootDatabase, def_map: &DefMap, module_id: ModuleId) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = Some(module_id);
-    while let Some(m) = cur {
-        if let Some(name) = m.name(db) {
-            out.push(name.as_str().to_string());
-            cur = def_map.containing_module(m);
-        } else {
-            break;
-        }
-    }
-    out.reverse();
-    out
 }
 
 #[cfg(test)]

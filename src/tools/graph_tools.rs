@@ -18,13 +18,17 @@ use rmcp::{
 };
 use serde::Serialize;
 
+use crate::graph::labels::{
+    binding_kind_label, item_kind_display_label as item_kind_label,
+    item_kind_short_label as short_item_kind_label, node_kind_label, usage_category_label,
+};
 use crate::graph::{
-    Binding, BindingKind, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
+    Binding, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
     DeadPubFinding, EmbeddingRecord, EnrichedCallSite, ForbiddenDependencyRule,
     ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
     GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapScope, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
-    RecursiveCallersCount, SelfKindFilter, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
+    RecursiveCallersCount, SelfKindFilter, Usage, UsageSummaryRow, WorkspaceStats,
     ModuleDependency, ModuleDependencySymbol, build_and_persist, open_current,
     snapshot::BuildOptions,
 };
@@ -2523,7 +2527,9 @@ fn enrich_bindings(snap: &OpenedSnapshot, bindings: Vec<Binding>) -> Vec<Enriche
                     .as_ref()
                     .map(|n| n.qualified_name.clone()),
                 target: target_node.as_ref().map(|n| n.qualified_name.clone()),
-                target_kind: target_node.as_ref().map(|n| node_kind_label(n)),
+                target_kind: target_node
+                    .as_ref()
+                    .map(|n| node_kind_label(n, short_item_kind_label)),
             }
         })
         .collect()
@@ -2621,55 +2627,6 @@ fn namespace_label(ns: Namespace) -> &'static str {
     }
 }
 
-fn usage_category_label(c: UsageCategory) -> &'static str {
-    match c {
-        UsageCategory::Read => "Read",
-        UsageCategory::Write => "Write",
-        UsageCategory::Test => "Test",
-        UsageCategory::Other => "Other",
-    }
-}
-
-fn item_kind_label(k: ItemKind) -> &'static str {
-    match k {
-        ItemKind::Function => "Function",
-        ItemKind::Struct => "Struct",
-        ItemKind::Enum => "Enum",
-        ItemKind::Union => "Union",
-        ItemKind::Trait => "Trait",
-        ItemKind::TypeAlias => "TypeAlias",
-        ItemKind::Const => "Const",
-        ItemKind::Static => "Static",
-        ItemKind::AssocFunction => "AssocFunction",
-        ItemKind::AssocConst => "AssocConst",
-        ItemKind::AssocType => "AssocType",
-        ItemKind::Method => "Method",
-        ItemKind::EnumVariant => "EnumVariant",
-    }
-}
-
-fn binding_kind_label(kind: BindingKind) -> &'static str {
-    match kind {
-        BindingKind::Declared => "Declared",
-        BindingKind::NamedImport => "NamedImport",
-        BindingKind::GlobImport => "GlobImport",
-        BindingKind::ExternCrateImport => "ExternCrateImport",
-    }
-}
-
-fn node_kind_label(node: &Node) -> String {
-    match node.kind {
-        NodeKind::Workspace => "Workspace".to_string(),
-        NodeKind::Crate => "Crate".to_string(),
-        NodeKind::Module => "Module".to_string(),
-        NodeKind::Item => match node.item_kind {
-            Some(k) => format!("Item.{}", short_item_kind_label(k)),
-            None => "Item".to_string(),
-        },
-        NodeKind::ExternalSymbol => "ExternalSymbol".to_string(),
-    }
-}
-
 fn module_dependency_view(
     dependency: ModuleDependency,
     summary: bool,
@@ -2681,28 +2638,6 @@ fn module_dependency_view(
         import_count: dependency.import_count,
         usage_count: dependency.usage_count,
         symbols: if summary { None } else { Some(dependency.symbols) },
-    }
-}
-
-/// Short variant labels matching the form used by `queries::label_item_kind`
-/// (e.g. `Function -> "Fn"`, `AssocFunction -> "AssocFn"`). Pair with
-/// `node_kind_label` so a Function Item serializes as `"Item.Fn"` rather than
-/// `"Item.Function"`. Keep in sync with `queries::label_item_kind`.
-fn short_item_kind_label(k: ItemKind) -> &'static str {
-    match k {
-        ItemKind::EnumVariant => "EnumVariant",
-        ItemKind::Function => "Fn",
-        ItemKind::Struct => "Struct",
-        ItemKind::Enum => "Enum",
-        ItemKind::Union => "Union",
-        ItemKind::Trait => "Trait",
-        ItemKind::TypeAlias => "TypeAlias",
-        ItemKind::Const => "Const",
-        ItemKind::Static => "Static",
-        ItemKind::AssocFunction => "AssocFn",
-        ItemKind::AssocConst => "AssocConst",
-        ItemKind::AssocType => "AssocType",
-        ItemKind::Method => "Method",
     }
 }
 

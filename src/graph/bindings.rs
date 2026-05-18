@@ -19,6 +19,9 @@ use ra_ap_ide::RootDatabase;
 use ra_ap_syntax::ast::HasVisibility as _;
 
 use super::ids::NodeId;
+use super::labels::{
+    crate_display_name, item_kind_id_label as item_kind_label, module_qualified_path,
+};
 use super::model::{
     Binding, BindingKind, BindingVisibility, ExtractionModel, ItemKind, Namespace, Node, NodeKind,
 };
@@ -209,7 +212,7 @@ fn resolve_or_create_target(
 
     if let Some(&local_module_node_id) = module_node_for.get(&owner_module_id) {
         // Local item: create an Item node now.
-        let crate_name = owner_crate_name(db, owner_module_id);
+        let crate_name = crate_display_name(db, owner_module_id.krate(db).into());
         let node_id = create_local_item_node(
             model,
             db,
@@ -316,29 +319,6 @@ fn item_kind_for_def(def_id: ModuleDefId) -> Option<ItemKind> {
     })
 }
 
-fn item_kind_label(kind: ItemKind) -> &'static str {
-    match kind {
-        ItemKind::Function => "function",
-        ItemKind::Struct => "struct",
-        ItemKind::Enum => "enum",
-        ItemKind::Union => "union",
-        ItemKind::Trait => "trait",
-        ItemKind::TypeAlias => "type_alias",
-        ItemKind::Const => "const",
-        ItemKind::Static => "static",
-        ItemKind::AssocFunction => "assoc_function",
-        ItemKind::AssocConst => "assoc_const",
-        ItemKind::AssocType => "assoc_type",
-        ItemKind::Method => "method",
-        // EnumVariant is emitted via Layer 4 (impls.rs), which uses its own
-        // NodeId-component label "enum_variant" directly. This branch is
-        // unreachable from `create_local_item_node` (which is the only
-        // caller) because the bindings pass never produces an EnumVariant
-        // ItemKind. Kept for match-exhaustiveness.
-        ItemKind::EnumVariant => "enum_variant",
-    }
-}
-
 fn name_for_def(db: &RootDatabase, def_id: ModuleDefId) -> Option<String> {
     use ra_ap_hir::{Const, Enum, Function, Static, Struct, Trait, TypeAlias, Union};
     Some(match def_id {
@@ -367,37 +347,6 @@ fn module_def_owner_module(db: &RootDatabase, def_id: ModuleDefId) -> Option<Mod
         ModuleDefId::StaticId(id) => id.module(db),
         _ => return None,
     })
-}
-
-fn owner_crate_name(db: &RootDatabase, module_id: ModuleId) -> String {
-    let krate = module_id.krate(db);
-    krate
-        .extra_data(db)
-        .display_name
-        .as_ref()
-        .map(|n| n.canonical_name().as_str().to_string())
-        .unwrap_or_else(|| "unknown_crate".to_string())
-}
-
-fn module_qualified_path(db: &RootDatabase, module_id: ModuleId) -> String {
-    let crate_name = owner_crate_name(db, module_id);
-    let def_map = module_id.def_map(db);
-    let mut segs: Vec<String> = Vec::new();
-    let mut cur = Some(module_id);
-    while let Some(m) = cur {
-        if let Some(name) = m.name(db) {
-            segs.push(name.as_str().to_string());
-            cur = def_map.containing_module(m);
-        } else {
-            break;
-        }
-    }
-    segs.reverse();
-    if segs.is_empty() {
-        crate_name
-    } else {
-        format!("{crate_name}::{}", segs.join("::"))
-    }
 }
 
 fn stub_qualified_name(
