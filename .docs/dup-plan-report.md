@@ -95,6 +95,10 @@ planner while preserving their input/output adapters. The helper lives in
 `embeddings`, which keeps the legal dependency direction `indexing ->
 embeddings`.
 
+The shared planner also clamps zero batch sizes, token budgets, and per-item
+token estimates to `1`. That preserves normal configured behavior while making
+the new common helper total for zero-valued inputs.
+
 ### Tool DTOs and summaries
 
 Collapsed duplicated DTO shapes in `tools::graph_tools`:

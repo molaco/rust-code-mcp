@@ -1,7 +1,7 @@
 //! Shared project path computation
 //!
-//! Extracts the repeated directory hash + path derivation logic
-//! used across query_tools, index_tool, and sync manager.
+//! Extracts repeated data-directory, directory-hash, embedder-identity, and
+//! backend-resolution logic used by the tools layer.
 
 use std::path::{Path, PathBuf};
 
