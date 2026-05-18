@@ -6,13 +6,11 @@ use rmcp::{
     model::{CallToolResult, Content},
     schemars, tool,
 };
-use std::path::PathBuf;
-use directories::ProjectDirs;
 
 use crate::embeddings::EmbeddingBackend;
 use crate::monitoring::health::HealthMonitor;
 use crate::search::Bm25Search;
-use crate::tools::project_paths::ProjectPaths;
+use crate::tools::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
 use crate::vector_store::VectorStore;
 
 /// Health check parameters (optional directory to check specific project)
@@ -23,27 +21,6 @@ pub struct HealthCheckParams {
     #[schemars(description = "Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: the built-in default profile.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
-}
-
-/// Get the path for storing persistent index and cache
-fn data_dir() -> PathBuf {
-    ProjectDirs::from("dev", "rust-code-mcp", "search")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
-}
-
-/// Read the embedder identity recorded in `metadata.json` next to a
-/// vector store. Returns `None` if the file is absent or malformed —
-/// health check is best-effort and should never fail because of a
-/// missing sidecar.
-fn read_on_disk_embedder_identity(vector_path: &std::path::Path) -> Option<String> {
-    let metadata_path = vector_path.join("metadata.json");
-    let bytes = std::fs::read(&metadata_path).ok()?;
-    let parsed: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    parsed
-        .get("embedder_version")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
 }
 
 /// Check system health status
@@ -104,7 +81,7 @@ pub async fn health_check(
     // On-disk identity, if any: the actual model that wrote this
     // index. May differ from `embedder_identity` (the configured
     // default) when the user picked a variant at index time.
-    let on_disk_identity = read_on_disk_embedder_identity(&vector_path);
+    let on_disk_identity = read_embedder_identity(&vector_path).ok().flatten();
 
     let vector_store = {
         // Use the on-disk identity when probing, so we don't trip the

@@ -40,21 +40,12 @@
 //! It provides low-level primitives used by higher-level indexing operations
 //! in `index_tool` and `unified` modules.
 
-use directories::ProjectDirs;
-use std::path::PathBuf;
 use tantivy::Index;
 use tracing;
 
 use crate::metadata_cache::MetadataCache;
 use crate::schema::FileSchema;
-
-/// Get the path for storing persistent index and cache
-pub fn data_dir() -> PathBuf {
-    // Use XDG-compliant data directory, or fallback to current directory
-    ProjectDirs::from("dev", "rust-code-mcp", "search")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
-}
+pub use crate::tools::project_paths::data_dir;
 
 /// Open or create a persistent Tantivy index
 pub fn open_or_create_index() -> Result<(Index, FileSchema), String> {

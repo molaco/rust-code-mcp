@@ -10,7 +10,7 @@ use crate::indexing::identity::{
     active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
 use crate::indexing::incremental::get_snapshot_path_for_identity;
-use crate::tools::indexing_tools::data_dir;
+use directories::ProjectDirs;
 use sha2::{Digest, Sha256};
 
 /// Derived paths for a project directory
@@ -30,6 +30,13 @@ pub struct IndexedProfilePaths {
     pub paths: ProjectPaths,
     pub backend: EmbeddingBackend,
     pub stored_identity: String,
+}
+
+/// Get the path for storing persistent index and cache.
+pub fn data_dir() -> PathBuf {
+    ProjectDirs::from("dev", "rust-code-mcp", "search")
+        .map(|dirs| dirs.data_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
 }
 
 impl ProjectPaths {
@@ -168,7 +175,7 @@ impl ProjectPaths {
     }
 }
 
-fn dir_hash(dir: &Path) -> String {
+pub(in crate::tools) fn dir_hash(dir: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(dir.to_string_lossy().as_bytes());
     format!("{:x}", hasher.finalize())
@@ -179,7 +186,7 @@ fn collection_prefix(dir: &Path) -> String {
     format!("code_chunks_{}_", &hash[..8])
 }
 
-fn read_embedder_identity(vector_path: &Path) -> Result<Option<String>, String> {
+pub(in crate::tools) fn read_embedder_identity(vector_path: &Path) -> Result<Option<String>, String> {
     let metadata_path = vector_path.join("metadata.json");
     if !metadata_path.exists() {
         return Ok(None);

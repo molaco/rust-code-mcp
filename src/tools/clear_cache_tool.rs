@@ -5,13 +5,13 @@
 //! persisted hypergraph snapshot so the next `build_hypergraph` call
 //! does a full re-index.
 
-use directories::ProjectDirs;
 use rmcp::{
     model::{CallToolResult, Content},
     schemars, ErrorData as McpError,
 };
-use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::tools::project_paths::{data_dir, dir_hash};
 
 /// Parameters for clearing the cache
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -35,20 +35,6 @@ pub struct ClearCacheParams {
     )]
     #[serde(default)]
     pub dry_run: Option<bool>,
-}
-
-/// Get the path for storing persistent index and cache
-fn data_dir() -> PathBuf {
-    ProjectDirs::from("dev", "rust-code-mcp", "search")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
-}
-
-/// Compute the directory hash (same logic as other tools)
-fn compute_dir_hash(dir_path: &std::path::Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(dir_path.to_string_lossy().as_bytes());
-    format!("{:x}", hasher.finalize())
 }
 
 fn clear_existing_dir(
@@ -91,7 +77,7 @@ pub async fn clear_cache(
     if let Some(ref directory) = params.directory {
         // Clear cache for specific project
         let dir_path = std::path::Path::new(directory);
-        let dir_hash = compute_dir_hash(dir_path);
+        let dir_hash = dir_hash(dir_path);
         // The current layout keys vector directories as
         // `code_chunks_<dirhash[..8]>_<modelfp[..8]>`. The legacy
         // pre-Step-6 layout used just `code_chunks_<dirhash[..8]>`.
@@ -269,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_compute_dir_hash() {
-        let hash = compute_dir_hash(std::path::Path::new("/some/test/path"));
+        let hash = dir_hash(std::path::Path::new("/some/test/path"));
         assert_eq!(hash.len(), 64); // SHA256 hex is 64 chars
     }
 

@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — steps 1-3 complete
+Status: in progress — steps 1-4 complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -198,7 +198,7 @@ Each commit is one zone, compiles independently, keeps `cargo check
 3. **DONE — `graph: define_id! macro for ids.rs`** — M1–M3. One macro generates the
    three ID newtypes; removes ~9 identical method bodies. *Independent of the
    file splits — can land anytime. Effort: small.*
-4. **`tools: centralize data_dir / dir_hash / embedder-identity`** — C7 (3
+4. **DONE — `tools: centralize data_dir / dir_hash / embedder-identity`** — C7 (3
    tools copies only) + C14 + C15 in `project_paths.rs` (`pub(in crate::tools)`).
    Explicitly leave config.rs and graph/storage.rs. *Effort: small.*
 5. **`tools: unify embedding-backend resolution`** — C13. Shared resolver in
