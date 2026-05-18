@@ -4,7 +4,7 @@
 //! → read path → MCP tools. Each layer is built and tested in isolation.
 
 pub mod ast_resolve;
-pub mod audit_util;
+pub(in crate::graph) mod audit_util;
 pub mod attributes;
 pub mod bindings;
 pub mod channel_audit;
@@ -16,7 +16,7 @@ pub mod fn_body_audit;
 pub mod hir_trim;
 pub mod ids;
 pub mod impls;
-pub mod labels;
+pub(crate) mod labels;
 pub mod loader;
 pub mod model;
 pub mod queries;

@@ -45,7 +45,12 @@ use tracing;
 
 use crate::metadata_cache::MetadataCache;
 use crate::schema::FileSchema;
-pub use crate::tools::project_paths::data_dir;
+use std::path::PathBuf;
+
+/// Get the path for storing persistent index and cache.
+pub fn data_dir() -> PathBuf {
+    crate::tools::project_paths::data_dir()
+}
 
 /// Open or create a persistent Tantivy index
 pub fn open_or_create_index() -> Result<(Index, FileSchema), String> {

@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — steps 1-8 complete
+Status: in progress — steps 1-9 complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -213,8 +213,11 @@ Each commit is one zone, compiles independently, keeps `cargo check
 8. **DONE — `parser: dedupe line_of_offset helper`** — C10. `parser/mod.rs`
    now owns the shared helper; `parser/type_references.rs` imports it. The
    distinct `graph::codemap::line_of_byte` algorithm was left untouched.
+9. **DONE — `visibility: narrow new helper modules`** — guardrail follow-up.
+   New helper modules/functions now use crate- or family-scoped visibility;
+   the existing public `indexing_tools::data_dir` path remains as a wrapper.
 
-Commits 1–5 are the core deliverable; 6–7 are follow-ups.
+Commits 1–5 are the core deliverable; 6–9 are follow-ups.
 
 ## 8. Ordering relative to the refactor plan
 

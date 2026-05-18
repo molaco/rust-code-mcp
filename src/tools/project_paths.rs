@@ -33,7 +33,7 @@ pub struct IndexedProfilePaths {
 }
 
 /// Get the path for storing persistent index and cache.
-pub fn data_dir() -> PathBuf {
+pub(in crate::tools) fn data_dir() -> PathBuf {
     ProjectDirs::from("dev", "rust-code-mcp", "search")
         .map(|dirs| dirs.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
