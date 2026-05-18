@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — steps 1-5 complete
+Status: in progress — steps 1-6 complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -204,7 +204,7 @@ Each commit is one zone, compiles independently, keeps `cargo check
 5. **DONE — `tools: unify embedding-backend resolution`** — C13. Shared resolver in
    `project_paths.rs`; `index_tool`'s `resolve_backend` keeps its `model`
    fallback layered on top. *Effort: small.*
-6. **`embeddings: dedupe arc + extract generic batch planner`** (optional) —
+6. **DONE — `embeddings: dedupe arc + extract generic batch planner`** —
    C2 + C11. `arc` to an `embeddings` util; generic `plan_batches<T>` in
    `embeddings`, reused by `indexing`. *Lowest priority. Effort: medium.*
 7. **`tools: collapse duplicate DTO structs`** (optional) — S1 (`*RuleParam`

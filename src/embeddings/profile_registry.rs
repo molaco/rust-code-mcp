@@ -1,10 +1,10 @@
 //! Per-request embedding profile registry.
 
 use super::backend::{EmbeddingProfile, EmbeddingRuntime, QueryPolicy};
+use super::util::arc;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Arc;
 
 pub const EMBEDDING_PROFILES_ENV: &str = "RUST_CODE_MCP_EMBEDDING_PROFILES";
 pub const PROJECT_PROFILE_FILE: &str = "embedding_profiles.toml";
@@ -213,10 +213,6 @@ fn validate_positive(
         ));
     }
     Ok(())
-}
-
-fn arc(value: &str) -> Arc<str> {
-    Arc::<str>::from(value)
 }
 
 #[cfg(test)]

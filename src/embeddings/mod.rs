@@ -21,6 +21,9 @@ pub use backend::{
 
 mod identity;
 
+pub(crate) mod batching;
+mod util;
+
 mod profile_registry;
 pub use profile_registry::{
     resolve_profile, EMBEDDING_PROFILES_ENV, PROJECT_PROFILE_FILE,

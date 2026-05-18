@@ -4,6 +4,7 @@
 //! GPU-optimized batch embedding generation and memory-aware batch sizing.
 
 use crate::chunker::CodeChunk;
+use crate::embeddings::batching::{BatchPlan as EmbeddingBatchPlan, plan_batches};
 use crate::embeddings::{
     Embedding, EmbeddingGenerator, EmbeddingRuntime, EmbeddingTextLen, EmbeddingTokenCounter,
 };
@@ -33,12 +34,6 @@ struct TokenLengthSummary {
     padded_tokens_total: usize,
     min_tokens: usize,
     max_tokens: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EmbeddingBatchPlan {
-    start: usize,
-    end: usize,
 }
 
 impl EmbeddingBatcher {
@@ -505,46 +500,16 @@ fn plan_embedding_batches(
     max_batch_size: usize,
     max_tokens_per_batch: usize,
 ) -> Vec<EmbeddingBatchPlan> {
-    if ordered_texts.is_empty() {
-        return Vec::new();
-    }
-
-    let max_batch_size = max_batch_size.max(1);
-    let max_tokens_per_batch = max_tokens_per_batch.max(1);
-    let mut plans = Vec::new();
-    let mut start = 0usize;
-    let mut batch_len = 0usize;
-    let mut batch_max_tokens = 0usize;
-
-    for (idx, (_, text, token_len)) in ordered_texts.iter().enumerate() {
-        let item_tokens = token_len
-            .map(|len| len.capped_tokens)
-            .unwrap_or_else(|| text.len())
-            .max(1);
-        let next_len = batch_len + 1;
-        let next_max_tokens = batch_max_tokens.max(item_tokens);
-        let exceeds_count = next_len > max_batch_size;
-        let exceeds_token_budget = next_len * next_max_tokens > max_tokens_per_batch;
-
-        if batch_len > 0 && (exceeds_count || exceeds_token_budget) {
-            plans.push(EmbeddingBatchPlan { start, end: idx });
-            start = idx;
-            batch_len = 0;
-            batch_max_tokens = 0;
-        }
-
-        batch_len += 1;
-        batch_max_tokens = batch_max_tokens.max(item_tokens);
-    }
-
-    if batch_len > 0 {
-        plans.push(EmbeddingBatchPlan {
-            start,
-            end: ordered_texts.len(),
-        });
-    }
-
-    plans
+    plan_batches(
+        ordered_texts,
+        max_batch_size,
+        max_tokens_per_batch,
+        |(_, text, token_len)| {
+            token_len
+                .map(|len| len.capped_tokens)
+                .unwrap_or_else(|| text.len())
+        },
+    )
 }
 
 fn sort_embedding_inputs(ordered_texts: &mut [(usize, String, Option<EmbeddingTextLen>)]) {

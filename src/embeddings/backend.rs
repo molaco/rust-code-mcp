@@ -5,6 +5,7 @@
 
 use super::error::EmbeddingError;
 use super::identity::{percent_decode, percent_encode, EmbeddingIdentity};
+use super::util::arc;
 use std::sync::{Arc, LazyLock};
 
 pub(crate) const QWEN3_CODE_QUERY_PREFIX: &str =
@@ -143,10 +144,6 @@ const PROFILE_ALIASES: &[(&str, &str)] = &[
     ("bge-small-cpu", "local-cpu-small"),
     ("qwen3-8b-openrouter", "openrouter-qwen3-8b"),
 ];
-
-fn arc(value: &str) -> Arc<str> {
-    Arc::<str>::from(value)
-}
 
 impl Qwen3Variant {
     pub fn dim(self) -> usize {

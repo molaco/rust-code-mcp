@@ -1,6 +1,7 @@
 //! OpenRouter embeddings backend.
 
 use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime};
+use crate::embeddings::batching::{BatchPlan as OpenRouterBatchPlan, plan_batches};
 use crate::embeddings::{Embedding, EmbeddingError, EmbeddingTokenCounter};
 use futures::stream::{self, StreamExt};
 use reqwest::StatusCode;
@@ -143,12 +144,6 @@ struct OpenRouterInput {
     original_index: usize,
     text: String,
     token_len: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OpenRouterBatchPlan {
-    start: usize,
-    end: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -710,43 +705,12 @@ fn plan_openrouter_batches(
     inputs: &[OpenRouterInput],
     config: OpenRouterRuntimeConfig,
 ) -> Vec<OpenRouterBatchPlan> {
-    if inputs.is_empty() {
-        return Vec::new();
-    }
-
-    let max_batch_inputs = config.max_batch_inputs.max(1);
-    let max_batch_tokens = config.max_batch_tokens.max(1);
-    let mut plans = Vec::new();
-    let mut start = 0usize;
-    let mut batch_len = 0usize;
-    let mut batch_max_tokens = 0usize;
-
-    for (idx, input) in inputs.iter().enumerate() {
-        let item_tokens = input.token_len.max(1);
-        let next_len = batch_len + 1;
-        let next_max_tokens = batch_max_tokens.max(item_tokens);
-        let exceeds_count = next_len > max_batch_inputs;
-        let exceeds_token_budget = next_len * next_max_tokens > max_batch_tokens;
-
-        if batch_len > 0 && (exceeds_count || exceeds_token_budget) {
-            plans.push(OpenRouterBatchPlan { start, end: idx });
-            start = idx;
-            batch_len = 0;
-            batch_max_tokens = 0;
-        }
-
-        batch_len += 1;
-        batch_max_tokens = batch_max_tokens.max(item_tokens);
-    }
-
-    if batch_len > 0 {
-        plans.push(OpenRouterBatchPlan {
-            start,
-            end: inputs.len(),
-        });
-    }
-
-    plans
+    plan_batches(
+        inputs,
+        config.max_batch_inputs,
+        config.max_batch_tokens,
+        |input| input.token_len,
+    )
 }
 
 fn fallback_token_estimate(text: &str) -> usize {
