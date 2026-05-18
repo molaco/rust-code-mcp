@@ -20,8 +20,9 @@ use ra_ap_hir_def::{AdtId, ModuleDefId, TraitId};
 use ra_ap_ide::TryToNav;
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_ide_db::defs::Definition;
-use ra_ap_vfs::{FileId, Vfs};
+use ra_ap_vfs::Vfs;
 
+use super::audit_util::resolve_workspace_relative;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, ItemKind, Node, NodeKind};
 
@@ -347,18 +348,4 @@ fn emit_enum_variant(
     def_to_node
         .entry(ModuleDefId::EnumVariantId(variant_id))
         .or_insert(node_id);
-}
-
-fn resolve_workspace_relative(
-    vfs: &Vfs,
-    file_id: FileId,
-    workspace_root: &Path,
-) -> Option<String> {
-    let vfs_path = vfs.file_path(file_id);
-    let abs = vfs_path.as_path()?;
-    let abs_pathbuf: std::path::PathBuf = abs.to_path_buf().into();
-    abs_pathbuf
-        .strip_prefix(workspace_root)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
 }

@@ -7,13 +7,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ra_ap_base_db::FileId;
 use ra_ap_hir::Crate;
 use ra_ap_hir_def::ModuleId;
 use ra_ap_hir_def::nameres::{DefMap, crate_def_map};
 use ra_ap_ide::RootDatabase;
 use ra_ap_vfs::Vfs;
 
+use super::audit_util::resolve_workspace_relative;
 use super::attributes::extract_attributes;
 use super::bindings::extract_bindings;
 use super::ids::{NodeId, workspace_hash};
@@ -346,20 +346,6 @@ fn crate_target_kind_for(
         .and_then(|root_file| crate_target_kinds_by_root_file.get(&root_file).cloned())
         .or_else(|| crate_target_kinds_by_name.get(crate_name).cloned())
         .or_else(|| Some("lib".to_string()))
-}
-
-fn resolve_workspace_relative(
-    vfs: &Vfs,
-    file_id: FileId,
-    workspace_root: &Path,
-) -> Option<String> {
-    let vfs_path = vfs.file_path(file_id);
-    let abs = vfs_path.as_path()?;
-    let abs_pathbuf: std::path::PathBuf = abs.to_path_buf().into();
-    abs_pathbuf
-        .strip_prefix(workspace_root)
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn crate_display_name(db: &RootDatabase, krate: Crate) -> String {

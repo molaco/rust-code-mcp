@@ -16,15 +16,15 @@
 //! Files outside workspace_root are skipped defensively.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use anyhow::Result;
 use ra_ap_hir::{Semantics, attach_db};
 use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_syntax::ast::{self, AstNode};
-use ra_ap_vfs::{FileId, Vfs};
+use ra_ap_vfs::FileId;
 use serde::{Deserialize, Serialize};
 
+use super::audit_util::resolve_workspace_relative;
 use super::ids::NodeId;
 use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
@@ -235,20 +235,6 @@ pub(crate) fn has_safety_comment_in_preceding_lines(text: &str, unsafe_offset: u
         }
     }
     false
-}
-
-fn resolve_workspace_relative(
-    vfs: &Vfs,
-    file_id: FileId,
-    workspace_root: &Path,
-) -> Option<String> {
-    let vfs_path = vfs.file_path(file_id);
-    let abs = vfs_path.as_path()?;
-    let abs_pathbuf: std::path::PathBuf = abs.to_path_buf().into();
-    abs_pathbuf
-        .strip_prefix(workspace_root)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

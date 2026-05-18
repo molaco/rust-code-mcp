@@ -7,17 +7,20 @@
 //! Mirrors the loader + Semantics pattern from `channel_audit.rs`.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use anyhow::Result;
 use ra_ap_hir::{Semantics, attach_db};
 use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_syntax::SyntaxNode;
 use ra_ap_syntax::ast::{self, AstNode, HasLoopBody};
-use ra_ap_vfs::{FileId, Vfs};
+use ra_ap_vfs::FileId;
 use serde::{Deserialize, Serialize};
 
 use super::ast_resolve::resolve_call_to_function;
+use super::audit_util::{
+    canonical_function_path, enclosed_by_cfg_test,
+    resolve_enclosing_function as enclosing_fn_for_body_offset, resolve_workspace_relative,
+};
 use super::ids::NodeId;
 use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
@@ -521,120 +524,6 @@ fn build_context(file_text: &str, start: usize, end: usize) -> String {
     };
     let slice = &file_text[prev_line_start..next_line_end];
     slice.trim().to_string()
-}
-
-fn canonical_function_path(db: &ra_ap_ide_db::RootDatabase, func: ra_ap_hir::Function) -> String {
-    let module = func.module(db);
-    let krate = module.krate(db);
-    let crate_name = krate
-        .display_name(db)
-        .map(|n| n.canonical_name().as_str().to_string())
-        .unwrap_or_default();
-    let mut path_segs: Vec<String> = Vec::new();
-    for ancestor in module.path_to_root(db).into_iter().rev() {
-        if let Some(name) = ancestor.name(db) {
-            path_segs.push(name.as_str().to_string());
-        }
-    }
-    let fn_name = func.name(db).as_str().to_string();
-    let mut prefix = String::new();
-    if !crate_name.is_empty() {
-        prefix.push_str(&crate_name);
-    }
-    if !path_segs.is_empty() {
-        if !prefix.is_empty() {
-            prefix.push_str("::");
-        }
-        prefix.push_str(&path_segs.join("::"));
-    }
-    if prefix.is_empty() {
-        fn_name
-    } else {
-        format!("{prefix}::{fn_name}")
-    }
-}
-
-fn enclosing_fn_for_body_offset(
-    sema: &Semantics<'_, ra_ap_ide_db::RootDatabase>,
-    syntax_root: &SyntaxNode,
-    offset: ra_ap_syntax::TextSize,
-    snap: &OpenedSnapshot,
-    db: &ra_ap_ide_db::RootDatabase,
-) -> (Option<NodeId>, Option<String>) {
-    let token = match syntax_root.token_at_offset(offset) {
-        ra_ap_syntax::TokenAtOffset::None => None,
-        ra_ap_syntax::TokenAtOffset::Single(t) => Some(t),
-        ra_ap_syntax::TokenAtOffset::Between(a, b) => Some(b).or(Some(a)),
-    };
-    let scope_node = token.as_ref().and_then(|t| t.parent());
-    let scope = match scope_node.as_ref() {
-        Some(p) => sema.scope_at_offset(p, offset),
-        None => sema.scope_at_offset(syntax_root, offset),
-    };
-    let fn_hir = match scope.and_then(|s| s.containing_function()) {
-        Some(f) => f,
-        None => return (None, None),
-    };
-    let qualified = canonical_function_path(db, fn_hir);
-    let node_id = match snap.lookup_by_qualified_name(&qualified) {
-        Ok(Some((id, _))) => Some(id),
-        _ => None,
-    };
-    (node_id, Some(qualified))
-}
-
-fn enclosed_by_cfg_test(node: &SyntaxNode) -> bool {
-    let mut cur = Some(node.clone());
-    while let Some(n) = cur {
-        if let Some(item) = ast::Item::cast(n.clone()) {
-            if item_has_cfg_test(&item) {
-                return true;
-            }
-        }
-        cur = n.parent();
-    }
-    false
-}
-
-fn item_has_cfg_test(item: &ast::Item) -> bool {
-    use ra_ap_syntax::ast::HasAttrs;
-    let attrs: Box<dyn Iterator<Item = ast::Attr>> = match item {
-        ast::Item::Fn(f) => Box::new(f.attrs()),
-        ast::Item::Module(m) => Box::new(m.attrs()),
-        ast::Item::Impl(i) => Box::new(i.attrs()),
-        ast::Item::Trait(t) => Box::new(t.attrs()),
-        ast::Item::Const(c) => Box::new(c.attrs()),
-        ast::Item::Static(s) => Box::new(s.attrs()),
-        ast::Item::Struct(s) => Box::new(s.attrs()),
-        ast::Item::Enum(e) => Box::new(e.attrs()),
-        ast::Item::Union(u) => Box::new(u.attrs()),
-        _ => return false,
-    };
-    for attr in attrs {
-        let text = attr.syntax().text().to_string();
-        let stripped: String = text.split_whitespace().collect();
-        if stripped.contains("cfg(test)")
-            || stripped.contains("cfg(any(test")
-            || stripped.contains("cfg(all(test")
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn resolve_workspace_relative(
-    vfs: &Vfs,
-    file_id: FileId,
-    workspace_root: &Path,
-) -> Option<String> {
-    let vfs_path = vfs.file_path(file_id);
-    let abs = vfs_path.as_path()?;
-    let abs_pathbuf: std::path::PathBuf = abs.to_path_buf().into();
-    abs_pathbuf
-        .strip_prefix(workspace_root)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
