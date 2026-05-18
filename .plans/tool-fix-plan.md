@@ -72,7 +72,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T3 | `forbidden_dependency_check` | P1 | 2 | complete |
 | T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | complete |
 | T4 | Layer-4 → impl-method extraction | P2 | 3 | complete |
-| T8 | `workspace_stats` | P3 | 4 | small |
+| T8 | `workspace_stats` | P3 | 4 | complete |
 | T9 | `overlaps` | P3 | 4 | small |
 | T11 | `index_codebase` | P3 | 4 | small |
 | T6 | `similar_to_item` | P3 | 5 | small |
@@ -261,6 +261,15 @@ either gate it behind a param or, recommended, **document the current
 bucketing precisely now** and relabel only later with a changelog. Files:
 `src/graph/queries.rs` (`workspace_stats`), visibility classification in
 `src/graph/bindings.rs`.
+
+Progress (2026-05-18): fixed the resolved visibility bucketing additively by
+adding `visibility.module_private` and making `restricted_to` mean broader
+module-subtree restrictions (`pub(super)` / `pub(in path)`) rather than
+implicit private declarations. `private` and `pub_self` now include
+module-private declarations instead of staying effectively zero; the tool
+description documents the buckets. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test visibility_counts_separate_module_private_from_restricted --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 **T9 — `overlaps` vendored/example noise.** Collisions include vendored
 `fastembed` and example-crate names. Fix: add `scope: "all" | "local" |

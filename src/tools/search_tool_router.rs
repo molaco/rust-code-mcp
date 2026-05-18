@@ -540,7 +540,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio."
+        description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio. In `visibility`, `module_private` is the precise bucket for declarations visible only inside their declaring module; `restricted_to` is for broader module-subtree restrictions such as `pub(super)` / `pub(in path)`, and `private` includes module-private plus unresolved private restrictions."
     )]
     async fn workspace_stats(
         &self,

@@ -266,8 +266,18 @@ pub struct NodeKindCounts {
 pub struct VisibilityCounts {
     pub pub_: usize,
     pub pub_crate: usize,
+    /// Declarations visible only inside their declaring module. This is the
+    /// precise bucket for implicit private items and explicit `pub(self)`.
+    #[serde(default)]
+    pub module_private: usize,
+    /// Back-compat alias for `module_private` plus unresolved private
+    /// restrictions. Prefer `module_private` for the precise resolved bucket.
     pub pub_self: usize,
+    /// Declarations restricted to a module subtree broader than the declaring
+    /// module, e.g. `pub(super)` or `pub(in path)`.
     pub restricted_to: usize,
+    /// Declarations not visible beyond their declaring module, plus any
+    /// restricted visibility whose module could not be resolved.
     pub private: usize,
 }
 
@@ -2312,18 +2322,9 @@ impl OpenedSnapshot {
             // (the ones that carry the item's source visibility). Counting
             // all bindings would over-count re-exports. Filter to Declared.
             if binding.kind == BindingKind::Declared {
-                match binding.visibility {
-                    BindingVisibility::Public => visibility.pub_ += 1,
-                    BindingVisibility::Crate(_) => visibility.pub_crate += 1,
-                    BindingVisibility::RestrictedTo(_) => visibility.restricted_to += 1,
-                    BindingVisibility::Private => visibility.private += 1,
-                }
+                count_declared_visibility(&mut visibility, &binding);
             }
         }
-        // pub_self = items declared without any pub keyword. The Binding model
-        // collapses that into Private. Mirror it explicitly for consumers that
-        // expect the name to be present.
-        visibility.pub_self = visibility.private;
 
         // `pub_crate / (pub_ + pub_crate)` — of the items the author actively
         // made non-private, what fraction is crate-scoped? Avoid NaN on a
@@ -2562,6 +2563,23 @@ fn label_binding_kind(k: BindingKind) -> &'static str {
         BindingKind::NamedImport => "NamedImport",
         BindingKind::GlobImport => "GlobImport",
         BindingKind::ExternCrateImport => "ExternCrateImport",
+    }
+}
+
+fn count_declared_visibility(counts: &mut VisibilityCounts, binding: &Binding) {
+    match binding.visibility {
+        BindingVisibility::Public => counts.pub_ += 1,
+        BindingVisibility::Crate(_) => counts.pub_crate += 1,
+        BindingVisibility::RestrictedTo(module_id) if module_id == binding.from_module => {
+            counts.module_private += 1;
+            counts.pub_self += 1;
+            counts.private += 1;
+        }
+        BindingVisibility::RestrictedTo(_) => counts.restricted_to += 1,
+        BindingVisibility::Private => {
+            counts.pub_self += 1;
+            counts.private += 1;
+        }
     }
 }
 
@@ -2898,6 +2916,7 @@ fn is_visible_from(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::graph::model::Namespace;
     use crate::graph::snapshot::{BuildOptions, build_and_persist, open_current};
     use crate::graph::storage::{GraphEnvOptions, GraphPaths};
     use std::path::Path;
@@ -3591,6 +3610,33 @@ pub(crate) mod tests {
         assert!(stats.pub_crate_share.is_finite());
         assert!(stats.pub_crate_share >= 0.0);
         assert!(stats.pub_crate_share <= 1.0);
+    }
+
+    #[test]
+    fn visibility_counts_separate_module_private_from_restricted() {
+        let from_module = NodeId([1u8; 32]);
+        let parent_module = NodeId([2u8; 32]);
+        let target = NodeId([3u8; 32]);
+        let mut counts = VisibilityCounts::default();
+
+        let mut binding = Binding {
+            from_module,
+            namespace: Namespace::Type,
+            visible_name: "local".to_string(),
+            target,
+            kind: BindingKind::Declared,
+            visibility: BindingVisibility::RestrictedTo(from_module),
+            is_explicit_pub_use: false,
+        };
+        count_declared_visibility(&mut counts, &binding);
+        binding.visible_name = "super_visible".to_string();
+        binding.visibility = BindingVisibility::RestrictedTo(parent_module);
+        count_declared_visibility(&mut counts, &binding);
+
+        assert_eq!(counts.module_private, 1);
+        assert_eq!(counts.pub_self, 1);
+        assert_eq!(counts.private, 1);
+        assert_eq!(counts.restricted_to, 1);
     }
 
     #[test]
