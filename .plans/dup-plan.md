@@ -1,6 +1,6 @@
 # Duplication Consolidation Plan: Private-Helper De-duplication
 
-Status: in progress — steps 1-4 complete
+Status: in progress — steps 1-5 complete
 Basis: `rust-code-mcp` semantic-overlap analysis (Qwen3-Embedding-8B via the
 `openrouter-qwen3-8b` profile), every cluster cross-validated against source.
 Companion to `.plans/refactor-plan.md` — see §8 for ordering.
@@ -131,7 +131,7 @@ every cluster above intact and added two repetitions of its own:
   joined the cluster when T3 added crate-kind extraction to `extract.rs`. No
   extra work — it consolidates into `audit_util.rs` with the other five
   (Commit 1), just one more copy to delete.
-- **T7 `summary`-drop copy-paste (not a scan cluster).** The T7 pagination
+- **DONE — T7 `summary`-drop copy-paste (not a scan cluster).** The T7 pagination
   work inlined the same `if summary { x.file = None; x.span = None; }` block
   into ~8 enumerating endpoints in `tools/graph_tools.rs` (`dead_pub_in_crate`,
   `dead_pub_report`, `enum_variants`, `items_with_attribute`,
@@ -141,7 +141,7 @@ every cluster above intact and added two repetitions of its own:
   follow-up commit `62ebd363` already solved this correctly for the call/usage
   tools via a shared `call_site_views` helper + an `enrich_usages(summary)`
   param; apply the same centralization to the remaining ~8. Small and
-  `tools`-local — fold into Commit 4 or 5.
+  `tools`-local — folded into Commit 5 with `clear_locations_for_summary`.
 
 ## 5. Dependency-direction constraints
 
@@ -201,7 +201,7 @@ Each commit is one zone, compiles independently, keeps `cargo check
 4. **DONE — `tools: centralize data_dir / dir_hash / embedder-identity`** — C7 (3
    tools copies only) + C14 + C15 in `project_paths.rs` (`pub(in crate::tools)`).
    Explicitly leave config.rs and graph/storage.rs. *Effort: small.*
-5. **`tools: unify embedding-backend resolution`** — C13. Shared resolver in
+5. **DONE — `tools: unify embedding-backend resolution`** — C13. Shared resolver in
    `project_paths.rs`; `index_tool`'s `resolve_backend` keeps its `model`
    fallback layered on top. *Effort: small.*
 6. **`embeddings: dedupe arc + extract generic batch planner`** (optional) —

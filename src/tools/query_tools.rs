@@ -11,9 +11,11 @@ use tokio::fs;
 use std::path::Path;
 use tracing;
 
-use crate::embeddings::{resolve_profile, EmbeddingBackend, EmbeddingGenerator};
+use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use crate::search::HybridSearch;
-use crate::tools::project_paths::ProjectPaths;
+use crate::tools::project_paths::{
+    ProjectPaths, read_embedder_identity, resolve_embedding_backend,
+};
 use crate::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
@@ -208,52 +210,24 @@ fn resolve_query_backend(
     paths: &ProjectPaths,
     configured_backend: EmbeddingBackend,
 ) -> Result<ResolvedQueryBackend, McpError> {
-    let metadata_path = paths.vector_path.join("metadata.json");
-    if !metadata_path.exists() {
+    let Some(identity) = read_embedder_identity(&paths.vector_path).map_err(|msg| {
+        McpError::invalid_params(
+            format!("{msg}. Run `clear_cache` for this directory to discard the stale index."),
+            None,
+        )
+    })? else {
         let vector_identity = configured_backend.identity();
         return Ok(ResolvedQueryBackend {
             backend: configured_backend,
             vector_identity,
         });
-    }
-    let bytes = std::fs::read(&metadata_path).map_err(|e| {
-        McpError::invalid_params(
-            format!(
-                "Failed to read vector store metadata at {}: {}",
-                metadata_path.display(),
-                e
-            ),
-            None,
-        )
-    })?;
-    let parsed: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-        McpError::invalid_params(
-            format!(
-                "Failed to parse vector store metadata at {}: {}",
-                metadata_path.display(),
-                e
-            ),
-            None,
-        )
-    })?;
-    let identity = parsed
-        .get("embedder_version")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            McpError::invalid_params(
-                format!(
-                    "Missing `embedder_version` in {}",
-                    metadata_path.display()
-                ),
-                None,
-            )
-        })?;
-    let backend = EmbeddingBackend::from_identity(identity).map_err(|e| {
+    };
+    let backend = EmbeddingBackend::from_identity(&identity).map_err(|e| {
         McpError::invalid_params(
             format!(
                 "Invalid embedder identity `{identity}` in {}: {e}. \
                  Run `clear_cache` for this directory to discard the stale index.",
-                metadata_path.display()
+                paths.vector_path.join("metadata.json").display()
             ),
             None,
         )
@@ -261,7 +235,7 @@ fn resolve_query_backend(
 
     Ok(ResolvedQueryBackend {
         backend,
-        vector_identity: identity.to_string(),
+        vector_identity: identity,
     })
 }
 
@@ -315,13 +289,8 @@ fn resolve_requested_backend(
     embedding_profile: Option<&str>,
     dir_path: &Path,
 ) -> Result<EmbeddingBackend, McpError> {
-    if let Some(profile) = embedding_profile {
-        let profile = resolve_profile(profile, dir_path)
-            .map_err(|msg| McpError::invalid_params(msg, None))?;
-        return Ok(EmbeddingBackend::from_profile(profile));
-    }
-
-    Ok(EmbeddingBackend::default())
+    resolve_embedding_backend(embedding_profile, dir_path)
+        .map_err(|msg| McpError::invalid_params(msg, None))
 }
 
 /// Format search results into a display string

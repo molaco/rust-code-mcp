@@ -3,10 +3,10 @@
 //! Provides the `index_codebase` tool which allows manual triggering of
 //! incremental indexing with optional force reindex.
 
-use crate::embeddings::{resolve_profile, EmbeddingBackend, Qwen3Variant};
+use crate::embeddings::{EmbeddingBackend, Qwen3Variant};
 use crate::indexing::incremental::IncrementalIndexer;
 use crate::indexing::unified::IndexStats;
-use crate::tools::project_paths::ProjectPaths;
+use crate::tools::project_paths::{ProjectPaths, resolve_embedding_backend};
 use crate::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
 use std::path::PathBuf;
@@ -49,10 +49,9 @@ fn resolve_backend(
     model: Option<&str>,
     project_root: &std::path::Path,
 ) -> Result<EmbeddingBackend, McpError> {
-    if let Some(profile) = embedding_profile {
-        let profile = resolve_profile(profile, project_root)
-            .map_err(|msg| McpError::invalid_params(msg, None))?;
-        return Ok(EmbeddingBackend::from_profile(profile));
+    if embedding_profile.is_some() {
+        return resolve_embedding_backend(embedding_profile, project_root)
+            .map_err(|msg| McpError::invalid_params(msg, None));
     }
 
     let Some(s) = model else {

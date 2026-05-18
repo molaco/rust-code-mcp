@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::embeddings::EmbeddingBackend;
+use crate::embeddings::{EmbeddingBackend, resolve_profile};
 use crate::indexing::identity::{
     active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
@@ -37,6 +37,18 @@ pub fn data_dir() -> PathBuf {
     ProjectDirs::from("dev", "rust-code-mcp", "search")
         .map(|dirs| dirs.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
+}
+
+pub(in crate::tools) fn resolve_embedding_backend(
+    embedding_profile: Option<&str>,
+    directory: &Path,
+) -> Result<EmbeddingBackend, String> {
+    if let Some(profile) = embedding_profile {
+        let profile = resolve_profile(profile, directory)?;
+        return Ok(EmbeddingBackend::from_profile(profile));
+    }
+
+    Ok(EmbeddingBackend::default())
 }
 
 impl ProjectPaths {

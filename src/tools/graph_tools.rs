@@ -428,12 +428,10 @@ pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, 
         .into_iter()
         .map(|f| enrich_dead_pub(&snap, f))
         .collect();
-    if page_req.summary {
-        for finding in &mut enriched {
-            finding.file = None;
-            finding.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut enriched, page_req.summary, |finding| {
+        finding.file = None;
+        finding.span = None;
+    });
     let (page, findings) = page_list(enriched, page_req);
     json_result(&DeadPubResponse {
         krate: params.krate,
@@ -456,14 +454,14 @@ pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResu
     let page_req = list_page(&params.pagination);
     let mut flat: Vec<(String, EnrichedDeadPub)> = Vec::new();
     for c in crates {
-        for mut finding in c.findings {
-            if page_req.summary {
-                finding.file = None;
-                finding.span = None;
-            }
+        for finding in c.findings {
             flat.push((c.krate.clone(), finding));
         }
     }
+    clear_locations_for_summary(&mut flat, page_req.summary, |(_, finding)| {
+        finding.file = None;
+        finding.span = None;
+    });
     let (page, flat) = page_list(flat, page_req);
     let mut crates: Vec<EnrichedCrateDeadPub> = Vec::new();
     for (krate, finding) in flat {
@@ -529,12 +527,10 @@ pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult,
         })
         .collect();
     let page_req = list_page(&params.pagination);
-    if page_req.summary {
-        for variant in &mut enriched {
-            variant.file = None;
-            variant.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut enriched, page_req.summary, |variant| {
+        variant.file = None;
+        variant.span = None;
+    });
     let variant_count = enriched.len();
     let (page, variants) = page_list(enriched, page_req);
     json_result(&EnumVariantsResponse {
@@ -622,12 +618,10 @@ pub async fn items_with_attribute(
         })
         .collect();
     let page_req = list_page(&params.pagination);
-    if page_req.summary {
-        for item in &mut enriched {
-            item.file = None;
-            item.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut enriched, page_req.summary, |item| {
+        item.file = None;
+        item.span = None;
+    });
     let total = enriched.len();
     let (page, items) = page_list(enriched, page_req);
     json_result(&ItemsWithAttributeResponse {
@@ -1158,14 +1152,11 @@ fn resolve_graph_tool_backend(
     embedding_profile: Option<&str>,
     directory: &str,
 ) -> Result<crate::embeddings::EmbeddingBackend, McpError> {
-    match embedding_profile {
-        Some(name) => {
-            let profile = crate::embeddings::resolve_profile(name, Path::new(directory))
-                .map_err(|msg| McpError::invalid_params(msg, None))?;
-            Ok(crate::embeddings::EmbeddingBackend::from_profile(profile))
-        }
-        None => Ok(crate::embeddings::EmbeddingBackend::default()),
-    }
+    crate::tools::project_paths::resolve_embedding_backend(
+        embedding_profile,
+        Path::new(directory),
+    )
+    .map_err(|msg| McpError::invalid_params(msg, None))
 }
 
 /// Max texts per `embed_batch_async` call. Keeps memory bounded when the
@@ -1568,12 +1559,10 @@ pub async fn pub_use_pub_type_audit(
             .collect()
     };
     let page_req = list_page(&params.pagination);
-    if page_req.summary {
-        for finding in &mut enriched {
-            finding.file = None;
-            finding.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut enriched, page_req.summary, |finding| {
+        finding.file = None;
+        finding.span = None;
+    });
     let finding_count = enriched.len();
     let (page, findings) = page_list(enriched, page_req);
     json_result(&PubUsePubTypeAuditResponse {
@@ -1804,12 +1793,10 @@ pub async fn mut_static_audit(
         })
         .collect();
     let page_req = list_page(&params.pagination);
-    if page_req.summary {
-        for finding in &mut rendered {
-            finding.file = None;
-            finding.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut rendered, page_req.summary, |finding| {
+        finding.file = None;
+        finding.span = None;
+    });
     let finding_count = rendered.len();
     let (page, findings) = page_list(rendered, page_req);
     json_result(&Resp {
@@ -1917,12 +1904,10 @@ pub async fn missing_docs_audit(
         })
         .collect();
     let page_req = list_page(&params.pagination);
-    if page_req.summary {
-        for finding in &mut rendered {
-            finding.file = None;
-            finding.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut rendered, page_req.summary, |finding| {
+        finding.file = None;
+        finding.span = None;
+    });
     let finding_count = rendered.len();
     let (page, findings) = page_list(rendered, page_req);
 
@@ -2061,12 +2046,10 @@ pub async fn derive_audit(
         })
         .collect();
     let page_req = list_page(&params.pagination);
-    if page_req.summary {
-        for finding in &mut rendered {
-            finding.file = None;
-            finding.span = None;
-        }
-    }
+    clear_locations_for_summary(&mut rendered, page_req.summary, |finding| {
+        finding.file = None;
+        finding.span = None;
+    });
     let finding_count = rendered.len();
     let (page, findings) = page_list(rendered, page_req);
 
@@ -2452,6 +2435,18 @@ fn page_list<T>(items: Vec<T>, page: ListPage) -> (ListMeta, Vec<T>) {
         returned_match_count: paged.len(),
     };
     (meta, paged)
+}
+
+fn clear_locations_for_summary<T>(
+    items: &mut [T],
+    summary: bool,
+    mut clear: impl FnMut(&mut T),
+) {
+    if summary {
+        for item in items {
+            clear(item);
+        }
+    }
 }
 
 fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {
