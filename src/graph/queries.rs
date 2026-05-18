@@ -467,6 +467,51 @@ pub fn classify_metadata(meta: &StaticMetadata) -> Vec<&'static str> {
     out
 }
 
+fn impl_module_item_alias_parts(name: &str) -> Option<(&str, &str, &str)> {
+    let (type_prefix, member_name) = name.rsplit_once("::")?;
+    let (module_prefix, type_name) = type_prefix.rsplit_once("::")?;
+    if module_prefix.is_empty() || type_name.is_empty() || member_name.is_empty() {
+        return None;
+    }
+    Some((module_prefix, type_name, member_name))
+}
+
+fn is_impl_module_item_alias_candidate(
+    node: &Node,
+    module_crate_id: Option<NodeId>,
+    module_file: Option<&str>,
+    type_name: &str,
+    member_name: &str,
+) -> bool {
+    if node.kind != NodeKind::Item
+        || !matches!(
+            node.item_kind,
+            Some(
+                ItemKind::Method
+                    | ItemKind::AssocFunction
+                    | ItemKind::AssocConst
+                    | ItemKind::AssocType
+            )
+        )
+        || node.display_name != member_name
+    {
+        return false;
+    }
+    if let Some(crate_id) = module_crate_id {
+        if node.crate_id != Some(crate_id) {
+            return false;
+        }
+    }
+    if let Some(file) = module_file {
+        if node.file.as_deref() != Some(file) {
+            return false;
+        }
+    }
+
+    let suffix = format!("::{type_name}::{member_name}");
+    node.qualified_name.ends_with(&suffix)
+}
+
 impl OpenedSnapshot {
     /// Resolve a `::`-qualified name to a `(NodeId, Node)`.
     ///
@@ -508,6 +553,11 @@ impl OpenedSnapshot {
         if hops_remaining == 0 {
             return Ok(None);
         }
+
+        if let Some(found) = self.lookup_impl_module_item_alias(name, hops_remaining)? {
+            return Ok(Some(found));
+        }
+
         let Some((prefix, leaf)) = name.rsplit_once("::") else {
             return Ok(None);
         };
@@ -540,6 +590,50 @@ impl OpenedSnapshot {
             }
         }
         Ok(None)
+    }
+
+    fn lookup_impl_module_item_alias(
+        &self,
+        name: &str,
+        hops_remaining: usize,
+    ) -> Result<Option<(NodeId, Node)>> {
+        let Some((module_prefix, type_name, member_name)) = impl_module_item_alias_parts(name)
+        else {
+            return Ok(None);
+        };
+
+        let Some((_module_id, module_node)) =
+            self.lookup_by_qualified_name_inner(module_prefix, hops_remaining - 1)?
+        else {
+            return Ok(None);
+        };
+        if module_node.kind != NodeKind::Module {
+            return Ok(None);
+        }
+
+        let mut resolved: Option<(NodeId, Node)> = None;
+        let rtxn = self.env.read_txn()?;
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if !is_impl_module_item_alias_candidate(
+                &node,
+                module_node.crate_id,
+                module_node.file.as_deref(),
+                type_name,
+                member_name,
+            ) {
+                continue;
+            }
+
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            if resolved.is_some() {
+                return Ok(None);
+            }
+            resolved = Some((NodeId(id), node));
+        }
+
+        Ok(resolved)
     }
 
     pub fn node_by_id(&self, rtxn: &RoTxn<'_, heed::WithoutTls>, id: NodeId) -> Result<Option<Node>> {
@@ -3011,6 +3105,83 @@ pub(crate) mod tests {
                 SharedSnap { _td: td, snap }
             })
             .snap
+    }
+
+    fn test_node(qualified_name: &str, display_name: &str, item_kind: Option<ItemKind>) -> Node {
+        Node {
+            id: NodeId([9u8; 32]),
+            kind: NodeKind::Item,
+            display_name: display_name.to_string(),
+            qualified_name: qualified_name.to_string(),
+            crate_id: Some(NodeId([1u8; 32])),
+            parent_id: None,
+            item_kind,
+            file: Some("src/graph/queries.rs".to_string()),
+            span: None,
+            visibility: None,
+            attributes: Vec::new(),
+            crate_target_kind: None,
+        }
+    }
+
+    #[test]
+    fn impl_module_item_alias_matches_canonical_method_suffix() {
+        let (module_prefix, type_name, member_name) = impl_module_item_alias_parts(
+            "rust_code_mcp::graph::queries::OpenedSnapshot::lookup_by_qualified_name",
+        )
+        .expect("alias parts");
+        assert_eq!(module_prefix, "rust_code_mcp::graph::queries");
+        assert_eq!(type_name, "OpenedSnapshot");
+        assert_eq!(member_name, "lookup_by_qualified_name");
+
+        let node = test_node(
+            "rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
+            "lookup_by_qualified_name",
+            Some(ItemKind::Method),
+        );
+        assert!(is_impl_module_item_alias_candidate(
+            &node,
+            Some(NodeId([1u8; 32])),
+            Some("src/graph/queries.rs"),
+            type_name,
+            member_name
+        ));
+    }
+
+    #[test]
+    fn impl_module_item_alias_rejects_wrong_crate_or_kind() {
+        let method = test_node(
+            "rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
+            "lookup_by_qualified_name",
+            Some(ItemKind::Method),
+        );
+        assert!(!is_impl_module_item_alias_candidate(
+            &method,
+            Some(NodeId([2u8; 32])),
+            Some("src/graph/queries.rs"),
+            "OpenedSnapshot",
+            "lookup_by_qualified_name"
+        ));
+        assert!(!is_impl_module_item_alias_candidate(
+            &method,
+            Some(NodeId([1u8; 32])),
+            Some("src/graph/other.rs"),
+            "OpenedSnapshot",
+            "lookup_by_qualified_name"
+        ));
+
+        let function = test_node(
+            "rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
+            "lookup_by_qualified_name",
+            Some(ItemKind::Function),
+        );
+        assert!(!is_impl_module_item_alias_candidate(
+            &function,
+            Some(NodeId([1u8; 32])),
+            Some("src/graph/queries.rs"),
+            "OpenedSnapshot",
+            "lookup_by_qualified_name"
+        ));
     }
 
     #[test]

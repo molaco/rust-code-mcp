@@ -75,7 +75,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T8 | `workspace_stats` | P3 | 4 | complete |
 | T9 | `overlaps` | P3 | 4 | complete |
 | T11 | `index_codebase` | P3 | 4 | complete |
-| T6 | `similar_to_item` | P3 | 5 | small |
+| T6 | `similar_to_item` | P3 | 5 | complete |
 | T12 | `clear_cache` (optional enhancement) | P3 | 4 | small |
 
 ### Cluster A — response budget
@@ -314,6 +314,19 @@ reproduce first, capture the exact error. Likely a qualified-name-resolution
 inconsistency between the two tools — and likely resolved for free once T4
 makes impl methods first-class Item nodes, so **verify T6 after T4**. Files:
 `src/tools/graph_tools.rs` (`similar_to_item` target resolution).
+
+Progress (2026-05-18): reproduced the exact failure as a non-canonical
+impl-module spelling: `rust_code_mcp::graph::queries::OpenedSnapshot::
+lookup_by_qualified_name` failed to resolve, while the canonical method name
+`rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name`
+resolved and seeded `similar_to_item`. Added a guarded
+`lookup_by_qualified_name` fallback for unambiguous same-crate method/associated
+item aliases whose source file matches the impl module, so the impl-module
+spelling now resolves to the canonical method Item. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test impl_module_item_alias_ --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
+A direct snapshot-backed regression test was attempted but stopped at the
+120-second timeout, consistent with the existing slow snapshot-test behavior.
 
 **T12 — `clear_cache` dry-run (optional enhancement, not a defect).**
 `clear_cache` was not exercised — it is destructive (wipes the index/embedding
