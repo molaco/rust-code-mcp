@@ -5,6 +5,7 @@
 
 use crate::embeddings::{resolve_profile, EmbeddingBackend, Qwen3Variant};
 use crate::indexing::incremental::IncrementalIndexer;
+use crate::indexing::unified::IndexStats;
 use crate::tools::project_paths::ProjectPaths;
 use crate::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
@@ -59,6 +60,92 @@ fn resolve_backend(
     };
     let variant = parse_variant(s).map_err(|msg| McpError::invalid_params(msg, None))?;
     Ok(EmbeddingBackend::from_qwen3_variant(variant))
+}
+
+fn format_index_codebase_result(
+    stats: &IndexStats,
+    directory: &str,
+    profile_name: &str,
+    embedder_identity: &str,
+    collection_name: &str,
+    background_sync: &str,
+    force: bool,
+    elapsed: std::time::Duration,
+) -> String {
+    if stats.total_files == 0 {
+        return format!(
+            "No Rust files suitable for indexing were found in '{}'.\n\
+            Profile: {}\n\
+            Embedder: {}\n\
+            Skipped files: {}\n\
+            Time: {:?}",
+            directory, profile_name, embedder_identity, stats.skipped_files, elapsed
+        );
+    }
+
+    if stats.indexed_files == 0 {
+        let heading = if stats.skipped_files == 0 {
+            format!("✓ Index already up to date for '{}'", directory)
+        } else {
+            format!("✓ No files needed indexing updates in '{}'", directory)
+        };
+
+        return format!(
+            "{}\n\n\
+            Indexing stats:\n\
+            - Total Rust files: {}\n\
+            - Changed files indexed: 0\n\
+            - Total chunks: {}\n\
+            - Unchanged files: {}\n\
+            - Skipped or removed files: {}\n\
+            - Time: {:?}\n\n\
+            Profile: {}\n\
+            Embedder: {}\n\
+            Background sync: {}\n\
+            Collection: {}",
+            heading,
+            stats.total_files,
+            stats.total_chunks,
+            stats.unchanged_files,
+            stats.skipped_files,
+            elapsed,
+            profile_name,
+            embedder_identity,
+            background_sync,
+            collection_name
+        );
+    }
+
+    format!(
+        "✓ Successfully indexed '{}'\n\n\
+        Indexing stats:\n\
+        - Total Rust files: {}\n\
+        - Indexed files: {} {}\n\
+        - Total chunks: {}\n\
+        - Unchanged files: {}\n\
+        - Skipped or removed files: {}\n\
+        - Time: {:?}\n\n\
+        Profile: {}\n\
+        Embedder: {}\n\
+        Background sync: {}\n\
+        Collection: {}",
+        directory,
+        stats.total_files,
+        stats.indexed_files,
+        if force {
+            "(forced full reindex)"
+        } else {
+            "(incremental)"
+        },
+        stats.total_chunks,
+        stats.unchanged_files,
+        stats.skipped_files,
+        elapsed,
+        profile_name,
+        embedder_identity,
+        background_sync,
+        collection_name
+    )
 }
 
 /// Index a codebase directory with automatic change detection
@@ -189,80 +276,20 @@ pub async fn index_codebase(
     // Format result. The resolved embedder identity is echoed verbatim
     // so a user who passed `model` (or relied on the default) can
     // confirm exactly which variant the index is bound to.
-    let result_text = if stats.indexed_files == 0 && stats.unchanged_files == 0 {
-        // No files indexed at all
-        format!(
-            "No Rust files suitable for indexing were found in '{}'.\n\
-            Profile: {}\n\
-            Embedder: {}\n\
-            Skipped files: {}\n\
-            Time: {:?}",
-            params.directory,
-            backend.profile.name(),
-            embedder_identity,
-            stats.skipped_files,
-            elapsed
-        )
-    } else if stats.indexed_files == 0 {
-        // No changes detected
-        format!(
-            "✓ No changes detected in '{}'\n\n\
-            Indexing stats:\n\
-            - Indexed files: {} (no changes)\n\
-            - Total chunks: {}\n\
-            - Unchanged files: {}\n\
-            - Skipped files: {}\n\
-            - Time: {:?} (< 10ms change detection)\n\n\
-            Profile: {}\n\
-            Embedder: {}\n\
-            Background sync: {}\n\
-            Collection: {}",
-            params.directory,
-            stats.indexed_files,
-            stats.total_chunks,
-            stats.unchanged_files,
-            stats.skipped_files,
-            elapsed,
-            backend.profile.name(),
-            embedder_identity,
-            if sync_manager.is_some() {
-                "enabled (5-minute interval)"
-            } else {
-                "disabled"
-            },
-            paths.collection_name
-        )
-    } else {
-        // Changes detected and indexed
-        format!(
-            "✓ Successfully indexed '{}'\n\n\
-            Indexing stats:\n\
-            - Indexed files: {} {}\n\
-            - Total chunks: {}\n\
-            - Unchanged files: {}\n\
-            - Skipped files: {}\n\
-            - Time: {:?}\n\n\
-            Profile: {}\n\
-            Embedder: {}\n\
-            Background sync: {}\n\
-            Collection: {}",
-            params.directory,
-            stats.indexed_files,
-            if force { "(forced full reindex)" } else { "(incremental)" },
-            stats.total_chunks,
-            stats.unchanged_files,
-            stats.skipped_files,
-            elapsed,
-            backend.profile.name(),
-            embedder_identity,
-            if sync_manager.is_some() {
-                "enabled (5-minute interval)"
-            } else {
-                "disabled"
-            },
-            paths.collection_name
-        )
-    };
+    let result_text = format_index_codebase_result(
+        &stats,
+        &params.directory,
+        backend.profile.name(),
+        &embedder_identity,
+        &paths.collection_name,
+        if sync_manager.is_some() {
+            "enabled (5-minute interval)"
+        } else {
+            "disabled"
+        },
+        force,
+        elapsed,
+    );
 
     Ok(CallToolResult::success(vec![Content::text(result_text)]))
 }
@@ -356,6 +383,84 @@ mod tests {
         };
         let result2 = index_codebase(params2, None).await;
         assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn format_result_reports_up_to_date_noop_as_unchanged_files() {
+        let stats = IndexStats {
+            total_files: 28,
+            indexed_files: 0,
+            unchanged_files: 28,
+            skipped_files: 0,
+            total_chunks: 120,
+        };
+
+        let text = format_index_codebase_result(
+            &stats,
+            "/workspace",
+            "local-gpu-small",
+            "test-embedder:v1",
+            "test_collection",
+            "disabled",
+            false,
+            std::time::Duration::from_millis(33),
+        );
+
+        assert!(text.contains("Index already up to date"));
+        assert!(text.contains("- Changed files indexed: 0"));
+        assert!(text.contains("- Unchanged files: 28"));
+        assert!(!text.contains("No Rust files suitable"));
+    }
+
+    #[test]
+    fn format_result_does_not_call_skip_only_incremental_stats_empty() {
+        let stats = IndexStats {
+            total_files: 28,
+            indexed_files: 0,
+            unchanged_files: 0,
+            skipped_files: 28,
+            total_chunks: 0,
+        };
+
+        let text = format_index_codebase_result(
+            &stats,
+            "/workspace",
+            "local-gpu-small",
+            "test-embedder:v1",
+            "test_collection",
+            "disabled",
+            false,
+            std::time::Duration::from_millis(33),
+        );
+
+        assert!(text.contains("No files needed indexing updates"));
+        assert!(text.contains("- Total Rust files: 28"));
+        assert!(text.contains("- Skipped or removed files: 28"));
+        assert!(!text.contains("No Rust files suitable"));
+    }
+
+    #[test]
+    fn format_result_reports_no_rust_files_only_when_total_is_zero() {
+        let stats = IndexStats {
+            total_files: 0,
+            indexed_files: 0,
+            unchanged_files: 0,
+            skipped_files: 0,
+            total_chunks: 0,
+        };
+
+        let text = format_index_codebase_result(
+            &stats,
+            "/workspace",
+            "local-gpu-small",
+            "test-embedder:v1",
+            "test_collection",
+            "disabled",
+            false,
+            std::time::Duration::from_millis(33),
+        );
+
+        assert!(text.contains("No Rust files suitable"));
     }
 
     #[test]

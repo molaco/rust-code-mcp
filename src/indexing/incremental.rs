@@ -215,7 +215,9 @@ impl IncrementalIndexer {
         );
 
         // Process changes
-        self.process_changes(codebase_path, changes).await
+        let mut stats = self.process_changes(codebase_path, changes).await?;
+        stats.total_files = new_merkle.file_count();
+        Ok(stats)
     }
 
     /// Process detected changes: add, modify, delete

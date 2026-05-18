@@ -431,7 +431,7 @@ pub async fn search(
 
     // Handle case where first-time indexing produced nothing
     if let Some(ref st) = stats {
-        if st.total_chunks == 0 && st.unchanged_files == 0 {
+        if st.total_files == 0 {
             return Ok(CallToolResult::success(vec![Content::text(format!(
                 "No Rust files suitable for indexing were found in '{}'.\nSkipped files: {}",
                 directory, st.skipped_files

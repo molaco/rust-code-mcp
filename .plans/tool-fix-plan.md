@@ -74,7 +74,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T4 | Layer-4 → impl-method extraction | P2 | 3 | complete |
 | T8 | `workspace_stats` | P3 | 4 | complete |
 | T9 | `overlaps` | P3 | 4 | complete |
-| T11 | `index_codebase` | P3 | 4 | small |
+| T11 | `index_codebase` | P3 | 4 | complete |
 | T6 | `similar_to_item` | P3 | 5 | small |
 | T12 | `clear_cache` (optional enhancement) | P3 | 4 | small |
 
@@ -293,6 +293,17 @@ incremental-no-change path — "already up to date — N files unchanged, 0
 changed"; reconcile the skip counter. Files: `src/tools/index_tool.rs`,
 incremental path in `src/indexing/incremental.rs` / `unified.rs`. Compat:
 message text only.
+
+Progress (2026-05-18): updated incremental change-detection stats so the
+current Rust file count is preserved after skip/delete-only updates, and made
+`index_codebase` report "No Rust files suitable" only when `total_files == 0`.
+The no-indexed-files branch now distinguishes a true no-op as "Index already
+up to date" with unchanged-file counts, while skip/delete-only incremental
+runs report that no files needed indexing updates and label the skipped count
+as "Skipped or removed files." The analogous query-tool first-index empty
+check now also keys off `total_files == 0`. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test format_result_ --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 ### Cluster E — investigate
 
