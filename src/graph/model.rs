@@ -117,6 +117,11 @@ pub struct Node {
     /// (e.g. macro-generated impls).
     #[serde(default)]
     pub attributes: Vec<String>,
+    /// Cargo target kind for crate nodes: `lib`, `bin`, `example`, `test`,
+    /// `bench`, `build`, or `unknown`. `None` for non-crate nodes and for
+    /// older snapshots that predate target-kind extraction.
+    #[serde(default)]
+    pub crate_target_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

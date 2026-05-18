@@ -246,6 +246,7 @@ fn resolve_or_create_target(
                 span: None,
                 visibility: None,
                 attributes: Vec::new(),
+                crate_target_kind: None,
             });
         }
         def_to_node.insert(def_id, node_id);
@@ -295,6 +296,7 @@ fn create_local_item_node(
         span: None,
         visibility: None,
         attributes: Vec::new(),
+        crate_target_kind: None,
     });
 
     Some(node_id)

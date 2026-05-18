@@ -120,7 +120,14 @@ use super::model::{Binding, EmbeddingRecord, FunctionSignature, Node, StaticMeta
 // `embedder_version` pins the embedding-model identity (so swapping models
 // auto-invalidates entries). Old v10 snapshots auto-rebuild because
 // `graph_id_for` hashes `SCHEMA_VERSION`.
-pub const SCHEMA_VERSION: u32 = 11;
+// v12 (2026-05): `Node` gains `crate_target_kind` for crate nodes, populated
+// from Cargo target metadata (`lib`, `bin`, `example`, `test`, `bench`,
+// `build`, or `unknown`). This lets `forbidden_dependency_check` default to
+// architecture checks over only lib/bin consumers while excluding examples,
+// tests, benches, and build scripts unless callers opt them in. Existing v11
+// Node records are missing the appended bincode field, so old snapshots
+// auto-rebuild via the schema-versioned graph id.
+pub const SCHEMA_VERSION: u32 = 12;
 pub const CURRENT_POINTER_FILENAME: &str = "CURRENT";
 pub const SNAPSHOTS_DIRNAME: &str = "snapshots";
 pub const MANIFEST_FILENAME: &str = "manifest.json";

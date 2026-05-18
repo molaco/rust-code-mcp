@@ -279,13 +279,16 @@ pub struct OverlapsParams {
 }
 
 /// One architectural rule for `forbidden_dependency_check`. Patterns in
-/// `consumer`, `producer`, and `except` are glob-style with `*` wildcards.
+/// `consumer`, `producer`, and `except` are glob-style with `*` wildcards
+/// matched against crate names.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ForbiddenDependencyRuleParam {
     #[schemars(description = "Glob pattern matched against the consumer crate name (e.g. `domain*`)")]
     pub consumer: String,
     #[schemars(description = "Glob pattern matched against the producer crate name (e.g. `tokio`)")]
     pub producer: String,
+    #[schemars(description = "Optional consumer Cargo target kinds to inspect. Defaults to [`lib`, `bin`]; use values like `example`, `test`, `bench`, or `build` to opt those targets in")]
+    pub consumer_kinds: Option<Vec<String>>,
     #[schemars(description = "Optional consumer-side glob exception: edges whose consumer matches this pattern are NOT flagged, even if `consumer`/`producer` match")]
     pub except: Option<String>,
     #[schemars(description = "Optional severity tag passed through to violations (e.g. `error` / `warn`)")]

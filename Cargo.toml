@@ -88,6 +88,7 @@ walkdir = "2"          # Directory traversal for indexing
 anyhow = "1"           # Error handling
 regex = "1"            # Secrets scanning patterns
 glob = "0.3"           # File pattern matching
+cargo_metadata = "0.23.1" # Cargo target metadata for workspace crate classification
 
 # Merkle tree for 100x faster change detection (Week 2)
 rs_merkle = "1.4"      # Merkle tree implementation

@@ -1450,6 +1450,7 @@ pub async fn forbidden_dependency_check(
         .map(|r| ForbiddenDependencyRule {
             consumer: r.consumer,
             producer: r.producer,
+            consumer_kinds: r.consumer_kinds,
             except: r.except,
             severity: r.severity,
             message: r.message,
@@ -4185,6 +4186,7 @@ mod tests {
             span: Some((10, 20)),
             visibility: Some("pub".to_string()),
             attributes: Vec::new(),
+            crate_target_kind: None,
         };
 
         let full = serde_json::to_value(node_to_item_ref(&node, false)).unwrap();

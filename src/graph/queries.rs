@@ -66,13 +66,17 @@ pub struct EdgeSymbol {
 
 /// One architectural rule for `forbidden_dependency_check`. Patterns in
 /// `consumer`, `producer`, and `except` are glob-style with `*` wildcards
-/// (matched against the crate's qualified name, which for crates is just the
-/// crate name). `severity` and `message` are passed through unchanged for
-/// caller-side rendering.
+/// (matched against crate names). `consumer_kinds` filters Cargo target kinds
+/// on the consumer side and defaults to `["lib", "bin"]`, which excludes
+/// examples, tests, benches, and build scripts from architecture checks unless
+/// the caller opts them in. `severity` and `message` are passed through
+/// unchanged for caller-side rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForbiddenDependencyRule {
     pub consumer: String,
     pub producer: String,
+    #[serde(default)]
+    pub consumer_kinds: Option<Vec<String>>,
     #[serde(default)]
     pub except: Option<String>,
     #[serde(default)]
@@ -1769,20 +1773,29 @@ impl OpenedSnapshot {
 
     /// Pure filter over `crate_edges`. For every (consumer, producer) edge,
     /// test each rule; emit a violation when the consumer matches
-    /// `rule.consumer`, the producer matches `rule.producer`, and (if `except`
-    /// is set) the consumer does NOT match `rule.except`.
+    /// `rule.consumer`, the producer matches `rule.producer`, the consumer
+    /// target kind is allowed by `rule.consumer_kinds`, and (if `except` is
+    /// set) the consumer does NOT match `rule.except`.
     ///
-    /// Patterns are glob-style with `*` wildcards. Match is on the crate's
-    /// qualified name (for crates, that's just the crate name). Severity and
+    /// Patterns are glob-style with `*` wildcards. Pattern matching is on crate
+    /// names; `consumer_kinds` defaults to `["lib", "bin"]`. Severity and
     /// message pass through to violations unchanged for caller-side rendering.
     pub fn forbidden_dependency_check(
         &self,
         rules: &[ForbiddenDependencyRule],
     ) -> Result<Vec<ForbiddenDependencyViolation>> {
         let edges = self.crate_edges()?;
+        let crate_target_kind_by_name = self.crate_target_kind_by_name()?;
         let mut violations: Vec<ForbiddenDependencyViolation> = Vec::new();
         for edge in &edges {
+            let consumer_kind = crate_target_kind_by_name
+                .get(&edge.consumer_crate)
+                .map(String::as_str)
+                .unwrap_or("lib");
             for (idx, rule) in rules.iter().enumerate() {
+                if !rule_allows_consumer_kind(rule, consumer_kind) {
+                    continue;
+                }
                 if !glob_match(&rule.consumer, &edge.consumer_crate) {
                     continue;
                 }
@@ -1818,6 +1831,21 @@ impl OpenedSnapshot {
                 .then_with(|| a.producer_crate.cmp(&b.producer_crate))
         });
         Ok(violations)
+    }
+
+    fn crate_target_kind_by_name(&self) -> Result<HashMap<String, String>> {
+        let rtxn = self.read_txn()?;
+        let mut out = HashMap::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (_key, node) = entry?;
+            if node.kind == NodeKind::Crate {
+                out.insert(
+                    node.qualified_name,
+                    node.crate_target_kind.unwrap_or_else(|| "lib".to_string()),
+                );
+            }
+        }
+        Ok(out)
     }
 
     /// Phase 6: query-time audit of `unsafe { ... }` blocks across the
@@ -2462,6 +2490,28 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     true
 }
 
+fn rule_allows_consumer_kind(rule: &ForbiddenDependencyRule, consumer_kind: &str) -> bool {
+    let allowed = match rule.consumer_kinds.as_ref().filter(|kinds| !kinds.is_empty()) {
+        Some(kinds) => kinds.as_slice(),
+        None => return matches_default_consumer_kind(consumer_kind),
+    };
+    allowed.iter().any(|kind| {
+        let kind = normalize_consumer_kind(kind);
+        kind == "*" || kind == consumer_kind
+    })
+}
+
+fn matches_default_consumer_kind(consumer_kind: &str) -> bool {
+    matches!(consumer_kind, "lib" | "bin")
+}
+
+fn normalize_consumer_kind(kind: &str) -> String {
+    match kind.trim() {
+        "custom-build" => "build".to_string(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
 fn usage_category_label(c: UsageCategory) -> &'static str {
     match c {
         UsageCategory::Read => "Read",
@@ -2920,6 +2970,7 @@ pub(crate) mod tests {
         let rules = vec![ForbiddenDependencyRule {
             consumer: edge.consumer_crate.clone(),
             producer: edge.producer_crate.clone(),
+            consumer_kinds: Some(vec!["*".into()]),
             except: None,
             severity: Some("error".into()),
             message: Some("test rule".into()),
@@ -2950,6 +3001,7 @@ pub(crate) mod tests {
         let rules = vec![ForbiddenDependencyRule {
             consumer: "*".into(),
             producer: "*".into(),
+            consumer_kinds: Some(vec!["*".into()]),
             except: None,
             severity: None,
             message: None,
@@ -2974,6 +3026,7 @@ pub(crate) mod tests {
         let base_rules = vec![ForbiddenDependencyRule {
             consumer: "*".into(),
             producer: edge.producer_crate.clone(),
+            consumer_kinds: Some(vec!["*".into()]),
             except: None,
             severity: None,
             message: None,
@@ -2989,6 +3042,7 @@ pub(crate) mod tests {
         let exempted = vec![ForbiddenDependencyRule {
             consumer: "*".into(),
             producer: edge.producer_crate.clone(),
+            consumer_kinds: Some(vec!["*".into()]),
             except: Some(edge.consumer_crate.clone()),
             severity: None,
             message: None,
@@ -3016,6 +3070,41 @@ pub(crate) mod tests {
         assert!(super::glob_match("foo*bar", "foobar"));
         assert!(super::glob_match("foo*bar", "foo_x_bar"));
         assert!(!super::glob_match("foo*bar", "foo"));
+    }
+
+    #[test]
+    fn forbidden_dependency_rule_defaults_to_lib_and_bin_consumers() {
+        let rule = ForbiddenDependencyRule {
+            consumer: "*".into(),
+            producer: "*".into(),
+            consumer_kinds: None,
+            except: None,
+            severity: None,
+            message: None,
+        };
+
+        assert!(super::rule_allows_consumer_kind(&rule, "lib"));
+        assert!(super::rule_allows_consumer_kind(&rule, "bin"));
+        assert!(!super::rule_allows_consumer_kind(&rule, "example"));
+        assert!(!super::rule_allows_consumer_kind(&rule, "test"));
+        assert!(!super::rule_allows_consumer_kind(&rule, "bench"));
+        assert!(!super::rule_allows_consumer_kind(&rule, "build"));
+    }
+
+    #[test]
+    fn forbidden_dependency_rule_explicit_consumer_kinds_override_default() {
+        let rule = ForbiddenDependencyRule {
+            consumer: "*".into(),
+            producer: "*".into(),
+            consumer_kinds: Some(vec!["example".into(), "custom-build".into()]),
+            except: None,
+            severity: None,
+            message: None,
+        };
+
+        assert!(!super::rule_allows_consumer_kind(&rule, "lib"));
+        assert!(super::rule_allows_consumer_kind(&rule, "example"));
+        assert!(super::rule_allows_consumer_kind(&rule, "build"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Tool-Fix Plan: rust-code-mcp MCP Server Tools
 
-Status: in progress — Phase 1 complete
+Status: in progress — Phase 2 complete
 Basis: full-session exercise of 49 of the 50 rust-code-mcp tools against the
 live workspace (2026-05-18); `clear_cache` not run (destructive). Companion to
 `.plans/refactor-plan.md` and `.plans/dup-plan.md` — same crate, different
@@ -69,7 +69,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T7 | all enumerating tools | P2 | 1 | complete |
 | T5 | `find_definition` / `find_references` | P2 | 2 | complete |
 | T10 | `items_with_attribute` | P2 | 2 | complete |
-| T3 | `forbidden_dependency_check` | P1 | 2 | medium |
+| T3 | `forbidden_dependency_check` | P1 | 2 | complete |
 | T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | medium |
 | T4 | Layer-4 → impl-method extraction | P2 | 3 | large |
 | T8 | `workspace_stats` | P3 | 4 | small |
@@ -172,11 +172,26 @@ are treated as ordinary consumers, so `graph_burn` matched `*graph*`. Fix:
 extract each crate's target kind (lib/bin/example/test/bench/build) from
 `cargo metadata` into the crate node; add a `consumer_kinds` rule field
 (default `["lib","bin"]`) excluding example/test/bench consumers; document that
-patterns match crate names. Files: `src/graph/extract.rs` (crate-kind
-extraction), `src/graph/model.rs` (crate node), `src/graph/queries.rs` (rule
+patterns match crate names. Files: `Cargo.toml`, `src/graph/loader.rs`,
+`src/graph/extract.rs` (crate-kind extraction), `src/graph/model.rs` (crate
+node), `src/graph/storage.rs` (schema bump), `src/graph/queries.rs` (rule
 filter), `src/tools/graph_tools.rs` + `src/tools/search_tool.rs`
 (`ForbiddenDependencyRuleParam`). Compat: additive param; default behavior
 changes (a bug fix) — document.
+
+Progress (2026-05-18): implemented Cargo target-kind extraction through
+`cargo metadata`, keyed by both normalized target name and target root file;
+crate nodes now carry `crate_target_kind`, and the graph schema bumped to v12
+so old bincode snapshots rebuild instead of decoding stale `Node` records.
+`forbidden_dependency_check` rules now accept optional `consumer_kinds`;
+omitting it defaults to `["lib", "bin"]`, while explicit kinds (or `*`) can
+opt examples/tests/benches/build scripts back in. Updated tool descriptions to
+state that glob patterns match crate names and that target-kind filtering is
+consumer-side. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test forbidden_dependency_rule --lib`,
+`nix develop ../nix-devshells#cuda-code --command cargo test target_kind_label_collapses_cargo_kinds --lib`,
+`nix develop ../nix-devshells#cuda-code --command cargo test load_crate_target_kinds_finds_workspace_targets --lib`,
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 ### Cluster C — graph soundness
 

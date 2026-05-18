@@ -5,11 +5,14 @@
 //! ExternalSymbol stubs as a side effect.
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use ra_ap_base_db::FileId;
 use ra_ap_hir::Crate;
 use ra_ap_hir_def::ModuleId;
 use ra_ap_hir_def::nameres::{DefMap, crate_def_map};
 use ra_ap_ide::RootDatabase;
+use ra_ap_vfs::Vfs;
 
 use super::attributes::extract_attributes;
 use super::bindings::extract_bindings;
@@ -59,6 +62,7 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         span: None,
         visibility: None,
         attributes: Vec::new(),
+        crate_target_kind: None,
     });
 
     let mut crate_node_for: HashMap<Crate, NodeId> = HashMap::new();
@@ -70,8 +74,12 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         emit_crate(
             &mut model,
             &loaded.db,
+            &loaded.vfs,
+            &loaded.workspace_root,
             krate,
             workspace_id,
+            &loaded.crate_target_kinds_by_name,
+            &loaded.crate_target_kinds_by_root_file,
             &mut crate_node_for,
             &mut crate_name_for,
             &mut module_node_for,
@@ -206,13 +214,29 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
 fn emit_crate(
     model: &mut ExtractionModel,
     db: &RootDatabase,
+    vfs: &Vfs,
+    workspace_root: &Path,
     krate: Crate,
     workspace_id: NodeId,
+    crate_target_kinds_by_name: &HashMap<String, String>,
+    crate_target_kinds_by_root_file: &HashMap<String, String>,
     crate_node_for: &mut HashMap<Crate, NodeId>,
     crate_name_for: &mut HashMap<Crate, String>,
     module_node_for: &mut HashMap<ModuleId, NodeId>,
 ) {
     let crate_name = crate_display_name(db, krate);
+    let def_map = crate_def_map(db, krate.base());
+    let root_module_id = def_map.crate_root(db);
+    let crate_target_kind = crate_target_kind_for(
+        db,
+        vfs,
+        workspace_root,
+        &crate_name,
+        def_map,
+        root_module_id,
+        crate_target_kinds_by_name,
+        crate_target_kinds_by_root_file,
+    );
     let crate_id = NodeId::from_components(&[
         model.workspace_hash.as_str(),
         "crate",
@@ -234,11 +258,9 @@ fn emit_crate(
         span: None,
         visibility: Some("pub".to_string()),
         attributes: Vec::new(),
+        crate_target_kind,
     });
     model.insert_contains(workspace_id, crate_id);
-
-    let def_map = crate_def_map(db, krate.base());
-    let root_module_id = def_map.crate_root(db);
 
     for (module_id, _) in def_map.modules() {
         // Skip block-expression modules.
@@ -297,12 +319,47 @@ fn emit_crate(
             span: None,
             visibility: None,
             attributes: Vec::new(),
+            crate_target_kind: None,
         });
 
         if let Some(parent) = parent_id {
             model.insert_contains(parent, module_node_id);
         }
     }
+}
+
+fn crate_target_kind_for(
+    db: &RootDatabase,
+    vfs: &Vfs,
+    workspace_root: &Path,
+    crate_name: &str,
+    def_map: &DefMap,
+    root_module_id: ra_ap_hir_def::ModuleId,
+    crate_target_kinds_by_name: &HashMap<String, String>,
+    crate_target_kinds_by_root_file: &HashMap<String, String>,
+) -> Option<String> {
+    let root_file_id = def_map[root_module_id]
+        .definition_source_file_id()
+        .original_file(db)
+        .file_id(db);
+    resolve_workspace_relative(vfs, root_file_id, workspace_root)
+        .and_then(|root_file| crate_target_kinds_by_root_file.get(&root_file).cloned())
+        .or_else(|| crate_target_kinds_by_name.get(crate_name).cloned())
+        .or_else(|| Some("lib".to_string()))
+}
+
+fn resolve_workspace_relative(
+    vfs: &Vfs,
+    file_id: FileId,
+    workspace_root: &Path,
+) -> Option<String> {
+    let vfs_path = vfs.file_path(file_id);
+    let abs = vfs_path.as_path()?;
+    let abs_pathbuf: std::path::PathBuf = abs.to_path_buf().into();
+    abs_pathbuf
+        .strip_prefix(workspace_root)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn crate_display_name(db: &RootDatabase, krate: Crate) -> String {

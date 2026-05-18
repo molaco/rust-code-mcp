@@ -261,6 +261,7 @@ fn emit_assoc_item(
             span: Some((start, end)),
             visibility: None,
             attributes: Vec::new(),
+            crate_target_kind: None,
         });
         model.insert_contains(parent_node_id, node_id);
     }
@@ -337,6 +338,7 @@ fn emit_enum_variant(
             span: Some((start, end)),
             visibility: None,
             attributes: Vec::new(),
+            crate_target_kind: None,
         });
         model.insert_contains(enum_node_id, node_id);
     }

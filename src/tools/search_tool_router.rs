@@ -440,7 +440,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards), plus optional `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: cross-crate method calls / trait dispatch are NOT counted."
+        description = "Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards) matched against crate names, plus optional `consumer_kinds` (defaults to [`lib`, `bin`]), `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: cross-crate method calls / trait dispatch are NOT counted."
     )]
     async fn forbidden_dependency_check(
         &self,
