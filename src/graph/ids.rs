@@ -10,104 +10,46 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct NodeId(#[serde(with = "serde_bytes_32")] pub [u8; 32]);
+macro_rules! define_id {
+    ($name:ident) => {
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        pub struct $name(#[serde(with = "serde_bytes_32")] pub [u8; 32]);
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct BindingId(#[serde(with = "serde_bytes_32")] pub [u8; 32]);
-
-impl BindingId {
-    pub fn from_components(parts: &[&str]) -> Self {
-        let mut hasher = Sha256::new();
-        for (i, part) in parts.iter().enumerate() {
-            if i > 0 {
-                hasher.update(&[0u8]);
+        impl $name {
+            pub fn from_components(parts: &[&str]) -> Self {
+                let mut hasher = Sha256::new();
+                for (i, part) in parts.iter().enumerate() {
+                    if i > 0 {
+                        hasher.update(&[0u8]);
+                    }
+                    hasher.update(part.as_bytes());
+                }
+                let digest = hasher.finalize();
+                let mut out = [0u8; 32];
+                out.copy_from_slice(&digest);
+                Self(out)
             }
-            hasher.update(part.as_bytes());
-        }
-        let digest = hasher.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest);
-        Self(out)
-    }
 
-    pub fn to_hex(&self) -> String {
-        hex_encode(&self.0)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for BindingId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BindingId({}…)", &self.to_hex()[..12])
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct UsageId(#[serde(with = "serde_bytes_32")] pub [u8; 32]);
-
-impl UsageId {
-    pub fn from_components(parts: &[&str]) -> Self {
-        let mut hasher = Sha256::new();
-        for (i, part) in parts.iter().enumerate() {
-            if i > 0 {
-                hasher.update(&[0u8]);
+            pub fn to_hex(&self) -> String {
+                hex_encode(&self.0)
             }
-            hasher.update(part.as_bytes());
-        }
-        let digest = hasher.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest);
-        Self(out)
-    }
 
-    pub fn to_hex(&self) -> String {
-        hex_encode(&self.0)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for UsageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "UsageId({}…)", &self.to_hex()[..12])
-    }
-}
-
-impl NodeId {
-    pub fn from_components(parts: &[&str]) -> Self {
-        let mut hasher = Sha256::new();
-        for (i, part) in parts.iter().enumerate() {
-            if i > 0 {
-                hasher.update(&[0u8]); // unambiguous separator
+            pub fn as_bytes(&self) -> &[u8; 32] {
+                &self.0
             }
-            hasher.update(part.as_bytes());
         }
-        let digest = hasher.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest);
-        Self(out)
-    }
 
-    pub fn to_hex(&self) -> String {
-        hex_encode(&self.0)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}({}…)", stringify!($name), &self.to_hex()[..12])
+            }
+        }
+    };
 }
 
-impl std::fmt::Debug for NodeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NodeId({}…)", &self.to_hex()[..12])
-    }
-}
+define_id!(NodeId);
+define_id!(BindingId);
+define_id!(UsageId);
 
 pub fn workspace_hash(workspace_root: &Path) -> String {
     let mut hasher = Sha256::new();
@@ -126,7 +68,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 mod serde_bytes_32 {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+    use serde::{Deserializer, Serializer, de::Error};
 
     pub fn serialize<S: Serializer>(bytes: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
         serde_bytes::serialize(&bytes[..], s)
