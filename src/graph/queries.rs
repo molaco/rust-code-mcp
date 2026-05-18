@@ -1064,11 +1064,12 @@ impl OpenedSnapshot {
     }
 
     /// v8: every Item in `crate_id` whose attribute list has at least one
-    /// entry that anchor-matches `attr_pattern`. The pattern matches
-    /// case-sensitively when it appears at the **start** of the attribute
-    /// string (e.g. attr `"#[must_use]"` matches pattern `"#[must_use]"` and
-    /// pattern `"#[must_use"`), OR at the start of the **body** of a `///`
-    /// doc comment (the body is whatever follows the `/// ` prefix). This
+    /// entry that matches `attr_pattern`. Wrapped patterns match
+    /// case-sensitively at the **start** of the raw attribute string (e.g.
+    /// attr `"#[must_use]"` matches pattern `"#[must_use]"` and pattern
+    /// `"#[must_use"`), bare patterns such as `derive` or `must_use` match
+    /// the attribute path, OR a pattern can match the start of the **body**
+    /// of a `///` doc comment (the body is whatever follows the `/// ` prefix). This
     /// avoids false positives where the pattern text appears in the middle
     /// of an unrelated attribute — e.g. searching `#[must_use]` no longer
     /// matches `#[tool(description = "...#[must_use]...")]` whose body just
@@ -2473,8 +2474,9 @@ fn usage_category_label(c: UsageCategory) -> &'static str {
 /// Anchored attribute match used by `items_with_attribute`.
 ///
 /// Returns `Some("attr")` when `pat` is a prefix of the raw attribute
-/// string, `Some("doc")` when the attribute is a `///` doc-comment
-/// (`"/// body"`) and `pat` is a prefix of the body, otherwise `None`.
+/// string or matches the attribute path (`derive`, `must_use`, `cfg`, ...),
+/// `Some("doc")` when the attribute is a `///` doc-comment (`"/// body"`)
+/// and `pat` is a prefix of the body, otherwise `None`.
 ///
 /// The intent is that searching for `#[must_use]` matches an attribute
 /// stored as `"#[must_use]"` or `"#[must_use = \"...\"]"`, but does NOT
@@ -2496,6 +2498,9 @@ fn match_attribute(attr: &str, pat: &str) -> Option<&'static str> {
     if attr.starts_with(pat) {
         return Some("attr");
     }
+    if attr_matches_path_or_body(attr, pat) {
+        return Some("attr");
+    }
     // Doc lines in our model are always stored as `"/// body"`.
     if let Some(body) = attr.strip_prefix("/// ") {
         if body.starts_with(pat) {
@@ -2503,6 +2508,56 @@ fn match_attribute(attr: &str, pat: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+fn attr_matches_path_or_body(attr: &str, pat: &str) -> bool {
+    let Some(body) = attr.strip_prefix("#[") else {
+        return false;
+    };
+    let normalized_pat = normalize_attr_pattern(pat);
+    if normalized_pat.is_empty() {
+        return false;
+    }
+    if attr_pattern_is_path_only(normalized_pat) {
+        let path = attr_path(body);
+        return path == normalized_pat
+            || path
+                .rsplit("::")
+                .next()
+                .map(|last| last == normalized_pat)
+                .unwrap_or(false);
+    }
+    body.starts_with(normalized_pat)
+}
+
+fn normalize_attr_pattern(pat: &str) -> &str {
+    let pat = pat
+        .strip_prefix("#[")
+        .unwrap_or(pat)
+        .strip_prefix('!')
+        .unwrap_or_else(|| pat.strip_prefix("#![").unwrap_or(pat));
+    pat.strip_suffix(']').unwrap_or(pat)
+}
+
+fn attr_pattern_is_path_only(pat: &str) -> bool {
+    !pat.is_empty()
+        && pat
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+}
+
+fn attr_path(body: &str) -> &str {
+    let end = body
+        .char_indices()
+        .find_map(|(idx, c)| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == ':' {
+                None
+            } else {
+                Some(idx)
+            }
+        })
+        .unwrap_or(body.len());
+    &body[..end]
 }
 
 /// Render a `BindingVisibility` as the human-readable string we emit on
@@ -3311,8 +3366,8 @@ pub(crate) mod tests {
     }
 
     /// v8: `items_with_attribute(crate, pattern)` anchor-matches the
-    /// attribute strings on every Item in the crate. Searching for
-    /// `#[derive(` (anchored at the attribute start) across
+    /// attribute strings on every Item in the crate. Searching for bare
+    /// `derive` (attribute-path match) across
     /// `rust_code_mcp` should find at least the `Node` and `ItemKind`
     /// types.
     #[test]
@@ -3330,7 +3385,7 @@ pub(crate) mod tests {
             root_node.parent_id.expect("module should have parent")
         };
         let hits = snap
-            .items_with_attribute(crate_id, "#[derive(")
+            .items_with_attribute(crate_id, "derive")
             .expect("items_with_attribute failed");
         assert!(
             !hits.is_empty(),
@@ -3349,23 +3404,26 @@ pub(crate) mod tests {
                 .any(|q| q == "rust_code_mcp::graph::model::ItemKind"),
             "expected ItemKind among derive-bearing items, got {qnames:?}"
         );
-        // Every hit must carry a derive in its matched_attribute. With the
-        // anchored prefix matcher, the attribute starts with `#[derive(...)]`
-        // so `"derive"` won't match at offset 0 of the attribute string —
-        // but it WILL match the doc-body of a `/// derive ...` line, or
-        // (more commonly) a top-level attribute *if any* starts with the
-        // literal text `derive`. The pattern `derive(` would have similar
-        // issue. So loosen the assertion to "the matched_attribute mentions
-        // derive somewhere" — what we really care about is that the test
-        // surfaces the expected items.
         for h in &hits {
             assert!(
-                h.matched_attribute.contains("derive"),
-                "matched_attribute should contain `derive`, got `{}` (location={})",
+                h.matched_attribute.starts_with("#[derive("),
+                "matched_attribute should be a derive attr, got `{}` (location={})",
                 h.matched_attribute,
                 h.match_location,
             );
         }
+    }
+
+    #[test]
+    fn match_attribute_accepts_bare_attribute_paths() {
+        assert_eq!(match_attribute("#[derive(Debug)]", "derive"), Some("attr"));
+        assert_eq!(match_attribute("#[derive(Debug)]", "#[derive("), Some("attr"));
+        assert_eq!(match_attribute("#[must_use]", "must_use"), Some("attr"));
+        assert_eq!(match_attribute("#[cfg(test)]", "cfg"), Some("attr"));
+        assert_eq!(
+            match_attribute("#[tool(description = \"mentions #[must_use]\")]", "must_use"),
+            None
+        );
     }
 
     /// Item #2 audit: anchored matching must NOT surface items whose

@@ -68,7 +68,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T1 | `semantic_overlaps` | P1 | 1 | complete |
 | T7 | all enumerating tools | P2 | 1 | complete |
 | T5 | `find_definition` / `find_references` | P2 | 2 | complete |
-| T10 | `items_with_attribute` | P2 | 2 | small |
+| T10 | `items_with_attribute` | P2 | 2 | complete |
 | T3 | `forbidden_dependency_check` | P1 | 2 | medium |
 | T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | medium |
 | T4 | Layer-4 → impl-method extraction | P2 | 3 | large |
@@ -153,6 +153,18 @@ accept both bare and wrapped patterns. Stop the tool description's examples
 from mixing forms. Files: `src/graph/attributes.rs` (extraction/storage),
 `src/graph/queries.rs` (`items_with_attribute`). Compat: a bug-fix behavior
 change — `derive` starts matching; document it.
+
+Progress (2026-05-18): updated `items_with_attribute` matching so bare
+attribute paths such as `derive`, `must_use`, and `cfg` match the parsed
+attribute path while wrapped raw forms like `#[derive(` still work. Kept
+anchored behavior so prose inside unrelated attributes is not matched. Updated
+tool parameter/description text and changed the derive query regression to use
+the bare `derive` form. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test match_attribute_accepts_bare_attribute_paths --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
+The snapshot-backed `items_with_attribute_finds_derive_users` test was stopped
+after it did not finish in roughly two minutes, consistent with the existing
+snapshot-test hangs observed during T1.
 
 **T3 — `forbidden_dependency_check` crate-name-glob false positives.** Cause:
 rules glob-match crate *names*; non-library members (examples/tests/benches)

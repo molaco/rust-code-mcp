@@ -330,7 +330,7 @@ pub struct ItemsWithAttributeParams {
     pub directory: String,
     #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
     pub crate_name: String,
-    #[schemars(description = "Substring to match against each item's attribute strings, e.g. `#[must_use]`, `must_use`, `derive(Debug`, or `/// SAFETY:`")]
+    #[schemars(description = "Attribute/doc pattern to match. Bare attribute paths such as `derive`, `must_use`, and `cfg` match `#[derive(...)]` / `#[must_use]`; wrapped forms like `#[derive(` and doc bodies like `SAFETY:` are also accepted.")]
     pub attribute_pattern: String,
     #[serde(flatten)]
     pub pagination: ListPaginationParams,

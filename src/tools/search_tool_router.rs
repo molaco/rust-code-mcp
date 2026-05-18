@@ -470,7 +470,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Find every Item in the named crate whose attribute list has at least one entry that anchor-matches `attribute_pattern`. The match is case-sensitive and tested as a **prefix** against each attribute string (e.g. `#[must_use]`, `#[derive(Debug, Clone)]`) OR as a prefix against the **body** of a `///` doc-comment (the body is whatever follows the `/// ` prefix, so `SAFETY` matches a line `/// SAFETY: ...`). Anchoring avoids false positives where the pattern text appears mid-attribute — e.g. searching `#[must_use]` no longer matches `#[tool(description = \"...#[must_use]...\")]` whose body merely mentions the pattern. Each result row carries `match_location: \"attr\"` or `\"doc\"` so callers can filter visually. Useful for `#[must_use]` / `#[non_exhaustive]` / `#[inline]` audits, finding items missing a required derive, or scanning doc-comment text. Empty pattern returns no results."
+        description = "Find every Item in the named crate whose attribute list has at least one entry matching `attribute_pattern`. Bare attribute paths such as `derive`, `must_use`, and `cfg` match `#[derive(...)]` / `#[must_use]`; wrapped prefix forms like `#[derive(` still work. Doc-comment patterns match against the **body** of a `///` line, so `SAFETY` matches `/// SAFETY: ...`. Anchoring avoids false positives where the pattern text appears mid-attribute — e.g. searching `must_use` no longer matches `#[tool(description = \"...#[must_use]...\")]` whose body merely mentions it. Each result row carries `match_location: \"attr\"` or `\"doc\"` so callers can filter visually. Empty pattern returns no results."
     )]
     async fn items_with_attribute(
         &self,
