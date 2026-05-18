@@ -24,7 +24,7 @@ use crate::graph::labels::{
 };
 use crate::graph::{
     Binding, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
-    DeadPubFinding, EmbeddingRecord, EnrichedCallSite, ForbiddenDependencyRule,
+    DeadPubFinding, EmbeddingRecord, EnrichedCallSite,
     ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
     GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapScope, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
@@ -279,6 +279,7 @@ pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpErro
     json_result(&CallSitesResponse {
         target: Some(target_node.qualified_name),
         caller: None,
+        krate: None,
         page,
         call_sites,
     })
@@ -304,6 +305,7 @@ pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpEr
     json_result(&CallSitesResponse {
         target: None,
         caller: Some(caller_node.qualified_name),
+        krate: None,
         page,
         call_sites,
     })
@@ -352,9 +354,10 @@ pub async fn callers_in_crate(
     let page_req = list_page(&params.pagination);
     let (page, sites) = page_list(sites, page_req);
     let call_sites = call_site_views(sites, page_req.summary);
-    json_result(&CallersInCrateResponse {
-        target: target_node.qualified_name,
-        krate: params.krate,
+    json_result(&CallSitesResponse {
+        target: Some(target_node.qualified_name),
+        caller: None,
+        krate: Some(params.krate),
         page,
         call_sites,
     })
@@ -1475,25 +1478,14 @@ pub async fn forbidden_dependency_check(
     params: ForbiddenDependencyCheckParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
-    let rules: Vec<ForbiddenDependencyRule> = params
-        .rules
-        .into_iter()
-        .map(|r| ForbiddenDependencyRule {
-            consumer: r.consumer,
-            producer: r.producer,
-            consumer_kinds: r.consumer_kinds,
-            except: r.except,
-            severity: r.severity,
-            message: r.message,
-        })
-        .collect();
+    let rule_count = params.rules.len();
     let violations: Vec<ForbiddenDependencyViolation> = snap
-        .forbidden_dependency_check(&rules)
+        .forbidden_dependency_check(&params.rules)
         .map_err(internal_error("forbidden_dependency_check"))?;
     let violation_count = violations.len();
     let (page, violations) = page_list(violations, list_page(&params.pagination));
     json_result(&ForbiddenDependencyCheckResponse {
-        rule_count: rules.len(),
+        rule_count,
         violation_count,
         page,
         violations,
@@ -3055,6 +3047,9 @@ struct CallSitesResponse {
     /// name. None when serving `who_calls(target)`.
     #[serde(skip_serializing_if = "Option::is_none")]
     caller: Option<String>,
+    /// Set when serving `callers_in_crate`; none for the other call-site queries.
+    #[serde(rename = "crate", skip_serializing_if = "Option::is_none")]
+    krate: Option<String>,
     #[serde(flatten)]
     page: ListMeta,
     call_sites: Vec<CallSiteView>,
@@ -3259,16 +3254,6 @@ struct CallGraphResponse {
     root: String,
     depth: u32,
     tree: CallGraphNode,
-}
-
-#[derive(Debug, Serialize)]
-struct CallersInCrateResponse {
-    target: String,
-    #[serde(rename = "crate")]
-    krate: String,
-    #[serde(flatten)]
-    page: ListMeta,
-    call_sites: Vec<CallSiteView>,
 }
 
 #[derive(Debug, Serialize)]

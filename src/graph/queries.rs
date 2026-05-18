@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use heed::RoTxn;
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{BindingId, NodeId};
@@ -100,17 +101,23 @@ pub struct EdgeSymbol {
 /// examples, tests, benches, and build scripts from architecture checks unless
 /// the caller opts them in. `severity` and `message` are passed through
 /// unchanged for caller-side rendering.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ForbiddenDependencyRule {
+    #[schemars(description = "Glob pattern matched against the consumer crate name (e.g. `domain*`)")]
     pub consumer: String,
+    #[schemars(description = "Glob pattern matched against the producer crate name (e.g. `tokio`)")]
     pub producer: String,
     #[serde(default)]
+    #[schemars(description = "Optional consumer Cargo target kinds to inspect. Defaults to [`lib`, `bin`]; use values like `example`, `test`, `bench`, or `build` to opt those targets in")]
     pub consumer_kinds: Option<Vec<String>>,
     #[serde(default)]
+    #[schemars(description = "Optional consumer-side glob exception: edges whose consumer matches this pattern are NOT flagged, even if `consumer`/`producer` match")]
     pub except: Option<String>,
     #[serde(default)]
+    #[schemars(description = "Optional severity tag passed through to violations (e.g. `error` / `warn`)")]
     pub severity: Option<String>,
     #[serde(default)]
+    #[schemars(description = "Optional human-readable rationale, passed through unchanged")]
     pub message: Option<String>,
 }
 
