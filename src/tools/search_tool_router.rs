@@ -290,13 +290,23 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "List `use`/extern-crate imports in a module from the persisted hypergraph"
+        description = "List `use`/extern-crate imports in a module from the persisted hypergraph. For complete module-level dependencies including fully-qualified inline references, use module_dependencies."
     )]
     async fn get_imports(
         &self,
         Parameters(params): Parameters<crate::tools::search_tool::GraphImportsParams>,
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph_tools::get_imports(params).await
+    }
+
+    #[tool(
+        description = "List modules referenced by a module, combining `use`/extern-crate imports with non-import usage edges, including fully-qualified inline paths. Results are grouped by target module and include import/usage counts plus contributing symbols unless `summary=true`."
+    )]
+    async fn module_dependencies(
+        &self,
+        Parameters(params): Parameters<crate::tools::search_tool::ModuleDependenciesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph_tools::module_dependencies(params).await
     }
 
     #[tool(

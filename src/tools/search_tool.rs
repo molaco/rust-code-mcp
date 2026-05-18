@@ -131,6 +131,16 @@ pub struct GraphImportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ModuleDependenciesParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Module qualified name, e.g. `my_crate::sub::module`")]
+    pub module: String,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GraphExportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,

@@ -1,7 +1,8 @@
 //! Layer 6 — read-path queries on a published snapshot.
 //!
-//! Four primitives, all expressed as direct LMDB lookups (no traversal):
+//! Core primitives, all expressed as direct LMDB lookups (no traversal):
 //!   * `imports_of(M)` — scope-side: bindings declared in M that came from a `use`/extern crate.
+//!   * `module_dependencies(M)` — scope-side: imported and inline-referenced target modules.
 //!   * `exports_of(M, C)` — scope-side, filtered by visibility from consumer C.
 //!   * `reexports_of(M, C)` — subset of exports with non-Declared provenance.
 //!   * `who_imports(T)` — target-side: bindings anywhere in the workspace whose target is T.
@@ -41,6 +42,30 @@ pub struct CrateDeadPub {
     pub crate_id: NodeId,
     pub crate_qualified_name: String,
     pub findings: Vec<DeadPubFinding>,
+}
+
+/// One target module (or external symbol when no local module can be resolved)
+/// referenced by a source module. Import counts come from `use` / `extern crate`
+/// bindings; usage counts come from non-import references, including fully
+/// qualified inline paths such as `crate::search::bm25::Bm25Search`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleDependency {
+    pub target_module: String,
+    pub target_kind: String,
+    pub target_crate: Option<String>,
+    pub import_count: usize,
+    pub usage_count: usize,
+    pub symbols: Vec<ModuleDependencySymbol>,
+}
+
+/// Per-symbol contribution to a `ModuleDependency`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleDependencySymbol {
+    pub target_qualified: String,
+    pub target_kind: String,
+    pub import_count: usize,
+    pub usage_count: usize,
+    pub binding_kinds: Vec<String>,
 }
 
 /// One row of `crate_edges`: every cross-crate consumer→producer edge with the
@@ -504,6 +529,25 @@ impl OpenedSnapshot {
         Ok(self.dbs.nodes_by_id.get(rtxn, id.as_bytes())?)
     }
 
+    fn node_maps(
+        &self,
+        rtxn: &RoTxn<'_, heed::WithoutTls>,
+    ) -> Result<(HashMap<NodeId, Node>, HashMap<NodeId, String>)> {
+        let mut nodes = HashMap::new();
+        let mut crate_names = HashMap::new();
+        for entry in self.dbs.nodes_by_id.iter(rtxn)? {
+            let (key, node) = entry?;
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            let id = NodeId(id);
+            if node.kind == NodeKind::Crate {
+                crate_names.insert(id, node.qualified_name.clone());
+            }
+            nodes.insert(id, node);
+        }
+        Ok((nodes, crate_names))
+    }
+
     /// Given a `Crate` node's id, find its root `Module` — the module whose
     /// `parent_id == Some(crate_id)` and whose `qualified_name` equals the
     /// crate's `qualified_name`. Returns `None` if the supplied id does not
@@ -547,6 +591,75 @@ impl OpenedSnapshot {
             }
         }
         Ok(out)
+    }
+
+    /// Modules referenced by `module`, combining syntactic imports with
+    /// non-import usage edges. This complements `imports_of`: fully-qualified
+    /// inline references never appear as `Binding`s, but they do appear in
+    /// `usages_by_consumer`.
+    pub fn module_dependencies(&self, module: NodeId) -> Result<Vec<ModuleDependency>> {
+        let rtxn = self.env.read_txn()?;
+        let (nodes, crate_names) = self.node_maps(&rtxn)?;
+        let mut acc: BTreeMap<NodeId, ModuleDependencyAccumulator> = BTreeMap::new();
+
+        for entry in self.bindings_for_from_module(&rtxn, module)? {
+            let binding = entry?;
+            if binding.kind == BindingKind::Declared {
+                continue;
+            }
+            let Some((dependency_id, dependency_node)) =
+                dependency_node_for(&nodes, binding.target)
+            else {
+                continue;
+            };
+            if dependency_id == module {
+                continue;
+            }
+            let target_node = nodes.get(&binding.target);
+            let dep = acc.entry(dependency_id).or_insert_with(|| {
+                ModuleDependencyAccumulator::new(dependency_node, &crate_names)
+            });
+            dep.import_count += 1;
+            let symbol = dep.symbols.entry(binding.target).or_insert_with(|| {
+                ModuleDependencySymbolAccumulator::new(binding.target, target_node)
+            });
+            symbol.import_count += 1;
+            symbol
+                .binding_kinds
+                .insert(label_binding_kind(binding.kind).to_string());
+        }
+
+        for entry in self.usages_for_consumer(&rtxn, module)? {
+            let usage = entry?;
+            let Some((dependency_id, dependency_node)) = dependency_node_for(&nodes, usage.target)
+            else {
+                continue;
+            };
+            if dependency_id == module {
+                continue;
+            }
+            let target_node = nodes.get(&usage.target);
+            let dep = acc.entry(dependency_id).or_insert_with(|| {
+                ModuleDependencyAccumulator::new(dependency_node, &crate_names)
+            });
+            dep.usage_count += 1;
+            let symbol = dep
+                .symbols
+                .entry(usage.target)
+                .or_insert_with(|| ModuleDependencySymbolAccumulator::new(usage.target, target_node));
+            symbol.usage_count += 1;
+        }
+
+        let mut dependencies: Vec<ModuleDependency> = acc
+            .into_values()
+            .map(ModuleDependencyAccumulator::into_dependency)
+            .collect();
+        dependencies.sort_by(|a, b| {
+            a.target_module
+                .cmp(&b.target_module)
+                .then_with(|| a.target_kind.cmp(&b.target_kind))
+        });
+        Ok(dependencies)
     }
 
     /// Bindings declared in `module` that are visible from `consumer`. Includes
@@ -2451,6 +2564,101 @@ fn label_binding_kind(k: BindingKind) -> &'static str {
     }
 }
 
+#[derive(Default)]
+struct ModuleDependencyAccumulator {
+    target_module: String,
+    target_kind: String,
+    target_crate: Option<String>,
+    import_count: usize,
+    usage_count: usize,
+    symbols: BTreeMap<NodeId, ModuleDependencySymbolAccumulator>,
+}
+
+impl ModuleDependencyAccumulator {
+    fn new(node: &Node, crate_names: &HashMap<NodeId, String>) -> Self {
+        Self {
+            target_module: node.qualified_name.clone(),
+            target_kind: label_node_kind(node),
+            target_crate: node.crate_id.and_then(|id| crate_names.get(&id).cloned()),
+            import_count: 0,
+            usage_count: 0,
+            symbols: BTreeMap::new(),
+        }
+    }
+
+    fn into_dependency(self) -> ModuleDependency {
+        let mut symbols: Vec<ModuleDependencySymbol> = self
+            .symbols
+            .into_values()
+            .map(ModuleDependencySymbolAccumulator::into_symbol)
+            .collect();
+        symbols.sort_by(|a, b| a.target_qualified.cmp(&b.target_qualified));
+        ModuleDependency {
+            target_module: self.target_module,
+            target_kind: self.target_kind,
+            target_crate: self.target_crate,
+            import_count: self.import_count,
+            usage_count: self.usage_count,
+            symbols,
+        }
+    }
+}
+
+struct ModuleDependencySymbolAccumulator {
+    target_qualified: String,
+    target_kind: String,
+    import_count: usize,
+    usage_count: usize,
+    binding_kinds: BTreeSet<String>,
+}
+
+impl ModuleDependencySymbolAccumulator {
+    fn new(target: NodeId, node: Option<&Node>) -> Self {
+        Self {
+            target_qualified: node
+                .map(|node| node.qualified_name.clone())
+                .unwrap_or_else(|| target.to_hex()),
+            target_kind: node
+                .map(label_node_kind)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            import_count: 0,
+            usage_count: 0,
+            binding_kinds: BTreeSet::new(),
+        }
+    }
+
+    fn into_symbol(self) -> ModuleDependencySymbol {
+        ModuleDependencySymbol {
+            target_qualified: self.target_qualified,
+            target_kind: self.target_kind,
+            import_count: self.import_count,
+            usage_count: self.usage_count,
+            binding_kinds: self.binding_kinds.into_iter().collect(),
+        }
+    }
+}
+
+fn dependency_node_for(nodes: &HashMap<NodeId, Node>, target: NodeId) -> Option<(NodeId, &Node)> {
+    let mut current = target;
+    let mut guard = 0usize;
+    loop {
+        let node = nodes.get(&current)?;
+        match node.kind {
+            NodeKind::Module | NodeKind::Crate | NodeKind::ExternalSymbol => {
+                return Some((current, node));
+            }
+            NodeKind::Workspace => return None,
+            NodeKind::Item => {
+                current = node.parent_id?;
+                guard += 1;
+                if guard > 32 {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 /// Glob matcher with `*` wildcards (matches any run of chars, including
 /// empty). No other metacharacters; pattern segments are matched as literal
 /// substrings between wildcards. Greedy / linear in `text.len() *
@@ -3105,6 +3313,92 @@ pub(crate) mod tests {
         assert!(!super::rule_allows_consumer_kind(&rule, "lib"));
         assert!(super::rule_allows_consumer_kind(&rule, "example"));
         assert!(super::rule_allows_consumer_kind(&rule, "build"));
+    }
+
+    #[test]
+    fn dependency_node_for_climbs_item_parents_to_module() {
+        let module_id = NodeId([1u8; 32]);
+        let item_id = NodeId([2u8; 32]);
+        let variant_id = NodeId([3u8; 32]);
+        let external_id = NodeId([4u8; 32]);
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            module_id,
+            Node {
+                id: module_id,
+                kind: NodeKind::Module,
+                display_name: "search".to_string(),
+                qualified_name: "crate::search".to_string(),
+                crate_id: None,
+                parent_id: None,
+                item_kind: None,
+                file: None,
+                span: None,
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+        );
+        nodes.insert(
+            item_id,
+            Node {
+                id: item_id,
+                kind: NodeKind::Item,
+                display_name: "Bm25Search".to_string(),
+                qualified_name: "crate::search::Bm25Search".to_string(),
+                crate_id: None,
+                parent_id: Some(module_id),
+                item_kind: Some(ItemKind::Struct),
+                file: None,
+                span: None,
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+        );
+        nodes.insert(
+            variant_id,
+            Node {
+                id: variant_id,
+                kind: NodeKind::Item,
+                display_name: "Variant".to_string(),
+                qualified_name: "crate::search::Bm25Search::Variant".to_string(),
+                crate_id: None,
+                parent_id: Some(item_id),
+                item_kind: Some(ItemKind::EnumVariant),
+                file: None,
+                span: None,
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+        );
+        nodes.insert(
+            external_id,
+            Node {
+                id: external_id,
+                kind: NodeKind::ExternalSymbol,
+                display_name: "serde".to_string(),
+                qualified_name: "serde".to_string(),
+                crate_id: None,
+                parent_id: None,
+                item_kind: None,
+                file: None,
+                span: None,
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+        );
+
+        let (resolved_id, resolved_node) =
+            super::dependency_node_for(&nodes, variant_id).expect("variant dependency");
+        assert_eq!(resolved_id, module_id);
+        assert_eq!(resolved_node.qualified_name, "crate::search");
+        let (resolved_id, resolved_node) =
+            super::dependency_node_for(&nodes, external_id).expect("external dependency");
+        assert_eq!(resolved_id, external_id);
+        assert_eq!(resolved_node.qualified_name, "serde");
     }
 
     #[test]

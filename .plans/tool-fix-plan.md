@@ -1,6 +1,6 @@
 # Tool-Fix Plan: rust-code-mcp MCP Server Tools
 
-Status: in progress — Phase 2 complete
+Status: in progress — Phase 3 started
 Basis: full-session exercise of 49 of the 50 rust-code-mcp tools against the
 live workspace (2026-05-18); `clear_cache` not run (destructive). Companion to
 `.plans/refactor-plan.md` and `.plans/dup-plan.md` — same crate, different
@@ -70,7 +70,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T5 | `find_definition` / `find_references` | P2 | 2 | complete |
 | T10 | `items_with_attribute` | P2 | 2 | complete |
 | T3 | `forbidden_dependency_check` | P1 | 2 | complete |
-| T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | medium |
+| T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | complete |
 | T4 | Layer-4 → impl-method extraction | P2 | 3 | large |
 | T8 | `workspace_stats` | P3 | 4 | small |
 | T9 | `overlaps` | P3 | 4 | small |
@@ -205,6 +205,23 @@ hypergraph's usage edges; leave `get_imports` as-is and cross-link the two
 descriptions. Files: new endpoint in `src/tools/graph_tools.rs`, new query in
 `src/graph/queries.rs` over `src/graph/usages.rs` data. Compat: purely
 additive (new tool).
+
+Progress (2026-05-18): added the new `module_dependencies` tool and
+`OpenedSnapshot::module_dependencies`, grouping each source module's
+`use`/extern-crate bindings plus non-import usage edges by target module.
+Results include target module/kind/crate, import and usage counts, and
+per-symbol contributors; `summary=true` omits the symbol list under the same
+pagination convention introduced in T7. Kept `get_imports` binding-only and
+updated its description to point callers at `module_dependencies` for complete
+module-level dependency checks. Dogfooded the original symptom: `get_imports`
+for `rust_code_mcp::indexing::tantivy_adapter` does not list `search::bm25`,
+while `who_uses(rust_code_mcp::search::bm25::Bm25Search)` shows inline usage
+from that module. Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test dependency_node_for_climbs_item_parents_to_module --lib`
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
+The snapshot-backed `mcp_round_trip_against_self` test was stopped after it
+was still running past two minutes, matching the existing snapshot-test hang
+pattern from earlier phases.
 
 **T4 — Layer-4 gap: impl methods / trait dispatch not first-class.** Cause:
 impl-block and trait-impl items aren't extracted as Item nodes with usage/call

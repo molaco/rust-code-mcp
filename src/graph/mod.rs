@@ -37,10 +37,10 @@ pub use model::{
 pub use queries::{
     CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
     EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
-    FunctionWithSignature, ModuleShadow, ModuleTreeNode, MutStaticFinding, NodeKindCounts,
-    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, ReExportLink,
-    RecursiveCallersCount, SelfKindFilter, TypeCollision, TypeLocation, UsageSummaryRow,
-    VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
+    FunctionWithSignature, ModuleDependency, ModuleDependencySymbol, ModuleShadow, ModuleTreeNode,
+    MutStaticFinding, NodeKindCounts, OverlapsReport, PubTypeAliasMasqueradingAsReexport,
+    ReExportChain, ReExportLink, RecursiveCallersCount, SelfKindFilter, TypeCollision,
+    TypeLocation, UsageSummaryRow, VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
 };
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,

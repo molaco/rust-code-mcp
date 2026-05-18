@@ -25,7 +25,8 @@ use crate::graph::{
     GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
     RecursiveCallersCount, SelfKindFilter, Usage, UsageCategory, UsageSummaryRow, WorkspaceStats,
-    build_and_persist, open_current, snapshot::BuildOptions,
+    ModuleDependency, ModuleDependencySymbol, build_and_persist, open_current,
+    snapshot::BuildOptions,
 };
 use crate::graph::queries::ItemWithAttribute;
 use crate::tools::search_tool::{
@@ -33,10 +34,10 @@ use crate::tools::search_tool::{
     CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
     EnumVariantsParams, ForbiddenDependencyCheckParams, FunctionSignatureParams,
     FunctionsWithFilterParams, GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams,
-    GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ListPaginationParams, ModuleTreeParams,
-    OverlapsParams, PubUsePubTypeAuditParams, ReExportChainParams, RecursiveCallersCountParams,
-    SemanticOverlapsParams, SimilarToItemParams, WhoCallsParams, WhoImportsParams, WhoUsesParams,
-    WhoUsesSummaryParams, WorkspaceStatsParams,
+    GraphReexportsParams, ItemAttributesParams, ItemsWithAttributeParams, ListPaginationParams,
+    ModuleDependenciesParams, ModuleTreeParams, OverlapsParams, PubUsePubTypeAuditParams,
+    ReExportChainParams, RecursiveCallersCountParams, SemanticOverlapsParams, SimilarToItemParams,
+    WhoCallsParams, WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
 pub async fn build_hypergraph(
@@ -93,6 +94,34 @@ pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, M
         consumer: None,
         target: None,
         bindings,
+    })
+}
+
+pub async fn module_dependencies(
+    params: ModuleDependenciesParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
+    let dependencies = snap
+        .module_dependencies(module_id)
+        .map_err(internal_error("module_dependencies"))?;
+    let module_name = snap
+        .lookup_by_qualified_name(&params.module)
+        .ok()
+        .flatten()
+        .map(|(_, n)| n.qualified_name)
+        .unwrap_or(params.module.clone());
+
+    let (page, dependencies) = page_list(dependencies, list_page(&params.pagination));
+    let summary = page.summary;
+    let dependencies = dependencies
+        .into_iter()
+        .map(|dependency| module_dependency_view(dependency, summary))
+        .collect();
+    json_result(&ModuleDependenciesResponse {
+        page,
+        module: module_name,
+        dependencies,
     })
 }
 
@@ -2617,6 +2646,20 @@ fn node_kind_label(node: &Node) -> String {
     }
 }
 
+fn module_dependency_view(
+    dependency: ModuleDependency,
+    summary: bool,
+) -> ModuleDependencyView {
+    ModuleDependencyView {
+        target_module: dependency.target_module,
+        target_kind: dependency.target_kind,
+        target_crate: dependency.target_crate,
+        import_count: dependency.import_count,
+        usage_count: dependency.usage_count,
+        symbols: if summary { None } else { Some(dependency.symbols) },
+    }
+}
+
 /// Short variant labels matching the form used by `queries::label_item_kind`
 /// (e.g. `Function -> "Fn"`, `AssocFunction -> "AssocFn"`). Pair with
 /// `node_kind_label` so a Function Item serializes as `"Item.Fn"` rather than
@@ -2977,6 +3020,26 @@ struct BindingsListResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<String>,
     bindings: Vec<EnrichedBinding>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModuleDependenciesResponse {
+    #[serde(flatten)]
+    page: ListMeta,
+    module: String,
+    dependencies: Vec<ModuleDependencyView>,
+}
+
+#[derive(Debug, Serialize)]
+struct ModuleDependencyView {
+    target_module: String,
+    target_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_crate: Option<String>,
+    import_count: usize,
+    usage_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbols: Option<Vec<ModuleDependencySymbol>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3525,7 +3588,8 @@ mod tests {
     use super::*;
     use crate::tools::search_tool::{
         BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
-        GraphImportsParams, ListPaginationParams, WhoImportsParams, WhoUsesParams,
+        GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
+        WhoUsesParams,
     };
     use std::sync::Mutex;
 
@@ -3567,6 +3631,23 @@ mod tests {
         assert!(
             body.contains("\"visible_name\": \"load\""),
             "expected `load` re-export in graph mod imports: {body}"
+        );
+
+        let dependencies = module_dependencies(ModuleDependenciesParams {
+            directory: manifest_dir.to_string(),
+            module: "rust_code_mcp::indexing::tantivy_adapter".to_string(),
+            pagination: ListPaginationParams::default(),
+        })
+        .await
+        .expect("module_dependencies");
+        let body = first_text(&dependencies);
+        assert!(
+            body.contains("\"target_module\": \"rust_code_mcp::search::bm25\""),
+            "expected inline Bm25Search dependency on search::bm25: {body}"
+        );
+        assert!(
+            body.contains("\"target_qualified\": \"rust_code_mcp::search::bm25::Bm25Search\""),
+            "expected Bm25Search symbol in module dependency payload: {body}"
         );
 
         let importers = who_imports(WhoImportsParams {
