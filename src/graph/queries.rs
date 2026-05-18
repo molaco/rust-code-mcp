@@ -1061,9 +1061,10 @@ impl OpenedSnapshot {
 
     /// Aggregation rollup of `usages_of(target)` grouped by `consumer_module`.
     /// Each row carries a total count and a per-category breakdown
-    /// (Read/Write/Test/Other → count). Same Layer 4 caveat as `usages_of`:
-    /// cross-crate **method calls** and **trait method dispatch** are NOT
-    /// included — Layer 4 doesn't extract impl-block items as Item nodes.
+    /// (Read/Write/Test/Other → count). Local inherent method calls and local
+    /// trait-declaration dispatch are captured as Method items; remaining
+    /// blind spots are indirect calls RA cannot resolve to a workspace Item
+    /// (for example `dyn Trait` over external traits or generic `F: Fn(..)`).
     /// Sorted by `total_count` desc, ties broken by `consumer_qualified_name`.
     pub fn who_uses_summary(&self, target: NodeId) -> Result<Vec<UsageSummaryRow>> {
         let rtxn = self.env.read_txn()?;
@@ -1741,10 +1742,10 @@ impl OpenedSnapshot {
     /// carrying each edge. Cost is O(N_nodes + N_bindings + N_usages) — a
     /// single read transaction with three sequential scans.
     ///
-    /// Note: cross-crate **method calls** and **trait method dispatch** are
-    /// NOT captured in `total_refs_via_usages` — Layer 4 doesn't extract
-    /// impl-block items as Item nodes, so usage counts only reflect
-    /// references to module-level items.
+    /// Note: local inherent method calls and local trait-declaration dispatch
+    /// are captured as Method items in `total_refs_via_usages`. Remaining
+    /// blind spots are indirect calls RA cannot resolve to a workspace Item
+    /// (for example `dyn Trait` over external traits or generic `F: Fn(..)`).
     pub fn crate_edges(&self) -> Result<Vec<CrateEdge>> {
         let rtxn = self.env.read_txn()?;
 

@@ -22,7 +22,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | Live `indexing → search` edge invisible | `get_imports` | `crate::search::bm25::Bm25Search` used inline in `tantivy_adapter.rs`/`unified.rs`, no `use` |
 | Example crate flagged as an architecture violation | `forbidden_dependency_check` | `graph_burn` → `rust_code_mcp` matched `*graph*`/`*mcp*` by crate name |
 | Substring name match returns unrelated symbols | `find_definition`, `find_references` | `SearchResult` → also `VectorSearchResult`; `AuditOpts` → `ChannelAuditOpts` |
-| Cross-crate method calls / trait dispatch uncounted | `who_uses*`, `crate_edges`, `callers_in_crate`, `dead_pub_*` | documented "Layer 4" limit |
+| Stale caveat claimed local method/trait-dispatch calls were uncounted | `who_uses*`, `crate_edges`, `callers_in_crate`, `dead_pub_*` | docs said "Layer 4" limit, but extraction/tests already capture local inherent methods and local trait-declaration dispatch |
 | `derive` returns 0 matches; `#[derive(` is required | `items_with_attribute` | attributes stored as `"#[derive(Error, Debug)]"`, prefix-matched raw |
 | "No Rust files suitable for indexing were found" on a hundreds-of-files workspace | `index_codebase` | incremental no-op path |
 | `private: 0` always; module-private items folded into `restricted_to` | `workspace_stats` | `530/30/1144` breakdown |
@@ -71,7 +71,7 @@ misleading messages. The 38 tools confirmed fully correct are not touched.
 | T10 | `items_with_attribute` | P2 | 2 | complete |
 | T3 | `forbidden_dependency_check` | P1 | 2 | complete |
 | T2 | `get_imports` (new `module_dependencies`) | P1 | 3 | complete |
-| T4 | Layer-4 → impl-method extraction | P2 | 3 | large |
+| T4 | Layer-4 → impl-method extraction | P2 | 3 | complete |
 | T8 | `workspace_stats` | P3 | 4 | small |
 | T9 | `overlaps` | P3 | 4 | small |
 | T11 | `index_codebase` | P3 | 4 | small |
@@ -237,6 +237,20 @@ Files: `src/graph/extract.rs`, `impls.rs`, `usages.rs`, `bindings.rs`,
 nodes/edges); usage counts will *rise* — update any test asserting exact
 counts. **Largest, highest-risk item — touches the core extraction pipeline;
 do it last, gated on a full re-index + smoke test.**
+
+Progress (2026-05-18): investigation showed the extraction side of this item
+was already implemented before this plan pass: `extract_impl_items` emits
+Method/AssocConst/AssocType nodes for inherent impls and trait declaration
+items, and `src/graph/usages.rs` already has synthetic fixture regressions for
+both `Foo::bar()` and trait-dispatch `x.method()`. The actionable defect was
+stale tool/query wording that still said local method calls and trait dispatch
+were not captured. Updated those caveats to the actual blind spots: trait-impl
+method bodies are not standalone nodes, and unresolved indirect calls such as
+external dyn-trait dispatch or generic `F: Fn(..)` calls remain limitations.
+Verified with
+`nix develop ../nix-devshells#cuda-code --command cargo test pattern1_method_call_captured --lib`,
+`nix develop ../nix-devshells#cuda-code --command cargo test pattern2_trait_dispatch_captured --lib`,
+and `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`.
 
 ### Cluster D — output clarity
 

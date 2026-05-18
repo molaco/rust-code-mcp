@@ -360,7 +360,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Aggregation rollup of who_uses: every non-import reference to the given symbol, grouped by consumer module, with total count + per-category breakdown (Read/Write/Test/Other). Same caveat as who_uses: cross-crate method calls and trait dispatch are NOT included (Layer 4 limitation)."
+        description = "Aggregation rollup of who_uses: every non-import reference to the given symbol, grouped by consumer module, with total count + per-category breakdown (Read/Write/Test/Other). Local inherent method calls and local trait-declaration dispatch are captured as Method items; unresolved indirect calls such as external dyn-trait dispatch or generic Fn calls remain blind spots."
     )]
     async fn who_uses_summary(
         &self,
@@ -440,7 +440,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "All cross-crate consumer→producer edges in the workspace, with the symbols carrying each edge (sorted by total ref count desc). NOTE: cross-crate method calls and trait method dispatch are NOT captured in usage counts — Layer 4 doesn't extract impl-block items as Item nodes, so usage_count reflects only references to module-level items."
+        description = "All cross-crate consumer→producer edges in the workspace, with the symbols carrying each edge (sorted by total ref count desc). Local inherent method calls and local trait-declaration dispatch are captured in usage counts as Method items; unresolved indirect calls such as external dyn-trait dispatch or generic Fn calls remain blind spots."
     )]
     async fn crate_edges(
         &self,
@@ -450,7 +450,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards) matched against crate names, plus optional `consumer_kinds` (defaults to [`lib`, `bin`]), `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: cross-crate method calls / trait dispatch are NOT counted."
+        description = "Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards) matched against crate names, plus optional `consumer_kinds` (defaults to [`lib`, `bin`]), `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: unresolved indirect calls such as external dyn-trait dispatch or generic Fn calls remain blind spots."
     )]
     async fn forbidden_dependency_check(
         &self,
