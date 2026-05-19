@@ -1,6 +1,6 @@
 # Refactor Plan: Module & File Boundary Restructure
 
-Status: not ready to execute — open blockers (§12 Phase 0.6; Phase 1 endpoint facades §5; Phase 2 test-support §6)
+Status: not ready to execute — one pre-split blocker: Phase 0.6 (§12), which includes the graph::codemap → search decision
 Basis: `rust-code-mcp` workspace analysis, current checkout (post package
 rename, post multi-provider work). Cross-validated 2026-05-18 against the live
 workspace (rust-code-mcp tools + a Qwen3-Embedding-8B semantic scan); evidence
@@ -93,7 +93,7 @@ tools / mcp ─> graph, indexing, search, embeddings, vector_store
 indexing    ─> parser, chunker, embeddings, vector_store, search
 search      ─> embeddings, vector_store, chunker
 chunker     ─> parser
-graph       ─> graph internals, plus one sanctioned edge: graph::codemap → embeddings
+graph       ─> graph internals; lone exception: graph::codemap → embeddings + search
 ```
 
 Forbidden edges: `graph -> tools`, `graph -> mcp`, `engine -> tools`,
@@ -111,8 +111,13 @@ to them — only the grep sweep catches them. It is the *only* real
 `graph → tools`/`graph → mcp` edge today (`queries.rs`'s `crate::search`
 mentions are doc-comment text and test-string literals, not dependencies).
 `build_codemap` genuinely needs embedding support; the fix keeps that logic on
-the `graph` side and lets it depend on `embeddings` (the one sanctioned edge
-above), never on `tools` — see §12 Phase 0.6.
+the `graph` side and lets it depend on `embeddings`, never on `tools` — see
+§12 Phase 0.6. Separately, `codemap.rs` also takes `crate::search::SearchResult`
+directly (lines 224/248/629/682) — a real `graph → search` edge. It is
+*permitted* (sanctioned in the diagram above), but the cleaner target is a
+small codemap-local seed-hit DTO that the `build_codemap` `tools` endpoint maps
+`SearchResult` into, removing the edge — Phase 3's `seeds.rs` already owns
+"search-hit normalization", so do it there.
 
 ## 3. Guardrails
 
@@ -593,8 +598,11 @@ ensure_embeddings_for, cosine}`. Fix, smallest-first:
 
 - `embedder_version` is a one-line `backend.identity()` wrapper — delete it and
   inline `EmbeddingBackend::identity()` at the `codemap.rs` call site.
-- `cosine` is pure (`&[f32] -> f32`) — move to `embeddings::util` (or the new
-  `graph` helper below).
+- `cosine` is pure (`&[f32] -> f32`) — put it in the new `graph`-side helper
+  alongside `ensure_embeddings_for` (below); `codemap` is its only caller, so a
+  graph-local home needs no visibility change. Placing it in `embeddings::util`
+  instead would require widening that module from `mod util;` to
+  `pub(crate) mod util` and `cosine` to `pub(crate)`.
 - `ensure_embeddings_for` takes `&OpenedSnapshot` / `&[NodeId]` and returns a
   `tools`-local `ResolvedEmbedding` — moving it to `embeddings` would create
   the *worse* edge `embeddings → graph`. Move it (with `ResolvedEmbedding`) to
@@ -602,7 +610,9 @@ ensure_embeddings_for, cosine}`. Fix, smallest-first:
   3's `codemap/seeds.rs` (which already owns the embedding policy).
 
 Exit: `cargo check --all-targets` green; a `crate::tools`/`crate::mcp` grep
-sweep over `src/graph/` returns zero; `codemap` depends only on `embeddings`.
+sweep over `src/graph/` returns zero. `codemap` still depends on `embeddings`
+and `search` — both sanctioned in §2; the `search` edge is addressed in
+Phase 3, not here.
 
 ## 13. Per-Phase Output Template
 
