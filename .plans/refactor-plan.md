@@ -1,6 +1,6 @@
 # Refactor Plan: Module & File Boundary Restructure
 
-Status: ready to execute
+Status: not ready to execute — open blockers (§12 Phase 0.6; Phase 1 endpoint facades §5; Phase 2 test-support §6)
 Basis: `rust-code-mcp` workspace analysis, current checkout (post package
 rename, post multi-provider work). Cross-validated 2026-05-18 against the live
 workspace (rust-code-mcp tools + a Qwen3-Embedding-8B semantic scan); evidence
@@ -93,7 +93,7 @@ tools / mcp ─> graph, indexing, search, embeddings, vector_store
 indexing    ─> parser, chunker, embeddings, vector_store, search
 search      ─> embeddings, vector_store, chunker
 chunker     ─> parser
-graph       ─> graph internals only
+graph       ─> graph internals, plus one sanctioned edge: graph::codemap → embeddings
 ```
 
 Forbidden edges: `graph -> tools`, `graph -> mcp`, `engine -> tools`,
@@ -102,6 +102,17 @@ Forbidden edges: `graph -> tools`, `graph -> mcp`, `engine -> tools`,
 (Phase 7). While everything is one crate these are **module** boundaries:
 phases 1-6 verify them with `get_imports` on `graph` and the engine modules —
 no `tools`/`mcp` import may appear (see §14).
+
+**Known violation (must fix before Phase 1).** `graph::codemap` currently
+reaches *up* into `tools`: `src/graph/codemap.rs` calls
+`crate::tools::graph_tools::{embedder_version, ensure_embeddings_for, cosine}`.
+These are inline fully-qualified paths, so §14's `get_imports` check is blind
+to them — only the grep sweep catches them. It is the *only* real
+`graph → tools`/`graph → mcp` edge today (`queries.rs`'s `crate::search`
+mentions are doc-comment text and test-string literals, not dependencies).
+`build_codemap` genuinely needs embedding support; the fix keeps that logic on
+the `graph` side and lets it depend on `embeddings` (the one sanctioned edge
+above), never on `tools` — see §12 Phase 0.6.
 
 ## 3. Guardrails
 
@@ -130,6 +141,15 @@ These hold for **every** phase:
    keeps `cargo check --all-targets` green — not just at the end of the phase,
    but after each commit. This is the most likely thing to break; treat it as
    the primary regression signal.
+9. **Hypergraph qualified names shift when a mega-file becomes a directory.**
+   The rust-code-mcp hypergraph derives canonical qualified names from the real
+   module path, so `tools::graph_tools::X` becomes `tools::graph::core::X`,
+   `graph::queries::Y` becomes `graph::query::model::Y`, etc. — even though
+   `pub use` facades keep the Rust compile paths intact. Tests that hardcode
+   qualified-name strings break as their symbols move. Before each split phase,
+   sweep `src/**` and `tests/` for the affected literals and update or
+   canonicalize them. Known sites today: `queries.rs:4261`, `queries.rs:3785`,
+   `signatures.rs:210`.
 
 ### 3.1 Verification command
 
@@ -210,8 +230,9 @@ src/tools/
                              #   derive, pub_use/pub_type, re_export_chain
     audits.rs                # unsafe, mut_static, recursion, channel, fn_body
     similarity.rs            # similar_to_item, semantic_overlaps,
-                             #   ensure_embeddings_for, resolve_graph_tool_backend,
-                             #   embedder_version, cosine
+                             #   resolve_graph_tool_backend
+                             #   (ensure_embeddings_for / cosine leave `tools`
+                             #    in Phase 0.6; embedder_version is deleted)
     codemap.rs               # build_codemap endpoint bridge
     response.rs              # shared JSON/enrichment/render response helpers
 ```
@@ -223,6 +244,12 @@ external path depends on them):
 src/tools/search_tool.rs         ->  pub use crate::tools::params::*;
 src/tools/search_tool_router.rs  ->  pub use crate::tools::router::*;
 src/tools/graph_tools.rs         ->  pub use crate::tools::graph::*;
+src/tools/analysis_tools.rs      ->  pub use crate::tools::endpoints::analysis::*;
+src/tools/clear_cache_tool.rs    ->  pub use crate::tools::endpoints::cache::*;
+src/tools/health_tool.rs         ->  pub use crate::tools::endpoints::health::*;
+src/tools/index_tool.rs          ->  pub use crate::tools::endpoints::index::*;
+src/tools/indexing_tools.rs      ->  pub use crate::tools::endpoints::indexing_support::*;
+src/tools/query_tools.rs         ->  pub use crate::tools::endpoints::query::*;
 ```
 
 Steps:
@@ -233,7 +260,12 @@ Steps:
 2. Split `graph_tools.rs` one endpoint family at a time into `tools/graph/*`,
    each move its own commit. Shared helper/response structs that >1 family
    needs go to `graph/response.rs` rather than being duplicated.
-3. Move the standalone endpoint files into `tools/endpoints/` (rename only).
+3. Move the standalone endpoint files into `tools/endpoints/`. Each old file
+   (`index_tool.rs`, `health_tool.rs`, `query_tools.rs`, `clear_cache_tool.rs`,
+   `analysis_tools.rs`, `indexing_tools.rs`) stays as a one-line `pub use`
+   facade — see the facade list above — so in-repo imports such as
+   `rust_code_mcp::tools::index_tool::*` (used by three `tests/` files) keep
+   resolving until Phase 6.
 4. Keep `router.rs` importing endpoint fns from the new paths. **MCP tool
    names and param-struct names must not change.**
 
@@ -298,6 +330,16 @@ Steps (each a commit):
    each. `unsafe_audit` / `mut_static_audit` / `static_metadata` are the
    `audits.rs` family; `enum_variants` lands in `surface.rs`. Neither fits the
    other families — do not leave them orphaned.
+4. Relocate the shared test fixture. `queries.rs::tests::shared_snapshot` (a
+   `pub(crate) fn` in the `#[cfg(test)]` module) is imported by four sibling
+   `graph` modules — `attributes.rs`, `signatures.rs`, `unsafe_audit.rs`,
+   `statics.rs` — and mirrored privately in `usages.rs`. The production facade
+   above re-exports query families only, not the test module, so leaving the
+   fixture in a gutted `queries.rs` breaks `cargo test graph:: --lib`. Move it
+   to a graph-level `#[cfg(test)] pub(crate) mod test_support`
+   (`src/graph/test_support.rs`) — a sibling of those four modules, not buried
+   under `query/` — update the four importers in the same commit, and reconcile
+   the `usages.rs` private mirror (keep it, or switch it to the shared one).
 
 Risk: High. `queries.rs` result types are imported across `tools` and tests.
 
@@ -517,6 +559,7 @@ full workspace `cargo check --all-targets`.
 ```text
 Phase 0    Baseline & guardrails
 Phase 0.5  Private-helper de-duplication   (.plans/dup-plan.md — DONE)
+Phase 0.6  Resolve the graph→tools inversion (codemap embedding helpers)
 Phase 1    Split tools adapter layer       (lowest risk — start here)
 Phase 2    Split graph::queries            (highest risk)
 Phase 3    Split graph::codemap
@@ -541,6 +584,25 @@ will not scatter across the new files when the mega-files are split. The
 consolidation added four flat helper files — `graph/audit_util.rs`,
 `graph/labels.rs`, `embeddings/batching.rs`, `embeddings/util.rs` — shown in
 the §15 target tree.
+
+Phase 0.6 removes the one real `graph → tools` violation (§2) before any
+splitting begins — Phase 1 as drafted would otherwise relocate the offending
+helpers into `tools/graph/similarity.rs` and preserve the inversion.
+`src/graph/codemap.rs` calls `crate::tools::graph_tools::{embedder_version,
+ensure_embeddings_for, cosine}`. Fix, smallest-first:
+
+- `embedder_version` is a one-line `backend.identity()` wrapper — delete it and
+  inline `EmbeddingBackend::identity()` at the `codemap.rs` call site.
+- `cosine` is pure (`&[f32] -> f32`) — move to `embeddings::util` (or the new
+  `graph` helper below).
+- `ensure_embeddings_for` takes `&OpenedSnapshot` / `&[NodeId]` and returns a
+  `tools`-local `ResolvedEmbedding` — moving it to `embeddings` would create
+  the *worse* edge `embeddings → graph`. Move it (with `ResolvedEmbedding`) to
+  a `graph`-side home: a new `graph::embedding_cache`, or fold it into Phase
+  3's `codemap/seeds.rs` (which already owns the embedding policy).
+
+Exit: `cargo check --all-targets` green; a `crate::tools`/`crate::mcp` grep
+sweep over `src/graph/` returns zero; `codemap` depends only on `embeddings`.
 
 ## 13. Per-Phase Output Template
 
@@ -783,7 +845,7 @@ Agent ergonomics:
     semantic/      { mod.rs, loader.rs, position.rs, rename.rs }   # NOT touched
 
   Notes:
-  - Transient (not in this tree): during the plan, tools/graph_tools.rs, tools/search_tool.rs, tools/search_tool_router.rs, and graph/queries.rs survive as pub use facades, then are deleted in Phase 6.
+  - Transient (not in this tree): during the plan, tools/graph_tools.rs, tools/search_tool.rs, tools/search_tool_router.rs, the six standalone endpoint files (analysis_tools.rs, clear_cache_tool.rs, health_tool.rs, index_tool.rs, indexing_tools.rs, query_tools.rs), and graph/queries.rs survive as pub use facades, then are deleted in Phase 6.
   - graph/audit_util.rs, graph/labels.rs, embeddings/batching.rs, and embeddings/util.rs were created by Phase 0.5 (.plans/dup-plan.md, complete). They pre-date Phases 1-6, so they appear as existing files, not NEW.
   - indexing/unified.rs may also yield an optional indexing/types.rs if IndexStats/IndexFileResult separate cleanly — the plan leaves that to judgment.
   - Phase 7 (optional, not part of this target) would lift graph/ out to crates/rmc-graph/src/… with the same internal layout; the rest stays in the main crate.
