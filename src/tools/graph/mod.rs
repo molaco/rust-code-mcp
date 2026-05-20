@@ -5,5 +5,8 @@
 //! snapshot opening, error mapping, JSON serialization, common parsing).
 //! Subsequent PRs will move the remaining families out of `graph_tools.rs`.
 
+pub(super) mod audits;
 pub(super) mod core;
+pub(super) mod crates;
 pub(super) mod response;
+pub(super) mod surface;

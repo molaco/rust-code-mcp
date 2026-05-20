@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 04 complete; PR 05 is next. This is the executable sequence for the
+Status: PR 05 complete; PR 06 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -449,6 +449,42 @@ Exit:
 - `src/tools/graph_tools.rs` still preserves old imports through re-exports.
 
 ## PR 05: Split Tools Graph Crate/Surface/Audit Endpoints
+
+Status: DONE.
+
+Outcome:
+
+- Three new sibling files under `src/tools/graph/`:
+  - `crates.rs` (146 LOC) — `crate_edges`, `crate_dependency_metric`,
+    `forbidden_dependency_check` + response structs `CrateEdgesResponse`,
+    `CrateDependencyMetricResponse`, `CrateMetricRendered`,
+    `ForbiddenDependencyCheckResponse`.
+  - `surface.rs` (968 LOC) — 12 endpoints (`dead_pub_in_crate`,
+    `dead_pub_report`, `enum_variants`, `item_attributes`,
+    `items_with_attribute`, `function_signature`, `functions_with_filter`,
+    `pub_use_pub_type_audit`, `re_export_chain`, `missing_docs_audit`,
+    `derive_audit`, `overlaps`) + 14 family-private response structs + 2
+    family-private helpers (`enrich_dead_pub`, `enrich_crate_dead_pub`).
+  - `audits.rs` (454 LOC) — `unsafe_audit`, `mut_static_audit`,
+    `recursion_check`, `channel_capacity_audit`, `fn_body_audit` +
+    `RecursionCycleRendered` struct.
+- `src/tools/graph/mod.rs` now declares `pub(super) mod core; crates;
+  surface; audits; response;`.
+- `graph_tools.rs` shrank from 3421 → 1912 LOC (−1509). Facade re-export
+  block now:
+  ```rust
+  pub use crate::tools::graph::core::*;
+  pub use crate::tools::graph::crates::*;
+  pub use crate::tools::graph::audits::*;
+  pub use crate::tools::graph::surface::*;
+  pub(crate) use crate::tools::graph::response::*;
+  ```
+  Every moved-out symbol still resolves at its old
+  `crate::tools::graph_tools::Name` path.
+- Family-private response structs use `pub(crate)` only as needed to satisfy
+  the facade's `pub use ::*;` glob — no widening beyond that pattern.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. `grep -rn "crate::tools"` over engine modules returns no hits.
 
 Operation: `Split`.
 
