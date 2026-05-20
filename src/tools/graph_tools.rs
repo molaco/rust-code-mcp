@@ -33,7 +33,7 @@ use crate::graph::{
     snapshot::BuildOptions,
 };
 use crate::graph::queries::ItemWithAttribute;
-use crate::tools::search_tool::{
+use crate::tools::params::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
     CrateDependencyMetricParams, CrateEdgesParams, DeadPubParams, DeadPubReportParams,
     EnumVariantsParams, ForbiddenDependencyCheckParams, FunctionSignatureParams,
@@ -1457,7 +1457,7 @@ pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolRes
 }
 
 pub async fn unsafe_audit(
-    params: crate::tools::search_tool::UnsafeAuditParams,
+    params: crate::tools::params::UnsafeAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
     // The audit calls `loader::load` (full RA workspace load, ~2-3s) and
@@ -1517,7 +1517,7 @@ pub async fn unsafe_audit(
 }
 
 pub async fn mut_static_audit(
-    params: crate::tools::search_tool::MutStaticAuditParams,
+    params: crate::tools::params::MutStaticAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let findings = snap
@@ -1569,7 +1569,7 @@ pub async fn mut_static_audit(
 }
 
 pub async fn missing_docs_audit(
-    params: crate::tools::search_tool::MissingDocsAuditParams,
+    params: crate::tools::params::MissingDocsAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
 
@@ -1684,7 +1684,7 @@ pub async fn missing_docs_audit(
 }
 
 pub async fn derive_audit(
-    params: crate::tools::search_tool::DeriveAuditParams,
+    params: crate::tools::params::DeriveAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
 
@@ -1827,7 +1827,7 @@ pub async fn derive_audit(
 }
 
 pub async fn recursion_check(
-    params: crate::tools::search_tool::RecursionCheckParams,
+    params: crate::tools::params::RecursionCheckParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
 
@@ -1928,7 +1928,7 @@ struct RecursionCycleRendered {
 }
 
 pub async fn channel_capacity_audit(
-    params: crate::tools::search_tool::ChannelCapacityAuditParams,
+    params: crate::tools::params::ChannelCapacityAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
     let crate_name = params.crate_name.clone();
@@ -2037,7 +2037,7 @@ pub async fn channel_capacity_audit(
 }
 
 pub async fn fn_body_audit(
-    params: crate::tools::search_tool::FnBodyAuditParams,
+    params: crate::tools::params::FnBodyAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
     let crate_name = params.crate_name.clone();
@@ -3303,7 +3303,7 @@ pub(crate) async fn handle_build_codemap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::search_tool::{
+    use crate::tools::params::{
         BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
         GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
         WhoUsesParams,
@@ -3517,7 +3517,7 @@ mod tests {
         .await
         .expect("build_hypergraph");
 
-        let result = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+        let result = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
             krate: "rust_code_mcp".to_string(),
             min_param_count: None,
@@ -3586,7 +3586,7 @@ mod tests {
         .await
         .expect("build_hypergraph");
 
-        let result = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+        let result = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
             krate: "rust_code_mcp".to_string(),
             min_param_count: None,
@@ -3647,7 +3647,7 @@ mod tests {
         .expect("build_hypergraph");
 
         // First page.
-        let page1 = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+        let page1 = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
             krate: "rust_code_mcp".to_string(),
             min_param_count: None,
@@ -3676,7 +3676,7 @@ mod tests {
             .collect();
 
         // Second page (offset = 5).
-        let page2 = functions_with_filter(crate::tools::search_tool::FunctionsWithFilterParams {
+        let page2 = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
             directory: manifest_dir.to_string(),
             krate: "rust_code_mcp".to_string(),
             min_param_count: None,
@@ -3730,7 +3730,7 @@ mod tests {
         .expect("build_hypergraph");
 
         let result = crate_dependency_metric(
-            crate::tools::search_tool::CrateDependencyMetricParams {
+            crate::tools::params::CrateDependencyMetricParams {
                 directory: manifest_dir.to_string(),
                 top_n: Some(3),
                 sort_by: Some("item_count".to_string()),
@@ -3779,7 +3779,7 @@ mod tests {
         .expect("build_hypergraph");
 
         let result = crate_dependency_metric(
-            crate::tools::search_tool::CrateDependencyMetricParams {
+            crate::tools::params::CrateDependencyMetricParams {
                 directory: manifest_dir.to_string(),
                 top_n: None,
                 sort_by: Some("instability".to_string()),
@@ -3829,7 +3829,7 @@ mod tests {
         .expect("build_hypergraph");
 
         let result = crate_dependency_metric(
-            crate::tools::search_tool::CrateDependencyMetricParams {
+            crate::tools::params::CrateDependencyMetricParams {
                 directory: manifest_dir.to_string(),
                 top_n: None,
                 sort_by: Some("garbage_key".to_string()),

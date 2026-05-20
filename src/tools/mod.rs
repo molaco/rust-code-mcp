@@ -8,6 +8,8 @@ pub mod search_tool;
 pub mod indexing_tools;
 pub mod query_tools;
 pub mod analysis_tools;
+mod params;
+mod router;
 pub mod search_tool_router;
 
 // Hypergraph (Layer 7): MCP tools backed by the persisted graph snapshot.

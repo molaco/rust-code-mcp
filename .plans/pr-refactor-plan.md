@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 02 complete; PR 03 is next. This is the executable sequence for the
+Status: PR 03 complete; PR 04 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -267,6 +267,44 @@ Exit:
   it is fixed in PR 12, not here.
 
 ## PR 03: Split Tools Router And Params
+
+Status: DONE.
+
+Outcome:
+
+- `src/tools/router.rs` (~720 LOC after the post-review doc trim) is the new
+  home of `SearchToolRouter`. Declared as `mod router;` (not `pub`) — only the
+  `search_tool_router` and `search_tool` facades inside `tools` reach it.
+- `src/tools/search_tool_router.rs` is a 2-line facade
+  (`pub use crate::tools::router::*;`), kept `pub mod` so the public path
+  `rust_code_mcp::tools::search_tool_router::SearchToolRouter` still resolves.
+- `src/tools/params/` is declared `mod params;` (not `pub`); its four family
+  submodules (`audit.rs`, `graph.rs`, `indexing.rs`, `search.rs`) are also
+  private — `params/mod.rs` flat-re-exports every struct via
+  `pub use {family}::*;`. Callers continue to use
+  `crate::tools::params::FooParams` without ever naming a family submodule.
+- Family split: 9 search, 30+1 graph (the `ForbiddenDependencyRuleParam` alias
+  travels with `ForbiddenDependencyCheckParams`), 7 audit, 1 indexing.
+  `ListPaginationParams` lives in `params/mod.rs` as a shared cross-family
+  util.
+- `src/tools/search_tool.rs` is a facade that re-exports
+  `crate::tools::params::*` and aliases `SearchToolRouter as SearchTool`
+  **directly from `crate::tools::router`** (not through the
+  `search_tool_router` facade) — a one-hop external surface, no
+  facade-to-facade chain.
+- `router.rs` docs were rewritten to drop stale claims (no more "Exposes 10
+  tools" / "~200 LOC" / "90% complexity reduction"), point the external doctest
+  at the canonical `rust_code_mcp::tools::search_tool::SearchTool` path, and
+  describe the actual routing fan-out (query_tools, analysis_tools,
+  graph_tools, indexing_tools, index_tool, health_tool, clear_cache_tool).
+  The local `pub use crate::tools::params::{...}` was lowered to a plain
+  `use` — nothing external consumes those via `router`'s path.
+- Internal call sites updated: 41 occurrences in `router.rs` and 16 in
+  `graph_tools.rs` migrated from `crate::tools::search_tool::*` to
+  `crate::tools::params::*`. `grep -rn "crate::tools::search_tool::" src/`
+  returns no matches.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green.
 
 Operation: `Rename` + `Split` + Workflow C facade adapters.
 
