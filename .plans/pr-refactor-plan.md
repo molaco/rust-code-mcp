@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 08 complete; PR 09 is next. This is the executable sequence for the
+Status: PR 09 complete; PR 10 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -822,6 +822,60 @@ Exit:
 - No query behavior moved yet.
 
 ## PR 09: Move Graph Query Import/Usage/Call Families
+
+Status: DONE.
+
+Outcome:
+
+- 14 methods moved from the giant `impl OpenedSnapshot { ... }` block in
+  `queries.rs` into three family files. Each family file got its own
+  `impl OpenedSnapshot { ... }` block — Rust merges them at compile time, so
+  callers (`snap.imports_of(m)`) need no path changes.
+
+- **`src/graph/query/imports.rs`** (279 LOC): 5 endpoint methods
+  (`imports_of`, `module_dependencies`, `exports_of`, `reexports_of`,
+  `declared_reexports_of`), 2 family-private helper methods (`node_maps`,
+  `module_ancestors`), 1 family-private free fn (`is_visible_from`), and
+  the `ModuleDependencyAccumulator` + `ModuleDependencySymbolAccumulator`
+  helper structs with their impls. All moved items are private (no
+  visibility widening).
+
+- **`src/graph/query/usage.rs`** (114 LOC): 4 methods (`who_imports`,
+  `usages_of`, `usages_in`, `who_uses_summary`). No family-private
+  helpers — every helper this family reaches into is shared with
+  remaining-in-queries.rs methods, so they stayed in queries.rs and were
+  widened to `pub(super)`.
+
+- **`src/graph/query/calls.rs`** (334 LOC): 5 methods (`who_calls`,
+  `calls_from`, `call_graph`, `callers_in_crate`,
+  `recursive_callers_count`) + the family-private `call_graph_rec` helper
+  (only used by `call_graph`).
+
+- `queries.rs` shrank from 3966 → 3299 LOC (−667).
+
+- 6 private helpers in `queries.rs` widened from `fn` to `pub(super) fn`
+  (narrowest workable widening per Guardrail 2 — visible only to `graph::*`,
+  not crate-wide): `bindings_for_from_module`, `bindings_for_target`,
+  `usages_for_target`, `usages_for_consumer`, `usages_for_consumer_function`,
+  and the free fn `dependency_node_for`. Each is reached by at least one
+  moved method AND at least one method/test that stays in queries.rs, so it
+  can't simply move with one family.
+
+- No hardcoded qualified-name strings needed updating: the two
+  `graph::queries::` literals in queries.rs reference items that did not
+  move (`OpenedSnapshot::lookup_by_qualified_name` and the
+  `ForbiddenDependencyRule` type).
+
+- `#[cfg(test)] mod tests` block (1305 LOC) stayed in `queries.rs`
+  unchanged — tests call methods via `snap.foo()` dispatch, which finds
+  methods regardless of which file's `impl OpenedSnapshot` defines them.
+
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Engine-modules `crate::tools` grep returns no hits. All existing
+  external consumers (`graph::queries::ItemWithAttribute`,
+  `graph::queries::ModuleTreeNode`, `graph::queries::{FunctionFilter,
+  SelfKindFilter}`, `shared_snapshot` test fixture imports) continue to
+  resolve through the unchanged facade re-exports and the test module.
 
 Operation: `Split`.
 

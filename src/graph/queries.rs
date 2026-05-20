@@ -251,25 +251,6 @@ impl OpenedSnapshot {
         Ok(self.dbs.nodes_by_id.get(rtxn, id.as_bytes())?)
     }
 
-    fn node_maps(
-        &self,
-        rtxn: &RoTxn<'_, heed::WithoutTls>,
-    ) -> Result<(HashMap<NodeId, Node>, HashMap<NodeId, String>)> {
-        let mut nodes = HashMap::new();
-        let mut crate_names = HashMap::new();
-        for entry in self.dbs.nodes_by_id.iter(rtxn)? {
-            let (key, node) = entry?;
-            let mut id = [0u8; 32];
-            id.copy_from_slice(key);
-            let id = NodeId(id);
-            if node.kind == NodeKind::Crate {
-                crate_names.insert(id, node.qualified_name.clone());
-            }
-            nodes.insert(id, node);
-        }
-        Ok((nodes, crate_names))
-    }
-
     /// Given a `Crate` node's id, find its root `Module` — the module whose
     /// `parent_id == Some(crate_id)` and whose `qualified_name` equals the
     /// crate's `qualified_name`. Returns `None` if the supplied id does not
@@ -299,547 +280,6 @@ impl OpenedSnapshot {
             }
         }
         Ok(None)
-    }
-
-    /// Bindings declared in `module` that came from a `use` (or extern crate).
-    /// Order is unspecified — caller can sort by visible_name if needed.
-    pub fn imports_of(&self, module: NodeId) -> Result<Vec<Binding>> {
-        let rtxn = self.env.read_txn()?;
-        let mut out = Vec::new();
-        for entry in self.bindings_for_from_module(&rtxn, module)? {
-            let binding = entry?;
-            if binding.kind != BindingKind::Declared {
-                out.push(binding);
-            }
-        }
-        Ok(out)
-    }
-
-    /// Modules referenced by `module`, combining syntactic imports with
-    /// non-import usage edges. This complements `imports_of`: fully-qualified
-    /// inline references never appear as `Binding`s, but they do appear in
-    /// `usages_by_consumer`.
-    pub fn module_dependencies(&self, module: NodeId) -> Result<Vec<ModuleDependency>> {
-        let rtxn = self.env.read_txn()?;
-        let (nodes, crate_names) = self.node_maps(&rtxn)?;
-        let mut acc: BTreeMap<NodeId, ModuleDependencyAccumulator> = BTreeMap::new();
-
-        for entry in self.bindings_for_from_module(&rtxn, module)? {
-            let binding = entry?;
-            if binding.kind == BindingKind::Declared {
-                continue;
-            }
-            let Some((dependency_id, dependency_node)) =
-                dependency_node_for(&nodes, binding.target)
-            else {
-                continue;
-            };
-            if dependency_id == module {
-                continue;
-            }
-            let target_node = nodes.get(&binding.target);
-            let dep = acc.entry(dependency_id).or_insert_with(|| {
-                ModuleDependencyAccumulator::new(dependency_node, &crate_names)
-            });
-            dep.import_count += 1;
-            let symbol = dep.symbols.entry(binding.target).or_insert_with(|| {
-                ModuleDependencySymbolAccumulator::new(binding.target, target_node)
-            });
-            symbol.import_count += 1;
-            symbol
-                .binding_kinds
-                .insert(label_binding_kind(binding.kind).to_string());
-        }
-
-        for entry in self.usages_for_consumer(&rtxn, module)? {
-            let usage = entry?;
-            let Some((dependency_id, dependency_node)) = dependency_node_for(&nodes, usage.target)
-            else {
-                continue;
-            };
-            if dependency_id == module {
-                continue;
-            }
-            let target_node = nodes.get(&usage.target);
-            let dep = acc.entry(dependency_id).or_insert_with(|| {
-                ModuleDependencyAccumulator::new(dependency_node, &crate_names)
-            });
-            dep.usage_count += 1;
-            let symbol = dep
-                .symbols
-                .entry(usage.target)
-                .or_insert_with(|| ModuleDependencySymbolAccumulator::new(usage.target, target_node));
-            symbol.usage_count += 1;
-        }
-
-        let mut dependencies: Vec<ModuleDependency> = acc
-            .into_values()
-            .map(ModuleDependencyAccumulator::into_dependency)
-            .collect();
-        dependencies.sort_by(|a, b| {
-            a.target_module
-                .cmp(&b.target_module)
-                .then_with(|| a.target_kind.cmp(&b.target_kind))
-        });
-        Ok(dependencies)
-    }
-
-    /// Bindings declared in `module` that are visible from `consumer`. Includes
-    /// both the module's own declared items (true exports) and re-exports.
-    pub fn exports_of(&self, module: NodeId, consumer: NodeId) -> Result<Vec<Binding>> {
-        let rtxn = self.env.read_txn()?;
-        let consumer_ancestry = self.module_ancestors(&rtxn, consumer)?;
-        let consumer_crate = self
-            .node_by_id(&rtxn, consumer)?
-            .and_then(|n| n.crate_id);
-
-        let mut out = Vec::new();
-        for entry in self.bindings_for_from_module(&rtxn, module)? {
-            let binding = entry?;
-            if !is_visible_from(&binding.visibility, consumer_crate, &consumer_ancestry) {
-                continue;
-            }
-            out.push(binding);
-        }
-        Ok(out)
-    }
-
-    /// Subset of `exports_of` whose provenance is *not* Declared (i.e., `pub use`s).
-    pub fn reexports_of(&self, module: NodeId, consumer: NodeId) -> Result<Vec<Binding>> {
-        let mut out = self.exports_of(module, consumer)?;
-        out.retain(|b| b.kind != BindingKind::Declared);
-        Ok(out)
-    }
-
-    /// Every binding in `module` whose source `use` is explicitly marked `pub`
-    /// (or `pub(crate)` / `pub(in path)` / `pub(super)`). Unlike `reexports_of`,
-    /// this is not filtered by visibility from a particular consumer — it
-    /// returns all syntactic re-export declarations, useful for "audit every
-    /// `pub use` in this module" workflows.
-    pub fn declared_reexports_of(&self, module: NodeId) -> Result<Vec<Binding>> {
-        let rtxn = self.env.read_txn()?;
-        let mut out = Vec::new();
-        for entry in self.bindings_for_from_module(&rtxn, module)? {
-            let binding = entry?;
-            if binding.kind != BindingKind::Declared && binding.is_explicit_pub_use {
-                out.push(binding);
-            }
-        }
-        Ok(out)
-    }
-
-    /// All bindings in the workspace whose target is `target` (and that aren't
-    /// the target's own declaration). Useful for "who imports symbol X".
-    pub fn who_imports(&self, target: NodeId) -> Result<Vec<Binding>> {
-        let rtxn = self.env.read_txn()?;
-        let mut out = Vec::new();
-        for entry in self.bindings_for_target(&rtxn, target)? {
-            let binding = entry?;
-            if binding.kind != BindingKind::Declared {
-                out.push(binding);
-            }
-        }
-        Ok(out)
-    }
-
-    /// All non-import references to `target`, as recorded by `extract_usages`.
-    /// `IMPORT` references are filtered at extraction time — they're modeled
-    /// as `Binding`s instead. Order is unspecified.
-    pub fn usages_of(&self, target: NodeId) -> Result<Vec<Usage>> {
-        let rtxn = self.env.read_txn()?;
-        let mut out = Vec::new();
-        for entry in self.usages_for_target(&rtxn, target)? {
-            out.push(entry?);
-        }
-        Ok(out)
-    }
-
-    /// All non-import references whose enclosing module is `consumer_module`.
-    pub fn usages_in(&self, consumer_module: NodeId) -> Result<Vec<Usage>> {
-        let rtxn = self.env.read_txn()?;
-        let mut out = Vec::new();
-        for entry in self.usages_for_consumer(&rtxn, consumer_module)? {
-            out.push(entry?);
-        }
-        Ok(out)
-    }
-
-    /// Every non-import reference to `target_fn` whose call site is inside
-    /// some function body. Returns the caller's qualified name + file:byte
-    /// range + category. References from non-fn scopes (const initializers,
-    /// trait bounds, enum discriminants) are excluded — see `who_uses` for
-    /// those.
-    pub fn who_calls(&self, target_fn: NodeId) -> Result<Vec<EnrichedCallSite>> {
-        let rtxn = self.env.read_txn()?;
-        let callee_qualified_name = self
-            .dbs
-            .nodes_by_id
-            .get(&rtxn, target_fn.as_bytes())?
-            .map(|n| n.qualified_name)
-            .unwrap_or_default();
-        let mut usages: Vec<Usage> = Vec::new();
-        for entry in self.usages_for_target(&rtxn, target_fn)? {
-            let usage = entry?;
-            if usage.consumer_function.is_some() {
-                usages.push(usage);
-            }
-        }
-
-        let mut out = Vec::with_capacity(usages.len());
-        for usage in usages {
-            let caller_qualified_name = match usage.consumer_function {
-                Some(fn_id) => self
-                    .dbs
-                    .nodes_by_id
-                    .get(&rtxn, fn_id.as_bytes())?
-                    .map(|n| n.qualified_name),
-                None => None,
-            };
-            out.push(EnrichedCallSite {
-                caller_qualified_name,
-                callee_qualified_name: callee_qualified_name.clone(),
-                file: usage.file,
-                start: usage.start,
-                end: usage.end,
-                category: usage_category_label(usage.category).to_string(),
-            });
-        }
-        Ok(out)
-    }
-
-    /// Every non-import reference made *from* the body of `caller_fn`. Returns
-    /// the callee's qualified name + file:byte range + category. Closures
-    /// inside `caller_fn` attribute to it (RA's default for
-    /// `SemanticsScope::containing_function`).
-    pub fn calls_from(&self, caller_fn: NodeId) -> Result<Vec<EnrichedCallSite>> {
-        let rtxn = self.env.read_txn()?;
-        let caller_qualified_name = self
-            .dbs
-            .nodes_by_id
-            .get(&rtxn, caller_fn.as_bytes())?
-            .map(|n| n.qualified_name);
-
-        let mut usages: Vec<Usage> = Vec::new();
-        for entry in self.usages_for_consumer_function(&rtxn, caller_fn)? {
-            usages.push(entry?);
-        }
-
-        let mut out = Vec::with_capacity(usages.len());
-        for usage in usages {
-            let callee_qualified_name = self
-                .dbs
-                .nodes_by_id
-                .get(&rtxn, usage.target.as_bytes())?
-                .map(|n| n.qualified_name)
-                .unwrap_or_default();
-            out.push(EnrichedCallSite {
-                caller_qualified_name: caller_qualified_name.clone(),
-                callee_qualified_name,
-                file: usage.file,
-                start: usage.start,
-                end: usage.end,
-                category: usage_category_label(usage.category).to_string(),
-            });
-        }
-        Ok(out)
-    }
-
-    /// Bounded recursive descent over outgoing fn-body references rooted at
-    /// `root_fn`. At each node, `calls_from(node)` is computed, distinct callee
-    /// NodeIds are recursed into, and `depth` is decremented. A global
-    /// `visited: HashSet<NodeId>` prevents re-expanding the same fn twice
-    /// anywhere in the tree (so cycles and DAG-style fan-in both terminate).
-    ///
-    /// `truncated_at_cycle` flags subtrees pruned because the callee was
-    /// already expanded elsewhere — the same callees would have appeared.
-    /// `truncated_at_depth` flags subtrees pruned because `depth == 0` and
-    /// the node has at least one outgoing edge.
-    pub fn call_graph(&self, root_fn: NodeId, depth: u32) -> Result<CallGraphNode> {
-        let mut visited: HashSet<NodeId> = HashSet::new();
-        self.call_graph_rec(root_fn, depth, &mut visited)
-    }
-
-    fn call_graph_rec(
-        &self,
-        fn_id: NodeId,
-        depth: u32,
-        visited: &mut HashSet<NodeId>,
-    ) -> Result<CallGraphNode> {
-        let rtxn = self.env.read_txn()?;
-        let node = self.dbs.nodes_by_id.get(&rtxn, fn_id.as_bytes())?;
-        let (fn_qualified_name, crate_name) = match node {
-            Some(n) => {
-                let crate_name = match n.crate_id {
-                    Some(cid) => self
-                        .dbs
-                        .nodes_by_id
-                        .get(&rtxn, cid.as_bytes())?
-                        .map(|c| c.qualified_name),
-                    None => None,
-                };
-                (n.qualified_name, crate_name)
-            }
-            None => (String::new(), None),
-        };
-        drop(rtxn);
-
-        // If this fn has been expanded somewhere else already, prune.
-        // The root call (visited empty) always proceeds; subsequent visits to
-        // the same NodeId from anywhere in the tree become cycle-truncated.
-        if !visited.insert(fn_id) {
-            return Ok(CallGraphNode {
-                fn_qualified_name,
-                crate_name,
-                callees: Vec::new(),
-                truncated_at_cycle: true,
-                truncated_at_depth: false,
-            });
-        }
-
-        // Collect distinct callee NodeIds. `usages_for_consumer_function`
-        // returns one row per call site, so the same callee NodeId may appear
-        // multiple times.
-        let rtxn2 = self.env.read_txn()?;
-        let mut distinct_callees: Vec<NodeId> = Vec::new();
-        let mut seen: HashSet<NodeId> = HashSet::new();
-        for entry in self.usages_for_consumer_function(&rtxn2, fn_id)? {
-            let usage = entry?;
-            if seen.insert(usage.target) {
-                distinct_callees.push(usage.target);
-            }
-        }
-        drop(rtxn2);
-
-        // At depth 0, leave callees empty and flag truncation if there were any.
-        if depth == 0 {
-            return Ok(CallGraphNode {
-                fn_qualified_name,
-                crate_name,
-                callees: Vec::new(),
-                truncated_at_cycle: false,
-                truncated_at_depth: !distinct_callees.is_empty(),
-            });
-        }
-
-        let mut callees: Vec<CallGraphNode> = Vec::with_capacity(distinct_callees.len());
-        for callee_id in distinct_callees {
-            let child = self.call_graph_rec(callee_id, depth - 1, visited)?;
-            callees.push(child);
-        }
-
-        Ok(CallGraphNode {
-            fn_qualified_name,
-            crate_name,
-            callees,
-            truncated_at_cycle: false,
-            truncated_at_depth: false,
-        })
-    }
-
-    /// `who_calls(target)` filtered to call sites whose *caller fn* lives in a
-    /// crate whose qualified_name equals `crate_qualified`. Callers in any
-    /// other crate (or with a missing `crate_id`) are dropped. Note: this
-    /// filters by the **caller's** crate, not the target's.
-    pub fn callers_in_crate(
-        &self,
-        target: NodeId,
-        crate_qualified: &str,
-    ) -> Result<Vec<EnrichedCallSite>> {
-        let rtxn = self.env.read_txn()?;
-        let callee_qualified_name = self
-            .dbs
-            .nodes_by_id
-            .get(&rtxn, target.as_bytes())?
-            .map(|n| n.qualified_name)
-            .unwrap_or_default();
-
-        let mut out: Vec<EnrichedCallSite> = Vec::new();
-        for entry in self.usages_for_target(&rtxn, target)? {
-            let usage = entry?;
-            let Some(fn_id) = usage.consumer_function else {
-                continue;
-            };
-            let Some(caller_node) = self.dbs.nodes_by_id.get(&rtxn, fn_id.as_bytes())? else {
-                continue;
-            };
-            let Some(crate_id) = caller_node.crate_id else {
-                continue;
-            };
-            let Some(crate_node) = self.dbs.nodes_by_id.get(&rtxn, crate_id.as_bytes())? else {
-                continue;
-            };
-            if crate_node.qualified_name != crate_qualified {
-                continue;
-            }
-            out.push(EnrichedCallSite {
-                caller_qualified_name: Some(caller_node.qualified_name),
-                callee_qualified_name: callee_qualified_name.clone(),
-                file: usage.file,
-                start: usage.start,
-                end: usage.end,
-                category: usage_category_label(usage.category).to_string(),
-            });
-        }
-        Ok(out)
-    }
-
-    /// Reverse BFS from `target`: count distinct caller fns reachable backward
-    /// up to `depth` hops. depth=0 returns zeros. depth=1 returns just the
-    /// direct callers. Higher depths include transitive callers (callers of
-    /// callers, etc.). Counts *fns*, not call sites — a fn that calls target
-    /// 5 times counts as 1 caller.
-    pub fn recursive_callers_count(
-        &self,
-        target: NodeId,
-        depth: u32,
-    ) -> Result<RecursiveCallersCount> {
-        let rtxn = self.env.read_txn()?;
-        let target_qualified_name = self
-            .dbs
-            .nodes_by_id
-            .get(&rtxn, target.as_bytes())?
-            .map(|n| n.qualified_name)
-            .unwrap_or_default();
-        drop(rtxn);
-
-        if depth == 0 {
-            return Ok(RecursiveCallersCount {
-                target_qualified_name,
-                depth: 0,
-                direct_callers: 0,
-                transitive_callers: 0,
-                depth_reached: 0,
-                truncated_at_depth: false,
-            });
-        }
-
-        // Direct callers (hop 1).
-        let mut visited: HashSet<NodeId> = HashSet::new();
-        let mut frontier: Vec<NodeId> = Vec::new();
-        {
-            let rtxn = self.env.read_txn()?;
-            for entry in self.usages_for_target(&rtxn, target)? {
-                let usage = entry?;
-                if let Some(fn_id) = usage.consumer_function {
-                    if visited.insert(fn_id) {
-                        frontier.push(fn_id);
-                    }
-                }
-            }
-        }
-        let direct_callers = visited.len();
-        let mut depth_reached: u32 = if direct_callers > 0 { 1 } else { 0 };
-
-        // Hops 2..=depth.
-        let mut hop: u32 = 1;
-        let mut truncated_at_depth = false;
-        while hop < depth && !frontier.is_empty() {
-            let mut next: Vec<NodeId> = Vec::new();
-            for fn_id in frontier.drain(..) {
-                let rtxn = self.env.read_txn()?;
-                for entry in self.usages_for_target(&rtxn, fn_id)? {
-                    let usage = entry?;
-                    if let Some(caller_id) = usage.consumer_function {
-                        if visited.insert(caller_id) {
-                            next.push(caller_id);
-                        }
-                    }
-                }
-            }
-            if !next.is_empty() {
-                depth_reached = hop + 1;
-            }
-            frontier = next;
-            hop += 1;
-        }
-        // If we exited because we hit depth and the frontier still has
-        // un-visited would-be expansions, flag truncation.
-        if hop == depth && !frontier.is_empty() {
-            // Any node in the frontier that itself has at least one un-visited
-            // caller means the BFS isn't exhausted. Do a single peek pass.
-            'outer: for fn_id in &frontier {
-                let rtxn = self.env.read_txn()?;
-                for entry in self.usages_for_target(&rtxn, *fn_id)? {
-                    let usage = entry?;
-                    if let Some(caller_id) = usage.consumer_function {
-                        if !visited.contains(&caller_id) {
-                            truncated_at_depth = true;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(RecursiveCallersCount {
-            target_qualified_name,
-            depth,
-            direct_callers,
-            transitive_callers: visited.len(),
-            depth_reached,
-            truncated_at_depth,
-        })
-    }
-
-    /// Aggregation rollup of `usages_of(target)` grouped by `consumer_module`.
-    /// Each row carries a total count and a per-category breakdown
-    /// (Read/Write/Test/Other → count). Local inherent method calls and local
-    /// trait-declaration dispatch are captured as Method items; remaining
-    /// blind spots are indirect calls RA cannot resolve to a workspace Item
-    /// (for example `dyn Trait` over external traits or generic `F: Fn(..)`).
-    /// Sorted by `total_count` desc, ties broken by `consumer_qualified_name`.
-    pub fn who_uses_summary(&self, target: NodeId) -> Result<Vec<UsageSummaryRow>> {
-        let rtxn = self.env.read_txn()?;
-
-        // Group by consumer_module: total + per-category breakdown.
-        let mut totals: HashMap<NodeId, usize> = HashMap::new();
-        let mut breakdown: HashMap<NodeId, BTreeMap<String, usize>> = HashMap::new();
-        for entry in self.usages_for_target(&rtxn, target)? {
-            let usage = entry?;
-            *totals.entry(usage.consumer_module).or_insert(0) += 1;
-            let cat = usage_category_label(usage.category).to_string();
-            *breakdown
-                .entry(usage.consumer_module)
-                .or_default()
-                .entry(cat)
-                .or_insert(0) += 1;
-        }
-
-        // Resolve display names. We need the consumer module's qualified_name
-        // and (separately) its crate's qualified_name for downstream display.
-        let mut rows: Vec<UsageSummaryRow> = Vec::with_capacity(totals.len());
-        for (consumer_module, total_count) in totals {
-            let (qualified_name, crate_qualified) = match self
-                .dbs
-                .nodes_by_id
-                .get(&rtxn, consumer_module.as_bytes())?
-            {
-                Some(node) => {
-                    let crate_qual = match node.crate_id {
-                        Some(cid) => self
-                            .dbs
-                            .nodes_by_id
-                            .get(&rtxn, cid.as_bytes())?
-                            .map(|n| n.qualified_name),
-                        None => None,
-                    };
-                    (node.qualified_name, crate_qual)
-                }
-                None => (String::new(), None),
-            };
-            rows.push(UsageSummaryRow {
-                consumer_qualified_name: qualified_name,
-                consumer_crate: crate_qualified,
-                total_count,
-                category_breakdown: breakdown.remove(&consumer_module).unwrap_or_default(),
-            });
-        }
-        rows.sort_by(|a, b| {
-            b.total_count
-                .cmp(&a.total_count)
-                .then_with(|| a.consumer_qualified_name.cmp(&b.consumer_qualified_name))
-        });
-        Ok(rows)
     }
 
     /// v7: enumerate the variants of an enum. `enum_id` must be the NodeId of
@@ -2097,7 +1537,7 @@ impl OpenedSnapshot {
 
     // ----- helpers -----
 
-    fn bindings_for_from_module<'txn>(
+    pub(super) fn bindings_for_from_module<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         module: NodeId,
@@ -2124,7 +1564,7 @@ impl OpenedSnapshot {
             }))
     }
 
-    fn bindings_for_target<'txn>(
+    pub(super) fn bindings_for_target<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         target: NodeId,
@@ -2148,7 +1588,7 @@ impl OpenedSnapshot {
             }))
     }
 
-    fn usages_for_target<'txn>(
+    pub(super) fn usages_for_target<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         target: NodeId,
@@ -2172,7 +1612,7 @@ impl OpenedSnapshot {
             }))
     }
 
-    fn usages_for_consumer<'txn>(
+    pub(super) fn usages_for_consumer<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         consumer: NodeId,
@@ -2196,7 +1636,7 @@ impl OpenedSnapshot {
             }))
     }
 
-    fn usages_for_consumer_function<'txn>(
+    pub(super) fn usages_for_consumer_function<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         caller_fn: NodeId,
@@ -2253,27 +1693,6 @@ impl OpenedSnapshot {
         Ok(seen.into_iter().collect())
     }
 
-    /// Walk up `module → parent → ...` and return the set including `module`
-    /// itself. Used to answer "is C a descendant of M?".
-    fn module_ancestors(
-        &self,
-        rtxn: &RoTxn<'_, heed::WithoutTls>,
-        module: NodeId,
-    ) -> Result<HashSet<NodeId>> {
-        let mut seen = HashSet::new();
-        let mut cur = Some(module);
-        while let Some(id) = cur {
-            if !seen.insert(id) {
-                break; // cycle guard
-            }
-            cur = self
-                .dbs
-                .nodes_by_id
-                .get(rtxn, id.as_bytes())?
-                .and_then(|n| n.parent_id);
-        }
-        Ok(seen)
-    }
 }
 
 fn count_declared_visibility(counts: &mut VisibilityCounts, binding: &Binding) {
@@ -2337,81 +1756,10 @@ fn overlap_scope_allows_crate(
     }
 }
 
-#[derive(Default)]
-struct ModuleDependencyAccumulator {
-    target_module: String,
-    target_kind: String,
-    target_crate: Option<String>,
-    import_count: usize,
-    usage_count: usize,
-    symbols: BTreeMap<NodeId, ModuleDependencySymbolAccumulator>,
-}
-
-impl ModuleDependencyAccumulator {
-    fn new(node: &Node, crate_names: &HashMap<NodeId, String>) -> Self {
-        Self {
-            target_module: node.qualified_name.clone(),
-            target_kind: node_kind_label(node, label_item_kind),
-            target_crate: node.crate_id.and_then(|id| crate_names.get(&id).cloned()),
-            import_count: 0,
-            usage_count: 0,
-            symbols: BTreeMap::new(),
-        }
-    }
-
-    fn into_dependency(self) -> ModuleDependency {
-        let mut symbols: Vec<ModuleDependencySymbol> = self
-            .symbols
-            .into_values()
-            .map(ModuleDependencySymbolAccumulator::into_symbol)
-            .collect();
-        symbols.sort_by(|a, b| a.target_qualified.cmp(&b.target_qualified));
-        ModuleDependency {
-            target_module: self.target_module,
-            target_kind: self.target_kind,
-            target_crate: self.target_crate,
-            import_count: self.import_count,
-            usage_count: self.usage_count,
-            symbols,
-        }
-    }
-}
-
-struct ModuleDependencySymbolAccumulator {
-    target_qualified: String,
-    target_kind: String,
-    import_count: usize,
-    usage_count: usize,
-    binding_kinds: BTreeSet<String>,
-}
-
-impl ModuleDependencySymbolAccumulator {
-    fn new(target: NodeId, node: Option<&Node>) -> Self {
-        Self {
-            target_qualified: node
-                .map(|node| node.qualified_name.clone())
-                .unwrap_or_else(|| target.to_hex()),
-            target_kind: node
-                .map(|node| node_kind_label(node, label_item_kind))
-                .unwrap_or_else(|| "Unknown".to_string()),
-            import_count: 0,
-            usage_count: 0,
-            binding_kinds: BTreeSet::new(),
-        }
-    }
-
-    fn into_symbol(self) -> ModuleDependencySymbol {
-        ModuleDependencySymbol {
-            target_qualified: self.target_qualified,
-            target_kind: self.target_kind,
-            import_count: self.import_count,
-            usage_count: self.usage_count,
-            binding_kinds: self.binding_kinds.into_iter().collect(),
-        }
-    }
-}
-
-fn dependency_node_for(nodes: &HashMap<NodeId, Node>, target: NodeId) -> Option<(NodeId, &Node)> {
+pub(super) fn dependency_node_for(
+    nodes: &HashMap<NodeId, Node>,
+    target: NodeId,
+) -> Option<(NodeId, &Node)> {
     let mut current = target;
     let mut guard = 0usize;
     loop {
@@ -2641,21 +1989,6 @@ fn filter_matches(filter: &FunctionFilter, sig: &FunctionSignature) -> bool {
         }
     }
     true
-}
-
-fn is_visible_from(
-    vis: &BindingVisibility,
-    consumer_crate: Option<NodeId>,
-    consumer_ancestry: &HashSet<NodeId>,
-) -> bool {
-    match vis {
-        BindingVisibility::Public => true,
-        BindingVisibility::Private => false,
-        BindingVisibility::Crate(crate_id) => consumer_crate == Some(*crate_id),
-        // Restricted to the subtree rooted at `ancestor_id`: visible iff the
-        // consumer's own ancestry chain passes through that node.
-        BindingVisibility::RestrictedTo(ancestor_id) => consumer_ancestry.contains(ancestor_id),
-    }
 }
 
 #[cfg(test)]
