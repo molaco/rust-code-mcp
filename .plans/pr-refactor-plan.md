@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 07 complete; PR 08 is next. This is the executable sequence for the
+Status: PR 08 complete; PR 09 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -730,6 +730,54 @@ Exit:
 - In-repo tests/examples importing old paths still compile.
 
 ## PR 08: Create Graph Query Skeleton And Move Model Types
+
+Status: DONE.
+
+Outcome:
+
+- New `src/graph/query/` directory; declared `mod query;` (private) in
+  `src/graph/mod.rs`. The existing `pub mod queries;` stays alongside it as
+  the migration facade.
+- `src/graph/query/mod.rs` (17 LOC) declares 10 `pub(super)` family
+  submodules: `audits`, `calls`, `crates`, `functions`, `imports`, `model`,
+  `modules`, `overlaps`, `surface`, `usage`.
+- `src/graph/query/model.rs` (420 LOC) — 32 result types moved verbatim
+  from `queries.rs` lines 1-530: `DeadPubFinding`, `CrateDeadPub`,
+  `ModuleDependency`, `ModuleDependencySymbol`, `CrateEdge`, `EdgeSymbol`,
+  `ForbiddenDependencyRule`, `ForbiddenDependencyViolation`,
+  `OverlapsReport`, `OverlapScope`, `TypeCollision`, `TypeLocation`,
+  `ModuleShadow`, `WithinCrateDuplicate`, `CommonFnName`, `EnrichedCallSite`,
+  `CallGraphNode`, `RecursiveCallersCount`, `UsageSummaryRow`,
+  `ModuleTreeNode`, `WorkspaceStats`, `NodeKindCounts`, `VisibilityCounts`,
+  `ItemWithAttribute`, `FunctionFilter`, `SelfKindFilter`,
+  `FunctionWithSignature`, `PubTypeAliasMasqueradingAsReexport`,
+  `ReExportLink`, `ReExportChain`, `CrateMetric`, `MutStaticFinding`.
+- The other 9 family files (`imports.rs`, `usage.rs`, `calls.rs`,
+  `crates.rs`, `surface.rs`, `audits.rs`, `functions.rs`, `modules.rs`,
+  `overlaps.rs`) are 3-line placeholder stubs noting which later PR
+  populates them.
+- `src/graph/queries.rs` shrank from 4371 → 3966 LOC. The 32 type
+  definitions were replaced by a single re-export at the top of the file:
+  ```rust
+  // Result types moved to `super::query::model` in PR 08; re-exported here so
+  // `crate::graph::queries::FooResult` still resolves for external consumers.
+  pub use super::query::model::*;
+  ```
+  Two unused imports (`rmcp::schemars`, `serde::{Deserialize, Serialize}`)
+  were pruned — only the moved type derives referenced them.
+- `classify_metadata`, the `impl OpenedSnapshot { ... }` block (~530
+  through ~3065), the `ModuleDependencyAccumulator` /
+  `ModuleDependencySymbolAccumulator` helper structs, and the entire
+  `#[cfg(test)] mod tests` block (~3066 onward) all stay in `queries.rs` —
+  PR 09/10/11 will move them family by family.
+- External consumers unchanged: `crate::graph::queries::ItemWithAttribute`
+  (`tools/graph/surface.rs:13`), `crate::graph::queries::ModuleTreeNode`
+  (`graph/codemap.rs:18`),
+  `crate::graph::queries::{FunctionFilter, SelfKindFilter}`
+  (`graph/signatures.rs:144`), the `pub use queries::{...};` block in
+  `graph/mod.rs`, and all `shared_snapshot` test imports continue resolving.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. No new `crate::tools` references in engine modules.
 
 Operation: `Split` + Workflow C facade adapter.
 

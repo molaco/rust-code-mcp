@@ -22,6 +22,7 @@ pub mod loader;
 mod math;
 pub mod model;
 pub mod queries;
+mod query;
 pub mod recursion_check;
 pub mod signatures;
 pub mod snapshot;
