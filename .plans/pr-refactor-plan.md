@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 03 complete; PR 04 is next. This is the executable sequence for the
+Status: PR 04 complete; PR 05 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -359,6 +359,48 @@ Exit:
 - Old router and search-tool paths still compile through facades.
 
 ## PR 04: Split Tools Graph Core Endpoints
+
+Status: DONE.
+
+Outcome:
+
+- New `src/tools/graph/` directory; declared `mod graph;` (private) in
+  `src/tools/mod.rs`. Submodules use `pub(super)` visibility so only the
+  `graph_tools` facade (sibling under `tools`) can reach them.
+- `src/tools/graph/core.rs` (577 LOC) owns 15 core endpoints — imports/exports/
+  reexports (`get_imports`, `module_dependencies`, `get_exports`,
+  `get_reexports`, `get_declared_reexports`), usage (`who_imports`, `who_uses`,
+  `who_uses_summary`), calls (`who_calls`, `calls_from`, `call_graph`,
+  `callers_in_crate`, `recursive_callers_count`), modules (`module_tree`), and
+  `workspace_stats` — plus 11 response structs/views (`BindingsListResponse`,
+  `EnrichedBinding`, `UsagesListResponse`, `EnrichedUsage`,
+  `UsageSummaryResponse`, `CallSitesResponse`, `CallSiteView`,
+  `CallGraphResponse`, `ModuleDependenciesResponse`, `ModuleDependencyView`,
+  `ModuleTreeResponse`) and 6 core-local helpers
+  (`enrich_bindings`, `enrich_usages`, `call_site_views`, `namespace_label`,
+  `module_dependency_view`, …).
+- `src/tools/graph/response.rs` (285 LOC) owns 15 cross-family helpers
+  (`open_workspace_snapshot`, `resolve_required_node`, `json_result`,
+  `internal_error`, `list_page`, `page_list`, `ListPage`, `ListMeta`,
+  `DEFAULT_LIST_LIMIT`, `clear_locations_for_summary`, `visibility_label`,
+  `parse_item_kind_filter`, `parse_overlap_scope`, `line_range_overlaps`,
+  `resolve_chunk_to_item`). PR 05/06 endpoints consume these through the
+  facade — no relocation needed when the next families move out.
+- `src/tools/graph_tools.rs` shrank from 4218 to 3421 LOC. New facade lines:
+  ```rust
+  pub use crate::tools::graph::core::*;
+  pub(crate) use crate::tools::graph::response::*;
+  ```
+  External path `crate::tools::graph_tools::Name` still resolves for every
+  moved-out symbol, so `router.rs` and tests compile unchanged.
+- `#[cfg(test)] mod tests` block stays in `graph_tools.rs` — it consumes the
+  endpoints via `use super::*;` through the facade re-exports.
+- Helpers `node_to_item_ref`, `build_clusters`, `page_clusters_by_member_limit`
+  were intentionally left in `graph_tools.rs` (PR 06 will relocate them with
+  the similarity response structs they depend on).
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. `grep -rn "crate::tools" src/graph src/embeddings src/indexing
+  src/search src/vector_store src/chunker src/parser` returns no hits.
 
 Operation: `Split` + Workflow C facade adapter.
 
