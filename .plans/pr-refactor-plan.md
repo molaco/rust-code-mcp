@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 09 complete; PR 10 is next. This is the executable sequence for the
+Status: PR 10 complete; PR 11 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -907,6 +907,66 @@ Exit:
 - Existing public paths still compile.
 
 ## PR 10: Move Graph Query Crate/Surface/Audit Families
+
+Status: DONE.
+
+Outcome:
+
+- 13 more methods moved out of `impl OpenedSnapshot { ... }` in `queries.rs`,
+  using the same multi-impl-block pattern as PR 09.
+
+- **`src/graph/query/crates.rs`** (456 LOC): 3 methods (`crate_edges`,
+  `crate_dependency_metric`, `forbidden_dependency_check`) + 1 private impl
+  helper (`crate_target_kind_by_name`) + 4 family-local free helpers
+  (`glob_match`, `rule_allows_consumer_kind`, `matches_default_consumer_kind`,
+  `normalize_consumer_kind`) + 3 helper unit tests co-located with them.
+
+- **`src/graph/query/surface.rs`** (533 LOC): 7 methods (`enum_variants`,
+  `item_attributes`, `items_with_attribute`, `pub_use_pub_type_audit`,
+  `re_export_chain`, `dead_pub_in_crate`, `dead_pub_report`) + 5 family-local
+  free helpers (`match_attribute`, `attr_matches_path_or_body`,
+  `normalize_attr_pattern`, `attr_pattern_is_path_only`, `attr_path`) + 1
+  co-located unit test.
+
+- **`src/graph/query/audits.rs`** (146 LOC): 3 methods (`static_metadata`,
+  `mut_static_audit`, `unsafe_audit`) + the `classify_metadata` free fn
+  (moved from queries.rs top section) + the `MUT_STATIC_PATTERNS` const.
+
+- `queries.rs` shrank from 3299 → 2238 LOC (−1061).
+
+- Helper-test co-location decision: 4 free-helper unit tests
+  (`forbidden_glob_match_smoke`, `forbidden_dependency_rule_defaults_to_lib_and_bin_consumers`,
+  `forbidden_dependency_rule_explicit_consumer_kinds_override_default`,
+  `match_attribute_accepts_bare_attribute_paths`) travelled with the helpers
+  into their family files. Keeping them in `queries.rs::tests` would have
+  required `pub(crate)` widening of the helpers — a violation of Guardrail 2.
+  Family-private placement preserves the narrowest workable visibility AND
+  matches the standard Rust convention of co-locating helper tests. The
+  larger snapshot-backed `forbidden_dependency_*` integration tests stay in
+  `queries.rs::tests` because they exercise full `OpenedSnapshot` methods.
+
+- No new `pub(super)` widenings beyond the 6 from PR 09. The shared helpers
+  reached by both moved and remaining methods (`format_binding_visibility`,
+  `count_declared_visibility`, `overlap_scope_allows_crate`,
+  `dependency_node_for`, etc.) are still reached only by methods that stay
+  in queries.rs (`module_tree`, `workspace_stats`, `overlaps_with_scope`)
+  plus iterator helpers already widened in PR 09.
+
+- 1 re-export added to `queries.rs` after PR 08's model re-export:
+  `pub use super::query::audits::classify_metadata;` — keeps
+  `src/graph/statics.rs:73`'s `use crate::graph::queries::classify_metadata;`
+  resolving.
+
+- No hardcoded qualified-name strings needed updating: the literals at
+  queries.rs:1054 (`OpenedSnapshot::lookup_by_qualified_name`) and
+  queries.rs:2128 (`ForbiddenDependencyRule`) still reference items that
+  resolve in queries.rs (a method that stays + a model type re-export).
+
+- Two now-unused imports (`usage_category_label`, `StaticMetadata`) pruned
+  from queries.rs to keep the file warning-clean after the moves.
+
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Engine-modules `crate::tools` grep returns no hits.
 
 Operation: `Split`.
 
