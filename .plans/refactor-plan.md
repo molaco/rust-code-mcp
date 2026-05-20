@@ -598,16 +598,23 @@ ensure_embeddings_for, cosine}`. Fix, smallest-first:
 
 - `embedder_version` is a one-line `backend.identity()` wrapper — delete it and
   inline `EmbeddingBackend::identity()` at the `codemap.rs` call site.
-- `cosine` is pure (`&[f32] -> f32`) — put it in the new `graph`-side helper
-  alongside `ensure_embeddings_for` (below); `codemap` is its only caller, so a
-  graph-local home needs no visibility change. Placing it in `embeddings::util`
-  instead would require widening that module from `mod util;` to
-  `pub(crate) mod util` and `cosine` to `pub(crate)`.
+- `cosine` is pure (`&[f32] -> f32`). Two callers today — `codemap.rs:449` and
+  `tools::graph_tools::semantic_overlaps` (`graph_tools.rs:1046`) — so the
+  relocated helper must be reachable from both `graph::codemap` and
+  (post-Phase-1) `tools::graph::similarity`. Put it in a new `graph`-side
+  module with `pub(crate) fn cosine`, then repoint both call sites and move
+  the `cosine_basic_identities` test (currently `graph_tools.rs:4124`).
+  Placing `cosine` in `embeddings::util` instead would also require
+  `pub(crate) mod util` + `pub(crate) fn cosine` and a new `graph → embeddings`
+  use for codemap.
 - `ensure_embeddings_for` takes `&OpenedSnapshot` / `&[NodeId]` and returns a
-  `tools`-local `ResolvedEmbedding` — moving it to `embeddings` would create
-  the *worse* edge `embeddings → graph`. Move it (with `ResolvedEmbedding`) to
-  a `graph`-side home: a new `graph::embedding_cache`, or fold it into Phase
-  3's `codemap/seeds.rs` (which already owns the embedding policy).
+  `tools`-local `ResolvedEmbedding`. Two callers — `codemap.rs:427` and
+  `tools::graph_tools::semantic_overlaps` (`graph_tools.rs:961`) — so the
+  relocated fn also needs `pub(crate)` visibility. Moving it to `embeddings`
+  would create the *worse* edge `embeddings → graph`. Move it (with
+  `ResolvedEmbedding`) to a `graph`-side home: a new `graph::embedding_cache`,
+  or fold into Phase 3's `codemap/seeds.rs` (which already owns the embedding
+  policy). Repoint both call sites.
 
 Exit: `cargo check --all-targets` green; a `crate::tools`/`crate::mcp` grep
 sweep over `src/graph/` returns zero. `codemap` still depends on `embeddings`
