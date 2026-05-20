@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 01 complete; PR 02 is next. This is the executable sequence for the
+Status: PR 02 complete; PR 03 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -193,6 +193,31 @@ Exit:
 
 ## PR 02: Extract Graph Embedding Cache Helper
 
+Status: DONE.
+
+Completed in this workspace:
+
+- Required pre-PR command: `jj show --summary`
+  - commit `19933599d21e0f98077ad190a8a87d53e01b4570`
+  - change `zpytqpympturyvuwusnttnyvnzvvpyvl`
+- Created `src/graph/embedding_cache.rs`.
+- Moved `ResolvedEmbedding` and `ensure_embeddings_for` out of
+  `src/tools/graph_tools.rs`.
+- Deleted `embedder_version`; call sites now use `EmbeddingBackend::identity()`
+  directly.
+- Added private `mod embedding_cache;` plus narrow
+  `pub(crate) use embedding_cache::ensure_embeddings_for;` in
+  `src/graph/mod.rs`.
+- Kept `ResolvedEmbedding` graph-owned in `embedding_cache.rs`; callers use it
+  through inference and do not need to name it from `graph::mod`.
+- Updated production callers:
+  - `src/graph/codemap.rs` now uses `crate::graph::ensure_embeddings_for`.
+  - `src/tools/graph_tools.rs` now uses `crate::graph::ensure_embeddings_for`.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  - result: pass, warnings only
+- Boundary check: `rg -n "crate::tools|crate::mcp" src/graph`
+  - result: no hits
+
 Operation: `Move`.
 
 THEORY_3 mapping:
@@ -217,7 +242,7 @@ Steps:
    ```rust
    mod embedding_cache;
 
-   pub(crate) use embedding_cache::{ensure_embeddings_for, ResolvedEmbedding};
+   pub(crate) use embedding_cache::ensure_embeddings_for;
    ```
 
 5. Update callers:

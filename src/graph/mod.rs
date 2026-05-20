@@ -11,6 +11,7 @@ pub mod channel_audit;
 pub mod codemap;
 pub mod derive_audit;
 pub mod docs_audit;
+mod embedding_cache;
 pub mod extract;
 pub mod fn_body_audit;
 pub mod hir_trim;
@@ -30,6 +31,7 @@ pub mod unsafe_audit;
 pub mod usages;
 
 pub use extract::extract;
+pub(crate) use embedding_cache::ensure_embeddings_for;
 pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
 pub use loader::{LoadedWorkspace, load};
 pub(crate) use math::cosine;

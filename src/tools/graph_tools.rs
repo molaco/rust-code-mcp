@@ -24,7 +24,7 @@ use crate::graph::labels::{
 };
 use crate::graph::{
     Binding, BindingVisibility, CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric,
-    DeadPubFinding, EmbeddingRecord, EnrichedCallSite,
+    DeadPubFinding, EnrichedCallSite,
     ForbiddenDependencyViolation, FunctionFilter, FunctionSignature, FunctionWithSignature,
     GraphEnvOptions, GraphPaths, ItemKind, ModuleTreeNode, Namespace, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapScope, OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain,
@@ -958,7 +958,7 @@ pub async fn semantic_overlaps(
     //    contains one entry per seed whose source was readable +
     //    non-empty + spannable.
     let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
-    let embeddings = ensure_embeddings_for(&snap, &seed_nids, &backend)
+    let embeddings = crate::graph::ensure_embeddings_for(&snap, &seed_nids, &backend)
         .await
         .map_err(internal_error("ensure_embeddings_for"))?;
 
@@ -1133,18 +1133,6 @@ pub async fn semantic_overlaps(
     })
 }
 
-/// Stable identifier for the embedding model + dimension. Cache entries
-/// whose `embedder_version` does not match this string are treated as
-/// misses and refreshed. The identity is derived from the active
-/// `EmbeddingBackend`, so switching variants (or `max_len`) invalidates
-/// stale cache rows automatically.
-///
-/// Single source of truth shared by `semantic_overlaps` and
-/// `ensure_embeddings_for`; previously duplicated as a fn-local `const`.
-pub(crate) fn embedder_version(backend: &crate::embeddings::EmbeddingBackend) -> String {
-    backend.identity()
-}
-
 /// Resolve an optional `embedding_profile` argument into an
 /// `EmbeddingBackend`, falling back to the default profile when unset.
 ///
@@ -1160,225 +1148,6 @@ fn resolve_graph_tool_backend(
         Path::new(directory),
     )
     .map_err(|msg| McpError::invalid_params(msg, None))
-}
-
-/// Max texts per `embed_batch_async` call. Keeps memory bounded when the
-/// workspace has thousands of items.
-pub(crate) const EMBED_CHUNK: usize = 64;
-
-/// Per-NodeId embedding payload returned by [`ensure_embeddings_for`].
-///
-/// `content_hash` is exposed so callers that need to detect
-/// identical-source items (e.g. `semantic_overlaps`'s short-circuit
-/// pass) don't have to re-read the file and re-hash. Codemap-style
-/// callers can ignore the hash.
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedEmbedding {
-    pub vector: Vec<f32>,
-    pub content_hash: [u8; 16],
-}
-
-/// Resolve embeddings for the given NodeIds, hitting the cache where
-/// possible and computing-and-persisting where not.
-///
-/// Used by both `semantic_overlaps` and (Phase 5+) the codemap builder.
-///
-/// Behaviour:
-/// - Cache hit with matching `content_hash` AND matching
-///   `embedder_version` -> reused as-is.
-/// - Cache hit with mismatched hash or version -> re-computed, cache
-///   overwritten.
-/// - Cache miss -> computed, inserted.
-/// - Nodes missing a `file` or `span`, nodes whose file cannot be read,
-///   and nodes whose `span` slices a non-UTF8 boundary / empty/whitespace
-///   region are silently skipped (no entry returned). The caller decides
-///   what to do about the resulting absence.
-///
-/// Async hygiene: opens its own short read/write transactions
-/// internally. Callers MUST NOT hold a `heed::RoTxn` across this call.
-/// The split is:
-///   - Phase A (sync): one read txn to classify nids into cached / needs-
-///     compute and extract the source slice for the needs-compute set.
-///   - Phase B (async, no txn held): batched `embed_batch_async` over
-///     the missing set, in `EMBED_CHUNK`-sized chunks.
-///   - Phase C (sync): one write txn to persist the new
-///     `EmbeddingRecord`s. Skipped entirely when there are no misses.
-///
-/// The embedder is constructed lazily, only when at least one NodeId
-/// actually needs computing. The all-cache-hit (and empty-input) path
-/// therefore avoids loading the embedding model.
-///
-/// `backend` selects the embedding model: it drives both the cache
-/// `embedder_version` check and the embedder constructed for cache
-/// misses, so a caller switching profiles transparently re-embeds rows
-/// left by a different model.
-pub(crate) async fn ensure_embeddings_for(
-    snap: &OpenedSnapshot,
-    nids: &[NodeId],
-    backend: &crate::embeddings::EmbeddingBackend,
-) -> anyhow::Result<HashMap<NodeId, ResolvedEmbedding>> {
-    use sha2::{Digest, Sha256};
-
-    let mut out: HashMap<NodeId, ResolvedEmbedding> = HashMap::new();
-    if nids.is_empty() {
-        return Ok(out);
-    }
-
-    // The workspace root from the snapshot manifest is the base for the
-    // workspace-relative `Node.file` strings.
-    let ws_root = PathBuf::from(&snap.manifest.workspace_root);
-
-    // Phase A: classify nids using one short read txn.
-    //
-    // For every NodeId we either fill `out` directly (cache hit) or push
-    // an entry into `pending` carrying the source text to embed. We
-    // drop the rtxn before phase B (async).
-    struct Pending {
-        nid: NodeId,
-        content_hash: [u8; 16],
-        source: String,
-    }
-    let mut pending: Vec<Pending> = Vec::new();
-    let mut file_cache: HashMap<String, String> = HashMap::new();
-
-    // Resolve the active embedder identity once. The cache classifier
-    // below treats a row as fresh only if its `embedder_version` matches,
-    // and phase B builds the embedder from the same `backend` — so the
-    // classifier and the embedder are always in lockstep.
-    let active_version = embedder_version(backend);
-
-    {
-        let rtxn = snap.env.read_txn()?;
-        // De-duplicate so the same NodeId appearing twice in the input
-        // slice does not cause duplicate work or duplicate writes.
-        let mut seen: std::collections::HashSet<NodeId> =
-            std::collections::HashSet::with_capacity(nids.len());
-        for &nid in nids {
-            if !seen.insert(nid) {
-                continue;
-            }
-            let Some(node) = snap.node_by_id(&rtxn, nid)? else {
-                continue;
-            };
-            let Some(file_rel) = node.file.as_deref() else {
-                continue;
-            };
-            let Some(span) = node.span else {
-                continue;
-            };
-
-            let abs_path = ws_root.join(file_rel);
-            let abs_key = abs_path.to_string_lossy().to_string();
-            if !file_cache.contains_key(&abs_key) {
-                match std::fs::read_to_string(&abs_path) {
-                    Ok(s) => {
-                        file_cache.insert(abs_key.clone(), s);
-                    }
-                    Err(_) => continue,
-                }
-            }
-            let content = file_cache.get(&abs_key).expect("inserted above");
-            let (start, end) = (span.0 as usize, span.1 as usize);
-            let Some(slice) = content.get(start..end) else {
-                continue;
-            };
-            let trimmed = slice.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            let mut hasher = Sha256::new();
-            hasher.update(trimmed.as_bytes());
-            let full = hasher.finalize();
-            let mut content_hash = [0u8; 16];
-            content_hash.copy_from_slice(&full[..16]);
-
-            // Cache lookup. Hit only if content_hash AND embedder_version match.
-            match snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())? {
-                Some(rec)
-                    if rec.content_hash == content_hash
-                        && rec.embedder_version == active_version =>
-                {
-                    out.insert(
-                        nid,
-                        ResolvedEmbedding {
-                            vector: rec.vector,
-                            content_hash,
-                        },
-                    );
-                }
-                _ => {
-                    pending.push(Pending {
-                        nid,
-                        content_hash,
-                        source: trimmed.to_string(),
-                    });
-                }
-            }
-        }
-        // rtxn dropped here.
-    }
-
-    if pending.is_empty() {
-        return Ok(out);
-    }
-
-    // Phase B: batched async embedding. No transaction held across the
-    // await. Model is loaded lazily, only because we have work to do.
-    let embedder = crate::embeddings::EmbeddingGenerator::with_backend(backend.clone())
-        .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    // Pull texts out into their own Vec so we can pass owned Strings
-    // to embed_documents without cloning Pending entries.
-    let mut new_vectors: Vec<Vec<f32>> = Vec::with_capacity(pending.len());
-    for chunk_start in (0..pending.len()).step_by(EMBED_CHUNK) {
-        let chunk_end = (chunk_start + EMBED_CHUNK).min(pending.len());
-        let texts: Vec<String> = pending[chunk_start..chunk_end]
-            .iter()
-            .map(|p| p.source.clone())
-            .collect();
-        // Document-side embedding (raw source slices, no instruction prefix).
-        let vectors = embedder
-            .embed_documents(texts)
-            .await
-            .map_err(|e| anyhow::anyhow!("embed_documents: {e}"))?;
-        new_vectors.extend(vectors);
-    }
-
-    // Phase C: persist with one short write txn.
-    {
-        let mut wtxn = snap.env.write_txn()?;
-        for (p, vector) in pending.iter().zip(new_vectors.iter()) {
-            let rec = EmbeddingRecord {
-                content_hash: p.content_hash,
-                vector: vector.clone(),
-                embedder_version: active_version.clone(),
-                generated_at_unix: now,
-            };
-            snap.dbs
-                .embeddings_by_target
-                .put(&mut wtxn, p.nid.as_bytes(), &rec)?;
-        }
-        wtxn.commit()?;
-    }
-
-    // Assemble: move vectors into `out`.
-    for (p, vector) in pending.into_iter().zip(new_vectors.into_iter()) {
-        out.insert(
-            p.nid,
-            ResolvedEmbedding {
-                vector,
-                content_hash: p.content_hash,
-            },
-        );
-    }
-
-    Ok(out)
 }
 
 pub async fn functions_with_filter(

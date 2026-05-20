@@ -380,9 +380,7 @@ pub(crate) async fn build_codemap(
             // `&EmbeddingBackend` from its caller, replace this default
             // with the caller's choice so non-default Qwen3 variants
             // invalidate stale cache rows correctly.
-            let active_version = crate::tools::graph_tools::embedder_version(
-                &crate::embeddings::EmbeddingBackend::default(),
-            );
+            let active_version = crate::embeddings::EmbeddingBackend::default().identity();
             for nid in ordered {
                 let rec = snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())?;
                 let fresh = rec
@@ -424,7 +422,7 @@ pub(crate) async fn build_codemap(
         if opts.embedding_policy == EmbeddingPolicy::ComputeMissing && !missing.is_empty() {
             // Codemap is not profile-parameterized; embed with the default
             // backend, matching the prompt embedder constructed above.
-            let resolved = crate::tools::graph_tools::ensure_embeddings_for(
+            let resolved = crate::graph::ensure_embeddings_for(
                 snap,
                 &missing,
                 &crate::embeddings::EmbeddingBackend::default(),
