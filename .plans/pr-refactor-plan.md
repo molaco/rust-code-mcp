@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 00 complete; PR 01 is next. This is the executable sequence for the
+Status: PR 01 complete; PR 02 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -129,6 +129,24 @@ Exit:
 - No code moved yet.
 
 ## PR 01: Extract Graph Math Helper
+
+Status: DONE.
+
+Completed in this workspace:
+
+- Required pre-PR command: `jj show --summary`
+  - commit `5a3ff76fe37c5dffc4d2a8359055f0d40ebdd07b`
+  - change `npyqvrmwurokmqpywwrtltrstuxkwqqk`
+- Moved `cosine` from `src/tools/graph_tools.rs` to new
+  `src/graph/math.rs`.
+- Moved `cosine_basic_identities` into `src/graph/math.rs`.
+- Added private `mod math;` plus narrow `pub(crate) use math::cosine;` in
+  `src/graph/mod.rs`.
+- Updated production callers:
+  - `src/graph/codemap.rs` now uses `crate::graph::cosine`.
+  - `src/tools/graph_tools.rs` now uses `crate::graph::cosine`.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  - result: pass, warnings only
 
 Operation: `Move`.
 

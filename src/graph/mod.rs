@@ -18,6 +18,7 @@ pub mod ids;
 pub mod impls;
 pub(crate) mod labels;
 pub mod loader;
+mod math;
 pub mod model;
 pub mod queries;
 pub mod recursion_check;
@@ -31,6 +32,7 @@ pub mod usages;
 pub use extract::extract;
 pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
 pub use loader::{LoadedWorkspace, load};
+pub(crate) use math::cosine;
 pub use model::{
     Binding, BindingKind, BindingVisibility, EmbeddingRecord, ExtractionModel, FunctionSignature,
     GenericBound, ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage,

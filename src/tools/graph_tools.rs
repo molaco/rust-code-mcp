@@ -1043,7 +1043,7 @@ pub async fn semantic_overlaps(
             if cross_crate_only && a.node.crate_id == b.node.crate_id {
                 continue;
             }
-            let score = cosine(va, vb);
+            let score = crate::graph::cosine(va, vb);
             if score < threshold {
                 continue;
             }
@@ -2705,26 +2705,6 @@ fn line_range_overlaps(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bo
     a_start <= b_end && a_end >= b_start
 }
 
-/// Cosine similarity between two equal-length f32 vectors. Used by
-/// `semantic_overlaps` v1.1 for the in-memory pairwise pass. Returns 0.0
-/// when either vector has zero norm (instead of NaN); slices of unequal
-/// length are silently truncated to the shorter length via `zip`.
-pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    let mut dot = 0f32;
-    let mut na = 0f32;
-    let mut nb = 0f32;
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    if na == 0.0 || nb == 0.0 {
-        0.0
-    } else {
-        dot / (na.sqrt() * nb.sqrt())
-    }
-}
-
 /// Map a vector-store chunk's `(file, line_range)` to a hypergraph Item NodeId.
 ///
 /// `chunk_file` is normally absolute (vector store stores absolute paths).
@@ -4118,25 +4098,6 @@ mod tests {
         let mut id = [0u8; 32];
         id[0] = byte;
         NodeId(id)
-    }
-
-    #[test]
-    fn cosine_basic_identities() {
-        // identical → 1.0
-        let v = vec![1.0_f32, 2.0, 3.0];
-        assert!((cosine(&v, &v) - 1.0).abs() < 1e-6);
-        // orthogonal → 0.0
-        let a = vec![1.0_f32, 0.0];
-        let b = vec![0.0_f32, 1.0];
-        assert!(cosine(&a, &b).abs() < 1e-6);
-        // opposite → -1.0
-        let a = vec![1.0_f32, 2.0, 3.0];
-        let neg: Vec<f32> = a.iter().map(|x| -x).collect();
-        assert!((cosine(&a, &neg) + 1.0).abs() < 1e-6);
-        // zero-norm input → 0.0 (no NaN)
-        let z = vec![0.0_f32; 3];
-        assert_eq!(cosine(&z, &v), 0.0);
-        assert_eq!(cosine(&v, &z), 0.0);
     }
 
     #[test]
