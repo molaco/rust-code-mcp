@@ -16,6 +16,7 @@ use rmcp::{
 };
 use serde::Serialize;
 
+use crate::graph::labels::item_kind_short_label as short_item_kind_label;
 use crate::graph::{
     BindingVisibility, GraphEnvOptions, GraphPaths, ItemKind, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapScope, open_current,
@@ -282,4 +283,185 @@ pub(crate) fn resolve_chunk_to_item(
         }
     }
     None
+}
+
+// ----- shared similarity / codemap helpers (cross-family) -----
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ItemRef {
+    pub(crate) qualified_name: String,
+    pub(crate) item_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) span: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SimilarityCluster {
+    pub(crate) members: Vec<ItemRef>,
+    pub(crate) avg_similarity: f32,
+    pub(crate) min_similarity: f32,
+    pub(crate) size: usize,
+    pub(crate) truncated: bool,
+}
+
+/// Build a small ItemRef from a Node (used in semantic_overlaps response).
+pub(crate) fn node_to_item_ref(node: &Node, summary: bool) -> ItemRef {
+    ItemRef {
+        qualified_name: node.qualified_name.clone(),
+        item_kind: node.item_kind.map(|k| short_item_kind_label(k).to_string()),
+        file: if summary {
+            None
+        } else {
+            Some(node.file.clone().unwrap_or_default())
+        },
+        span: if summary {
+            None
+        } else {
+            Some(node.span.unwrap_or((0, 0)))
+        },
+    }
+}
+
+/// Single-linkage clustering via union-find. Each edge unions its two endpoints
+/// and contributes its score to the resulting cluster's score statistics.
+/// Singleton groups are dropped. Sort: by avg_similarity desc, then size desc,
+/// then min_similarity desc.
+/// Each cluster's member list is capped at `max_members` (sets `truncated=true`
+/// when the cap kicks in).
+pub(crate) fn build_clusters<F>(
+    edges: &[(NodeId, NodeId, f32)],
+    max_members: usize,
+    lookup: F,
+) -> Vec<SimilarityCluster>
+where
+    F: Fn(NodeId) -> Option<ItemRef>,
+{
+    // Collect node set.
+    let mut nodes: Vec<NodeId> = Vec::new();
+    let mut seen: HashMap<NodeId, usize> = HashMap::new();
+    for (a, b, _) in edges {
+        if !seen.contains_key(a) {
+            seen.insert(*a, nodes.len());
+            nodes.push(*a);
+        }
+        if !seen.contains_key(b) {
+            seen.insert(*b, nodes.len());
+            nodes.push(*b);
+        }
+    }
+    let n = nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Union-find with path compression.
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    for (a, b, _) in edges {
+        let ra = find(&mut parent, seen[a]);
+        let rb = find(&mut parent, seen[b]);
+        if ra != rb {
+            parent[ra] = rb;
+        }
+    }
+
+    // Group node indices by root.
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+
+    // For each group, collect score stats from the subset of edges whose
+    // endpoints both fall in this group.
+    let mut clusters: Vec<SimilarityCluster> = Vec::new();
+    for (_root, group) in groups {
+        if group.len() < 2 {
+            continue;
+        }
+        let group_set: std::collections::HashSet<usize> = group.iter().copied().collect();
+        let mut group_scores: Vec<f32> = Vec::new();
+        for (a, b, s) in edges {
+            let ai = seen[a];
+            let bi = seen[b];
+            if group_set.contains(&ai) && group_set.contains(&bi) {
+                group_scores.push(*s);
+            }
+        }
+        if group_scores.is_empty() {
+            continue;
+        }
+        let sum: f32 = group_scores.iter().sum();
+        let avg = sum / group_scores.len() as f32;
+        let mut min_sim = group_scores[0];
+        for s in &group_scores[1..] {
+            if *s < min_sim {
+                min_sim = *s;
+            }
+        }
+
+        let size = group.len();
+        let truncated = size > max_members;
+        let take_n = max_members.min(size);
+        let members: Vec<ItemRef> = group
+            .into_iter()
+            .take(take_n)
+            .filter_map(|i| lookup(nodes[i]))
+            .collect();
+
+        clusters.push(SimilarityCluster {
+            members,
+            avg_similarity: avg,
+            min_similarity: min_sim,
+            size,
+            truncated,
+        });
+    }
+
+    clusters.sort_by(|a, b| {
+        b.avg_similarity
+            .partial_cmp(&a.avg_similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.size.cmp(&a.size))
+            .then_with(|| {
+                b.min_similarity
+                    .partial_cmp(&a.min_similarity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    clusters
+}
+
+/// Apply `semantic_overlaps` cluster pagination. `offset` skips complete
+/// clusters, then `member_limit` caps the total number of emitted member refs
+/// across all returned clusters.
+pub(crate) fn page_clusters_by_member_limit(
+    clusters: Vec<SimilarityCluster>,
+    offset: usize,
+    member_limit: usize,
+) -> Vec<SimilarityCluster> {
+    let mut remaining = member_limit;
+    let mut paged = Vec::new();
+    for mut cluster in clusters.into_iter().skip(offset) {
+        if remaining == 0 {
+            break;
+        }
+        if cluster.members.len() > remaining {
+            cluster.members.truncate(remaining);
+            cluster.truncated = true;
+            paged.push(cluster);
+            break;
+        }
+        remaining -= cluster.members.len();
+        paged.push(cluster);
+    }
+    paged
 }

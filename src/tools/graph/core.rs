@@ -6,26 +6,75 @@
 //! follows the shape documented in `graph_tools.rs`: resolve directory,
 //! open snapshot, resolve qualified names, run the query, serialize.
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 
 use crate::graph::labels::{
     binding_kind_label, item_kind_short_label as short_item_kind_label, node_kind_label,
     usage_category_label,
 };
+use crate::graph::snapshot::BuildOptions;
 use crate::graph::{
     Binding, CallGraphNode, EnrichedCallSite, ModuleDependency, ModuleDependencySymbol,
     ModuleTreeNode, Namespace, NodeKind, OpenedSnapshot, RecursiveCallersCount, Usage,
-    UsageSummaryRow, WorkspaceStats,
+    UsageSummaryRow, WorkspaceStats, build_and_persist,
 };
 use crate::tools::graph::response::*;
 use crate::tools::params::{
-    CallGraphParams, CallersInCrateParams, CallsFromParams, GraphDeclaredReexportsParams,
-    GraphExportsParams, GraphImportsParams, GraphReexportsParams, ModuleDependenciesParams,
-    ModuleTreeParams, RecursiveCallersCountParams, WhoCallsParams, WhoImportsParams,
-    WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
+    BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
+    GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams, GraphReexportsParams,
+    ModuleDependenciesParams, ModuleTreeParams, RecursiveCallersCountParams, WhoCallsParams,
+    WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
 };
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
+
+pub async fn build_hypergraph(
+    params: BuildHypergraphParams,
+) -> Result<CallToolResult, McpError> {
+    let dir = PathBuf::from(&params.directory);
+    if !dir.exists() {
+        return Err(McpError::invalid_params(
+            format!("directory does not exist: {}", params.directory),
+            None,
+        ));
+    }
+    let opts = BuildOptions {
+        force_rebuild: params.force_rebuild.unwrap_or(false),
+        ..Default::default()
+    };
+    // build_and_persist runs `loader::load` + the full extract pass + LMDB
+    // writes synchronously (4-18s wall-clock). Hand off to a blocking thread
+    // so the tokio runtime worker stays free to handle other tool calls.
+    let result = tokio::task::spawn_blocking(move || build_and_persist(&dir, opts))
+        .await
+        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+        .map_err(|e| McpError::internal_error(format!("build_hypergraph failed: {e:#}"), None))?;
+
+    json_result(&BuildHypergraphResponse {
+        graph_id: result.graph_id,
+        workspace_root: result.workspace_root.display().to_string(),
+        fingerprint: result.fingerprint,
+        node_count: result.node_count,
+        binding_count: result.binding_count,
+        usage_count: result.usage_count,
+        reused: result.reused,
+        snapshot_path: result.snapshot_path.display().to_string(),
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BuildHypergraphResponse {
+    pub(crate) graph_id: String,
+    pub(crate) workspace_root: String,
+    pub(crate) fingerprint: String,
+    pub(crate) node_count: u64,
+    pub(crate) binding_count: u64,
+    pub(crate) usage_count: u64,
+    pub(crate) reused: bool,
+    pub(crate) snapshot_path: String,
+}
 
 pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;

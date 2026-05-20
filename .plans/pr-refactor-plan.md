@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 05 complete; PR 06 is next. This is the executable sequence for the
+Status: PR 06 complete; PR 07 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -537,6 +537,66 @@ Exit:
 - No MCP tool name changes.
 
 ## PR 06: Split Tools Graph Similarity And Codemap Endpoints
+
+Status: DONE.
+
+Outcome:
+
+- Two new sibling files under `src/tools/graph/`:
+  - `similarity.rs` (583 LOC) — `similar_to_item`, `semantic_overlaps`
+    endpoints + family-private helper `resolve_graph_tool_backend` + 5
+    family-private response structs (`SimilarToItemResp`, `SeedItemRef`,
+    `SimilarMatch`, `SemanticOverlapsResp`, `ScopeSummary`, `SimilarityPair`).
+    Uses `crate::graph::{cosine, ensure_embeddings_for}` directly — PR 01/02's
+    graph-side homes, no `crate::tools::graph_tools::*` paths involved.
+  - `codemap.rs` (172 LOC) — `handle_build_codemap` endpoint only.
+- `build_hypergraph` + `BuildHypergraphResponse` appended to `core.rs`
+  (577 → 626 LOC); naturally fits with `workspace_stats` and the rest of the
+  core graph endpoints. This completes the "pure facade" goal — every
+  production endpoint now lives in a family file.
+- Cross-family shared helpers moved into `response.rs` (285 → 467 LOC):
+  `node_to_item_ref`, `build_clusters`, `page_clusters_by_member_limit`, and
+  the cross-family structs `ItemRef` and `SimilarityCluster`. (Plan-spec said
+  only `ItemRef`, but `SimilarityCluster` was the return type of
+  `build_clusters` so it had to follow.)
+- `src/tools/graph/mod.rs` (12 → 16 LOC) now declares all six endpoint
+  families plus the shared `response`:
+  ```rust
+  pub(super) mod audits;
+  pub(super) mod codemap;
+  pub(super) mod core;
+  pub(super) mod crates;
+  pub(super) mod response;
+  pub(super) mod similarity;
+  pub(super) mod surface;
+  ```
+- `graph_tools.rs` shrank from 1912 → 933 LOC — 14 production lines (doc
+  comment + 7 facade re-exports) plus the 919-line `#[cfg(test)] mod tests`
+  block, which still resolves every endpoint through the facade glob
+  re-exports. The `_path_marker` stub and stale `use std::path::Path;` were
+  deleted (no remaining `Path` use after the moves). Final facade body:
+  ```rust
+  pub use crate::tools::graph::audits::*;
+  pub use crate::tools::graph::core::*;
+  pub use crate::tools::graph::crates::*;
+  pub use crate::tools::graph::similarity::*;
+  pub use crate::tools::graph::surface::*;
+  pub(crate) use crate::tools::graph::codemap::*;
+  // (response helpers are imported inside `mod tests` only — see below)
+  ```
+  `codemap` uses `pub(crate)` since `handle_build_codemap` is `pub(crate)` —
+  rustc warned that a `pub use` glob can't widen visibility, and the
+  endpoint's only caller (`router::build_codemap`) is in-crate. Access to
+  `response.rs` helpers from the retained `#[cfg(test)] mod tests` block is
+  scoped inside the test module (`use crate::tools::graph::response::*;`)
+  rather than a module-level `pub(crate) use`, so the facade does not leak
+  `open_workspace_snapshot`, `resolve_chunk_to_item`, `build_clusters`,
+  pagination DTOs, etc. crate-wide through the old `graph_tools::*` path.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. `grep -rn "crate::tools"` over engine modules returns no hits.
+- Checkpoint 2 (PR 03-06) complete: the 4218-LOC `graph_tools.rs` mega-file
+  is fully dissolved into 7 sibling family files in `src/tools/graph/`, with
+  full external-path compatibility via the facade.
 
 Operation: `Split`.
 
