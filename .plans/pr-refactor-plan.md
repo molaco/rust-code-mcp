@@ -1,7 +1,8 @@
 # PR-Based Refactor Plan
 
-Status: executable sequence for the module/file-boundary refactor in
-`.plans/refactor-plan.md`, corrected with the Phase 0.6 boundary fixes.
+Status: PR 00 complete; PR 01 is next. This is the executable sequence for the
+module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
+Phase 0.6 boundary fixes.
 
 Workflow basis: `THEORY_3.md`.
 
@@ -51,6 +52,41 @@ Do not change MCP tool names, parameter struct names, or public Rust paths
 unless the PR explicitly says it is a Phase 6 cleanup PR.
 
 ## PR 00: Baseline Record
+
+Status: DONE.
+
+Completed in this workspace:
+
+- Required pre-PR command: `jj show --summary`
+  - commit `8f7b65948e57168963ad1978f97f02d155738df2`
+  - change `tvqkwplronnptoysqtzwrwoyqulvnzul`
+- Baseline check: `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  - result: pass, warnings only
+- Hypergraph baseline:
+  - nodes: 2973
+  - bindings: 5056
+  - usages: 7935
+- Workspace stats:
+  - `pub`: 540
+  - `pub(crate)`: 43
+  - `pub_crate_share`: 0.07375643224699828
+- Dead-public baseline:
+  - `dead_pub_in_crate(krate="rust_code_mcp")`: 338 candidates
+- Oversized-file line and complexity baseline:
+  - `src/tools/graph_tools.rs`: 4488 lines, 92 fns, cyclomatic 816
+  - `src/graph/queries.rs`: 4371 lines, 120 fns, cyclomatic 928
+  - `src/graph/codemap.rs`: 2058 lines, 46 fns, cyclomatic 327
+  - `src/embeddings/openrouter.rs`: 1618 lines, 70 fns, cyclomatic 138
+  - `src/embeddings/backend.rs`: 895 lines, 55 fns, cyclomatic 95
+  - `src/chunker/mod.rs`: 805 lines, 32 fns, cyclomatic 103
+  - `src/indexing/embedding_batcher.rs`: 767 lines, 22 fns, cyclomatic 43
+  - `src/tools/search_tool_router.rs`: 765 lines, 56 fns, cyclomatic 168
+  - `src/indexing/unified.rs`: 742 lines, 24 fns, cyclomatic 77
+  - `src/tools/search_tool.rs`: 629 lines, 1 fn, cyclomatic 90
+  - `src/parser/mod.rs`: 621 lines, 21 fns, cyclomatic 45
+  - `src/tools/query_tools.rs`: 561 lines, 20 fns, cyclomatic 107
+  - `src/config/indexer.rs`: 534 lines, 20 fns, cyclomatic 55
+  - `src/tools/index_tool.rs`: 526 lines, 16 fns, cyclomatic 86
 
 Operation: baseline only, no structural change.
 
@@ -1145,4 +1181,3 @@ src/
     error.rs
     error_collection.rs
 ```
-
