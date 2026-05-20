@@ -594,32 +594,62 @@ Phase 0.6 removes the one real `graph → tools` violation (§2) before any
 splitting begins — Phase 1 as drafted would otherwise relocate the offending
 helpers into `tools/graph/similarity.rs` and preserve the inversion.
 `src/graph/codemap.rs` calls `crate::tools::graph_tools::{embedder_version,
-ensure_embeddings_for, cosine}`. Fix, smallest-first:
+ensure_embeddings_for, cosine}` at `codemap.rs:{383,427,449}` (verified
+2026-05-20). The three helpers are defined at `graph_tools.rs:1144` / `:1215` /
+`:2712` with an internal-only second caller in `semantic_overlaps`
+(`graph_tools.rs:{961,1046,1248}`) and the `cosine_basic_identities` test at
+`graph_tools.rs:4124`. Placements below are derived from §2's allowed edges
+(no new `graph → embeddings` or `embeddings → graph` use unless already
+sanctioned for `graph::codemap`):
 
-- `embedder_version` is a one-line `backend.identity()` wrapper — delete it and
-  inline `EmbeddingBackend::identity()` at the `codemap.rs` call site.
+- `embedder_version` is a one-line `backend.identity()` wrapper — delete it
+  and inline `EmbeddingBackend::identity()` at the `codemap.rs:383` call site
+  and at the (relocated) `ensure_embeddings_for` body.
 - `cosine` is pure (`&[f32] -> f32`). Two callers today — `codemap.rs:449` and
   `tools::graph_tools::semantic_overlaps` (`graph_tools.rs:1046`) — so the
   relocated helper must be reachable from both `graph::codemap` and
-  (post-Phase-1) `tools::graph::similarity`. Put it in a new `graph`-side
-  module with `pub(crate) fn cosine`, then repoint both call sites and move
-  the `cosine_basic_identities` test (currently `graph_tools.rs:4124`).
-  Placing `cosine` in `embeddings::util` instead would also require
-  `pub(crate) mod util` + `pub(crate) fn cosine` and a new `graph → embeddings`
-  use for codemap.
+  (post-Phase-1) `tools::graph::similarity`. **Target: `src/graph/math.rs`**
+  (new flat module) with `pub(crate) fn cosine`. Move the
+  `cosine_basic_identities` test alongside it. Placing `cosine` in
+  `embeddings::util` was considered and rejected: it would introduce a new
+  `graph → embeddings` edge purely for cosine, while `graph/math.rs` adds no
+  new cross-module edge.
 - `ensure_embeddings_for` takes `&OpenedSnapshot` / `&[NodeId]` and returns a
   `tools`-local `ResolvedEmbedding`. Two callers — `codemap.rs:427` and
   `tools::graph_tools::semantic_overlaps` (`graph_tools.rs:961`) — so the
   relocated fn also needs `pub(crate)` visibility. Moving it to `embeddings`
-  would create the *worse* edge `embeddings → graph`. Move it (with
-  `ResolvedEmbedding`) to a `graph`-side home: a new `graph::embedding_cache`,
-  or fold into Phase 3's `codemap/seeds.rs` (which already owns the embedding
-  policy). Repoint both call sites.
+  would create the forbidden edge `embeddings → graph`. **Target:
+  `src/graph/embedding_cache.rs`** (new flat module, sibling to `codemap.rs`),
+  exporting `pub(crate) struct ResolvedEmbedding` and
+  `pub(crate) async fn ensure_embeddings_for`. Pre-staging Phase 3's
+  `codemap/seeds.rs` was considered and rejected: it would create the
+  `graph/codemap/` directory while `codemap.rs` is still a mega-file
+  (violating Guardrail 7's one-concern-per-commit) and would force
+  `tools::graph::similarity` to import from inside `graph::codemap::`. Phase 3
+  may later absorb this module into `codemap/seeds.rs` if that becomes the
+  cleaner home; until then it stays flat.
 
-Exit: `cargo check --all-targets` green; a `crate::tools`/`crate::mcp` grep
-sweep over `src/graph/` returns zero. `codemap` still depends on `embeddings`
-and `search` — both sanctioned in §2; the `search` edge is addressed in
-Phase 3, not here.
+Commit shape (one concern per commit, Guardrail 7):
+
+- **Commit A** — extract `cosine`: create `src/graph/math.rs`, declare
+  `mod math;` in `src/graph/mod.rs`, move the `cosine_basic_identities` test,
+  repoint `codemap.rs:449` and `graph_tools.rs:1046` to
+  `crate::graph::math::cosine`.
+- **Commit B** — extract `ensure_embeddings_for` and delete
+  `embedder_version`: create `src/graph/embedding_cache.rs` with
+  `ResolvedEmbedding` + `ensure_embeddings_for`, declare
+  `mod embedding_cache;` in `src/graph/mod.rs`, inline
+  `backend.identity()` at the two `embedder_version` call sites, repoint
+  `codemap.rs:427` and `graph_tools.rs:961` to
+  `crate::graph::embedding_cache::ensure_embeddings_for`, delete the
+  originals (`embedder_version`, `ensure_embeddings_for`, `ResolvedEmbedding`)
+  from `graph_tools.rs`.
+
+Each commit ends green: `nix develop ../nix-devshells#cuda-code --command
+cargo check --all-targets`. After Commit B, a `crate::tools`/`crate::mcp`
+grep sweep over `src/graph/` must return zero. `codemap` still depends on
+`embeddings` and `search` — both sanctioned in §2; the `search` edge is
+addressed in Phase 3, not here.
 
 ## 13. Per-Phase Output Template
 
@@ -745,7 +775,7 @@ Agent ergonomics:
         codemap.rs                  # build_codemap endpoint bridge
         response.rs                 # shared JSON/enrichment/render helpers
 
-    graph/                          ── Phases 2-3: queries.rs + codemap.rs dissolved
+    graph/                          ── Phase 0.6: math.rs + embedding_cache.rs; Phases 2-3: queries.rs + codemap.rs dissolved
       mod.rs
       ids.rs
       model.rs
@@ -769,6 +799,8 @@ Agent ergonomics:
       recursion_check.rs
       audit_util.rs                 # dup-plan helper (Phase 0.5) — audit utils
       labels.rs                     # dup-plan helper (Phase 0.5) — label vocab
+      math.rs                       NEW  ← Phase 0.6 — pub(crate) cosine + test
+      embedding_cache.rs            NEW  ← Phase 0.6 — pub(crate) ResolvedEmbedding + ensure_embeddings_for
       query/                        NEW  ← queries.rs (4371), split by family
         mod.rs
         model.rs                    # query result structs/enums
