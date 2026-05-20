@@ -30,7 +30,7 @@ use super::model::MutStaticFinding;
 /// `lazy_static!` is intentionally NOT here — Path B's strength is type-name
 /// detection, and the macro expands to a generated wrapper type whose name
 /// won't match `LazyLock`. Document this as a limitation.
-pub(crate) const MUT_STATIC_PATTERNS: &[(&str, &str)] = &[
+const MUT_STATIC_PATTERNS: &[(&str, &str)] = &[
     // Handled specially via `is_mut`, but listed for documentation parity.
     ("static mut", ""),
     ("LazyLock", "LazyLock"),

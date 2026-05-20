@@ -15,7 +15,7 @@ use super::super::labels::{
     node_kind_label,
 };
 use super::super::model::{Binding, BindingKind, BindingVisibility, Node, NodeKind};
-use super::super::queries::dependency_node_for;
+use super::shared::dependency_node_for;
 use super::super::snapshot::OpenedSnapshot;
 use super::model::{ModuleDependency, ModuleDependencySymbol};
 

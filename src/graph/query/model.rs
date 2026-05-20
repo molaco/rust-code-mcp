@@ -10,7 +10,7 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use super::super::ids::NodeId;
-use super::super::model::{BindingVisibility, FunctionSignature, ItemKind, SelfKind};
+use super::super::model::{BindingVisibility, FunctionSignature, ItemKind};
 
 /// One result of `dead_pub_in_crate`: a `pub` item with no cross-crate
 /// importers or references.

@@ -12,6 +12,8 @@ pub(super) mod functions;
 pub(super) mod imports;
 pub(super) mod model;
 pub(super) mod modules;
+pub(super) mod navigation;
 pub(super) mod overlaps;
+pub(super) mod shared;
 pub(super) mod surface;
 pub(super) mod usage;

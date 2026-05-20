@@ -140,7 +140,7 @@ fn build_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::queries::tests::shared_snapshot;
+    use crate::graph::test_support::shared_snapshot;
     use crate::graph::queries::{FunctionFilter, SelfKindFilter};
 
     fn sig_of(qualified: &str) -> FunctionSignature {

@@ -13,7 +13,7 @@ use super::super::ids::NodeId;
 use super::super::model::{
     Binding, BindingKind, BindingVisibility, ItemKind, Node, NodeKind, Usage,
 };
-use super::super::queries::MAX_REEXPORT_HOPS;
+use super::shared::MAX_REEXPORT_HOPS;
 use super::super::snapshot::OpenedSnapshot;
 use super::model::{
     CrateDeadPub, DeadPubFinding, ItemWithAttribute, PubTypeAliasMasqueradingAsReexport,

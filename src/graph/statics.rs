@@ -69,7 +69,7 @@ pub fn extract_statics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::queries::tests::shared_snapshot;
+    use crate::graph::test_support::shared_snapshot;
     use crate::graph::queries::classify_metadata;
 
     #[test]

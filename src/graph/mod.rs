@@ -28,6 +28,8 @@ pub mod signatures;
 pub mod snapshot;
 pub mod statics;
 pub mod storage;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod unsafe_audit;
 pub mod usages;
 

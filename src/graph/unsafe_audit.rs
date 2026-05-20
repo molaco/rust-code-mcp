@@ -241,7 +241,7 @@ pub(crate) fn has_safety_comment_in_preceding_lines(text: &str, unsafe_offset: u
 mod tests {
     use super::*;
     use crate::graph::loader;
-    use crate::graph::queries::tests::shared_snapshot;
+    use crate::graph::test_support::shared_snapshot;
     use std::path::Path;
 
     #[test]

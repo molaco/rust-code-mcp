@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 10 complete; PR 11 is next. This is the executable sequence for the
+Status: PR 11 complete; PR 12 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1001,6 +1001,112 @@ Exit:
 - Crate, surface, and audit query families live in named files.
 
 ## PR 11: Move Remaining Graph Query Families And Test Support
+
+Status: DONE.
+
+Outcome:
+
+- 6 more methods moved out of `impl OpenedSnapshot { ... }` in queries.rs
+  into the last three family files. Same multi-impl-block pattern as
+  PRs 09/10.
+
+- **`src/graph/query/functions.rs`** (98 LOC): `function_signature`,
+  `functions_with_filter` + family-private `filter_matches` helper.
+
+- **`src/graph/query/modules.rs`** (331 LOC): `module_tree`,
+  `workspace_stats` + 4 family-private helpers (`build_module_tree` method,
+  `count_declared_visibility`, `visibility_count_notes`,
+  `format_binding_visibility`) + 2 unit tests
+  (`visibility_counts_separate_module_private_from_restricted`,
+  `visibility_count_notes_flag_alias_fields`) co-located with the helpers
+  they exercise. `workspace_stats` placement is a judgment call — the plan
+  didn't explicitly assign it; co-locating with `module_tree` keeps
+  workspace-level structural queries together.
+
+- **`src/graph/query/overlaps.rs`** (281 LOC): `overlaps`,
+  `overlaps_with_scope` + family-private `overlap_scope_allows_crate`
+  helper + 1 unit test (`overlap_scope_filters_examples_and_vendor`).
+
+- queries.rs shrank from 2238 → 1554 LOC (−684).
+
+- **`queries.rs` is now a true facade** (post-review fix-up, see below).
+  After PR 11 originally landed, reviewer flagged that queries.rs was still
+  a 1554-LOC production module owning navigation primitives + shared
+  helpers, contradicting the exit condition "contains only re-exports and
+  test-only compatibility". Fix-up applied (squashed into PR 11):
+
+  - **New `src/graph/query/navigation.rs`** (~254 LOC) — owns the lower-level
+    `OpenedSnapshot` navigation primitives: `lookup_by_qualified_name`
+    (+ 3 helpers: `lookup_by_qualified_name_inner`,
+    `lookup_impl_module_item_alias`, plus the free fns
+    `impl_module_item_alias_parts`, `is_impl_module_item_alias_candidate`),
+    `node_by_id`, `find_root_module_of`, `callees_of`, `referrers_of`.
+  - **New `src/graph/query/shared.rs`** (~168 LOC) — owns cross-family
+    helpers: 5 LMDB iterator methods (`bindings_for_from_module`,
+    `bindings_for_target`, `usages_for_target`, `usages_for_consumer`,
+    `usages_for_consumer_function`), the `dependency_node_for` free fn,
+    and the `MAX_REEXPORT_HOPS` const.
+  - `query/mod.rs` updated to declare both new submodules (12
+    `pub(super) mod ...;` lines, alphabetical).
+  - **Family-file back-imports eliminated**: `imports.rs` and `surface.rs`
+    were importing from `super::super::queries::*` (Medium #2). Now they
+    use `super::shared::*`, breaking the circular implementation dependency.
+  - **Visibility narrowed to `pub(in crate::graph)`** for the 6 items that
+    need to be reachable from `queries.rs::tests` (in `graph::queries`):
+    `impl_module_item_alias_parts`,
+    `is_impl_module_item_alias_candidate`, `callees_of`, `referrers_of`,
+    `dependency_node_for`, `MAX_REEXPORT_HOPS`. Subagent initially used
+    `pub(crate)` but that's wider than needed — narrowed to `pub(in
+    crate::graph)` per Guardrail 2 (narrowest workable widening).
+    `MUT_STATIC_PATTERNS` in audits.rs was kept private (it was only ever
+    used inside its own file).
+  - **`queries.rs` reduced to ~30 production lines + ~1130 test lines**
+    (from 1554 LOC pre-fixup). Production content is exclusively:
+    the rewritten module-level doc comment + `pub use super::query::model::*;`
+    + `pub use super::query::audits::classify_metadata;` + a few
+    `#[cfg(test)] use` statements bringing names into scope for the
+    unchanged test block.
+  - **Unused `SelfKind` import** in `model.rs:13` removed (Low #1).
+  - **Stale docs refreshed** (Low #2): module-level doc comment in
+    `queries.rs:3` rewritten to describe the facade state; doc reference
+    in `usages.rs:176` corrected to point at
+    `graph::test_support::shared_snapshot` (the actual shared fixture
+    name).
+
+- **Test fixture relocation**:
+  - Created `src/graph/test_support.rs` (42 LOC) with `pub(crate) fn shared_snapshot`.
+  - Registered `#[cfg(test)] pub(crate) mod test_support;` in `src/graph/mod.rs`.
+  - Updated 4 sibling test imports
+    (`attributes.rs:279`, `signatures.rs:143`, `unsafe_audit.rs:244`,
+    `statics.rs:72`) from `crate::graph::queries::tests::shared_snapshot` to
+    `crate::graph::test_support::shared_snapshot`.
+  - `queries.rs::tests` narrowed from `pub(crate) mod tests` to private
+    `mod tests` (no longer re-exports the fixture path).
+  - `usages.rs` private mirror: NOT replaced — it builds a synthetic
+    minimal crate for pattern-coverage tests, materially different from the
+    workspace-loading `shared_snapshot`. Renamed locally from
+    `shared_snapshot` to `synthetic_snapshot` (10 sites) so the conceptual
+    divergence is explicit; doc-comment cross-references
+    `graph::test_support::shared_snapshot`.
+
+- No new `pub(super)` widenings beyond the 6 from PR 09. All family-local
+  helpers stayed private to their new files.
+
+- Unused imports pruned from queries.rs after the moves
+  (`BTreeSet`, `BTreeMap`, several label fns, `BindingVisibility`,
+  `FunctionSignature`, `SelfKind`). `HashSet` and `Context` kept — still
+  used by remaining lookup helpers.
+
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. `grep -rn "queries::tests::shared_snapshot" src/` returns empty.
+  Engine-modules `crate::tools` grep returns empty.
+
+- **Checkpoint 3 (PR 08-11) complete**: the 4371-LOC `graph::queries`
+  mega-file is dissolved into 10 family files (`query/{model, imports,
+  usage, calls, crates, surface, audits, functions, modules, overlaps}.rs`)
+  + a `test_support` fixture sibling. queries.rs is now 1554 LOC of
+  navigation primitives + a test module; PR 19 will fold or migrate the
+  remaining content during facade cleanup.
 
 Operation: `Split` + `Move`.
 

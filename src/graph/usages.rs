@@ -172,8 +172,11 @@ mod tests {
     //! rust-analyzer's `Definition::usages` API.
     //!
     //! Strategy: Option B — one synthetic tempdir crate exercising all five
-    //! patterns, persisted once and shared across tests via a `OnceLock`
-    //! (mirrors `queries.rs::tests::shared_snapshot()`).
+    //! patterns, persisted once and shared across tests via a `OnceLock`.
+    //! Unlike `graph::test_support::shared_snapshot` (which loads the real
+    //! workspace), this `synthetic_snapshot` fixture materializes its own
+    //! minimal cargo crate so the pattern-matching assertions below have a
+    //! known fixed input.
     //!
     //! These tests load a *real* cargo workspace through rust-analyzer, so
     //! they pay the full RA load cost on first call (~3-5s release).
@@ -266,7 +269,7 @@ path = "src/lib.rs"
 
     /// Build the synthetic fixture crate, run `build_and_persist`, open the
     /// snapshot. Cached across all tests in this module.
-    fn shared_snapshot() -> &'static OpenedSnapshot {
+    fn synthetic_snapshot() -> &'static OpenedSnapshot {
         static CACHE: OnceLock<SharedSnap> = OnceLock::new();
         &CACHE
             .get_or_init(|| {
@@ -335,7 +338,7 @@ path = "src/lib.rs"
     /// reference to the assoc-fn def, not the parent struct).
     #[test]
     fn pattern1_method_call_captured() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::Foo::bar");
         assert!(
             !usages.is_empty(),
@@ -355,7 +358,7 @@ path = "src/lib.rs"
     /// single Item covers both forms.
     #[test]
     fn pattern2_trait_dispatch_captured() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::Trait::method");
         assert!(
             !usages.is_empty(),
@@ -370,7 +373,7 @@ path = "src/lib.rs"
     /// in a where clause / bound position.
     #[test]
     fn pattern3_generic_bound_captured() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::Bound");
         assert!(
             !usages.is_empty(),
@@ -385,7 +388,7 @@ path = "src/lib.rs"
     /// reference in a function body. Should be classified as `Read`.
     #[test]
     fn pattern4_const_read_captured() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::K");
         assert!(
             !usages.is_empty(),
@@ -401,7 +404,7 @@ path = "src/lib.rs"
     /// surfaces references inside macro inputs is the key question.
     #[test]
     fn pattern5_macro_expansion_captured() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::FOO");
         assert!(
             !usages.is_empty(),
@@ -419,7 +422,7 @@ path = "src/lib.rs"
     /// `consumer_function.is_some()`.
     #[test]
     fn pattern6_function_attribution_works() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::Foo::bar");
         let with_fn: Vec<_> = usages
             .iter()
@@ -437,7 +440,7 @@ path = "src/lib.rs"
     /// `Foo::bar` whose `consumer_function == NodeId(outer_with_closure)`.
     #[test]
     fn pattern7_closure_attributes_to_parent_fn() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let (outer_id, _) = snap
             .lookup_by_qualified_name("synthetic_crate::outer_with_closure")
             .unwrap()
@@ -457,7 +460,7 @@ path = "src/lib.rs"
     /// const-scope, so the resulting Usage row must carry None.
     #[test]
     fn pattern8_const_initializer_has_no_caller_fn() {
-        let snap = shared_snapshot();
+        let snap = synthetic_snapshot();
         let usages = usages_for(snap, "synthetic_crate::compute");
         let from_const_init: Vec<_> = usages
             .iter()
