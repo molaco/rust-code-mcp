@@ -2,8 +2,8 @@
 //!
 //! `SearchToolRouter` is the MCP-protocol entry point. Every tool the server
 //! exposes is declared here as a `#[tool]` method; bodies delegate to focused
-//! modules (`query_tools`, `analysis_tools`, `index_tool`, `health_tool`,
-//! `clear_cache_tool`, `graph_tools`, `indexing_tools`). The router itself
+//! modules under `endpoints/` (`query`, `analysis`, `index`, `health`,
+//! `cache`, `indexing_support`) and `graph_tools`. The router itself
 //! only does parameter wrapping, response formatting, and optional sync-manager
 //! plumbing — no business logic.
 //!
@@ -11,11 +11,11 @@
 //! MCP Client
 //!     ↓
 //! SearchToolRouter (this module)
-//!     ├─→ query_tools / analysis_tools (search, navigation, similarity)
-//!     ├─→ graph_tools                  (persisted-hypergraph endpoints)
-//!     ├─→ indexing_tools / index_tool  (hypergraph build, codebase index)
-//!     ├─→ health_tool                  (health_check)
-//!     └─→ clear_cache_tool             (clear_cache)
+//!     ├─→ endpoints::query / endpoints::analysis (search, navigation, similarity)
+//!     ├─→ graph_tools                            (persisted-hypergraph endpoints)
+//!     ├─→ endpoints::indexing_support / endpoints::index (hypergraph build, codebase index)
+//!     ├─→ endpoints::health                      (health_check)
+//!     └─→ endpoints::cache                       (clear_cache)
 //! ```
 //!
 //! External callers should use the stable facade path:
@@ -72,7 +72,7 @@ impl SearchToolRouter {
         &self,
         Parameters(FileContentParams { file_path }): Parameters<FileContentParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::query_tools::read_file_content(&file_path).await
+        crate::tools::endpoints::query::read_file_content(&file_path).await
     }
 
     /// Perform hybrid search (BM25 + Vector) on Rust code in the specified directory
@@ -87,7 +87,7 @@ impl SearchToolRouter {
             embedding_profile,
         }): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::query_tools::search(
+        crate::tools::endpoints::query::search(
             &directory,
             &keyword,
             embedding_profile.as_deref(),
@@ -108,7 +108,7 @@ impl SearchToolRouter {
             exact,
         }): Parameters<FindDefinitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_definition_with_options(
+        crate::tools::endpoints::analysis::find_definition_with_options(
             &symbol_name,
             &directory,
             exact.unwrap_or(false),
@@ -126,7 +126,7 @@ impl SearchToolRouter {
             exact,
         }): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::find_references_with_options(
+        crate::tools::endpoints::analysis::find_references_with_options(
             &symbol_name,
             &directory,
             exact.unwrap_or(false),
@@ -146,7 +146,7 @@ impl SearchToolRouter {
             directory,
         }): Parameters<RenameSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::rename_symbol(&symbol_name, &new_name, &directory).await
+        crate::tools::endpoints::analysis::rename_symbol(&symbol_name, &new_name, &directory).await
     }
 
     /// Get dependencies for a file (imports and files that depend on it)
@@ -155,7 +155,7 @@ impl SearchToolRouter {
         &self,
         Parameters(GetDependenciesParams { file_path }): Parameters<GetDependenciesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::get_dependencies(&file_path).await
+        crate::tools::endpoints::analysis::get_dependencies(&file_path).await
     }
 
     /// Get call graph for a file or specific symbol
@@ -167,7 +167,7 @@ impl SearchToolRouter {
             symbol_name,
         }): Parameters<GetCallGraphParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::get_call_graph(&file_path, symbol_name.as_deref()).await
+        crate::tools::endpoints::analysis::get_call_graph(&file_path, symbol_name.as_deref()).await
     }
 
     /// Analyze code complexity metrics for a file
@@ -178,7 +178,7 @@ impl SearchToolRouter {
         &self,
         Parameters(AnalyzeComplexityParams { file_path }): Parameters<AnalyzeComplexityParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::analysis_tools::analyze_complexity(&file_path).await
+        crate::tools::endpoints::analysis::analyze_complexity(&file_path).await
     }
 
     /// Check system health status
@@ -187,9 +187,9 @@ impl SearchToolRouter {
     )]
     async fn health_check(
         &self,
-        Parameters(params): Parameters<crate::tools::health_tool::HealthCheckParams>,
+        Parameters(params): Parameters<crate::tools::endpoints::health::HealthCheckParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::health_tool::health_check(Parameters(params)).await
+        crate::tools::endpoints::health::health_check(Parameters(params)).await
     }
 
     /// Find semantically similar code using vector search
@@ -204,7 +204,7 @@ impl SearchToolRouter {
         }): Parameters<GetSimilarCodeParams>,
     ) -> Result<CallToolResult, McpError> {
         let limit = limit.unwrap_or(5);
-        crate::tools::query_tools::get_similar_code(
+        crate::tools::endpoints::query::get_similar_code(
             &query,
             &directory,
             limit,
@@ -219,18 +219,18 @@ impl SearchToolRouter {
     )]
     async fn index_codebase(
         &self,
-        Parameters(params): Parameters<crate::tools::index_tool::IndexCodebaseParams>,
+        Parameters(params): Parameters<crate::tools::endpoints::index::IndexCodebaseParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::index_tool::index_codebase(params, self.sync_manager.as_ref()).await
+        crate::tools::endpoints::index::index_codebase(params, self.sync_manager.as_ref()).await
     }
 
     /// Clear corrupted cache, index, and vector store files
     #[tool(description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store. Pass include_hypergraph=true to ALSO wipe the persisted hypergraph snapshot at <data_dir>/graphs/<workspace_hash>/ — forces the next build_hypergraph call to do a full re-index. Pass dry_run=true to report the directories that would be removed without deleting them. The response lists exactly which directories were or would be cleared.")]
     async fn clear_cache(
         &self,
-        Parameters(params): Parameters<crate::tools::clear_cache_tool::ClearCacheParams>,
+        Parameters(params): Parameters<crate::tools::endpoints::cache::ClearCacheParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::clear_cache_tool::clear_cache(params).await
+        crate::tools::endpoints::cache::clear_cache(params).await
     }
 
     // ----- Hypergraph tools (Layer 7) -----

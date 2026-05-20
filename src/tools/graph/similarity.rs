@@ -96,7 +96,7 @@ pub async fn similar_to_item(
         &backend,
     );
     let hybrid_search =
-        crate::tools::query_tools::create_hybrid_search(&paths, None, backend).await?;
+        crate::tools::endpoints::query::create_hybrid_search(&paths, None, backend).await?;
 
     let limit = params.limit.unwrap_or(10);
     let threshold = params.threshold.unwrap_or(0.0);

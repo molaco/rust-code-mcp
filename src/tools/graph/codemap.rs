@@ -133,7 +133,7 @@ pub(crate) async fn handle_build_codemap(
                 .and_then(|adapter| adapter.create_bm25_search())
                 .ok()
         };
-        let hybrid = crate::tools::query_tools::create_hybrid_search(
+        let hybrid = crate::tools::endpoints::query::create_hybrid_search(
             &paths,
             bm25,
             crate::embeddings::EmbeddingBackend::default(),

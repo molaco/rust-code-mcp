@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 06 complete; PR 07 is next. This is the executable sequence for the
+Status: PR 07 complete; PR 08 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -640,6 +640,58 @@ Exit:
   helpers; it only calls the graph-owned projections.
 
 ## PR 07: Move Standalone Tool Endpoints
+
+Status: DONE.
+
+Outcome:
+
+- New `src/tools/endpoints/` directory; declared `mod endpoints;` (private)
+  in `src/tools/mod.rs`. Six submodules under `pub(super)` visibility:
+  ```rust
+  pub(super) mod analysis;
+  pub(super) mod cache;
+  pub(super) mod health;
+  pub(super) mod index;
+  pub(super) mod indexing_support;
+  pub(super) mod query;
+  ```
+- Implementation moved verbatim from six top-level files into the new
+  subtree (2197 LOC total, exact preservation):
+  - `analysis_tools.rs` (496) → `endpoints/analysis.rs`
+  - `clear_cache_tool.rs` (333) → `endpoints/cache.rs`
+  - `health_tool.rs` (171) → `endpoints/health.rs`
+  - `index_tool.rs` (526) → `endpoints/index.rs`
+  - `indexing_tools.rs` (110) → `endpoints/indexing_support.rs`
+  - `query_tools.rs` (561) → `endpoints/query.rs`
+- Each old file is now a 2-line facade:
+  ```rust
+  //! Compatibility facade — implementation lives in `crate::tools::endpoints::<new>`.
+  pub use crate::tools::endpoints::<new>::*;
+  ```
+  External paths `rust_code_mcp::tools::query_tools::search`,
+  `rust_code_mcp::tools::health_tool::HealthCheckParams`, etc. continue to
+  resolve.
+- Router (`src/tools/router.rs`) was repointed: 15 occurrences of
+  `crate::tools::<old>::*` rewritten to `crate::tools::endpoints::<new>::*`
+  (12 fn calls + 3 `Parameters<…Params>` type refs). Module-level doc
+  comment refreshed to describe the new endpoint fan-out.
+- Two PR 06 graph files (`src/tools/graph/codemap.rs:136`,
+  `src/tools/graph/similarity.rs:99`) referenced
+  `crate::tools::query_tools::create_hybrid_search` — a `pub(crate)` helper
+  that doesn't traverse a `pub use ::*;` facade glob. Both call sites were
+  updated directly to `crate::tools::endpoints::query::create_hybrid_search`.
+  No visibility was widened.
+- Each moved file's `#[cfg(test)] mod tests` block traveled with the
+  implementation. Tests now run from `crate::tools::endpoints::<new>::tests::*`.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Both verification greps return empty:
+  ```sh
+  grep -rn "crate::tools::\(analysis_tools\|clear_cache_tool\|health_tool\|index_tool\|indexing_tools\|query_tools\)::" src/
+  grep -rn "crate::tools" src/graph/ src/embeddings/ src/indexing/ src/search/ src/vector_store/ src/chunker/ src/parser/
+  ```
+- Checkpoint 2 (PR 03-07) complete: `tools/` is now a thin adapter layer
+  with `params/`, `endpoints/`, `graph/` subtrees plus the `router.rs`
+  entry point. Every old top-level file is a one-line facade.
 
 Operation: `Move` + Workflow C facade adapters.
 
