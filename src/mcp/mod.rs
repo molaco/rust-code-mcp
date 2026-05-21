@@ -3,6 +3,7 @@
 //! This module provides background synchronization and server management
 //! for the rust-code-mcp service.
 
+pub mod project_paths;
 pub mod sync;
 
 pub use sync::*;

@@ -6,7 +6,7 @@
 use crate::embeddings::{EmbeddingBackend, Qwen3Variant};
 use crate::indexing::incremental::IncrementalIndexer;
 use crate::indexing::unified::IndexStats;
-use crate::tools::project_paths::{ProjectPaths, resolve_embedding_backend};
+use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend};
 use crate::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
 use std::path::PathBuf;

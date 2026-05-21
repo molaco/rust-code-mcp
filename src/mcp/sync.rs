@@ -129,7 +129,7 @@ impl SyncManager {
     /// - < 10ms if no changes
     /// - Only reindexes changed files if changes detected
     async fn sync_directory(&self, dir: &Path) -> Result<()> {
-        use crate::tools::project_paths::ProjectPaths;
+        use crate::mcp::project_paths::ProjectPaths;
 
         let indexes = ProjectPaths::indexed_profiles(dir)
             .map_err(|msg| anyhow::anyhow!(msg))?;

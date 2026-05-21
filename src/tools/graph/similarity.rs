@@ -91,7 +91,7 @@ pub(crate) async fn similar_to_item(
         params.embedding_profile.as_deref(),
         &params.directory,
     )?;
-    let paths = crate::tools::project_paths::ProjectPaths::from_directory(
+    let paths = crate::mcp::project_paths::ProjectPaths::from_directory(
         Path::new(&params.directory),
         &backend,
     );
@@ -506,7 +506,7 @@ fn resolve_graph_tool_backend(
     embedding_profile: Option<&str>,
     directory: &str,
 ) -> Result<crate::embeddings::EmbeddingBackend, McpError> {
-    crate::tools::project_paths::resolve_embedding_backend(
+    crate::mcp::project_paths::resolve_embedding_backend(
         embedding_profile,
         Path::new(directory),
     )

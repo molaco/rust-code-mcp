@@ -13,7 +13,7 @@ use tracing;
 
 use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use crate::search::HybridSearch;
-use crate::tools::project_paths::{
+use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend,
 };
 use crate::vector_store::VectorStore;

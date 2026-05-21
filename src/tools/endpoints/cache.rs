@@ -11,7 +11,7 @@ use rmcp::{
 };
 use std::path::Path;
 
-use crate::tools::project_paths::{data_dir, dir_hash};
+use crate::mcp::project_paths::{data_dir, dir_hash};
 
 /// Parameters for clearing the cache
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

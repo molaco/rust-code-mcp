@@ -120,7 +120,7 @@ pub(crate) async fn handle_build_codemap(
         // have errored above).
         let prompt = trimmed_prompt.expect("validated above");
         let dir_path = std::path::Path::new(directory);
-        let paths = crate::tools::project_paths::ProjectPaths::from_directory(
+        let paths = crate::mcp::project_paths::ProjectPaths::from_directory(
             dir_path,
             &crate::embeddings::EmbeddingBackend::default(),
         );

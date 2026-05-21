@@ -10,7 +10,7 @@ use rmcp::{
 use crate::embeddings::EmbeddingBackend;
 use crate::monitoring::health::HealthMonitor;
 use crate::search::Bm25Search;
-use crate::tools::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
+use crate::mcp::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
 use crate::vector_store::VectorStore;
 
 /// Health check parameters (optional directory to check specific project)

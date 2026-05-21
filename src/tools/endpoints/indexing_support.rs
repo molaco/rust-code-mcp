@@ -49,7 +49,7 @@ use std::path::PathBuf;
 
 /// Get the path for storing persistent index and cache.
 pub(crate) fn data_dir() -> PathBuf {
-    crate::tools::project_paths::data_dir()
+    crate::mcp::project_paths::data_dir()
 }
 
 /// Open or create a persistent Tantivy index

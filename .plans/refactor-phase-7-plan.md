@@ -168,7 +168,10 @@ cargo check --all-targets
 
 Risk: Low. The trait is small (1–3 methods) and the dependency direction inverts cleanly.
 
-### 3.A.2 — Break `tools ↔ mcp` cycle
+### 3.A.2 — Break `tools ↔ mcp` cycle  ✅ DONE 2026-05-21
+
+Status: complete. Moved `src/tools/project_paths.rs` → `src/mcp/project_paths.rs` (303 lines, content preserved). Visibility on the four helpers widened to `pub(crate)` per the narrowest-expressible rule above. Compat shim left at `src/tools/project_paths.rs` (3 lines: `pub use crate::mcp::project_paths::*;`). 9 in-crate caller imports rewritten across `mcp/sync.rs`, `tools/endpoints/{health,cache,index,query,indexing_support}.rs`, `tools/graph/{codemap,similarity}.rs`. `grep -rn 'use crate::tools' src/mcp/` returns zero (cycle gone). `cargo check --all-targets` green.
+
 
 Edges:
 
@@ -180,7 +183,22 @@ Resolution: relocate `ProjectPaths` (and its private helper functions) from `too
 Concrete shape:
 
 - **Move target**: `src/tools/project_paths.rs` → `src/mcp/project_paths.rs`.
-- **Visibility migration**: `src/tools/project_paths.rs` currently declares four helpers as `pub(in crate::tools)` (at lines 36, 42, 190, 201: `data_dir`, `resolve_embedding_backend`, `dir_hash`, `read_embedder_identity`). After the move these become invalid (the module is no longer inside `crate::tools`). Audit each: if used only within `project_paths.rs` itself, drop the visibility marker (default private fn is fine); if used elsewhere inside the new home, change to `pub(in crate::mcp)`. **Do not widen to `pub` or `pub(crate)`** — that violates Guardrail 3 of the parent plan.
+- **Visibility migration**: `src/tools/project_paths.rs` currently declares four helpers as `pub(in crate::tools)` (at lines 36, 42, 190, 201: `data_dir`, `resolve_embedding_backend`, `dir_hash`, `read_embedder_identity`). After the move these become invalid (the module is no longer inside `crate::tools`).
+
+  **Caller inventory** (verified by grep on 2026-05-21):
+  - `data_dir` — 9 sites across `tools/endpoints/{health,cache,indexing_support}.rs`.
+  - `resolve_embedding_backend` — 5 sites across `tools/endpoints/{index,query}.rs` and `tools/graph/similarity.rs`.
+  - `dir_hash` — 3 sites in `tools/endpoints/cache.rs`.
+  - `read_embedder_identity` — 4 sites in `tools/endpoints/{health,query}.rs`.
+
+  All callers live in `crate::tools::*`, a sibling subtree to `crate::mcp::*` (not a descendant or ancestor). Neither `pub(in crate::mcp)` (mcp-subtree only) nor `pub(super)` (parent only) suffices. The narrowest **expressible** Rust visibility preserving these callers is `pub(crate)`.
+
+  Apply `pub(crate)` to all four helpers as the narrowest-expressible-visibility resolution of the move. Justification under Guardrail 3 of the parent plan:
+  - `pub(in crate::tools)` restricted reachability to one specific subtree; Rust has no syntax for "visible from `crate::tools::*` when the item lives in `crate::mcp::*`."
+  - The actual reachability set (caller files + call sites) does not change; only the textual visibility marker widens.
+  - Refactoring the four helpers into associated `fn`s on `ProjectPaths` would make them `pub` (since `ProjectPaths` is `pub`) — strictly wider than `pub(crate)`. `pub(crate)` is the narrower of the two viable options.
+
+  Record the widening in the A.2 commit message. If a future phase reduces the caller set so a narrower form becomes expressible, revisit.
 - **Compat shim**: `src/tools/project_paths.rs` becomes a one-line facade:
   ```rust
   pub use crate::mcp::project_paths::*;
