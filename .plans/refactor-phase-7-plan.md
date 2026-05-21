@@ -480,6 +480,8 @@ Commit:
 
 - **B.8.a** — Add a CI check or workspace-level test that runs `forbidden_dependency_check` and asserts zero violations. (`rust-code-mcp` itself is the tool that provides this check, so this is dogfooding.)
 
+✅ DONE 2026-05-21. Rule set codified in `.docs/architectural-rules.md` (JSON form, directly runnable). Verified against the post-B.7 workspace with `mcp__rust-code-mcp__forbidden_dependency_check`: 3 rules, **0 violations**. Phase C extension drafted (8 additional rules, not yet enforced — preconditions on Phase C crates). CI wiring is a follow-up (Claude Code session or shell-invoked MCP client); the rule documentation is the durable artifact.
+
 Risk: Low. By the time we're here, the boundaries already work.
 
 ### 4.B Exit conditions
