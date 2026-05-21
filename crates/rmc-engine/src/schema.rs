@@ -10,7 +10,7 @@ use tantivy::schema::{
 
 /// Schema for indexing files with metadata for change detection
 #[derive(Clone)]
-pub(crate) struct FileSchema {
+pub struct FileSchema {
     pub schema: Schema,
 
     /// SHA-256 hash of file content (for change detection)

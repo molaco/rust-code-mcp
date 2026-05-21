@@ -373,7 +373,13 @@ Commits:
 - **B.1.a** — Move `src/parser/` → `crates/rmc-engine/src/parser/`; declare `pub mod parser;` in `rmc-engine/src/lib.rs`; **add `parser`'s third-party deps to `crates/rmc-engine/Cargo.toml`** (`syn`, `ra_ap_*` per the §4.B.0 extraction procedure); add `pub use rmc_engine::parser;` to main `src/lib.rs`.
 - **B.1.b** — Move `src/schema.rs` → `crates/rmc-engine/src/schema.rs`; declare `pub mod schema;`; **add `tantivy` to `rmc-engine/Cargo.toml`** with the same feature set the main crate used; main re-export.
 
+✅ DONE 2026-05-21 — landed as a single B.1 commit (the two sub-commits a/b were combined because the moves are independent and the verification gate is shared). Deps added: `ra_ap_syntax` (parser) and `tantivy` (schema) only — narrower than the plan's "typical expected set" anticipated. Visibility widening: `FileSchema` widened from `pub(crate)` to `pub` per the cross-crate-widening rule above (consumed by `src/tools/endpoints/indexing_support.rs:47`). `cargo check --workspace --all-targets` green.
+
 **Every subsequent B.x / C.x move follows the same three-part pattern: file move + module declaration + dependency extraction in the new crate's Cargo.toml.** Skipping the manifest step is the most likely cause of `cargo check` failures during the lift; treat it as a required sub-step.
+
+**Cross-crate visibility widening (added 2026-05-21 during B.1 execution).** A `pub(crate)` item in the monolith means "visible anywhere in the crate." Post-lift, that same item in `rmc-engine` becomes "visible anywhere in `rmc-engine`" — strictly narrower. Items consumed by code remaining in the main crate (or in a different workspace member) will fail to resolve with `error[E0603]: struct/fn X is private` unless the visibility widens. This is not "widening to make a move compile" in the §3 Guardrail 2 sense — the original visibility represented monolith-scope reachability; preserving that reachability across the new crate boundary requires `pub`.
+
+Apply this rule: when a moved `pub(crate)` item has consumers outside the new crate (verified by the `error[E0603]` from `cargo check`), widen to `pub`. Record each widening in the commit message. Items with no out-of-crate consumers stay `pub(crate)` — the lift surfaces those as previously-overscoped items that can now justifiably narrow further (though that narrowing is not a B.x step's job; the move alone is the commit).
 
 Risk: Low. Both modules have no in-crate dependencies that change with the lift.
 

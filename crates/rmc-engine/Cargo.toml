@@ -4,4 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# empty for now; B.1 onward populates this as modules move in
+# parser/ — rust-analyzer syntax
+ra_ap_syntax = { workspace = true }
+
+# schema.rs — Tantivy schema definitions
+tantivy = { workspace = true }

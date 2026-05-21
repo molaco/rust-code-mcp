@@ -7226,6 +7226,10 @@ dependencies = [
 [[package]]
 name = "rmc-engine"
 version = "0.1.0"
+dependencies = [
+ "ra_ap_syntax",
+ "tantivy",
+]
 
 [[package]]
 name = "rmc-graph"
