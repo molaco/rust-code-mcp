@@ -17,7 +17,7 @@ pub use rmc_engine::schema;
 pub mod search;
 pub mod security;
 pub mod tools;
-pub mod vector_store;
+pub use rmc_engine::vector_store;
 
 pub mod semantic;
 

@@ -7227,10 +7227,15 @@ dependencies = [
 name = "rmc-engine"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
  "candle-core",
+ "directories",
  "fastembed",
  "futures",
  "hf-hub",
+ "lancedb",
  "ra_ap_syntax",
  "reqwest",
  "serde",

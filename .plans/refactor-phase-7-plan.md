@@ -415,6 +415,8 @@ Commit:
 
 - **B.4.a** — Move `src/vector_store/` → `crates/rmc-engine/src/vector_store/`; declare; re-export.
 
+✅ DONE 2026-05-21. 4 files moved. Deps added: `lancedb`, `arrow-array`, `arrow-schema`, `async-trait`, `directories` (last one was inline `directories::ProjectDirs::from(...)` in `mod.rs:49`, caught on first compile). No visibility widenings — vector_store's public API was already `pub`. `cargo check --workspace --all-targets` green.
+
 ### 4.B.5 — Lift `search`
 
 `search` depends on `chunker, embeddings, schema, vector_store` — all in `rmc-engine`. After this move, `rmc-engine` is internally complete.
