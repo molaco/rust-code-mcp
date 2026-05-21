@@ -7228,7 +7228,9 @@ name = "rmc-engine"
 version = "0.1.0"
 dependencies = [
  "ra_ap_syntax",
+ "serde",
  "tantivy",
+ "uuid",
 ]
 
 [[package]]

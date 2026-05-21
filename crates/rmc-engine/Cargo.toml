@@ -9,3 +9,7 @@ ra_ap_syntax = { workspace = true }
 
 # schema.rs — Tantivy schema definitions
 tantivy = { workspace = true }
+
+# chunker/ — semantic code chunking
+serde = { workspace = true }
+uuid  = { workspace = true }

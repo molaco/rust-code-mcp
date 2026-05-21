@@ -4,7 +4,7 @@
 
 #![warn(unreachable_pub, dead_code)]
 
-pub mod chunker;
+pub use rmc_engine::chunker;
 pub mod config;
 pub mod embeddings;
 pub mod indexing;

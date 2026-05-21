@@ -395,6 +395,8 @@ Commit:
 
 - **B.2.a** — Move `src/chunker/` → `crates/rmc-engine/src/chunker/`.
 
+✅ DONE 2026-05-21. Deps added to `rmc-engine`: `serde`, `uuid`. No visibility widenings required — chunker's public surface (`Chunker`, `ChunkContext`, `ChunkId`, `ChunkSplitConfig`, `CodeChunk`) was already `pub`. `cargo check --workspace --all-targets` green.
+
 ### 4.B.3 — Lift `embeddings`
 
 `embeddings` depends on `chunker` (post-B.2 also in `rmc-engine`). One important wrinkle: `config::indexer` imports `embeddings::EmbeddingProfile`. After this lift, `config` is in main crate and must depend on `rmc_engine`. Main crate already depends on rmc-engine (added in B.0), so `config/indexer.rs`'s `use crate::embeddings::EmbeddingProfile;` continues to resolve via the re-export — but only if the `pub use rmc_engine::embeddings;` is added to `src/lib.rs` in this commit.
