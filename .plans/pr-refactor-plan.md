@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 13 complete; PR 14 is next. This is the executable sequence for the
+Status: PR 14 complete; PR 15 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1351,6 +1351,61 @@ Exit:
 - Codemap is split by model, seeds, build, hierarchy, and render.
 
 ## PR 14: Split OpenRouter Config And DTOs
+
+Status: DONE.
+
+Outcome:
+
+- `src/embeddings/openrouter.rs` (1618 LOC) converted to a directory:
+  `src/embeddings/openrouter/{mod.rs, config.rs, request.rs, response.rs}`.
+
+- **`config.rs`** (374 LOC) — all 17 runtime/env constants
+  (`DEFAULT_BASE_URL`, `API_KEY_ENV`, `MAX_BATCH_INPUTS_ENV`,
+  `MAX_BATCH_TOKENS_ENV`, etc.) + 4 public config types
+  (`OpenRouterRuntimeConfig`, `OpenRouterEncodingFormat`,
+  `OpenRouterProviderPreferences`, `OpenRouterProviderSort` + their impls)
+  + public fn `openrouter_runtime_config()` + 10 private env-parsing
+  helpers (`api_key_from_env`, `openrouter_runtime_config_from_env`,
+  `resolve_openrouter_runtime_config`, `positive_usize_from_env`,
+  `encoding_format_from_env`, `provider_preferences_from_env`,
+  `provider_sort_from_env`, `optional_usize_from_env`,
+  `optional_f64_from_env`, `resolve_api_key`).
+
+- **`request.rs`** (15 LOC) — `EmbeddingRequest<'a>` wire DTO only.
+
+- **`response.rs`** (170 LOC) — `EmbeddingResponse`, `EmbeddingResponseItem`,
+  `EmbeddingResponseEmbedding` enum + impl, `parse_embeddings_response` fn,
+  `decode_base64_f32_embedding`, `decode_base64_standard`.
+
+- **`openrouter/mod.rs`** (1093 LOC) — still owns `OpenRouterEmbedder` +
+  giant impl block, `OpenRouterRequestMetrics` + impl + logger,
+  `OpenRouterBatchError`, `OpenRouterInput`, `OpenRouterInputBatch` + impl,
+  batch planning helpers, retry helpers, `MAX_RETRIES` const, and the full
+  test block. PR 15 will split these.
+
+- `OpenRouterInput` deliberately stayed in `mod.rs` — it's batch-coupled
+  (referenced by `OpenRouterInputBatch`, `plan_remote_input_batches`,
+  `sort_openrouter_inputs`), and PR 15 will move it to `batch.rs` alongside
+  the batching code. Putting it in `request.rs` would force unnecessary
+  cross-module access.
+
+- Re-exports in `openrouter/mod.rs` preserve all external paths via
+  `pub use config::{openrouter_runtime_config, OpenRouterEncodingFormat,
+  OpenRouterProviderPreferences, OpenRouterProviderSort,
+  OpenRouterRuntimeConfig};`. The 2-line block in `src/embeddings/mod.rs:35-36`
+  resolves unchanged.
+
+- Visibility discipline (Guardrail 2 followed):
+  - Public types/fn unchanged.
+  - `pub(super)` granted only where strictly required for mod.rs's giant
+    impl block and the test module to reach moved items: env-parsing helper
+    fns the test block names by name, response DTO fields/variants
+    `parse_embeddings_response` constructs, `EmbeddingRequest` fields the
+    embedder reaches.
+  - No `pub(crate)` widening anywhere.
+
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. No new warnings.
 
 Operation: `Split`.
 
