@@ -1,10 +1,11 @@
 //! Codemap endpoint family.
 //!
 //! Bridge between the `#[tool]` method in `search_tool_router.rs` and the
-//! algorithm core in `src/graph/codemap.rs`. Validates params, opens the
-//! workspace snapshot, resolves seeds either via qualified-name lookup or
-//! by running `HybridSearch::search`, calls `build_codemap`, and serializes
-//! the result per `format`.
+//! algorithm core in `src/graph/codemap/build.rs`. Validates params, opens
+//! the workspace snapshot, resolves seeds either via qualified-name lookup
+//! or by running `HybridSearch::search`, maps the resulting hits into the
+//! codemap-local `SeedHit` DTO, calls `build_codemap`, and serializes the
+//! result per `format`.
 
 use rmcp::{
     ErrorData as McpError,
@@ -14,7 +15,7 @@ use rmcp::{
 use crate::tools::graph::response::*;
 
 /// Bridge between the `#[tool]` method in `search_tool_router.rs` and the
-/// algorithm core in `src/graph/codemap.rs`.
+/// algorithm core in `src/graph/codemap/build.rs`.
 ///
 /// Validates params, opens the workspace snapshot, resolves seeds either via
 /// qualified-name lookup or by running `HybridSearch::search`, calls

@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 12 complete; PR 13 is next. This is the executable sequence for the
+Status: PR 13 complete; PR 14 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1248,6 +1248,74 @@ Exit:
 - Model types keep their external paths.
 
 ## PR 13: Split Codemap Render/Build/Hierarchy
+
+Status: DONE.
+
+Outcome:
+
+- `src/graph/codemap/mod.rs` reduced from 1857 → 22 LOC — a true facade.
+  Body:
+  ```rust
+  mod model;
+  pub(super) mod seeds;
+  pub(super) mod build;
+  pub(super) mod hierarchy;
+  pub(super) mod render;
+
+  #[cfg(test)]
+  mod test_support;
+
+  pub use model::*;
+  pub use seeds::SeedHit;
+  pub(crate) use build::{build_codemap, newest_source_mtime};
+  pub(crate) use render::{render_mermaid, render_outline};
+  ```
+  All five submodules are private (`mod` / `pub(super) mod`) — no
+  `graph::codemap::model::*` etc. paths are exposed beyond what the explicit
+  `pub use` re-exports surface. Post-review fix-up narrowed `pub mod model;`
+  to `mod model;`; sibling files reach `model` items via
+  `crate::graph::codemap::model::*` (still works from inside `codemap/`).
+- **`src/graph/codemap/build.rs`** (950 LOC) — `build_codemap` (pub async fn),
+  `newest_source_mtime` (pub(crate)), private algorithm helpers
+  (`rank_referrer`, `prune_to_budget`, `line_of_byte`, `extract_snippet`,
+  `node_qualified_name`), + 9 tests (build_codemap, prune, edge dedup,
+  newest_source_mtime tempdir tests, graph_prox).
+- **`src/graph/codemap/hierarchy.rs`** (109 LOC) — `project_hierarchy`,
+  `filter_module_tree` (both private to `codemap/*`).
+- **`src/graph/codemap/render.rs`** (385 LOC) — `render_mermaid`,
+  `render_outline` (pub(crate)) + private helpers (`short_node_id`,
+  `sanitize_mermaid_id`, `escape_label`) + 4 render tests.
+- **`src/graph/codemap/seeds.rs`** grew from 145 → 397 LOC. Beyond PR 12's
+  scope, the subagent absorbed `canonicalize_and_strip` and
+  `enclosing_item_for_line_range` (formerly in mod.rs at `pub(crate)`) into
+  seeds.rs and narrowed both to `pub(super)`. They were only used internally
+  by seeds.rs anyway. The `canonicalize_and_strip_normalizes` tests moved
+  with them.
+- **`src/graph/codemap/test_support.rs`** (211 LOC, new) — shared
+  `#[cfg(test)] pub(super) fn hand_built_codemap()` + `shared_fixture()` +
+  `FixtureSnap` + private fixture helpers (`nid`, `make_node`). Mirrors the
+  pattern PR 11 established for `graph/test_support.rs`.
+- **`embedding_cache` decision**: stays graph-level. Confirmed
+  `src/tools/graph/similarity.rs:324` still invokes
+  `crate::graph::ensure_embeddings_for`, so absorbing the module into
+  `codemap/seeds.rs` would force the similarity tool to reach into a
+  codemap-internal helper. No code change.
+- **Test redistribution**: the pre-PR-13 mega test module's `pure` and
+  `fixture_dependent` submodules were flattened — each family file owns a
+  single `mod tests` block containing its subject's tests. Fixtures shared
+  across multiple test sites live in `test_support.rs`.
+- Public path stability verified: `crate::graph::codemap::{Codemap,
+  CodemapOptions, EmbeddingPolicy, build_codemap, render_mermaid,
+  render_outline, newest_source_mtime, SeedHit}` all resolve unchanged.
+  `src/tools/graph/codemap.rs:38,101` compiles without modification.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Engine→tools grep returns no hits.
+  `crate::search::SearchResult` only appears in seeds.rs doc-comments now —
+  the PR 12 boundary fix is preserved.
+- **Checkpoint 4 (PR 12-13) complete**: 2056-LOC `codemap.rs` mega-file
+  fully dissolved into `codemap/{mod, model, seeds, build, hierarchy, render,
+  test_support}.rs`. Boundary fix landed (graph→search edge removed). mod.rs
+  is a true 22-line facade.
 
 Operation: `Split`.
 
