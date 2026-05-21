@@ -34,5 +34,8 @@ arrow-schema = { workspace = true }
 async-trait  = { workspace = true }
 directories  = { workspace = true }
 
+# search/ — Tantivy BM25 + hybrid search
+anyhow = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"

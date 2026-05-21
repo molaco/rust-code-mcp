@@ -425,6 +425,8 @@ Commit:
 
 - **B.5.a** — Move `src/search/` → `crates/rmc-engine/src/search/`; declare; re-export.
 
+✅ DONE 2026-05-21. 5 files moved. Deps added: just `anyhow` (everything else was already present from earlier B.x). No visibility widenings — search's public surface was already `pub`. `cargo check --workspace --all-targets` green. **`rmc-engine` is now internally complete** (parser, schema, chunker, embeddings, vector_store, search).
+
 ### 4.B.6 — Verify engine boundary
 
 Before lifting graph, verify `rmc-engine` is self-contained:

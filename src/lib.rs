@@ -14,7 +14,7 @@ pub mod metrics;
 pub mod monitoring;
 pub use rmc_engine::parser;
 pub use rmc_engine::schema;
-pub mod search;
+pub use rmc_engine::search;
 pub mod security;
 pub mod tools;
 pub use rmc_engine::vector_store;
