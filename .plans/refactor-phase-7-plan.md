@@ -427,14 +427,14 @@ Commit:
 
 ✅ DONE 2026-05-21. 5 files moved. Deps added: just `anyhow` (everything else was already present from earlier B.x). No visibility widenings — search's public surface was already `pub`. `cargo check --workspace --all-targets` green. **`rmc-engine` is now internally complete** (parser, schema, chunker, embeddings, vector_store, search).
 
-### 4.B.6 — Verify engine boundary
+### 4.B.6 — Verify engine boundary  ✅ DONE 2026-05-21
 
-Before lifting graph, verify `rmc-engine` is self-contained:
+Status: passed cleanly. `grep -rnE 'use crate::(graph|tools|indexing|mcp|config|monitoring|metadata_cache|metrics|security|semantic)' crates/rmc-engine/src/` returned zero hits. `cargo check -p rmc-engine` standalone built green in ~1m on a cold cache (20 dead-code style warnings, no errors). The Phase A.1/A.2 cycle breaks held; no hidden inversions surfaced. `rmc-engine` is self-contained and ready for `rmc-graph` to depend on it (B.7).
+
+Pre-B.6 requirements (kept as a checklist for reference):
 
 - `cargo check -p rmc-engine` green standalone.
 - No `use crate::graph::`, `use crate::tools::`, `use crate::indexing::`, `use crate::mcp::`, `use crate::config::` anywhere in `crates/rmc-engine/src/`.
-
-If any of those greps return a hit, that's a hidden inversion — stop and audit. The Phase A.1/A.2 cycle breaks were the *known* inversions; an unknown one would surface here.
 
 ### 4.B.7 — Lift `graph`
 
