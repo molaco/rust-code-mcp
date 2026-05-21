@@ -1,0 +1,7 @@
+[package]
+name    = "rmc-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# empty for now; B.1 onward populates this as modules move in

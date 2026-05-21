@@ -283,7 +283,10 @@ Operation: `Lift`. Each move is a workspace-member relocation, not a code change
 
 Precondition: Phase A complete and settled.
 
-### 4.B.0 — Workspace skeleton + dependency extraction strategy
+### 4.B.0 — Workspace skeleton + dependency extraction strategy  ✅ DONE 2026-05-21
+
+Status: complete. Root `Cargo.toml` converted to workspace (resolver = "3", 3 members). All 50 main-crate `[dependencies]` moved to `[workspace.dependencies]` with versions/features preserved. `[patch.crates-io]`, `[features]`, 13 `[[example]]` blocks, `[dev-dependencies]` preserved. Created `crates/rmc-engine/` and `crates/rmc-graph/` as empty stubs with `Cargo.toml`, `src/lib.rs`, `README.md`. Main `[dependencies]` redirects every dep via `{ workspace = true }` and adds path deps `rmc-engine`, `rmc-graph`. `cargo check --workspace --all-targets` green.
+
 
 Convert the single-crate repo into a Cargo workspace:
 

@@ -7224,6 +7224,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmc-engine"
+version = "0.1.0"
+
+[[package]]
+name = "rmc-graph"
+version = "0.1.0"
+
+[[package]]
 name = "rmcp"
 version = "0.8.1"
 source = "git+https://github.com/modelcontextprotocol/rust-sdk?branch=main#11093bc830d77717b8f24813d888238a12d7eefe"
@@ -7320,6 +7328,8 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest",
+ "rmc-engine",
+ "rmc-graph",
  "rmcp",
  "rs_merkle",
  "serde",

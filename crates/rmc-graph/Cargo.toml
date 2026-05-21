@@ -1,0 +1,7 @@
+[package]
+name    = "rmc-graph"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# rmc-engine path dep added in B.7 when the graph module actually moves in
