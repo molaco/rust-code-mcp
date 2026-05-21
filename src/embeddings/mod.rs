@@ -14,9 +14,11 @@ mod error;
 pub use error::EmbeddingError;
 
 mod backend;
-pub use backend::{
-    EmbeddingBackend, EmbeddingProfile, EmbeddingRuntime, FastembedCpuModel,
-    LocalLoaderSpec, Qwen3Variant, QueryPolicy,
+pub use backend::{EmbeddingBackend, EmbeddingRuntime};
+
+mod profile;
+pub use profile::{
+    EmbeddingProfile, FastembedCpuModel, LocalLoaderSpec, QueryPolicy, Qwen3Variant,
 };
 
 mod identity;

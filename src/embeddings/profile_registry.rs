@@ -1,6 +1,7 @@
 //! Per-request embedding profile registry.
 
-use super::backend::{EmbeddingProfile, EmbeddingRuntime, QueryPolicy};
+use super::backend::EmbeddingRuntime;
+use super::profile::{EmbeddingProfile, QueryPolicy};
 use super::util::arc;
 use serde::Deserialize;
 use std::collections::HashSet;

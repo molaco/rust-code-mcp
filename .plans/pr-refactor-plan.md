@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 16 complete; PR 17 is next. This is the executable sequence for the
+Status: PR 17 complete; PR 18 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1668,6 +1668,55 @@ Exit:
 - `chunker/mod.rs` and `parser/mod.rs` are facades, not implementation dumps.
 
 ## PR 17: Split Embeddings Backend Profile Model
+
+Status: DONE.
+
+Outcome:
+
+- `src/embeddings/backend.rs` reduced from 895 → 535 LOC.
+- **`src/embeddings/profile.rs`** (398 LOC, new) — profile data model +
+  built-in registry: `EmbeddingProfile` struct + inherent impl (`name`,
+  `parse`, `accepted_names`, `default_chunk_*_tokens`, `built_in_profiles`,
+  `built_in_local_for_identity`, `built_in_api_for_identity`), `QueryPolicy`
+  enum + impl, `LocalLoaderSpec` enum, `FastembedCpuModel` enum + impl,
+  `Qwen3Variant` enum + impl, `BUILT_IN_PROFILES`
+  (`LazyLock<Vec<EmbeddingProfile>>`), `PROFILE_ALIASES` const,
+  `QWEN3_CODE_QUERY_PREFIX` and `BGE_SEARCH_QUERY_PREFIX` constants.
+- **`src/embeddings/backend.rs`** stays focused on runtime wiring:
+  `EmbeddingBackend` struct + impl (constructors, accessors, query
+  formatting, identity encode/decode, legacy identity parsing),
+  `EmbeddingRuntime` enum, `Default for EmbeddingBackend`.
+- **`src/embeddings/mod.rs`** updated:
+  ```rust
+  pub use backend::{EmbeddingBackend, EmbeddingRuntime};
+
+  mod profile;
+  pub use profile::{EmbeddingProfile, FastembedCpuModel, LocalLoaderSpec, QueryPolicy, Qwen3Variant};
+  ```
+  `mod profile;` is private (matches chunker/parser pattern). External
+  paths `crate::embeddings::EmbeddingProfile` etc. resolve unchanged via the
+  `pub use` re-export.
+- Sibling submodule imports rewritten (no visibility change, just path
+  rewrite):
+  - `src/embeddings/profile_registry.rs`: split `use super::backend::{...}`
+    into `use super::backend::EmbeddingRuntime;` +
+    `use super::profile::{EmbeddingProfile, QueryPolicy};`
+  - `src/embeddings/fastembed_cpu.rs`: split into backend-side and
+    profile-side imports.
+- Two helpers widened from private to `pub(super)` because
+  `backend.rs::from_v2_identity` calls them across the new module
+  boundary: `EmbeddingProfile::built_in_local_for_identity` and
+  `EmbeddingProfile::built_in_api_for_identity`. Narrowest workable
+  widening per Guardrail 2.
+- Tests redistributed: 12 `EmbeddingBackend`-focused tests stayed in
+  `backend.rs` (default/dim/identity round-trips, legacy parsing, garbage
+  rejection, profile-aware query formatting); 5+1 profile data-only tests
+  moved to `profile.rs` (built-in data assertions, parse acceptance, alias
+  acceptance, query-policy tag round-trip, OpenRouter input_type policy,
+  plus a new `qwen3_variant_dims` slice).
+- `src/embeddings/identity.rs` untouched per spec.
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Engine→tools grep returns no hits.
 
 Operation: `Split`.
 

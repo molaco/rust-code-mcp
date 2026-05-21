@@ -1,6 +1,7 @@
 //! CPU text embedding backend backed by fastembed's ONNX path.
 
-use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime, FastembedCpuModel};
+use crate::embeddings::backend::{EmbeddingBackend, EmbeddingRuntime};
+use crate::embeddings::profile::FastembedCpuModel;
 use crate::embeddings::{Embedding, EmbeddingError};
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::sync::Mutex;
