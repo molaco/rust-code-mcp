@@ -168,3 +168,63 @@ fn decode_base64_standard(encoded: &str) -> Result<Vec<u8>, String> {
 
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_embeddings_response_in_index_order() {
+        let body = r#"{
+            "data": [
+                {"embedding": [3.0, 4.0], "index": 1},
+                {"embedding": [1.0, 2.0], "index": 0}
+            ],
+            "model": "qwen/qwen3-embedding-8b",
+            "object": "list"
+        }"#;
+
+        let embeddings = parse_embeddings_response(body, 2, 2).unwrap();
+
+        assert_eq!(embeddings, vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+    }
+
+    #[test]
+    fn rejects_dimension_mismatch() {
+        let body = r#"{
+            "data": [
+                {"embedding": [1.0], "index": 0}
+            ]
+        }"#;
+
+        let err = parse_embeddings_response(body, 2, 1).unwrap_err();
+
+        assert!(err.contains("embedding dimension 1"));
+    }
+
+    #[test]
+    fn parses_base64_embeddings_response() {
+        let body = r#"{
+            "data": [
+                {"embedding": "AACAPwAAAEA=", "index": 0}
+            ]
+        }"#;
+
+        let embeddings = parse_embeddings_response(body, 2, 1).unwrap();
+
+        assert_eq!(embeddings, vec![vec![1.0, 2.0]]);
+    }
+
+    #[test]
+    fn rejects_invalid_base64_embeddings_response() {
+        let body = r#"{
+            "data": [
+                {"embedding": "???", "index": 0}
+            ]
+        }"#;
+
+        let err = parse_embeddings_response(body, 2, 1).unwrap_err();
+
+        assert!(err.contains("invalid base64"));
+    }
+}

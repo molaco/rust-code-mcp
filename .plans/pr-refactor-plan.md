@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 14 complete; PR 15 is next. This is the executable sequence for the
+Status: PR 15 complete; PR 16 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1443,6 +1443,79 @@ Exit:
 - Config and DTO concerns are no longer mixed into the client implementation.
 
 ## PR 15: Split OpenRouter Client Support
+
+Status: DONE.
+
+Outcome:
+
+- `src/embeddings/openrouter/mod.rs` reduced from 1093 → 15 LOC — a true
+  facade. Body:
+  ```rust
+  mod batch;
+  mod client;
+  mod config;
+  mod metrics;
+  mod request;
+  mod response;
+  mod retry;
+
+  pub use config::{
+      openrouter_runtime_config, OpenRouterEncodingFormat,
+      OpenRouterProviderPreferences, OpenRouterProviderSort,
+      OpenRouterRuntimeConfig,
+  };
+  pub(in crate::embeddings) use client::OpenRouterEmbedder;
+  ```
+
+- **`src/embeddings/openrouter/batch.rs`** (273 LOC) — batch planning:
+  `OpenRouterBatchError`, `OpenRouterInput`, `OpenRouterInputBatch` + impl,
+  `plan_remote_input_batches`, `sort_openrouter_inputs`,
+  `plan_openrouter_batches`, `fallback_token_estimate`,
+  `restore_original_embedding_order`, plus 7 batch-planning tests.
+
+- **`src/embeddings/openrouter/retry.rs`** (38 LOC) — HTTP-retry classification:
+  `MAX_RETRIES`, `body_snippet`, `is_payload_too_large`,
+  `is_retryable_status`, `is_retryable_reqwest_error`, `sleep_for_retry`.
+
+- **`src/embeddings/openrouter/metrics.rs`** (141 LOC) — kept separate from
+  client.rs (plan §15 final tree lists it, and tracking spans the whole
+  request flow): `OpenRouterRequestMetrics` + impl, `OpenRouterMetricsHandle`
+  type alias, `log_openrouter_request_metrics`, plus 1 latency test.
+
+- **`src/embeddings/openrouter/client.rs`** (450 LOC) — `OpenRouterEmbedder`
+  struct + giant impl block: `new`, `dim`, `embed_documents`,
+  `embed_queries`, `plan_remote_batches`, `estimate_token_lengths`,
+  `embed_with_split`, `request_batch_with_split`, `request_batch`.
+
+- **`pub(in crate::embeddings) use client::OpenRouterEmbedder;`** —
+  visibility was `pub(super)` pre-split (meaning "visible from
+  `embeddings`" when mod.rs was the home). After moving to `client.rs`,
+  `pub(super)` would collapse to "visible only inside `openrouter`" which
+  breaks `src/embeddings/mod.rs:68,85`. Used `pub(in crate::embeddings)` —
+  strictly narrower than `pub(crate)`, preserves the original effective
+  reachability.
+
+- **Tests distributed by subject** — no `test_support.rs` needed. Each
+  family file owns the tests that exercise it: 4 response tests in
+  response.rs, 1 request test in request.rs, 7 config tests in config.rs,
+  1 metrics test in metrics.rs, 7 batch tests in batch.rs.
+
+- `OpenRouterInput` (deferred from PR 14) landed in `batch.rs` alongside
+  the batching code — its natural home (batch-coupled, not a wire DTO).
+
+- All `embeddings::openrouter::*` public paths preserved:
+  `OpenRouterRuntimeConfig`, `OpenRouterEncodingFormat`,
+  `OpenRouterProviderPreferences`, `OpenRouterProviderSort`,
+  `openrouter_runtime_config()`, `OpenRouterEmbedder`. `src/embeddings/mod.rs`
+  and `examples/index_codebase.rs` compile unchanged.
+
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Engine→tools grep returns no hits.
+
+- **Checkpoint 5 (PR 14-15) complete**: 1618-LOC `openrouter.rs` mega-file
+  fully dissolved into `openrouter/{mod, config, request, response, batch,
+  retry, metrics, client}.rs`. mod.rs is a 15-line facade. No file exceeds
+  500 LOC.
 
 Operation: `Split`.
 

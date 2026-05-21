@@ -372,3 +372,125 @@ where
             ))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_api_key_is_clear() {
+        let err = resolve_api_key(|_| Err(std::env::VarError::NotPresent)).unwrap_err();
+
+        assert!(err.to_string().contains("missing OpenRouter API key"));
+        assert!(err.to_string().contains(API_KEY_ENV));
+    }
+
+    #[test]
+    fn runtime_config_uses_defaults() {
+        let config = config_from_pairs(&[]);
+
+        assert_eq!(config.max_batch_inputs, DEFAULT_MAX_BATCH_INPUTS);
+        assert_eq!(config.max_batch_tokens, DEFAULT_MAX_BATCH_TOKENS);
+        assert_eq!(config.concurrency, DEFAULT_CONCURRENCY);
+        assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Float);
+        assert_eq!(config.provider, None);
+    }
+
+    #[test]
+    fn runtime_config_accepts_valid_overrides() {
+        let config = config_from_pairs(&[
+            (MAX_BATCH_INPUTS_ENV, "64"),
+            (MAX_BATCH_TOKENS_ENV, "65536"),
+            (CONCURRENCY_ENV, "8"),
+            (ENCODING_FORMAT_ENV, "float"),
+            (PROVIDER_SORT_ENV, "throughput"),
+            (PROVIDER_MIN_THROUGHPUT_ENV, "5000"),
+            (PROVIDER_MAX_LATENCY_ENV, "2.5"),
+        ]);
+
+        assert_eq!(config.max_batch_inputs, 64);
+        assert_eq!(config.max_batch_tokens, 65_536);
+        assert_eq!(config.concurrency, 8);
+        assert_eq!(config.encoding_format.as_str(), "float");
+        assert_eq!(
+            config.provider,
+            Some(OpenRouterProviderPreferences {
+                sort: Some(OpenRouterProviderSort::Throughput),
+                preferred_min_throughput: Some(5000),
+                preferred_max_latency: Some(2.5),
+            })
+        );
+    }
+
+    #[test]
+    fn runtime_config_rejects_zero_and_invalid_overrides() {
+        let config = config_from_pairs(&[
+            (MAX_BATCH_INPUTS_ENV, "0"),
+            (MAX_BATCH_TOKENS_ENV, "abc"),
+            (CONCURRENCY_ENV, ""),
+            (ENCODING_FORMAT_ENV, "xml"),
+            (PROVIDER_SORT_ENV, "fastest"),
+            (PROVIDER_MIN_THROUGHPUT_ENV, "0"),
+            (PROVIDER_MAX_LATENCY_ENV, "nan"),
+        ]);
+
+        assert_eq!(config.max_batch_inputs, DEFAULT_MAX_BATCH_INPUTS);
+        assert_eq!(config.max_batch_tokens, DEFAULT_MAX_BATCH_TOKENS);
+        assert_eq!(config.concurrency, DEFAULT_CONCURRENCY);
+        assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Float);
+        assert_eq!(config.provider, None);
+    }
+
+    #[test]
+    fn runtime_config_accepts_base64_encoding() {
+        let config = config_from_pairs(&[(ENCODING_FORMAT_ENV, "base64")]);
+
+        assert_eq!(config.encoding_format, OpenRouterEncodingFormat::Base64);
+        assert_eq!(config.encoding_format.as_str(), "base64");
+    }
+
+    #[test]
+    fn runtime_config_clamps_large_overrides() {
+        let config = config_from_pairs(&[
+            (MAX_BATCH_INPUTS_ENV, "999999"),
+            (MAX_BATCH_TOKENS_ENV, "999999999"),
+            (CONCURRENCY_ENV, "999"),
+        ]);
+
+        assert_eq!(config.max_batch_inputs, MAX_BATCH_INPUTS);
+        assert_eq!(config.max_batch_tokens, MAX_BATCH_TOKENS);
+        assert_eq!(config.concurrency, MAX_CONCURRENCY);
+    }
+
+    #[test]
+    fn provider_preferences_are_optional_and_partial() {
+        let config = config_from_pairs(&[
+            (PROVIDER_SORT_ENV, "latency"),
+            (PROVIDER_MAX_LATENCY_ENV, "1.25"),
+        ]);
+
+        assert_eq!(
+            config.provider,
+            Some(OpenRouterProviderPreferences {
+                sort: Some(OpenRouterProviderSort::Latency),
+                preferred_min_throughput: None,
+                preferred_max_latency: Some(1.25),
+            })
+        );
+    }
+
+    fn config_from_pairs(pairs: &[(&str, &str)]) -> OpenRouterRuntimeConfig {
+        resolve_openrouter_runtime_config(|key| {
+            pairs
+                .iter()
+                .find_map(|(pair_key, value)| {
+                    if *pair_key == key {
+                        Some((*value).to_string())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(std::env::VarError::NotPresent)
+        })
+    }
+}
