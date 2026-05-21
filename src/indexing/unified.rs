@@ -305,7 +305,7 @@ impl UnifiedIndexer {
     pub async fn index_directory_with_backup(
         &mut self,
         dir_path: &Path,
-        backup_manager: Option<&crate::monitoring::backup::BackupManager>,
+        backup_manager: Option<&dyn crate::indexing::backup::Backup>,
     ) -> Result<IndexStats> {
         let stats = self.index_directory(dir_path).await?;
 

@@ -143,6 +143,12 @@ impl BackupManager {
     }
 }
 
+impl crate::indexing::backup::Backup for BackupManager {
+    fn create_backup(&self, merkle: &FileSystemMerkle) -> anyhow::Result<PathBuf> {
+        BackupManager::create_backup(self, merkle)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

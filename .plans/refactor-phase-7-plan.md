@@ -115,9 +115,11 @@ Purpose: bring the module graph to a true DAG and bring `graph`'s public surface
 
 Operation: `Lower` visibility + small `Move` for the cycle breaks. No file count changes beyond the SCC-break extractions.
 
-### 3.A.1 — Break `indexing ↔ monitoring` cycle
+### 3.A.1 — Break `indexing ↔ monitoring` cycle  ✅ DONE 2026-05-21
 
-Edges:
+Status: complete. Created `src/indexing/backup.rs` (13 lines) with `pub(crate) trait Backup`; impl block added to `src/monitoring/backup.rs`; `UnifiedIndexer::index_directory_with_backup` parameter changed from `Option<&BackupManager>` to `Option<&dyn Backup>`. `grep -rn 'crate::monitoring' src/indexing/` returns zero. `cargo check --all-targets` green (pre-existing unrelated warnings only).
+
+Edges (pre-A.1, for reference):
 
 - `monitoring/backup.rs:5` reads `indexing::merkle::FileSystemMerkle` (read-side observer; one-way `monitoring → indexing` is fine and natural).
 - `indexing/unified.rs:308` takes `Option<&monitoring::backup::BackupManager>` as a function parameter — this is the cycle edge.

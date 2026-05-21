@@ -1,5 +1,6 @@
 //! Indexing module - Unified pipeline for both Tantivy and vector store
 
+pub(crate) mod backup;
 pub mod consistency;
 pub(crate) mod embedding_batcher;
 pub mod error;
