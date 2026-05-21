@@ -17,9 +17,8 @@ mod backend;
 pub use backend::{EmbeddingBackend, EmbeddingRuntime};
 
 mod profile;
-pub use profile::{
-    EmbeddingProfile, FastembedCpuModel, LocalLoaderSpec, QueryPolicy, Qwen3Variant,
-};
+pub use profile::{EmbeddingProfile, Qwen3Variant};
+pub use profile::{FastembedCpuModel, LocalLoaderSpec, QueryPolicy};
 
 mod identity;
 
@@ -27,9 +26,7 @@ pub(crate) mod batching;
 mod util;
 
 mod profile_registry;
-pub use profile_registry::{
-    resolve_profile, EMBEDDING_PROFILES_ENV, PROJECT_PROFILE_FILE,
-};
+pub use profile_registry::resolve_profile;
 
 mod fastembed_cpu;
 mod openrouter;
@@ -47,7 +44,7 @@ use std::sync::Arc;
 
 /// An embedding vector. Dimension depends on the active backend
 /// (1024 for Qwen3-0.6B by default).
-pub type Embedding = Vec<f32>;
+pub(crate) type Embedding = Vec<f32>;
 
 /// A chunk paired with its generated embedding.
 #[derive(Debug, Clone)]
@@ -193,7 +190,7 @@ impl EmbeddingGenerator {
 }
 
 /// Embedding pipeline with batch processing and progress reporting.
-pub struct EmbeddingPipeline {
+pub(crate) struct EmbeddingPipeline {
     generator: EmbeddingGenerator,
     batch_size: usize,
 }

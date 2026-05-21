@@ -7,7 +7,7 @@ use anyhow::{Result, Context};
 
 /// A source code location
 #[derive(Debug, Clone)]
-pub struct Location {
+pub(crate) struct Location {
     pub file_path: PathBuf,
     pub line: u32,      // 1-based
     pub column: u32,    // 1-based
@@ -86,7 +86,7 @@ fn nav_target_to_location(
 }
 
 /// Goto definition at position
-pub fn goto_definition(
+pub(crate) fn goto_definition(
     host: &AnalysisHost,
     vfs: &Vfs,
     file_path: &Path,
@@ -117,7 +117,7 @@ pub fn goto_definition(
 }
 
 /// Find all references at position
-pub fn find_references(
+pub(crate) fn find_references(
     host: &AnalysisHost,
     vfs: &Vfs,
     file_path: &Path,
@@ -181,7 +181,7 @@ pub fn find_references(
 }
 
 /// Search for symbols by name
-pub fn symbol_search(
+pub(crate) fn symbol_search(
     host: &AnalysisHost,
     vfs: &Vfs,
     symbol_name: &str,
@@ -191,7 +191,7 @@ pub fn symbol_search(
 }
 
 /// Search for symbols by name, optionally retaining only full-name matches.
-pub fn symbol_search_with_exact(
+pub(crate) fn symbol_search_with_exact(
     host: &AnalysisHost,
     vfs: &Vfs,
     symbol_name: &str,
@@ -218,7 +218,7 @@ pub fn symbol_search_with_exact(
 
 /// Find all references to symbols matching a name
 /// First finds all symbols with that name, then finds references for each
-pub fn find_references_by_name(
+pub(crate) fn find_references_by_name(
     host: &AnalysisHost,
     vfs: &Vfs,
     symbol_name: &str,
@@ -228,7 +228,7 @@ pub fn find_references_by_name(
 
 /// Find all references to symbols matching a name, optionally retaining only
 /// full-name symbol matches before resolving references.
-pub fn find_references_by_name_with_exact(
+pub(crate) fn find_references_by_name_with_exact(
     host: &AnalysisHost,
     vfs: &Vfs,
     symbol_name: &str,

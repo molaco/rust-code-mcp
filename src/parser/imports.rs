@@ -17,19 +17,19 @@ pub struct Import {
 }
 
 /// Extract all import statements from source code (convenience wrapper that parses internally)
-pub fn extract_imports(source: &str) -> Vec<Import> {
+pub(crate) fn extract_imports(source: &str) -> Vec<Import> {
     extract_imports_with_edition(source, Edition::Edition2021)
 }
 
 /// Extract all import statements from source code with a specific Rust edition
-pub fn extract_imports_with_edition(source: &str, edition: Edition) -> Vec<Import> {
+pub(crate) fn extract_imports_with_edition(source: &str, edition: Edition) -> Vec<Import> {
     let parse = SourceFile::parse(source, edition);
     let file = parse.tree();
     extract_imports_from_ast(&file)
 }
 
 /// Extract imports from a pre-parsed AST (avoids re-parsing)
-pub fn extract_imports_from_ast(file: &SourceFile) -> Vec<Import> {
+pub(crate) fn extract_imports_from_ast(file: &SourceFile) -> Vec<Import> {
     let mut imports = Vec::new();
 
     for item in file.items() {
@@ -91,7 +91,7 @@ fn extract_use_tree(use_tree: Option<ast::UseTree>, imports: &mut Vec<Import>, p
 }
 
 /// Get just the module/crate names from imports (for dependency tracking)
-pub fn get_external_dependencies(imports: &[Import]) -> Vec<String> {
+pub(crate) fn get_external_dependencies(imports: &[Import]) -> Vec<String> {
     imports
         .iter()
         .filter_map(|import| {

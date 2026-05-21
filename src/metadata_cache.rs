@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 /// Metadata for a single indexed file
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FileMetadata {
+pub(crate) struct FileMetadata {
     /// SHA-256 hash of file content
     pub hash: String,
 
@@ -27,7 +27,7 @@ pub struct FileMetadata {
 
 /// Lightweight stat info for fast change detection (avoids reading file content)
 #[derive(Debug, Clone)]
-pub struct FileStat {
+pub(crate) struct FileStat {
     pub last_modified: u64,
     pub size: u64,
 }
@@ -69,7 +69,7 @@ impl FileMetadata {
 }
 
 /// Cache for tracking file metadata
-pub struct MetadataCache {
+pub(crate) struct MetadataCache {
     db: Db,
 }
 

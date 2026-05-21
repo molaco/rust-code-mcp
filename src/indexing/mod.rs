@@ -14,11 +14,7 @@ pub mod tantivy_adapter;
 pub mod unified;
 mod unified_parallel;
 
-pub use consistency::{ConsistencyChecker, ConsistencyReport};
-pub use error::IndexingError;
-pub use error_collection::{ErrorCategory, ErrorCollector, ErrorDetail};
+pub(crate) use error::IndexingError;
 pub use incremental::{get_snapshot_path, IncrementalIndexer};
-pub use indexer_core::{IndexerCore, ProcessedFile};
-pub use retry::{retry_sync_with_backoff, retry_with_backoff};
 pub use tantivy_adapter::TantivyAdapter;
 pub use unified::{IndexFileResult, IndexStats, UnifiedIndexer};

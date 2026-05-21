@@ -12,11 +12,11 @@ use ra_ap_ide::AnalysisHost;
 use ra_ap_vfs::Vfs;
 use anyhow::Result;
 
-pub use position::Location;
-pub use rename::{RenameEdit, RenameFileMove, RenamePreview};
+pub(crate) use position::Location;
+pub(crate) use rename::RenamePreview;
 
 /// Global semantic service instance (Mutex because AnalysisHost is not Sync)
-pub static SEMANTIC: LazyLock<Mutex<SemanticService>> = LazyLock::new(|| {
+pub(crate) static SEMANTIC: LazyLock<Mutex<SemanticService>> = LazyLock::new(|| {
     Mutex::new(SemanticService::new())
 });
 
@@ -27,7 +27,7 @@ struct ProjectContext {
 }
 
 /// Service for semantic code queries
-pub struct SemanticService {
+pub(crate) struct SemanticService {
     projects: HashMap<PathBuf, ProjectContext>,
 }
 

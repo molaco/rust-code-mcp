@@ -15,7 +15,7 @@ use super::model::{BindingKind, BindingVisibility, ItemKind, Node, NodeKind};
 use super::snapshot::OpenedSnapshot;
 
 #[derive(Debug, Clone)]
-pub struct AuditOpts {
+pub struct DeriveAuditOpts {
     pub crate_id_filter: Option<NodeId>,
     pub kind_filter: HashSet<ItemKind>,
     pub required_derives: HashSet<String>,
@@ -24,7 +24,7 @@ pub struct AuditOpts {
 }
 
 #[derive(Debug, Clone)]
-pub struct DeriveFinding {
+pub(crate) struct DeriveFinding {
     pub target: NodeId,
     pub qualified_name: String,
     pub item_kind: ItemKind,
@@ -35,7 +35,7 @@ pub struct DeriveFinding {
     pub missing_derives: Vec<String>,
 }
 
-pub fn derive_audit(snap: &OpenedSnapshot, opts: AuditOpts) -> Result<Vec<DeriveFinding>> {
+pub(crate) fn derive_audit(snap: &OpenedSnapshot, opts: DeriveAuditOpts) -> Result<Vec<DeriveFinding>> {
     let rtxn = snap.env.read_txn()?;
 
     let mut candidates: Vec<(NodeId, Node)> = Vec::new();
@@ -170,7 +170,7 @@ pub fn derive_audit(snap: &OpenedSnapshot, opts: AuditOpts) -> Result<Vec<Derive
 ///   - whitespace and trailing commas tolerated
 ///
 /// Multiple `#[derive(...)]` attributes on one item accumulate.
-pub fn extract_derives(attributes: &[String]) -> HashSet<String> {
+pub(crate) fn extract_derives(attributes: &[String]) -> HashSet<String> {
     let mut out: HashSet<String> = HashSet::new();
     for raw in attributes {
         let trimmed = raw.trim();
@@ -209,7 +209,7 @@ pub fn extract_derives(attributes: &[String]) -> HashSet<String> {
 ///
 /// Caller is responsible for populating `node.visibility` from the declaring
 /// Binding before invocation (Item Nodes don't carry visibility themselves).
-pub fn missing_required_derives(
+pub(crate) fn missing_required_derives(
     node: &Node,
     kind_filter: &HashSet<ItemKind>,
     pub_only: bool,
@@ -239,7 +239,7 @@ pub fn missing_required_derives(
 
 /// Default kind set per Phase 8 plan: `Struct`, `Enum`, `Union` — the three
 /// kinds that accept derive macros.
-pub fn default_kind_filter() -> HashSet<ItemKind> {
+pub(crate) fn default_kind_filter() -> HashSet<ItemKind> {
     let mut s = HashSet::new();
     s.insert(ItemKind::Struct);
     s.insert(ItemKind::Enum);

@@ -34,7 +34,7 @@ pub mod usages;
 
 pub use extract::extract;
 pub(crate) use embedding_cache::ensure_embeddings_for;
-pub use ids::{BindingId, NodeId, UsageId, workspace_hash};
+pub use ids::{BindingId, NodeId, UsageId};
 pub use loader::{LoadedWorkspace, load};
 pub(crate) use math::cosine;
 pub use model::{
@@ -43,12 +43,6 @@ pub use model::{
     UsageCategory,
 };
 pub use query::model::*;
-pub use query::audits::classify_metadata;
-pub use snapshot::{
-    BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
-};
+pub use snapshot::{BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current};
 pub use unsafe_audit::UnsafeFinding;
-pub use storage::{
-    GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths, SCHEMA_VERSION,
-    compute_fingerprint,
-};
+pub use storage::{GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths};

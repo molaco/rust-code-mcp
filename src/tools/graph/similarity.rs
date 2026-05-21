@@ -29,7 +29,7 @@ use crate::tools::params::{SemanticOverlapsParams, SimilarToItemParams};
 /// Limitation: self-match detection is file-path-only. If the seed file
 /// contains other items that match the seed's source semantically, those
 /// will be returned. A finer span-overlap check is left for v0.2.
-pub async fn similar_to_item(
+pub(crate) async fn similar_to_item(
     params: SimilarToItemParams,
 ) -> Result<CallToolResult, McpError> {
     // 1. Resolve seed Item from the hypergraph snapshot.
@@ -201,7 +201,7 @@ pub async fn similar_to_item(
 /// modified items pay the embedding cost. The cache lives in LMDB at the
 /// `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears
 /// it (the new graph_id implies a fresh snapshot env).
-pub async fn semantic_overlaps(
+pub(crate) async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();

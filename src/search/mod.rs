@@ -10,11 +10,10 @@ pub mod rrf_tuner;
 pub use bm25::Bm25Search;
 pub use error::SearchError;
 pub use resilient::ResilientHybridSearch;
-pub use rrf_tuner::{evaluate_hybrid_search, EvaluationMetrics, RRFTuner, TestQuery, TuningResult};
 
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::EmbeddingGenerator;
-use crate::vector_store::{VectorStore, SearchResult as VectorSearchResult};
+use crate::vector_store::{VectorStore, VectorSearchResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -62,7 +61,7 @@ pub struct SearchResult {
 }
 
 /// Vector search wrapper that generates embeddings and queries the vector store
-pub struct VectorSearch {
+pub(crate) struct VectorSearch {
     embedding_generator: EmbeddingGenerator,
     vector_store: VectorStore,
 }

@@ -47,7 +47,7 @@ pub struct UnsafeFinding {
     pub has_safety_comment: bool,
 }
 
-pub fn unsafe_audit_impl(
+pub(crate) fn unsafe_audit_impl(
     loaded: &LoadedWorkspace,
     snap: &OpenedSnapshot,
 ) -> Result<Vec<UnsafeFinding>> {

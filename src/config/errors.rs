@@ -6,11 +6,8 @@
 
 pub use anyhow::{anyhow, bail, Context, Error, Result};
 
-// Re-export indexing errors for convenience
-pub use crate::indexing::error_collection::{categorize_error, ErrorCategory, ErrorCollector, ErrorDetail};
-
 /// Common error message formatting
-pub trait ErrorMessage {
+pub(crate) trait ErrorMessage {
     fn to_user_message(&self) -> String;
 }
 
@@ -21,7 +18,7 @@ impl ErrorMessage for Error {
 }
 
 /// Error context builders for common operations
-pub trait ErrorContextExt<T> {
+pub(crate) trait ErrorContextExt<T> {
     /// Add indexing operation context
     fn indexing_context(self, operation: &str) -> Result<T>;
 
@@ -54,12 +51,12 @@ impl<T> ErrorContextExt<T> for Result<T> {
 }
 
 /// Convert `Box<dyn Error>` to anyhow::Error
-pub fn box_error_to_anyhow(e: Box<dyn std::error::Error + Send + Sync>) -> Error {
+pub(crate) fn box_error_to_anyhow(e: Box<dyn std::error::Error + Send + Sync>) -> Error {
     anyhow!("{}", e)
 }
 
 /// Check if an error is retryable
-pub fn is_retryable(error: &Error) -> bool {
+pub(crate) fn is_retryable(error: &Error) -> bool {
     let error_str = error.to_string().to_lowercase();
 
     // Network and temporary errors are retryable

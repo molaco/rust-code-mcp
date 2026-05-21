@@ -8,15 +8,15 @@ mod graph;
 mod indexing;
 mod search;
 
-pub use audit::*;
-pub use graph::*;
-pub use indexing::*;
-pub use search::*;
+pub(crate) use audit::*;
+pub(crate) use graph::*;
+pub(crate) use indexing::*;
+pub(crate) use search::*;
 
 use rmcp::schemars;
 
 #[derive(Debug, Default, Clone, Copy, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct ListPaginationParams {
+pub(crate) struct ListPaginationParams {
     #[schemars(description = "Optional cap on returned items after slicing. Default: 50.")]
     #[serde(default)]
     pub limit: Option<usize>,

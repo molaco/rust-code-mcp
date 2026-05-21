@@ -7,7 +7,7 @@ use crate::vector_store::VectorStoreError;
 
 /// Errors that can occur during indexing operations
 #[derive(Error, Debug)]
-pub enum IndexingError {
+pub(crate) enum IndexingError {
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

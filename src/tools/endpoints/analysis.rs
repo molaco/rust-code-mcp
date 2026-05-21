@@ -93,7 +93,7 @@ use crate::parser::RustParser;
 use crate::semantic::SEMANTIC;
 
 /// Find the definition of a symbol by name
-pub async fn find_definition(
+pub(crate) async fn find_definition(
     symbol_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
@@ -101,7 +101,7 @@ pub async fn find_definition(
 }
 
 /// Find the definition of a symbol by name with exact-match control.
-pub async fn find_definition_with_options(
+pub(crate) async fn find_definition_with_options(
     symbol_name: &str,
     directory: &str,
     exact: bool,
@@ -140,7 +140,7 @@ pub async fn find_definition_with_options(
 }
 
 /// Find all references to a symbol by name
-pub async fn find_references(
+pub(crate) async fn find_references(
     symbol_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
@@ -148,7 +148,7 @@ pub async fn find_references(
 }
 
 /// Find all references to a symbol by name with exact-match control.
-pub async fn find_references_with_options(
+pub(crate) async fn find_references_with_options(
     symbol_name: &str,
     directory: &str,
     exact: bool,
@@ -187,7 +187,7 @@ pub async fn find_references_with_options(
 }
 
 /// Preview a rename of a symbol across the project (does not modify files).
-pub async fn rename_symbol(
+pub(crate) async fn rename_symbol(
     symbol_name: &str,
     new_name: &str,
     directory: &str,
@@ -234,7 +234,7 @@ pub async fn rename_symbol(
 }
 
 /// Get dependencies for a file (imports and files that depend on it)
-pub async fn get_dependencies(file_path: &str) -> Result<CallToolResult, McpError> {
+pub(crate) async fn get_dependencies(file_path: &str) -> Result<CallToolResult, McpError> {
     let file_path_obj = Path::new(file_path);
 
     if !file_path_obj.exists() {
@@ -274,7 +274,7 @@ pub async fn get_dependencies(file_path: &str) -> Result<CallToolResult, McpErro
 }
 
 /// Get call graph for a file or specific symbol
-pub async fn get_call_graph(
+pub(crate) async fn get_call_graph(
     file_path: &str,
     symbol_name: Option<&str>,
 ) -> Result<CallToolResult, McpError> {
@@ -352,7 +352,7 @@ pub async fn get_call_graph(
 }
 
 /// Analyze code complexity metrics for a file
-pub async fn analyze_complexity(file_path: &str) -> Result<CallToolResult, McpError> {
+pub(crate) async fn analyze_complexity(file_path: &str) -> Result<CallToolResult, McpError> {
     let file_path_obj = Path::new(file_path);
 
     if !file_path_obj.exists() {

@@ -5,15 +5,16 @@
 pub mod errors;
 pub mod indexer;
 
-pub use errors::{Error, ErrorContextExt, Result};
-pub use indexer::{IndexerConfig, IndexerCoreConfig, TantivyConfig};
+pub use errors::{Error, Result};
+pub use indexer::TantivyConfig;
+pub(crate) use indexer::{IndexerConfig, IndexerCoreConfig};
 
 use std::env;
 use std::path::PathBuf;
 
 /// Server configuration
 #[derive(Debug, Clone)]
-pub struct Config {
+pub(crate) struct Config {
     /// Port for the MCP server
     pub server_port: u16,
     /// Directory for storing indexes and cache

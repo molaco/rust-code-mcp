@@ -7,7 +7,7 @@ use crate::graph::ForbiddenDependencyRule;
 use super::ListPaginationParams;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GraphImportsParams {
+pub(crate) struct GraphImportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Module qualified name, e.g. `my_crate::sub::module`")]
@@ -17,7 +17,7 @@ pub struct GraphImportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ModuleDependenciesParams {
+pub(crate) struct ModuleDependenciesParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Module qualified name, e.g. `my_crate::sub::module`")]
@@ -27,7 +27,7 @@ pub struct ModuleDependenciesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GraphExportsParams {
+pub(crate) struct GraphExportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Module to enumerate exports from (qualified name)")]
@@ -39,7 +39,7 @@ pub struct GraphExportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GraphReexportsParams {
+pub(crate) struct GraphReexportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Module to enumerate re-exports from (qualified name)")]
@@ -51,7 +51,7 @@ pub struct GraphReexportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GraphDeclaredReexportsParams {
+pub(crate) struct GraphDeclaredReexportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Module to enumerate explicit `pub use` declarations from (qualified name)")]
@@ -61,7 +61,7 @@ pub struct GraphDeclaredReexportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct WhoImportsParams {
+pub(crate) struct WhoImportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the symbol whose importers you want")]
@@ -71,7 +71,7 @@ pub struct WhoImportsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct WhoUsesParams {
+pub(crate) struct WhoUsesParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the symbol whose non-import references you want (file:byte-range hits)")]
@@ -81,7 +81,7 @@ pub struct WhoUsesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct WhoUsesSummaryParams {
+pub(crate) struct WhoUsesSummaryParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the symbol whose non-import references you want, aggregated per consumer module with per-category counts")]
@@ -91,7 +91,7 @@ pub struct WhoUsesSummaryParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct WhoCallsParams {
+pub(crate) struct WhoCallsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the target function whose callers you want (Layer 10 call graph)")]
@@ -101,7 +101,7 @@ pub struct WhoCallsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CallsFromParams {
+pub(crate) struct CallsFromParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the caller function whose outgoing references you want (Layer 10 call graph)")]
@@ -111,7 +111,7 @@ pub struct CallsFromParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CallGraphParams {
+pub(crate) struct CallGraphParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the root function to descend from")]
@@ -121,7 +121,7 @@ pub struct CallGraphParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CallersInCrateParams {
+pub(crate) struct CallersInCrateParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the target function whose callers you want")]
@@ -133,7 +133,7 @@ pub struct CallersInCrateParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct RecursiveCallersCountParams {
+pub(crate) struct RecursiveCallersCountParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the target function whose transitive callers you want to count")]
@@ -143,7 +143,7 @@ pub struct RecursiveCallersCountParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeadPubParams {
+pub(crate) struct DeadPubParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the local crate to scan (e.g. `my_crate`). Items declared `pub` with no cross-crate consumers are returned as candidates for downgrading to `pub(crate)`.")]
@@ -153,7 +153,7 @@ pub struct DeadPubParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeadPubReportParams {
+pub(crate) struct DeadPubReportParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml). Runs dead_pub_in_crate over every local crate and returns aggregated findings per crate.")]
     pub directory: String,
     #[serde(flatten)]
@@ -161,7 +161,7 @@ pub struct DeadPubReportParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CrateEdgesParams {
+pub(crate) struct CrateEdgesParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[serde(flatten)]
@@ -169,17 +169,17 @@ pub struct CrateEdgesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct OverlapsParams {
+pub(crate) struct OverlapsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional scope: `all` (default, current behavior), `local` (lib/bin targets only), or `local_no_vendor` (lib/bin targets excluding source under vendor/)")]
     pub scope: Option<String>,
 }
 
-pub type ForbiddenDependencyRuleParam = ForbiddenDependencyRule;
+pub(crate) type ForbiddenDependencyRuleParam = ForbiddenDependencyRule;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ForbiddenDependencyCheckParams {
+pub(crate) struct ForbiddenDependencyCheckParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Architectural rules to enforce against the workspace's cross-crate edges")]
@@ -189,7 +189,7 @@ pub struct ForbiddenDependencyCheckParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct EnumVariantsParams {
+pub(crate) struct EnumVariantsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the enum whose variants you want (e.g. `my_crate::module::MyEnum`)")]
@@ -199,7 +199,7 @@ pub struct EnumVariantsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ItemAttributesParams {
+pub(crate) struct ItemAttributesParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the item whose outer attributes (and doc-comment lines) you want, e.g. `my_crate::Foo`")]
@@ -209,7 +209,7 @@ pub struct ItemAttributesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ItemsWithAttributeParams {
+pub(crate) struct ItemsWithAttributeParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
@@ -221,7 +221,7 @@ pub struct ItemsWithAttributeParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct PubUsePubTypeAuditParams {
+pub(crate) struct PubUsePubTypeAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
@@ -231,7 +231,7 @@ pub struct PubUsePubTypeAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ReExportChainParams {
+pub(crate) struct ReExportChainParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the canonical declaration whose re-export chain you want to walk (e.g. `my_crate::module::Token`)")]
@@ -241,7 +241,7 @@ pub struct ReExportChainParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct CrateDependencyMetricParams {
+pub(crate) struct CrateDependencyMetricParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional cap on returned rows after sorting. Default: None (all rows).")]
@@ -255,7 +255,7 @@ pub struct CrateDependencyMetricParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ModuleTreeParams {
+pub(crate) struct ModuleTreeParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Crate qualified name (e.g. `my_crate`)")]
@@ -265,13 +265,13 @@ pub struct ModuleTreeParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct WorkspaceStatsParams {
+pub(crate) struct WorkspaceStatsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FunctionSignatureParams {
+pub(crate) struct FunctionSignatureParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the function (e.g. `crate::module::fn_name` or `crate::Type::method`)")]
@@ -279,7 +279,7 @@ pub struct FunctionSignatureParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FunctionsWithFilterParams {
+pub(crate) struct FunctionsWithFilterParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Crate qualified name to scope the search (accepts the crate name or its root module)")]
@@ -311,7 +311,7 @@ pub struct FunctionsWithFilterParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct SimilarToItemParams {
+pub(crate) struct SimilarToItemParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Qualified name of the seed Item (function, struct, enum, etc.)")]
@@ -331,7 +331,7 @@ pub struct SimilarToItemParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct SemanticOverlapsParams {
+pub(crate) struct SemanticOverlapsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
@@ -370,7 +370,7 @@ pub struct SemanticOverlapsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct BuildCodemapParams {
+pub(crate) struct BuildCodemapParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Natural-language task description. Required unless seed_qualified_names is supplied. Best for exploratory queries against documented APIs — HybridSearch weighs token frequency in doc comments, so verbose-doc public surfaces rank highest. For pinpoint navigation to a specific implementation, prefer seed_qualified_names. Search hits that don't snap to an indexed Item are surfaced in Codemap.diagnostics with per-failure-mode counts (path-norm, line-resolve, kind-filter).")]

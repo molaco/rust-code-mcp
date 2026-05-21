@@ -35,7 +35,7 @@ use ra_ap_vfs::Vfs;
 use super::ids::NodeId;
 use super::model::ExtractionModel;
 
-pub fn extract_attributes(
+pub(crate) fn extract_attributes(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     _vfs: &Vfs,

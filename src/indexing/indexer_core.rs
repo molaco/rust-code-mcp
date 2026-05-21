@@ -44,7 +44,7 @@ use std::time::{Duration, Instant};
 
 /// Result of processing a single file
 #[derive(Debug)]
-pub struct ProcessedFile {
+pub(crate) struct ProcessedFile {
     /// File path
     pub path: PathBuf,
     /// File content
@@ -56,7 +56,7 @@ pub struct ProcessedFile {
 }
 
 /// Core indexing logic — facade over FileProcessor, Chunker, and EmbeddingBatcher
-pub struct IndexerCore {
+pub(crate) struct IndexerCore {
     /// File filtering, security, and change detection
     file_processor: FileProcessor,
     /// Code chunker

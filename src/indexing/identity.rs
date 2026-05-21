@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 ///
 /// Chunking changes alter the document text that gets embedded, so they must
 /// invalidate both metadata-cache entries and Merkle snapshots.
-pub fn active_chunking_identity() -> String {
+pub(crate) fn active_chunking_identity() -> String {
     active_chunking_identity_for_backend(&EmbeddingBackend::default())
 }
 
 /// Active chunking identity for a specific embedding backend.
-pub fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
+pub(crate) fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
     IndexerCoreConfig::default()
         .with_embedding_profile(backend.profile.clone())
         .with_env_overrides()
@@ -25,12 +25,12 @@ pub fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> Strin
 ///
 /// Callers validate paths before indexing, but tests and health probes may
 /// pass paths that do not exist yet. In that case, fall back to the raw path.
-pub fn canonical_codebase_path(codebase_path: &Path) -> PathBuf {
+pub(crate) fn canonical_codebase_path(codebase_path: &Path) -> PathBuf {
     std::fs::canonicalize(codebase_path).unwrap_or_else(|_| codebase_path.to_path_buf())
 }
 
 /// Stable identity for all embedding-sensitive indexing artifacts.
-pub fn indexing_identity(
+pub(crate) fn indexing_identity(
     codebase_path: &Path,
     backend: &EmbeddingBackend,
     chunking_identity: &str,
@@ -45,7 +45,7 @@ pub fn indexing_identity(
 }
 
 /// SHA-256 hex digest for a stable identity string.
-pub fn identity_hash(identity: &str) -> String {
+pub(crate) fn identity_hash(identity: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(identity.as_bytes());
     format!("{:x}", hasher.finalize())

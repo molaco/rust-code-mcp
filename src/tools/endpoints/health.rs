@@ -15,7 +15,7 @@ use crate::vector_store::VectorStore;
 
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct HealthCheckParams {
+pub(crate) struct HealthCheckParams {
     #[schemars(description = "Optional: project directory to check (checks system-wide if not provided)")]
     pub directory: Option<String>,
     #[schemars(description = "Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: the built-in default profile.")]
@@ -25,7 +25,7 @@ pub struct HealthCheckParams {
 
 /// Check system health status
 #[tool(description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)")]
-pub async fn health_check(
+pub(crate) async fn health_check(
     Parameters(HealthCheckParams {
         directory,
         embedding_profile,

@@ -20,7 +20,7 @@ use super::hir_trim::trim_hir_display;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, StaticMetadata};
 
-pub fn extract_statics(
+pub(crate) fn extract_statics(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     _vfs: &Vfs,
@@ -70,7 +70,7 @@ pub fn extract_statics(
 mod tests {
     use super::*;
     use crate::graph::test_support::shared_snapshot;
-    use crate::graph::classify_metadata;
+    use crate::graph::query::audits::classify_metadata;
 
     #[test]
     fn classifier_detects_lazy_lock() {

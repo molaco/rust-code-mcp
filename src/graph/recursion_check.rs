@@ -16,27 +16,27 @@ use super::ids::NodeId;
 use super::snapshot::OpenedSnapshot;
 
 #[derive(Debug, Clone)]
-pub struct RecursionOpts {
+pub(crate) struct RecursionOpts {
     pub crate_id_filter: Option<NodeId>,
     pub max_cycle_length: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct RecursionCycleInternal {
+pub(crate) struct RecursionCycleInternal {
     pub fns: Vec<NodeId>,
     pub cycle_length: usize,
     pub direct_recursion: bool,
 }
 
-pub const HARD_CAP_CYCLE_LENGTH: usize = 12;
-pub const DEFAULT_CYCLE_LENGTH: usize = 5;
+pub(crate) const HARD_CAP_CYCLE_LENGTH: usize = 12;
+pub(crate) const DEFAULT_CYCLE_LENGTH: usize = 5;
 
-pub fn clamp_cycle_length(requested: Option<usize>) -> usize {
+pub(crate) fn clamp_cycle_length(requested: Option<usize>) -> usize {
     let n = requested.unwrap_or(DEFAULT_CYCLE_LENGTH);
     n.clamp(1, HARD_CAP_CYCLE_LENGTH)
 }
 
-pub fn recursion_check(
+pub(crate) fn recursion_check(
     snap: &OpenedSnapshot,
     opts: RecursionOpts,
 ) -> Result<Vec<RecursionCycleInternal>> {
@@ -144,7 +144,7 @@ pub fn recursion_check(
 ///
 /// Pure function over the closure — unit-testable against a hand-built
 /// adjacency list.
-pub fn find_cycles_from<F>(start: NodeId, max_depth: usize, outgoing_edges: F) -> Vec<Vec<NodeId>>
+pub(crate) fn find_cycles_from<F>(start: NodeId, max_depth: usize, outgoing_edges: F) -> Vec<Vec<NodeId>>
 where
     F: Fn(NodeId) -> Vec<NodeId>,
 {
@@ -195,7 +195,7 @@ fn dfs<F>(
 /// Rotate a cycle so its lowest-id `NodeId` (by lexicographic byte order)
 /// comes first. Used for dedup: two cycles with the same canonical form are
 /// the same cycle viewed from different starting nodes.
-pub fn canonicalize_cycle(mut cycle: Vec<NodeId>) -> Vec<NodeId> {
+pub(crate) fn canonicalize_cycle(mut cycle: Vec<NodeId>) -> Vec<NodeId> {
     if cycle.len() <= 1 {
         return cycle;
     }
@@ -209,7 +209,7 @@ pub fn canonicalize_cycle(mut cycle: Vec<NodeId>) -> Vec<NodeId> {
     cycle
 }
 
-pub fn enclosing_fn_qualified_names(
+pub(crate) fn enclosing_fn_qualified_names(
     snap: &OpenedSnapshot,
     cycle: &[NodeId],
 ) -> Result<Vec<String>> {

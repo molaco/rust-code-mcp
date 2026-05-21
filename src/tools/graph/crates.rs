@@ -16,7 +16,7 @@ use crate::tools::params::{
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
-pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let edges: Vec<CrateEdge> = snap
         .crate_edges()
@@ -25,7 +25,7 @@ pub async fn crate_edges(params: CrateEdgesParams) -> Result<CallToolResult, Mcp
     json_result(&CrateEdgesResponse { page, edges })
 }
 
-pub async fn forbidden_dependency_check(
+pub(crate) async fn forbidden_dependency_check(
     params: ForbiddenDependencyCheckParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -43,7 +43,7 @@ pub async fn forbidden_dependency_check(
     })
 }
 
-pub async fn crate_dependency_metric(
+pub(crate) async fn crate_dependency_metric(
     params: CrateDependencyMetricParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;

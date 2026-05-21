@@ -7,8 +7,8 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
 
-pub const EMBEDDING_PROFILES_ENV: &str = "RUST_CODE_MCP_EMBEDDING_PROFILES";
-pub const PROJECT_PROFILE_FILE: &str = "embedding_profiles.toml";
+pub(crate) const EMBEDDING_PROFILES_ENV: &str = "RUST_CODE_MCP_EMBEDDING_PROFILES";
+pub(crate) const PROJECT_PROFILE_FILE: &str = "embedding_profiles.toml";
 
 const DEFAULT_QUERY_DOCUMENT: &str = "search_document";
 const DEFAULT_QUERY_INPUT: &str = "search_query";

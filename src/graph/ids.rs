@@ -51,7 +51,7 @@ define_id!(NodeId);
 define_id!(BindingId);
 define_id!(UsageId);
 
-pub fn workspace_hash(workspace_root: &Path) -> String {
+pub(crate) fn workspace_hash(workspace_root: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(workspace_root.to_string_lossy().as_bytes());
     hex_encode(&hasher.finalize())
@@ -70,11 +70,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 mod serde_bytes_32 {
     use serde::{Deserializer, Serializer, de::Error};
 
-    pub fn serialize<S: Serializer>(bytes: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(bytes: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
         serde_bytes::serialize(&bytes[..], s)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
         let v: Vec<u8> = serde_bytes::deserialize(d)?;
         if v.len() != 32 {
             return Err(D::Error::custom("NodeId must be 32 bytes"));

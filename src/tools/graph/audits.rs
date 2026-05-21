@@ -14,7 +14,7 @@ use crate::tools::graph::response::*;
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
-pub async fn unsafe_audit(
+pub(crate) async fn unsafe_audit(
     params: crate::tools::params::UnsafeAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
@@ -74,7 +74,7 @@ pub async fn unsafe_audit(
     })
 }
 
-pub async fn mut_static_audit(
+pub(crate) async fn mut_static_audit(
     params: crate::tools::params::MutStaticAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -126,7 +126,7 @@ pub async fn mut_static_audit(
     })
 }
 
-pub async fn recursion_check(
+pub(crate) async fn recursion_check(
     params: crate::tools::params::RecursionCheckParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -227,7 +227,7 @@ pub(crate) struct RecursionCycleRendered {
     pub(crate) starting_node_id: String,
 }
 
-pub async fn channel_capacity_audit(
+pub(crate) async fn channel_capacity_audit(
     params: crate::tools::params::ChannelCapacityAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
@@ -336,7 +336,7 @@ pub async fn channel_capacity_audit(
     })
 }
 
-pub async fn fn_body_audit(
+pub(crate) async fn fn_body_audit(
     params: crate::tools::params::FnBodyAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();

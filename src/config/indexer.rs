@@ -40,14 +40,14 @@ use std::path::{Path, PathBuf};
 use crate::embeddings::EmbeddingProfile;
 
 /// Environment variable for overriding the GPU embedding batch size.
-pub const EMBED_BATCH_SIZE_ENV: &str = "RUST_CODE_MCP_EMBED_BATCH_SIZE";
+pub(crate) const EMBED_BATCH_SIZE_ENV: &str = "RUST_CODE_MCP_EMBED_BATCH_SIZE";
 /// Environment variable for overriding the padded token budget per embedding batch.
-pub const EMBED_MAX_TOKENS_PER_BATCH_ENV: &str =
+pub(crate) const EMBED_MAX_TOKENS_PER_BATCH_ENV: &str =
     "RUST_CODE_MCP_EMBED_MAX_TOKENS_PER_BATCH";
 /// Environment variable for the preferred formatted chunk token length.
-pub const CHUNK_TARGET_TOKENS_ENV: &str = "RUST_CODE_MCP_CHUNK_TARGET_TOKENS";
+pub(crate) const CHUNK_TARGET_TOKENS_ENV: &str = "RUST_CODE_MCP_CHUNK_TARGET_TOKENS";
 /// Environment variable for the hard formatted chunk token length.
-pub const CHUNK_HARD_MAX_TOKENS_ENV: &str =
+pub(crate) const CHUNK_HARD_MAX_TOKENS_ENV: &str =
     "RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS";
 
 const DEFAULT_GPU_BATCH_SIZE: usize = 32;
@@ -64,7 +64,7 @@ const MAX_CHUNK_TOKENS: usize = 16_384;
 /// - IndexerCore (file processing settings)
 /// - TantivyAdapter (BM25 indexing settings)
 #[derive(Debug, Clone)]
-pub struct IndexerConfig {
+pub(crate) struct IndexerConfig {
     /// Core processing settings
     pub core: IndexerCoreConfig,
     /// Tantivy BM25 settings
@@ -138,7 +138,7 @@ impl IndexerConfig {
 
 /// Core indexing configuration
 #[derive(Debug, Clone)]
-pub struct IndexerCoreConfig {
+pub(crate) struct IndexerCoreConfig {
     /// Path to metadata cache directory
     pub cache_path: PathBuf,
     /// Maximum file size to process (in bytes)

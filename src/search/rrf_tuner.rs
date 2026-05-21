@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Test query with ground truth relevant results
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestQuery {
+pub(crate) struct TestQuery {
     /// The search query text
     pub query: String,
     /// List of symbol names that are relevant for this query
@@ -16,13 +16,13 @@ pub struct TestQuery {
 }
 
 /// RRF parameter tuner for hybrid search
-pub struct RRFTuner {
+pub(crate) struct RRFTuner {
     test_queries: Vec<TestQuery>,
 }
 
 /// Tuning results with metrics for each k value tested
 #[derive(Debug, Clone)]
-pub struct TuningResult {
+pub(crate) struct TuningResult {
     pub best_k: f32,
     pub best_ndcg: f64,
     pub k_values_tested: Vec<(f32, f64)>, // (k, ndcg@10)
@@ -297,7 +297,7 @@ fn calculate_precision_at_k(results: &[SearchResult], relevant: &[String], k: us
 
 /// Comprehensive evaluation metrics
 #[derive(Debug, Clone, Serialize)]
-pub struct EvaluationMetrics {
+pub(crate) struct EvaluationMetrics {
     pub ndcg_at_10: f64,
     pub mrr: f64,
     pub map: f64,
@@ -306,7 +306,7 @@ pub struct EvaluationMetrics {
 }
 
 /// Evaluate hybrid search quality across all test queries
-pub async fn evaluate_hybrid_search(
+pub(crate) async fn evaluate_hybrid_search(
     hybrid_search: &HybridSearch,
     test_queries: &[TestQuery],
 ) -> Result<EvaluationMetrics, Box<dyn std::error::Error + Send + Sync>> {

@@ -5,7 +5,7 @@ use rmcp::schemars;
 use super::ListPaginationParams;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct UnsafeAuditParams {
+pub(crate) struct UnsafeAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[serde(flatten)]
@@ -13,7 +13,7 @@ pub struct UnsafeAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct MutStaticAuditParams {
+pub(crate) struct MutStaticAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[serde(flatten)]
@@ -21,7 +21,7 @@ pub struct MutStaticAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct MissingDocsAuditParams {
+pub(crate) struct MissingDocsAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
@@ -38,7 +38,7 @@ pub struct MissingDocsAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct DeriveAuditParams {
+pub(crate) struct DeriveAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
@@ -60,7 +60,7 @@ pub struct DeriveAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct RecursionCheckParams {
+pub(crate) struct RecursionCheckParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
@@ -74,7 +74,7 @@ pub struct RecursionCheckParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct ChannelCapacityAuditParams {
+pub(crate) struct ChannelCapacityAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
@@ -88,7 +88,7 @@ pub struct ChannelCapacityAuditParams {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct FnBodyAuditParams {
+pub(crate) struct FnBodyAuditParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]

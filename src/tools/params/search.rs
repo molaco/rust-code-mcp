@@ -3,7 +3,7 @@
 use rmcp::schemars;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct SearchParams {
+pub(crate) struct SearchParams {
     #[schemars(description = "Path to the directory to search")]
     pub directory: String,
     #[schemars(description = "Keyword to search for")]
@@ -15,13 +15,13 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FileContentParams {
+pub(crate) struct FileContentParams {
     #[schemars(description = "Path to the file to read")]
     pub file_path: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FindDefinitionParams {
+pub(crate) struct FindDefinitionParams {
     #[schemars(description = "Symbol name to find the definition for (function, struct, trait, const, etc.)")]
     pub symbol_name: String,
     #[schemars(description = "Project root directory containing Cargo.toml")]
@@ -32,7 +32,7 @@ pub struct FindDefinitionParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FindReferencesParams {
+pub(crate) struct FindReferencesParams {
     #[schemars(description = "Symbol name to find all references for")]
     pub symbol_name: String,
     #[schemars(description = "Project root directory containing Cargo.toml")]
@@ -43,7 +43,7 @@ pub struct FindReferencesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct RenameSymbolParams {
+pub(crate) struct RenameSymbolParams {
     #[schemars(description = "Symbol name to rename (must match exactly; ambiguous names are rejected)")]
     pub symbol_name: String,
     #[schemars(description = "New name for the symbol (valid Rust identifier)")]
@@ -53,13 +53,13 @@ pub struct RenameSymbolParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GetDependenciesParams {
+pub(crate) struct GetDependenciesParams {
     #[schemars(description = "Path to the file to analyze")]
     pub file_path: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GetCallGraphParams {
+pub(crate) struct GetCallGraphParams {
     #[schemars(description = "Path to the file to analyze")]
     pub file_path: String,
     #[schemars(description = "Optional: specific symbol to get call graph for")]
@@ -67,13 +67,13 @@ pub struct GetCallGraphParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct AnalyzeComplexityParams {
+pub(crate) struct AnalyzeComplexityParams {
     #[schemars(description = "Path to the file to analyze")]
     pub file_path: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GetSimilarCodeParams {
+pub(crate) struct GetSimilarCodeParams {
     #[schemars(description = "Code snippet or query to find similar code")]
     pub query: String,
     #[schemars(description = "Directory containing the codebase")]

@@ -15,7 +15,7 @@ use crate::tools::project_paths::{data_dir, dir_hash};
 
 /// Parameters for clearing the cache
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ClearCacheParams {
+pub(crate) struct ClearCacheParams {
     #[schemars(
         description = "Optional: project directory to clear cache for. If not provided, clears all caches."
     )]
@@ -64,7 +64,7 @@ fn clear_existing_dir(
 /// corrupted sled database files. When `include_hypergraph` is set, the
 /// persisted workspace hypergraph snapshot is also wiped so the next
 /// `build_hypergraph` call performs a full re-index.
-pub async fn clear_cache(
+pub(crate) async fn clear_cache(
     params: ClearCacheParams,
 ) -> Result<CallToolResult, McpError> {
     let mut cleared = Vec::new();

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 /// A search result from vector search
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResult {
+pub struct VectorSearchResult {
     pub chunk_id: ChunkId,
     pub score: f32,
     pub chunk: CodeChunk,
@@ -117,7 +117,7 @@ impl VectorStore {
         &self,
         query_vector: Embedding,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, VectorStoreError> {
+    ) -> Result<Vec<VectorSearchResult>, VectorStoreError> {
         self.backend.search(query_vector, limit).await
     }
 

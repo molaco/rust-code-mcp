@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 19 complete; PR 20 is next. This is the executable sequence for the
+Status: PR 20 complete; PR 21 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1999,6 +1999,120 @@ Exit:
   stable parent facades.
 
 ## PR 20: Lower Accidental Public Visibility
+
+Status: DONE.
+
+Outcome:
+
+**`workspace_stats` before/after**:
+- Baseline (Phase 0): `pub`=540, `pub(crate)`=43, `pub_crate_share`≈0.074.
+- After PR 20: `pub`=268, `pub(crate)`=362, `pub_crate_share`≈**0.575**.
+- Exceeds the plan's "meaningfully above 0.074" target by a wide margin.
+
+**`dead_pub_in_crate` before/after**:
+- Before: 339 candidates.
+- After: 76 candidates (remaining 76 are mostly types reachable transitively
+  through `pub` method signatures on `OpenedSnapshot` etc.; they're not
+  truly "dead" — `dead_pub_in_crate` doesn't see method-return-type
+  transitivity).
+
+**Demotion summary (rough counts per module family)**:
+| Family | demotions |
+|---|---|
+| `graph/{extract,bindings,usages,impls,signatures,attributes,statics,ast_resolve}` | 7 |
+| `graph/{docs,derive,unsafe,fn_body,channel,recursion}_audit` | 39 |
+| `graph/query/{model,audits}` | 33 |
+| `graph/{audit_util,labels,math,embedding_cache,test_support,ids,hir_trim,snapshot,storage}` + `codemap/{model,seeds}` | 29 |
+| `embeddings/*` (excluding `profile.rs`) | 15 |
+| `tools/{router,project_paths,params/*}` | 51 |
+| `tools/endpoints/* + tools/graph/*` | 56 |
+| `indexing/*` | 22 |
+| `chunker,parser,search,vector_store` | 31 |
+| `config,metadata_cache,metrics,monitoring,schema,security,semantic` | 38 |
+| **Total** | **~321** demotions |
+
+Most demotions narrowed `pub` items to `pub(crate)`; many `mod.rs`
+re-exports also narrowed from `pub use` to `pub(crate) use`. No
+`pub(in crate::path)` was needed — `pub(crate)` was always sufficient.
+
+**Intentional public facades retained** (verified `pub`):
+- `graph::OpenedSnapshot` (`src/graph/snapshot.rs:365`)
+- `graph::BuildOptions` (`src/graph/snapshot.rs:30`)
+- `indexing::UnifiedIndexer` (`src/indexing/unified.rs:57`)
+- `indexing::IncrementalIndexer` (`src/indexing/incremental.rs:59`)
+- `embeddings::EmbeddingGenerator` (`src/embeddings/mod.rs:59`)
+- `search::HybridSearch` (`src/search/mod.rs:106`)
+- `vector_store::VectorStore` (`src/vector_store/mod.rs:66`)
+
+**Disambiguating renames**:
+- `graph::docs_audit::AuditOpts` → **`DocsAuditOpts`** (3 sites updated:
+  declaration, fn signature, `tools/graph/surface.rs:554`).
+- `graph::derive_audit::AuditOpts` → **`DeriveAuditOpts`** (3 sites
+  updated). Both renamed for symmetry with the existing
+  `ChannelAuditOpts` and `FnBodyAuditOpts`.
+- `vector_store::SearchResult` → **`VectorSearchResult`** (5 sites
+  updated: declaration + construction in `lancedb.rs:452` + imports in
+  `vector_store/{mod,traits,lancedb}.rs` and `search/mod.rs`). Replaced
+  the previous `use ... as VectorSearchResult` alias in `search/mod.rs`.
+
+**Surprises (transitive-pub reachability via method signatures)**: many
+items that `dead_pub_in_crate` flagged as candidates turned out to be
+required `pub` because they appear in `pub` method signatures on `pub`
+types reached from examples/tests:
+- `graph::query::model::*` (32 types) — return types of `OpenedSnapshot`
+  methods called from examples.
+- `graph::model::{Binding, Usage, ItemKind, ExtractionModel, …}` — reached
+  via `extract()` and `OpenedSnapshot` accessors.
+- `EmbeddingError`, `VectorStoreError`, `SearchError` — variants in pub
+  `IndexingError` chain.
+- `ChunkId`, `CodeChunk`, `ChunkContext`, `ChunkSplitConfig` — used by
+  `EmbeddingGenerator::embed_chunks` and `Chunker`.
+- `RustParser`, `ParseResult`, `Range`, `Symbol`, `SymbolKind` — used by
+  `src/bin/test_tools_direct.rs`.
+- `IndexFileResult` — used by `tests/benchmark_gpu_performance.rs` and
+  `examples/quick_bench.rs`.
+- `IndexingMetrics` — used by `examples/index_codebase.rs`.
+
+These were reverted to `pub` after compilation discovered the dependency.
+The 76 remaining `dead_pub_in_crate` flags reflect this transitive
+reachability limit of the tool itself, not residual cleanup.
+
+`nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+green. Engine→tools grep returns no hits.
+
+**Post-review fix-up** (private_interfaces + dead-glob cleanup):
+The first pass over-demoted some types that appear in public-API signatures,
+producing 14 `private_interfaces` warnings and 4 dead-glob warnings.
+Fix-up:
+- Re-promoted 15 types to `pub` (the 14 reviewer-cited + `TypeUsageContext`
+  surfaced after `TypeReference` was re-promoted): `ChunkWithEmbedding`,
+  `FastembedCpuModel`, `QueryPolicy`, `LocalLoaderSpec`, `ChunkSchema`,
+  `BackupManager`, `parser::types::Visibility`, `TypeReference`,
+  `TypeUsageContext`, `HybridSearchConfig`, `SecretMatch`,
+  `IndexedProfilePaths`, `VectorStoreConfig`, `UnsafeFinding`. Updated the
+  corresponding `mod.rs` re-exports.
+- Narrowed 4 dead globs in `src/tools/params/mod.rs` from `pub use {audit,
+  graph, indexing, search}::*;` to `pub(crate) use ...::*;` — params are
+  only consumed inside `crate::tools`.
+- Cleaned 19 lib `unused import` warnings (introduced by PR 20's narrowing)
+  by deleting now-unused re-export lines in `indexing/mod.rs`,
+  `config/errors.rs`, `config.rs`, `embeddings/mod.rs`, `parser/mod.rs`,
+  `search/mod.rs`, `semantic/mod.rs`, `graph/{mod, storage}.rs`,
+  `tools/graph/tests.rs`. One test in `src/graph/statics.rs` rewired from
+  the deleted `crate::graph::classify_metadata` re-export to
+  `crate::graph::query::audits::classify_metadata`.
+- Fixed stale doc comment in `src/graph/query/model.rs:4-5` — old text
+  claimed `graph::queries::Foo` continues to resolve; new text describes
+  the post-PR-19 facade (`crate::graph::Foo` through
+  `graph::mod::pub use query::model::*;`).
+- `pub_crate_share` dropped slightly from 0.575 → 0.5524 (still ~7.5× the
+  baseline 0.074) reflecting the 15 type re-promotions.
+
+**Checkpoint 7 (PR 19-20) complete**: all migration facades deleted,
+boundaries are stable, accidental public surface dropped from 540 → 283
+`pub` items (post-fix-up), the two name-only collisions disambiguated, and
+all `private_interfaces` / dead-glob warnings cleared from the library
+build.
 
 Operation: `Lower`.
 

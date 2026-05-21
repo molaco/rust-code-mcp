@@ -42,7 +42,7 @@ const MUT_STATIC_PATTERNS: &[(&str, &str)] = &[
 /// list of matched pattern labels (empty if none). Public to the graph
 /// module for unit testing without a snapshot — the workspace-wide audit
 /// uses this internally.
-pub fn classify_metadata(meta: &StaticMetadata) -> Vec<&'static str> {
+pub(crate) fn classify_metadata(meta: &StaticMetadata) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
     for &(label, needle) in MUT_STATIC_PATTERNS {
         if label == "static mut" {

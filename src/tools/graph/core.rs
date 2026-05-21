@@ -30,7 +30,7 @@ use crate::tools::params::{
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
-pub async fn build_hypergraph(
+pub(crate) async fn build_hypergraph(
     params: BuildHypergraphParams,
 ) -> Result<CallToolResult, McpError> {
     let dir = PathBuf::from(&params.directory);
@@ -76,7 +76,7 @@ pub(crate) struct BuildHypergraphResponse {
     pub(crate) snapshot_path: String,
 }
 
-pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
     let bindings = snap
@@ -99,7 +99,7 @@ pub async fn get_imports(params: GraphImportsParams) -> Result<CallToolResult, M
     })
 }
 
-pub async fn module_dependencies(
+pub(crate) async fn module_dependencies(
     params: ModuleDependenciesParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -127,7 +127,7 @@ pub async fn module_dependencies(
     })
 }
 
-pub async fn get_exports(params: GraphExportsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn get_exports(params: GraphExportsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
     let consumer_id = resolve_required_node(&snap, &params.consumer, NodeKind::Module)?;
@@ -145,7 +145,7 @@ pub async fn get_exports(params: GraphExportsParams) -> Result<CallToolResult, M
     })
 }
 
-pub async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
     let consumer_id = resolve_required_node(&snap, &params.consumer, NodeKind::Module)?;
@@ -163,7 +163,7 @@ pub async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResul
     })
 }
 
-pub async fn get_declared_reexports(
+pub(crate) async fn get_declared_reexports(
     params: GraphDeclaredReexportsParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -182,7 +182,7 @@ pub async fn get_declared_reexports(
     })
 }
 
-pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     // The target may be any node kind (Item, Module, ExternalSymbol).
     let (target_id, target_node) = snap
@@ -208,7 +208,7 @@ pub async fn who_imports(params: WhoImportsParams) -> Result<CallToolResult, Mcp
     })
 }
 
-pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let (target_id, target_node) = snap
         .lookup_by_qualified_name(&params.target)
@@ -232,7 +232,7 @@ pub async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, McpError>
     })
 }
 
-pub async fn who_uses_summary(
+pub(crate) async fn who_uses_summary(
     params: WhoUsesSummaryParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -257,7 +257,7 @@ pub async fn who_uses_summary(
     })
 }
 
-pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let (target_id, target_node) = snap
         .lookup_by_qualified_name(&params.target)
@@ -283,7 +283,7 @@ pub async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, McpErro
     })
 }
 
-pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let (caller_id, caller_node) = snap
         .lookup_by_qualified_name(&params.caller)
@@ -309,7 +309,7 @@ pub async fn calls_from(params: CallsFromParams) -> Result<CallToolResult, McpEr
     })
 }
 
-pub async fn call_graph(params: CallGraphParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn call_graph(params: CallGraphParams) -> Result<CallToolResult, McpError> {
     const DEFAULT_DEPTH: u32 = 3;
     const MAX_DEPTH: u32 = 8;
     let depth = params.depth.unwrap_or(DEFAULT_DEPTH).min(MAX_DEPTH);
@@ -333,7 +333,7 @@ pub async fn call_graph(params: CallGraphParams) -> Result<CallToolResult, McpEr
     })
 }
 
-pub async fn callers_in_crate(
+pub(crate) async fn callers_in_crate(
     params: CallersInCrateParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -361,7 +361,7 @@ pub async fn callers_in_crate(
     })
 }
 
-pub async fn recursive_callers_count(
+pub(crate) async fn recursive_callers_count(
     params: RecursiveCallersCountParams,
 ) -> Result<CallToolResult, McpError> {
     const DEFAULT_DEPTH: u32 = 3;
@@ -383,7 +383,7 @@ pub async fn recursive_callers_count(
     json_result(&count)
 }
 
-pub async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let tree: ModuleTreeNode = snap
         .module_tree(&params.krate, params.depth)
@@ -391,7 +391,7 @@ pub async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, Mcp
     json_result(&ModuleTreeResponse { tree })
 }
 
-pub async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let stats: WorkspaceStats = snap
         .workspace_stats()

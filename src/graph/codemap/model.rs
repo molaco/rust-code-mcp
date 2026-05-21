@@ -11,7 +11,7 @@ use crate::graph::model::{ItemKind, NodeKind};
 use crate::graph::ModuleTreeNode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Codemap {
+pub(crate) struct Codemap {
     pub prompt: String,
     pub snapshot_id: String,
     pub generated_at_unix: u64,
@@ -24,7 +24,7 @@ pub struct Codemap {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodemapNode {
+pub(crate) struct CodemapNode {
     pub id: NodeId,
     pub qualified_name: String,
     pub kind: NodeKind,
@@ -42,7 +42,7 @@ pub struct CodemapNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodemapEdge {
+pub(crate) struct CodemapEdge {
     pub from: NodeId,
     pub to: NodeId,
     pub kind: EdgeKind,
@@ -58,7 +58,7 @@ pub struct CodemapEdge {
 /// is part of the MCP tool's serialized JSON output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum EdgeKind {
+pub(crate) enum EdgeKind {
     Calls,
     Uses,
     Imports,
@@ -66,7 +66,7 @@ pub enum EdgeKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodemapStats {
+pub(crate) struct CodemapStats {
     pub seed_count: usize,
     pub node_count: usize,
     pub edge_count: usize,
@@ -77,7 +77,7 @@ pub struct CodemapStats {
 
 /// Caller-tunable knobs. The MCP tool layer translates JSON params into this.
 #[derive(Debug, Clone)]
-pub struct CodemapOptions {
+pub(crate) struct CodemapOptions {
     pub max_nodes: usize,
     pub depth: u8,
     pub top_k_seeds: usize,
@@ -100,7 +100,7 @@ impl Default for CodemapOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmbeddingPolicy {
+pub(crate) enum EmbeddingPolicy {
     NoRerank,
     UseCachedOnly,
     ComputeMissing,

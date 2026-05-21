@@ -27,7 +27,7 @@ pub fn get_snapshot_path(codebase_path: &Path) -> PathBuf {
 }
 
 /// Get snapshot storage path for a codebase/backend/chunking identity.
-pub fn get_snapshot_path_for_backend(
+pub(crate) fn get_snapshot_path_for_backend(
     codebase_path: &Path,
     backend: &EmbeddingBackend,
 ) -> PathBuf {
@@ -37,7 +37,7 @@ pub fn get_snapshot_path_for_backend(
 }
 
 /// Get snapshot storage path for a precomputed indexing identity.
-pub fn get_snapshot_path_for_identity(indexing_identity: &str) -> PathBuf {
+pub(crate) fn get_snapshot_path_for_identity(indexing_identity: &str) -> PathBuf {
     use directories::ProjectDirs;
 
     // Use same ProjectDirs config as data_dir() for consistency

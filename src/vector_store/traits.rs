@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::Embedding;
 use super::error::VectorStoreError;
-use super::SearchResult;
+use super::VectorSearchResult;
 
 /// Trait for vector storage backends
 ///
@@ -26,7 +26,7 @@ pub trait VectorStoreBackend: Send + Sync {
         &self,
         query_vector: Embedding,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, VectorStoreError>;
+    ) -> Result<Vec<VectorSearchResult>, VectorStoreError>;
 
     /// Delete chunks by their IDs
     async fn delete_chunks(

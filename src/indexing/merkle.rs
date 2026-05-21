@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 
 /// SHA-256 hasher for Merkle tree
 #[derive(Clone)]
-pub struct Sha256Hasher;
+pub(crate) struct Sha256Hasher;
 
 impl Hasher for Sha256Hasher {
     type Hash = [u8; 32];
@@ -30,7 +30,7 @@ impl Hasher for Sha256Hasher {
 
 /// Metadata for a file node in the Merkle tree
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileNode {
+pub(crate) struct FileNode {
     /// SHA-256 hash of file content
     pub content_hash: [u8; 32],
     /// Index in Merkle tree leaves
@@ -311,7 +311,7 @@ struct MerkleSnapshot {
 
 // hex encoding helper
 mod hex {
-    pub fn encode(bytes: &[u8]) -> String {
+    pub(crate) fn encode(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }

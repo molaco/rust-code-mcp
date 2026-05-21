@@ -26,7 +26,7 @@ use super::audit_util::resolve_workspace_relative;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, ItemKind, Node, NodeKind};
 
-pub fn extract_impl_items(
+pub(crate) fn extract_impl_items(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     vfs: &Vfs,

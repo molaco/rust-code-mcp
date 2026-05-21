@@ -28,7 +28,7 @@ use super::model::{
 
 /// Returns `def_to_node` so the usage-extraction pass can map ModuleDefIds
 /// back to local Item NodeIds without re-running the bindings walk.
-pub fn extract_bindings(
+pub(crate) fn extract_bindings(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     local_crates: &[Crate],

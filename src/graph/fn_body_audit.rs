@@ -25,7 +25,7 @@ use super::ids::NodeId;
 use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
 
-pub const ALL_PATTERNS: &[&str] = &[
+pub(crate) const ALL_PATTERNS: &[&str] = &[
     "unwrap",
     "expect",
     "panic_macros",
@@ -37,14 +37,14 @@ pub const ALL_PATTERNS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone)]
-pub struct FnBodyAuditOpts {
+pub(crate) struct FnBodyAuditOpts {
     pub crate_id_filter: Option<NodeId>,
     pub patterns: HashSet<&'static str>,
     pub skip_test_fns: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FnBodyFinding {
+pub(crate) struct FnBodyFinding {
     pub target: Option<NodeId>,
     pub qualified_name: Option<String>,
     pub pattern: String,
@@ -54,13 +54,13 @@ pub struct FnBodyFinding {
 }
 
 #[derive(Debug, Clone)]
-pub struct RawFinding {
+pub(crate) struct RawFinding {
     pub pattern: &'static str,
     pub span: (u32, u32),
     pub syntax_node: SyntaxNode,
 }
 
-pub fn parse_pattern_filter(input: Option<&[String]>) -> Result<HashSet<&'static str>, String> {
+pub(crate) fn parse_pattern_filter(input: Option<&[String]>) -> Result<HashSet<&'static str>, String> {
     let valid: &[&'static str] = ALL_PATTERNS;
     match input {
         None => Ok(valid.iter().copied().collect()),
@@ -81,7 +81,7 @@ pub fn parse_pattern_filter(input: Option<&[String]>) -> Result<HashSet<&'static
     }
 }
 
-pub fn match_unwrap(body: &SyntaxNode) -> Vec<RawFinding> {
+pub(crate) fn match_unwrap(body: &SyntaxNode) -> Vec<RawFinding> {
     let mut out = Vec::new();
     for node in body.descendants() {
         if let Some(mc) = ast::MethodCallExpr::cast(node) {
@@ -102,7 +102,7 @@ pub fn match_unwrap(body: &SyntaxNode) -> Vec<RawFinding> {
     out
 }
 
-pub fn match_expect(body: &SyntaxNode) -> Vec<RawFinding> {
+pub(crate) fn match_expect(body: &SyntaxNode) -> Vec<RawFinding> {
     let mut out = Vec::new();
     for node in body.descendants() {
         if let Some(mc) = ast::MethodCallExpr::cast(node) {
@@ -123,7 +123,7 @@ pub fn match_expect(body: &SyntaxNode) -> Vec<RawFinding> {
     out
 }
 
-pub fn match_panic_macros(body: &SyntaxNode) -> Vec<RawFinding> {
+pub(crate) fn match_panic_macros(body: &SyntaxNode) -> Vec<RawFinding> {
     let names: &[&str] = &["panic", "unreachable", "todo", "unimplemented"];
     let mut out = Vec::new();
     for node in body.descendants() {
@@ -154,7 +154,7 @@ pub fn match_panic_macros(body: &SyntaxNode) -> Vec<RawFinding> {
     out
 }
 
-pub fn match_unwrap_unchecked(body: &SyntaxNode) -> Vec<RawFinding> {
+pub(crate) fn match_unwrap_unchecked(body: &SyntaxNode) -> Vec<RawFinding> {
     let names: &[&str] = &["unwrap_unchecked", "unwrap_err_unchecked"];
     let mut out = Vec::new();
     for node in body.descendants() {
@@ -176,7 +176,7 @@ pub fn match_unwrap_unchecked(body: &SyntaxNode) -> Vec<RawFinding> {
     out
 }
 
-pub fn match_unbounded_loop(body: &SyntaxNode) -> Vec<RawFinding> {
+pub(crate) fn match_unbounded_loop(body: &SyntaxNode) -> Vec<RawFinding> {
     let mut out = Vec::new();
     for node in body.descendants() {
         if let Some(loop_expr) = ast::LoopExpr::cast(node) {
@@ -220,7 +220,7 @@ const GUARD_TEXT_NEEDLES: &[&str] = &[
     ".write()",
 ];
 
-pub fn match_await_in_guard_scope(body: &SyntaxNode) -> Vec<RawFinding> {
+pub(crate) fn match_await_in_guard_scope(body: &SyntaxNode) -> Vec<RawFinding> {
     let mut out = Vec::new();
     for node in body.descendants() {
         let await_expr = match ast::AwaitExpr::cast(node) {
@@ -275,7 +275,7 @@ pub fn match_await_in_guard_scope(body: &SyntaxNode) -> Vec<RawFinding> {
     out
 }
 
-pub fn match_transmute(
+pub(crate) fn match_transmute(
     body: &SyntaxNode,
     sema: &Semantics<'_, ra_ap_ide_db::RootDatabase>,
     db: &ra_ap_ide_db::RootDatabase,
@@ -306,7 +306,7 @@ pub fn match_transmute(
     out
 }
 
-pub fn match_self_recursion(
+pub(crate) fn match_self_recursion(
     body: &SyntaxNode,
     self_qualified_name: &str,
     sema: &Semantics<'_, ra_ap_ide_db::RootDatabase>,
@@ -350,7 +350,7 @@ pub fn match_self_recursion(
     out
 }
 
-pub fn fn_body_audit(
+pub(crate) fn fn_body_audit(
     loaded: &LoadedWorkspace,
     snap: &OpenedSnapshot,
     opts: FnBodyAuditOpts,

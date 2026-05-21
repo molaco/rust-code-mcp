@@ -16,7 +16,7 @@ pub(super) mod render;
 #[cfg(test)]
 mod test_support;
 
-pub use model::*;
-pub use seeds::SeedHit;
+pub(crate) use model::*;
+pub(crate) use seeds::SeedHit;
 pub(crate) use build::{build_codemap, newest_source_mtime};
 pub(crate) use render::{render_mermaid, render_outline};

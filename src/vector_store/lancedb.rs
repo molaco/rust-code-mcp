@@ -23,7 +23,7 @@ use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::Embedding;
 use super::error::VectorStoreError;
 use super::traits::VectorStoreBackend;
-use super::SearchResult;
+use super::VectorSearchResult;
 
 const TABLE_NAME: &str = "vectors";
 const METADATA_FILE: &str = "metadata.json";
@@ -386,7 +386,7 @@ impl VectorStoreBackend for LanceDbBackend {
         &self,
         query_vector: Embedding,
         limit: usize,
-    ) -> Result<Vec<SearchResult>, VectorStoreError> {
+    ) -> Result<Vec<VectorSearchResult>, VectorStoreError> {
         let table = self.get_table().await?;
 
         let results = table
@@ -449,7 +449,7 @@ impl VectorStoreBackend for LanceDbBackend {
                 // Convert to similarity [0, 1] (standard cosine similarity range)
                 let score = 1.0 - (distance / 2.0);
 
-                search_results.push(SearchResult {
+                search_results.push(VectorSearchResult {
                     chunk_id,
                     score,
                     chunk,

@@ -25,7 +25,7 @@ use crate::tools::params::{
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
-pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
 
     // Caller may pass a crate name (e.g. `my_crate`) or a crate root module name —
@@ -83,7 +83,7 @@ pub async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolResult, 
     })
 }
 
-pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let report = snap
         .dead_pub_report()
@@ -127,7 +127,7 @@ pub async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallToolResu
     })
 }
 
-pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let (enum_id, enum_node) = snap
         .lookup_by_qualified_name(&params.target)
@@ -175,7 +175,7 @@ pub async fn enum_variants(params: EnumVariantsParams) -> Result<CallToolResult,
     })
 }
 
-pub async fn item_attributes(
+pub(crate) async fn item_attributes(
     params: ItemAttributesParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -203,7 +203,7 @@ pub async fn item_attributes(
     })
 }
 
-pub async fn items_with_attribute(
+pub(crate) async fn items_with_attribute(
     params: ItemsWithAttributeParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -267,7 +267,7 @@ pub async fn items_with_attribute(
     })
 }
 
-pub async fn function_signature(
+pub(crate) async fn function_signature(
     params: FunctionSignatureParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -289,7 +289,7 @@ pub async fn function_signature(
     })
 }
 
-pub async fn functions_with_filter(
+pub(crate) async fn functions_with_filter(
     params: FunctionsWithFilterParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -382,7 +382,7 @@ pub async fn functions_with_filter(
     })
 }
 
-pub async fn pub_use_pub_type_audit(
+pub(crate) async fn pub_use_pub_type_audit(
     params: PubUsePubTypeAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -455,7 +455,7 @@ pub async fn pub_use_pub_type_audit(
     })
 }
 
-pub async fn re_export_chain(
+pub(crate) async fn re_export_chain(
     params: ReExportChainParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -490,7 +490,7 @@ pub async fn re_export_chain(
     })
 }
 
-pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let scope = parse_overlap_scope(params.scope.as_deref())?;
     let report: OverlapsReport = snap
@@ -499,7 +499,7 @@ pub async fn overlaps(params: OverlapsParams) -> Result<CallToolResult, McpError
     json_result(&report)
 }
 
-pub async fn missing_docs_audit(
+pub(crate) async fn missing_docs_audit(
     params: crate::tools::params::MissingDocsAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -551,7 +551,7 @@ pub async fn missing_docs_audit(
         }
     };
 
-    let opts = crate::graph::docs_audit::AuditOpts {
+    let opts = crate::graph::docs_audit::DocsAuditOpts {
         crate_id_filter,
         kind_filter,
         skip_test_items: params.skip_test_items.unwrap_or(true),
@@ -614,7 +614,7 @@ pub async fn missing_docs_audit(
     })
 }
 
-pub async fn derive_audit(
+pub(crate) async fn derive_audit(
     params: crate::tools::params::DeriveAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -686,7 +686,7 @@ pub async fn derive_audit(
     let required_derives: std::collections::HashSet<String> =
         params.required_derives.iter().cloned().collect();
 
-    let opts = crate::graph::derive_audit::AuditOpts {
+    let opts = crate::graph::derive_audit::DeriveAuditOpts {
         crate_id_filter,
         kind_filter,
         required_derives,

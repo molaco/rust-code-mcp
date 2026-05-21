@@ -10,7 +10,7 @@ use ra_ap_vfs::Vfs;
 
 /// A single text edit to apply to a file
 #[derive(Debug, Clone)]
-pub struct RenameEdit {
+pub(crate) struct RenameEdit {
     pub file_path: PathBuf,
     pub start_line: u32,
     pub start_column: u32,
@@ -36,7 +36,7 @@ impl std::fmt::Display for RenameEdit {
 
 /// A file move/create as part of a rename (e.g. renaming a module renames a file)
 #[derive(Debug, Clone)]
-pub struct RenameFileMove {
+pub(crate) struct RenameFileMove {
     pub from: PathBuf,
     pub to_anchor: PathBuf,
     pub to_path: String,
@@ -56,7 +56,7 @@ impl std::fmt::Display for RenameFileMove {
 
 /// Preview of a rename operation
 #[derive(Debug, Clone, Default)]
-pub struct RenamePreview {
+pub(crate) struct RenamePreview {
     pub edits: Vec<RenameEdit>,
     pub file_moves: Vec<RenameFileMove>,
 }
@@ -65,7 +65,7 @@ pub struct RenamePreview {
 ///
 /// Resolves the symbol by name first; fails if multiple symbols match (ambiguous rename
 /// is dangerous). Use a fully-qualified name fragment to disambiguate.
-pub fn rename_by_name(
+pub(crate) fn rename_by_name(
     host: &AnalysisHost,
     vfs: &Vfs,
     symbol_name: &str,

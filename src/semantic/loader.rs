@@ -11,7 +11,7 @@ use anyhow::{Result, Context};
 ///
 /// Uses no_deps=true for fast loading (~120ms).
 /// Only local project code is analyzed.
-pub fn load_project(path: &Path) -> Result<(AnalysisHost, Vfs)> {
+pub(crate) fn load_project(path: &Path) -> Result<(AnalysisHost, Vfs)> {
     let cargo_config = CargoConfig {
         sysroot: None,
         no_deps: true,

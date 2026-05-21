@@ -16,7 +16,7 @@ use std::time::Instant;
 
 /// Overall system health status
 #[derive(Debug, Clone, Serialize)]
-pub struct HealthStatus {
+pub(crate) struct HealthStatus {
     /// Overall system status
     pub overall: Status,
     /// BM25 search component health
@@ -30,7 +30,7 @@ pub struct HealthStatus {
 /// Health status levels
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Status {
+pub(crate) enum Status {
     /// All systems operational
     Healthy,
     /// Some systems degraded but functional
@@ -41,7 +41,7 @@ pub enum Status {
 
 /// Individual component health
 #[derive(Debug, Clone, Serialize)]
-pub struct ComponentHealth {
+pub(crate) struct ComponentHealth {
     /// Component status
     pub status: Status,
     /// Status message
@@ -81,7 +81,7 @@ impl ComponentHealth {
 }
 
 /// Health monitor for the search system
-pub struct HealthMonitor {
+pub(crate) struct HealthMonitor {
     bm25: Option<Arc<Bm25Search>>,
     vector_store: Option<Arc<VectorStore>>,
     merkle_path: PathBuf,

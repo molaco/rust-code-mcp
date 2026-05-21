@@ -48,12 +48,12 @@ use crate::schema::FileSchema;
 use std::path::PathBuf;
 
 /// Get the path for storing persistent index and cache.
-pub fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     crate::tools::project_paths::data_dir()
 }
 
 /// Open or create a persistent Tantivy index
-pub fn open_or_create_index() -> Result<(Index, FileSchema), String> {
+pub(crate) fn open_or_create_index() -> Result<(Index, FileSchema), String> {
     let schema = FileSchema::new();
     let index_path = data_dir().join("index");
 
@@ -76,7 +76,7 @@ pub fn open_or_create_index() -> Result<(Index, FileSchema), String> {
 }
 
 /// Open or create metadata cache
-pub fn open_cache() -> Result<MetadataCache, String> {
+pub(crate) fn open_cache() -> Result<MetadataCache, String> {
     let cache_path = data_dir().join("cache");
     MetadataCache::new(&cache_path).map_err(|e| format!("Failed to open metadata cache: {}", e))
 }

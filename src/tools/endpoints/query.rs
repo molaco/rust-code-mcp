@@ -19,7 +19,7 @@ use crate::tools::project_paths::{
 use crate::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
-pub async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
+pub(crate) async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
     let file_path_obj = Path::new(file_path);
 
     if !file_path_obj.exists() {
@@ -350,7 +350,7 @@ fn format_results(
 }
 
 /// Perform hybrid search (BM25 + Vector) on Rust code
-pub async fn search(
+pub(crate) async fn search(
     directory: &str,
     keyword: &str,
     embedding_profile: Option<&str>,
@@ -426,7 +426,7 @@ pub async fn search(
 }
 
 /// Find semantically similar code using vector search
-pub async fn get_similar_code(
+pub(crate) async fn get_similar_code(
     query: &str,
     directory: &str,
     limit: usize,

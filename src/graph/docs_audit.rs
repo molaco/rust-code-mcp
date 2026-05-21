@@ -15,14 +15,14 @@ use super::model::{BindingKind, BindingVisibility, ItemKind, Node, NodeKind};
 use super::snapshot::OpenedSnapshot;
 
 #[derive(Debug, Clone)]
-pub struct AuditOpts {
+pub struct DocsAuditOpts {
     pub crate_id_filter: Option<NodeId>,
     pub kind_filter: HashSet<ItemKind>,
     pub skip_test_items: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct MissingDocsFinding {
+pub(crate) struct MissingDocsFinding {
     pub target: NodeId,
     pub qualified_name: String,
     pub item_kind: ItemKind,
@@ -31,9 +31,9 @@ pub struct MissingDocsFinding {
     pub span: Option<(u32, u32)>,
 }
 
-pub fn missing_docs_audit(
+pub(crate) fn missing_docs_audit(
     snap: &OpenedSnapshot,
-    opts: AuditOpts,
+    opts: DocsAuditOpts,
 ) -> Result<Vec<MissingDocsFinding>> {
     let rtxn = snap.env.read_txn()?;
 
@@ -151,7 +151,7 @@ pub fn missing_docs_audit(
 /// carries no `///` line in `attributes`. Caller is responsible for
 /// populating `node.visibility` from the declaring Binding (the Node itself
 /// stores `None` for Item visibility).
-pub fn is_undocumented_pub_item(
+pub(crate) fn is_undocumented_pub_item(
     node: &Node,
     kind_filter: &HashSet<ItemKind>,
     skip_tests: bool,
@@ -176,7 +176,7 @@ pub fn is_undocumented_pub_item(
 
 /// Default kind set per Phase 8 plan: documentable kinds excluding
 /// EnumVariant, AssocConst, AssocType (rarely carry standalone docs).
-pub fn default_kind_filter() -> HashSet<ItemKind> {
+pub(crate) fn default_kind_filter() -> HashSet<ItemKind> {
     let mut s = HashSet::new();
     s.insert(ItemKind::Function);
     s.insert(ItemKind::Struct);

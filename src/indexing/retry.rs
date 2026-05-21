@@ -15,7 +15,7 @@ use tokio::time::sleep;
 /// # Returns
 /// * `Ok(T)` if operation succeeds within max_attempts
 /// * `Err(E)` if all attempts fail
-pub async fn retry_with_backoff<F, Fut, T, E>(
+pub(crate) async fn retry_with_backoff<F, Fut, T, E>(
     mut operation: F,
     max_attempts: u32,
     initial_delay: Duration,
@@ -61,7 +61,7 @@ where
 /// * `operation` - The operation to retry
 /// * `max_attempts` - Maximum number of attempts
 /// * `initial_delay_ms` - Initial delay in milliseconds
-pub fn retry_sync_with_backoff<F, T, E>(
+pub(crate) fn retry_sync_with_backoff<F, T, E>(
     mut operation: F,
     max_attempts: u32,
     initial_delay_ms: u64,

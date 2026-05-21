@@ -29,13 +29,13 @@ use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
 
 #[derive(Debug, Clone)]
-pub struct ChannelAuditOpts {
+pub(crate) struct ChannelAuditOpts {
     pub crate_id_filter: Option<NodeId>,
     pub skip_test_fns: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChannelFinding {
+pub(crate) struct ChannelFinding {
     pub crate_name: String,
     pub kind: String,
     pub bounded: bool,
@@ -46,7 +46,7 @@ pub struct ChannelFinding {
     pub enclosing_function_name: Option<String>,
 }
 
-pub fn classify_channel_path(canonical_path: &str) -> Option<(&'static str, bool)> {
+pub(crate) fn classify_channel_path(canonical_path: &str) -> Option<(&'static str, bool)> {
     match canonical_path {
         "tokio::sync::mpsc::channel" | "tokio::sync::mpsc::bounded::channel" => {
             Some(("tokio_mpsc", true))
@@ -63,7 +63,7 @@ pub fn classify_channel_path(canonical_path: &str) -> Option<(&'static str, bool
     }
 }
 
-pub fn parse_capacity_arg(arg_text: &str) -> Option<u64> {
+pub(crate) fn parse_capacity_arg(arg_text: &str) -> Option<u64> {
     let cleaned = arg_text.trim().replace('_', "");
     if cleaned.is_empty() {
         return None;
@@ -71,7 +71,7 @@ pub fn parse_capacity_arg(arg_text: &str) -> Option<u64> {
     cleaned.parse::<u64>().ok()
 }
 
-pub fn channel_capacity_audit(
+pub(crate) fn channel_capacity_audit(
     loaded: &LoadedWorkspace,
     snap: &OpenedSnapshot,
     opts: ChannelAuditOpts,

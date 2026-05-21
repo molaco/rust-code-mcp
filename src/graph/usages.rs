@@ -30,7 +30,7 @@ use super::audit_util::resolve_workspace_relative;
 use super::ids::NodeId;
 use super::model::{ExtractionModel, NodeKind, Usage, UsageCategory};
 
-pub fn extract_usages(
+pub(crate) fn extract_usages(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     vfs: &Vfs,

@@ -253,7 +253,7 @@ fn extract_types_from_type(
 }
 
 /// Get all references to a specific type name
-pub fn find_type_references<'a>(references: &'a [TypeReference], type_name: &str) -> Vec<&'a TypeReference> {
+pub(crate) fn find_type_references<'a>(references: &'a [TypeReference], type_name: &str) -> Vec<&'a TypeReference> {
     references
         .iter()
         .filter(|r| r.type_name == type_name)
@@ -261,7 +261,7 @@ pub fn find_type_references<'a>(references: &'a [TypeReference], type_name: &str
 }
 
 /// Get references grouped by file line
-pub fn group_by_line(references: &[TypeReference]) -> HashMap<usize, Vec<&TypeReference>> {
+pub(crate) fn group_by_line(references: &[TypeReference]) -> HashMap<usize, Vec<&TypeReference>> {
     let mut grouped: HashMap<usize, Vec<&TypeReference>> = HashMap::new();
     for reference in references {
         grouped

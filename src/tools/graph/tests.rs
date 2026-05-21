@@ -5,12 +5,10 @@
 //! the facade's `pub use` of every family. We replicate that surface here by
 //! bringing each family into scope explicitly.
 
-use super::audits::*;
 use super::codemap::*;
 use super::core::*;
 use super::crates::*;
 use super::response::*;
-use super::similarity::*;
 use super::surface::*;
 
 use crate::graph::{ItemKind, Node, NodeId, NodeKind};

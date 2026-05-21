@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 /// Category of indexing error
 #[derive(Debug, Clone, PartialEq)]
-pub enum ErrorCategory {
+pub(crate) enum ErrorCategory {
     /// Permanent error (permission denied, invalid UTF-8)
     Permanent,
     /// Transient error (network timeout, would block)
@@ -20,7 +20,7 @@ pub enum ErrorCategory {
 
 /// Details of a single indexing error
 #[derive(Debug, Clone)]
-pub struct ErrorDetail {
+pub(crate) struct ErrorDetail {
     /// Path to the file that failed
     pub file_path: PathBuf,
     /// Category of the error
@@ -31,7 +31,7 @@ pub struct ErrorDetail {
 
 /// Thread-safe collector for indexing errors
 #[derive(Clone)]
-pub struct ErrorCollector {
+pub(crate) struct ErrorCollector {
     errors: Arc<Mutex<Vec<ErrorDetail>>>,
 }
 
@@ -82,7 +82,7 @@ impl Default for ErrorCollector {
 }
 
 /// Categorize an error based on its message
-pub fn categorize_error(error: &dyn std::error::Error) -> ErrorCategory {
+pub(crate) fn categorize_error(error: &dyn std::error::Error) -> ErrorCategory {
     let error_str = error.to_string().to_lowercase();
 
     // Permanent errors

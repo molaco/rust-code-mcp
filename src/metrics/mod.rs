@@ -150,7 +150,7 @@ impl IndexingMetrics {
 
 /// Timer for measuring phase durations
 #[derive(Debug)]
-pub struct PhaseTimer {
+pub(crate) struct PhaseTimer {
     start: Instant,
 }
 

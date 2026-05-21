@@ -160,7 +160,7 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
 }
 
 /// Lower-level entry for tests that already have a `LoadedWorkspace` in hand.
-pub fn persist_loaded(
+pub(crate) fn persist_loaded(
     loaded: &LoadedWorkspace,
     options: &BuildOptions,
 ) -> Result<BuildResult> {
@@ -310,7 +310,7 @@ fn write_model(
     Ok((node_count, binding_count, usage_count))
 }
 
-pub fn binding_id_for(binding: &Binding) -> BindingId {
+pub(crate) fn binding_id_for(binding: &Binding) -> BindingId {
     let ns = match binding.namespace {
         Namespace::Type => "T",
         Namespace::Value => "V",
@@ -323,7 +323,7 @@ pub fn binding_id_for(binding: &Binding) -> BindingId {
     ])
 }
 
-pub fn usage_id_for(u: &Usage) -> UsageId {
+pub(crate) fn usage_id_for(u: &Usage) -> UsageId {
     let cat = match u.category {
         crate::graph::model::UsageCategory::Read => "R",
         crate::graph::model::UsageCategory::Write => "W",
@@ -480,7 +480,7 @@ pub fn open_current(paths: &GraphPaths, env: GraphEnvOptions) -> Result<Option<O
     open_specific(paths, &graph_id, env)
 }
 
-pub fn open_specific(
+pub(crate) fn open_specific(
     paths: &GraphPaths,
     graph_id: &str,
     env_opts: GraphEnvOptions,

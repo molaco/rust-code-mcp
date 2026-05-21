@@ -10,7 +10,6 @@ pub mod type_references;
 mod rust_parser;
 mod types;
 
-pub use imports::{extract_imports, extract_imports_from_ast, get_external_dependencies};
 pub use rust_parser::RustParser;
 pub use types::{ParseResult, Range, Symbol, SymbolKind, Visibility};
 

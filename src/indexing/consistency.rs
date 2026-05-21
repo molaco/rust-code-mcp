@@ -12,7 +12,7 @@ use crate::schema::ChunkSchema;
 
 /// Results from a consistency check
 #[derive(Debug, Clone)]
-pub struct ConsistencyReport {
+pub(crate) struct ConsistencyReport {
     /// Number of chunks in Tantivy
     pub tantivy_count: usize,
     /// Number of chunks in vector store
@@ -49,7 +49,7 @@ impl ConsistencyReport {
 }
 
 /// Consistency checker for index integrity
-pub struct ConsistencyChecker {
+pub(crate) struct ConsistencyChecker {
     tantivy_index: Index,
     vector_store: VectorStore,
     schema: ChunkSchema,

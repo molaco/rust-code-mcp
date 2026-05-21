@@ -1,8 +1,10 @@
 //! Result types for `graph::query` methods.
 //!
 //! Moved verbatim from the pre-refactor `graph::queries` module in PR 08.
-//! Re-exported through `graph::queries` so external consumers
-//! (`crate::graph::queries::Foo`, `crate::graph::Foo`) continue to resolve.
+//! External callers reach these types through the `graph` module facade
+//! (`crate::graph::Foo`), thanks to the `pub use query::model::*;` glob in
+//! `graph::mod`. The intermediate `graph::queries` module was removed in
+//! PR 19.
 
 use std::collections::BTreeMap;
 

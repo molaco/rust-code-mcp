@@ -28,7 +28,7 @@ use crate::graph::snapshot::OpenedSnapshot;
 /// resolution. The tools-side mapping just clones the `SearchResult.chunk.context.file_path`
 /// verbatim.
 #[derive(Debug, Clone)]
-pub struct SeedHit {
+pub(crate) struct SeedHit {
     pub file_path: PathBuf,
     pub line_start: u32,
     pub line_end: u32,
