@@ -6,7 +6,7 @@
 
 pub use rmc_engine::chunker;
 pub mod config;
-pub mod embeddings;
+pub use rmc_engine::embeddings;
 pub mod indexing;
 pub mod mcp;
 pub mod metadata_cache;

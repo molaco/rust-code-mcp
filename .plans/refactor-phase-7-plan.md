@@ -405,6 +405,8 @@ Commit:
 
 - **B.3.a** — Move `src/embeddings/` → `crates/rmc-engine/src/embeddings/`; add `pub mod embeddings;` to engine `lib.rs`; add `pub use rmc_engine::embeddings;` to main `lib.rs`.
 
+✅ DONE 2026-05-21. 12 files + `openrouter/` subdir (8 files) moved. Deps added: `reqwest`, `hf-hub`, `fastembed`, `candle-core`, `tokenizers`, `serde_json`, `thiserror`, `tracing`, `tokio`, `futures`, `toml`, plus `tempfile` dev-dep for `profile_registry.rs` test module. Visibility widenings (5, all driven by `indexing::embedding_batcher` + `vector_store`): `mod batching`, `type Embedding`, `struct BatchPlan` (+ fields `start`, `end`), `fn plan_batches`. `cargo check --workspace --all-targets` green.
+
 ### 4.B.4 — Lift `vector_store`
 
 `vector_store` depends on `chunker` + `embeddings` (both in `rmc-engine` by now).

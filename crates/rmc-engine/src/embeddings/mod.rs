@@ -22,7 +22,7 @@ pub use profile::{FastembedCpuModel, LocalLoaderSpec, QueryPolicy};
 
 mod identity;
 
-pub(crate) mod batching;
+pub mod batching;
 mod util;
 
 mod profile_registry;
@@ -44,7 +44,7 @@ use std::sync::Arc;
 
 /// An embedding vector. Dimension depends on the active backend
 /// (1024 for Qwen3-0.6B by default).
-pub(crate) type Embedding = Vec<f32>;
+pub type Embedding = Vec<f32>;
 
 /// A chunk paired with its generated embedding.
 #[derive(Debug, Clone)]

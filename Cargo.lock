@@ -7227,9 +7227,21 @@ dependencies = [
 name = "rmc-engine"
 version = "0.1.0"
 dependencies = [
+ "candle-core",
+ "fastembed",
+ "futures",
+ "hf-hub",
  "ra_ap_syntax",
+ "reqwest",
  "serde",
+ "serde_json",
  "tantivy",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokenizers",
+ "tokio",
+ "toml",
+ "tracing",
  "uuid",
 ]
 

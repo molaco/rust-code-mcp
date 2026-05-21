@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BatchPlan {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
+pub struct BatchPlan {
+    pub start: usize,
+    pub end: usize,
 }
 
-pub(crate) fn plan_batches<T>(
+pub fn plan_batches<T>(
     items: &[T],
     max_batch_size: usize,
     max_tokens_per_batch: usize,
