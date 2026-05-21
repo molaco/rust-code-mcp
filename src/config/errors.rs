@@ -7,7 +7,7 @@
 pub use anyhow::{anyhow, bail, Context, Error, Result};
 
 // Re-export indexing errors for convenience
-pub use crate::indexing::errors::{categorize_error, ErrorCategory, ErrorCollector, ErrorDetail};
+pub use crate::indexing::error_collection::{categorize_error, ErrorCategory, ErrorCollector, ErrorDetail};
 
 /// Common error message formatting
 pub trait ErrorMessage {

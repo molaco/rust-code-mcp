@@ -1,6 +1,10 @@
-//! Thread-safe error collection for parallel indexing
+//! Thread-safe error collection for parallel indexing.
 //!
-//! Provides error tracking that can be safely shared across threads
+//! Provides cross-thread error tracking (`ErrorCollector`) and error
+//! categorization (`ErrorCategory`, `ErrorDetail`, `categorize_error`).
+//!
+//! This is distinct from `indexing::error::IndexingError`, which is the
+//! `thiserror` enum for hard indexing failures.
 
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;

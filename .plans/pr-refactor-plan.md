@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 17 complete; PR 18 is next. This is the executable sequence for the
+Status: PR 18 complete; PR 19 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1715,6 +1715,11 @@ Outcome:
   acceptance, query-policy tag round-trip, OpenRouter input_type policy,
   plus a new `qwen3_variant_dims` slice).
 - `src/embeddings/identity.rs` untouched per spec.
+- **Review fix-up**: `QWEN3_CODE_QUERY_PREFIX` import was at module level in
+  `backend.rs` but only referenced by one test, causing a
+  `unused_import`-style lib warning. Moved the import inside the
+  `#[cfg(test)] mod tests` block (`use super::super::profile::QWEN3_CODE_QUERY_PREFIX;`).
+  No production code or visibility change.
 - `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
   green. Engine→tools grep returns no hits.
 
@@ -1750,6 +1755,84 @@ Exit:
 - Profile definitions are separated from backend runtime wiring.
 
 ## PR 18: Split Indexing Unified Helpers And Rename Error Collection
+
+Status: DONE.
+
+Outcome:
+
+**Unified split** (`src/indexing/unified.rs` 742 → 666 LOC):
+- New `src/indexing/unified_parallel.rs` (119 LOC) — 3 free fns extracted
+  as pure parallel-traversal helpers, all `pub(super)`:
+  - `collect_rust_files(dir_path, &mut stats)` — `WalkDir` traversal of
+    `.rs` files.
+  - `parallel_parse_batch(core, file_batch) -> (Vec<ProcessedFile>, ErrorCollector)`
+    — newly extracted from the inline PHASE 1 rayon `par_iter` loop in
+    `index_directory_parallel`.
+  - `process_batch_errors(error_collector, &mut stats)` — drains the
+    cross-thread error collector into stats.
+- `UnifiedIndexer`, `IndexStats`, `IndexFileResult`, and helpers that reach
+  into multiple `&mut self` fields (`process_and_index_batch`,
+  `finalize_metrics`) stayed in `unified.rs`. Moving them would have
+  required field-visibility widening — Guardrail 2 prefers keep-in-place.
+- `IndexStats` / `IndexFileResult` deliberately stayed in `unified.rs`
+  (the plan's optional `types.rs` extraction wasn't warranted — they're
+  small and tightly coupled to the orchestrator).
+
+**Error-collection rename**:
+- `src/indexing/errors.rs` (193 LOC) → `src/indexing/error_collection.rs`
+  (197 LOC after updated doc comment). Content unchanged — the rename
+  disambiguates the concern from `src/indexing/error.rs` (30 LOC,
+  `IndexingError` enum).
+- `src/indexing/mod.rs`:
+  ```rust
+  pub mod error_collection;
+  /// Compatibility facade — implementation moved to `error_collection`.
+  /// PR 19 facade-cleanup will remove this once no in-repo consumer
+  /// reaches `crate::indexing::errors::*`.
+  pub mod errors {
+      pub use super::error_collection::*;
+  }
+  pub use error_collection::{ErrorCategory, ErrorCollector, ErrorDetail};
+  mod unified_parallel;            // new (private)
+  ```
+- `src/config/errors.rs:10` (only in-repo consumer of
+  `crate::indexing::errors::*`) redirected to
+  `crate::indexing::error_collection::*`.
+- **Review fix-up**: per Guardrail 3 ("No public-path renames. A symbol's
+  external path is preserved by a facade `pub use`. Renaming is Phase 6's
+  job, behind facades"), added a compatibility facade `pub mod errors { pub
+  use super::error_collection::*; }` so external callers reaching
+  `rust_code_mcp::indexing::errors::*` continue to resolve. PR 19's facade
+  cleanup pass will delete it.
+
+**`embedding_batcher.rs` review verdict** (per plan step 7): **one coherent
+concern, left intact.** It's a single `pub(crate) struct EmbeddingBatcher`
++ 4 private helpers (`summarize_token_lengths`,
+`summarize_unsorted_token_lengths`, `plan_embedding_batches`,
+`sort_embedding_inputs`) + 1 private summary struct (`TokenLengthSummary`).
+All items support GPU-batched embedding generation with memory-aware batch
+sizing — single concern, no split needed.
+
+**Visibility decisions**:
+- 3 extracted helpers in `unified_parallel.rs` are `pub(super)` free fns.
+- `mod unified_parallel;` declaration is private (matches the
+  chunker/parser/embeddings pattern).
+- No `pub(crate)` widenings.
+
+**Public-path stability**: `crate::indexing::{ErrorCategory, ErrorCollector,
+ErrorDetail, UnifiedIndexer, IndexStats, IndexFileResult, …}` all resolve
+unchanged.
+
+`nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+green. Engine→tools grep returns no hits.
+
+- **Checkpoint 6 (PR 16-18) complete**: `chunker/mod.rs` (805 → 11 LOC),
+  `parser/mod.rs` (621 → 19 LOC), `embeddings/backend.rs` (895 → 535 LOC),
+  `embeddings/profile.rs` (398 new), `indexing/unified.rs` (742 → 666 LOC),
+  `indexing/unified_parallel.rs` (119 new), `indexing/errors.rs` →
+  `indexing/error_collection.rs` (renamed). `embedding_batcher.rs`
+  reviewed and left intact. No file in the touched modules exceeds the
+  ~1000-LOC structural target.
 
 Operation: `Split` + `Rename`.
 

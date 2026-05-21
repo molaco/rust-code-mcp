@@ -8,17 +8,17 @@
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::config::IndexerConfig;
 use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
-use crate::indexing::errors::{categorize_error, ErrorCollector, ErrorDetail};
 use crate::indexing::indexer_core::IndexerCore;
 use crate::indexing::tantivy_adapter::TantivyAdapter;
+use crate::indexing::unified_parallel::{
+    collect_rust_files, parallel_parse_batch, process_batch_errors,
+};
 use crate::metrics::IndexingMetrics;
 use crate::vector_store::VectorStore;
 use anyhow::{Context, Result};
-use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tantivy::Index;
-use walkdir::WalkDir;
 
 /// Statistics from an indexing operation
 #[derive(Debug, Clone, Default)]
@@ -256,7 +256,7 @@ impl UnifiedIndexer {
         self.metrics = IndexingMetrics::new();
 
         // Find all Rust files
-        let rust_files = self.collect_rust_files(dir_path, &mut stats)?;
+        let rust_files = collect_rust_files(dir_path, &mut stats)?;
 
         if rust_files.is_empty() {
             return Ok(stats);
@@ -341,7 +341,7 @@ impl UnifiedIndexer {
         self.metrics = IndexingMetrics::new();
 
         // Find all Rust files
-        let rust_files = self.collect_rust_files(dir_path, &mut stats)?;
+        let rust_files = collect_rust_files(dir_path, &mut stats)?;
 
         if rust_files.is_empty() {
             return Ok(stats);
@@ -374,28 +374,7 @@ impl UnifiedIndexer {
 
             // PHASE 1: Parallel parse and chunk (CPU-bound)
             let parse_start = Instant::now();
-            let error_collector = ErrorCollector::new();
-            let error_collector_clone = error_collector.clone();
-
-            let processed: Vec<_> = file_batch
-                .par_iter()
-                .filter_map(|file_path| {
-                    match self.core.process_file_sync(file_path) {
-                        Ok(processed) => {
-                            tracing::debug!("Parsed: {}", file_path.display());
-                            Some(processed)
-                        }
-                        Err(e) => {
-                            error_collector_clone.record(ErrorDetail {
-                                file_path: file_path.clone(),
-                                category: categorize_error(&e),
-                                message: e.to_string(),
-                            });
-                            None
-                        }
-                    }
-                })
-                .collect();
+            let (processed, error_collector) = parallel_parse_batch(&self.core, file_batch);
 
             let parse_duration = parse_start.elapsed();
             self.metrics.parse_duration += parse_duration;
@@ -408,7 +387,7 @@ impl UnifiedIndexer {
             );
 
             // Log errors and update stats
-            self.process_batch_errors(&error_collector, &mut stats);
+            process_batch_errors(&error_collector, &mut stats);
 
             // PHASE 2: Batch embedding for all files
             if !processed.is_empty() {
@@ -497,61 +476,6 @@ impl UnifiedIndexer {
     }
 
     // Private helper methods
-
-    fn collect_rust_files(&self, dir_path: &Path, stats: &mut IndexStats) -> Result<Vec<PathBuf>> {
-        let mut rust_files = Vec::new();
-        let mut walk_errors = 0;
-
-        let walker = WalkDir::new(dir_path)
-            .into_iter()
-            .filter_entry(|entry| {
-                let name = entry.file_name().to_string_lossy();
-                !(entry.file_type().is_dir()
-                    && matches!(name.as_ref(), "target" | "vendor" | ".git" | ".jj" | ".direnv"))
-            });
-
-        for entry in walker {
-            match entry {
-                Ok(e)
-                    if e.file_type().is_file()
-                        && e.path().extension() == Some(std::ffi::OsStr::new("rs")) =>
-                {
-                    rust_files.push(e.path().to_path_buf());
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    let path = err.path().unwrap_or_else(|| Path::new("<unknown>"));
-                    tracing::warn!("Failed to access {}: {}", path.display(), err);
-                    walk_errors += 1;
-                }
-            }
-        }
-
-        if walk_errors > 0 {
-            tracing::warn!(
-                "Encountered {} errors during directory walk, continuing with accessible files",
-                walk_errors
-            );
-        }
-
-        stats.total_files = rust_files.len();
-        Ok(rust_files)
-    }
-
-    fn process_batch_errors(&self, error_collector: &ErrorCollector, stats: &mut IndexStats) {
-        for error in error_collector.get_errors() {
-            match error.category {
-                crate::indexing::errors::ErrorCategory::Permanent => {
-                    tracing::debug!("Skipped {}: {}", error.file_path.display(), error.message);
-                    stats.skipped_files += 1;
-                }
-                crate::indexing::errors::ErrorCategory::Transient => {
-                    tracing::warn!("Failed {}: {}", error.file_path.display(), error.message);
-                    stats.skipped_files += 1;
-                }
-            }
-        }
-    }
 
     async fn process_and_index_batch(
         &mut self,

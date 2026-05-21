@@ -12,7 +12,6 @@ use super::error::EmbeddingError;
 use super::identity::EmbeddingIdentity;
 use super::profile::{
     EmbeddingProfile, FastembedCpuModel, LocalLoaderSpec, QueryPolicy, Qwen3Variant,
-    QWEN3_CODE_QUERY_PREFIX,
 };
 use super::util::arc;
 
@@ -344,6 +343,7 @@ impl EmbeddingBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::profile::QWEN3_CODE_QUERY_PREFIX;
 
     fn profile(name: &str) -> EmbeddingProfile {
         EmbeddingProfile::parse(name).unwrap()

@@ -3,7 +3,13 @@
 pub mod consistency;
 pub(crate) mod embedding_batcher;
 pub mod error;
-pub mod errors;
+pub mod error_collection;
+/// Compatibility facade — implementation moved to
+/// [`error_collection`] in PR 18. PR 19's facade-cleanup pass will remove
+/// this once no in-repo consumer reaches `crate::indexing::errors::*`.
+pub mod errors {
+    pub use super::error_collection::*;
+}
 pub(crate) mod file_processor;
 pub mod identity;
 pub mod incremental;
@@ -12,10 +18,11 @@ pub mod merkle;
 pub mod retry;
 pub mod tantivy_adapter;
 pub mod unified;
+mod unified_parallel;
 
 pub use consistency::{ConsistencyChecker, ConsistencyReport};
 pub use error::IndexingError;
-pub use errors::{ErrorCategory, ErrorCollector, ErrorDetail};
+pub use error_collection::{ErrorCategory, ErrorCollector, ErrorDetail};
 pub use incremental::{get_snapshot_path, IncrementalIndexer};
 pub use indexer_core::{IndexerCore, ProcessedFile};
 pub use retry::{retry_sync_with_backoff, retry_with_backoff};
