@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 20 complete; PR 21 is next. This is the executable sequence for the
+Status: PR 21 complete; plan finished (PR 22 is optional and not attempted). This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -2165,6 +2165,76 @@ Exit:
 - Dead-public findings shrink for non-facade modules.
 
 ## PR 21: Final Structural Verification Report
+
+Status: DONE.
+
+Outcome:
+
+- No code changes.
+- Final report written to `.docs/pr-refactor-plan-report.md` (348 lines)
+  covering: cargo-check status, forbidden-edge sweep, stale-facade-path
+  sweep, `workspace_stats` before/after, `dead_pub_in_crate` final state,
+  final file tree, LOC hotspots, mega-file dissolution table, boundary
+  fixes, disambiguating renames, PR-by-PR status table,
+  public-API-stability check, out-of-scope follow-ups.
+
+**Final-state evidence**:
+
+- `cargo check --all-targets`: green (0.25s incremental on the verify
+  run). No new errors, no `private_interfaces`, no
+  `glob-doesn't-reexport` warnings. Remaining warnings are pre-existing
+  `dead_code` flags from the workspace `#![warn(unreachable_pub,
+  dead_code)]` plus a handful of unused imports in `examples/` and
+  `tests/` that predate the refactor.
+- Engine→tools grep (`crate::tools|crate::mcp` over `src/graph/`,
+  `src/embeddings/`, `src/indexing/`, `src/search/`, `src/vector_store/`,
+  `src/chunker/`, `src/parser/`): **zero hits**.
+- Stale-facade-path grep across `src/`, `tests/`, `examples/` for the 9
+  deleted facade paths plus `graph::queries::` and `indexing::errors`:
+  **zero hits**.
+- `workspace_stats`: `pub` 540 → 282, `pub(crate)` 43 → 348,
+  `pub_crate_share` 0.074 → 0.5524 (~7.5× improvement). Plus 102 items
+  at `pub(super)` / `pub(in path)` (`restricted_to` bucket).
+- `dead_pub_in_crate`: 90 candidates remain. All are transitively
+  reachable via `pub` method signatures on `pub` types (the tool does
+  not model method-return-type reachability) — not residual cleanup.
+- `build_hypergraph`: 3031 nodes, 5390 bindings, 7964 usages
+  (baseline was 2973/5056/7935; growth from new files + relocated
+  tests).
+
+**LOC hotspots final** — no production source file exceeds the plan's
+~1000-LOC target. The two over-1000-LOC files are test modules
+(`graph/query/tests.rs` 1144, `tools/graph/tests.rs` 927) relocated
+verbatim from the deleted `queries.rs::tests` and
+`graph_tools.rs::tests` blocks. The largest production-code file is
+`tools/graph/surface.rs` at 968 LOC (12 endpoints — coherent single
+concern per plan §15).
+
+**Mega-files dissolved (from `.plans/refactor-plan.md` §1)**:
+- `tools/graph_tools.rs` 4488 → 7 family files + tests
+- `graph/queries.rs` 4371 → 12 family files + tests
+- `graph/codemap.rs` 2058 → 5 family files + test_support
+- `embeddings/openrouter.rs` 1618 → 7 family files
+
+**Intentional public facades verified `pub`**:
+`graph::OpenedSnapshot`, `graph::BuildOptions`,
+`indexing::{UnifiedIndexer, IncrementalIndexer}`,
+`embeddings::EmbeddingGenerator`, `search::HybridSearch`,
+`vector_store::VectorStore`.
+
+**Out-of-scope follow-ups** documented in the report:
+1. `search::SearchResult` ↔ `vector_store::VectorSearchResult`
+   structural dedup (plan §12 deferred).
+2. The 90 transitively-reachable `pub` candidates.
+3. Potential `tools::graph::surface.rs` subdivision.
+4. Potential `graph::query::shared.rs` further partitioning.
+5. `indexing::embedding_batcher.rs` (reviewed, kept intact).
+6. PR 22 (graph crate lift) — preconditions met, not attempted.
+
+**Plan complete**: 21 PRs landed across the checkpoint cadence (PR 00
+through PR 21). Each PR was reviewed at the user's checkpoint
+boundaries; review findings were folded into the originating PR via
+`jj squash`. PR 22 is optional and deferred.
 
 Operation: verification only.
 
