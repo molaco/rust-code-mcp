@@ -8,7 +8,7 @@
 
 ## Summary
 
-Three structural changes landed in four `jj` commits. Both SCCs flagged by the Phase 7 boundary analysis are broken. `graph`'s declared public surface is narrowed from a 32-item glob + 34 named re-exports (66 total) to a 42-item explicit list (38 `pub` + 3 `pub(crate)` + 1 minor counting variance). `cargo check --all-targets` is green at every commit.
+Three structural changes landed in four `jj` commits, plus one polish commit. Both SCCs flagged by the Phase 7 boundary analysis are broken. `graph`'s declared public surface is narrowed from a 32-item glob + 34 named re-exports (66 total) to a 43-item explicit list (40 `pub` + 3 `pub(crate)`). `cargo check --all-targets` is green at every commit.
 
 The post-Phase-A codebase is ready to age. Phase B (engine + graph crate lift) and Phase C (server cluster lift) remain explicitly optional per the parent plan and should not be started until the codebase has aged through one normal-feature-work pass with no follow-up structural change.
 
@@ -93,8 +93,8 @@ The four `pub(in crate::tools)` helpers — `data_dir`, `resolve_embedding_backe
 | Metric | Before | After |
 |---|---|---|
 | Declared `pub use` lines in `src/graph/mod.rs` | 21 lines (including 1 glob) | 9 lines (zero globs) |
-| Individual re-exported items | ~66 | 42 |
-| Of which `pub` (cross-crate API) | ~64 | 38 |
+| Individual re-exported items | ~66 | 43 |
+| Of which `pub` (cross-crate API) | ~64 | 40 |
 | Of which `pub(crate)` (graph-internal) | 2 | 3 |
 | Dropped from facade (dead-by-shadowing) | — | 22 |
 
@@ -190,6 +190,7 @@ Phase A is technically complete. Phase B should not be started until the codebas
 
 ## Open follow-ups (not in Phase A scope)
 
+- **`index_directory_with_backup` (and transitively the `Backup` trait + `monitoring::backup::BackupManager` impl) is dead code.** Demoting the method from `pub` to `pub(crate)` in the A.4 polish commit let the compiler prove zero in-crate callers — surfacing a "never used" warning that was previously hidden by the wider visibility. The A.1 cycle break is still structurally correct (the cycle was in the type graph regardless of dynamic usage), but a future cleanup could delete the unused method, trait, impl, and possibly `BackupManager` itself. **Deliberately out of A.4 scope** because (a) deciding "delete vs revive" is a feature-level call, not a structural one, and (b) the cycle break commit (A.1) should stand on its own merits.
 - The 90 `dead_pub_in_crate` candidates are unchanged. Most of them are facade narrowing artifacts now: their source-level definitions are still `pub`, but the type is reachable only via signatures or no longer named externally. A subsequent narrowing pass could demote the definitions themselves to `pub(crate)`. This is **deliberately not a Phase A task** — definitions in `graph/model.rs` and `graph/query/model.rs` are consumed by the `pub` re-exports in `graph/mod.rs`, so any demotion at the definition site would force the re-export to also narrow. The right time to do this is during Phase B's `forbidden_dependency_check` enforcement, when crate boundaries make the question machine-decidable.
 - The compat shim `src/tools/project_paths.rs` (3 lines) is scheduled for deletion in Phase C.3 (when `tools` lifts to `rmc-server`). Until then it costs nothing.
 - One unattributed `+1 item` in the workspace_stats delta (post-A vs pre-A). Likely a glob-removal counting artifact in the hypergraph rebuild; not material.

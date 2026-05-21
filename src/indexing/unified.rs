@@ -302,7 +302,7 @@ impl UnifiedIndexer {
     }
 
     /// Index an entire directory with automatic backup management
-    pub async fn index_directory_with_backup(
+    pub(crate) async fn index_directory_with_backup(
         &mut self,
         dir_path: &Path,
         backup_manager: Option<&dyn crate::indexing::backup::Backup>,

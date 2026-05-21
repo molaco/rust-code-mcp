@@ -2,9 +2,10 @@
 //!
 //! Moved verbatim from the pre-refactor `graph::queries` module in PR 08.
 //! External callers reach these types through the `graph` module facade
-//! (`crate::graph::Foo`), thanks to the `pub use query::model::*;` glob in
-//! `graph::mod`. The intermediate `graph::queries` module was removed in
-//! PR 19.
+//! (`crate::graph::Foo`). Phase 7 A.3 (2026-05-21) replaced the previous
+//! `pub use query::model::*;` glob in `graph::mod` with an explicit list of
+//! named re-exports; only types on that list are part of the public contract.
+//! The intermediate `graph::queries` module was removed in PR 19.
 
 use std::collections::BTreeMap;
 
