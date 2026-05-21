@@ -13,7 +13,7 @@ const EMBED_CHUNK: usize = 64;
 /// items do not have to re-read the file and re-hash. Codemap-style callers can
 /// ignore the hash.
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedEmbedding {
+pub struct ResolvedEmbedding {
     pub vector: Vec<f32>,
     pub content_hash: [u8; 16],
 }
@@ -32,10 +32,10 @@ pub(crate) struct ResolvedEmbedding {
 ///
 /// Async hygiene: opens its own short read/write transactions internally.
 /// Callers must not hold a `heed::RoTxn` across this call.
-pub(crate) async fn ensure_embeddings_for(
+pub async fn ensure_embeddings_for(
     snap: &OpenedSnapshot,
     nids: &[NodeId],
-    backend: &crate::embeddings::EmbeddingBackend,
+    backend: &rmc_engine::embeddings::EmbeddingBackend,
 ) -> anyhow::Result<HashMap<NodeId, ResolvedEmbedding>> {
     use sha2::{Digest, Sha256};
 
@@ -133,7 +133,7 @@ pub(crate) async fn ensure_embeddings_for(
         return Ok(out);
     }
 
-    let embedder = crate::embeddings::EmbeddingGenerator::with_backend(backend.clone())
+    let embedder = rmc_engine::embeddings::EmbeddingGenerator::with_backend(backend.clone())
         .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
 
     let now = std::time::SystemTime::now()

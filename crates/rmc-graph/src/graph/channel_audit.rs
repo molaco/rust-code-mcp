@@ -29,13 +29,13 @@ use super::loader::LoadedWorkspace;
 use super::snapshot::OpenedSnapshot;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ChannelAuditOpts {
+pub struct ChannelAuditOpts {
     pub crate_id_filter: Option<NodeId>,
     pub skip_test_fns: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ChannelFinding {
+pub struct ChannelFinding {
     pub crate_name: String,
     pub kind: String,
     pub bounded: bool,
@@ -71,7 +71,7 @@ pub(crate) fn parse_capacity_arg(arg_text: &str) -> Option<u64> {
     cleaned.parse::<u64>().ok()
 }
 
-pub(crate) fn channel_capacity_audit(
+pub fn channel_capacity_audit(
     loaded: &LoadedWorkspace,
     snap: &OpenedSnapshot,
     opts: ChannelAuditOpts,

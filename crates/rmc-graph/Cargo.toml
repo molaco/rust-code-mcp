@@ -4,4 +4,49 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# rmc-engine path dep added in B.7 when the graph module actually moves in
+# In-workspace engine crate (embeddings backend/generator)
+rmc-engine = { path = "../rmc-engine" }
+
+# Persisted hypergraph store
+heed = { workspace = true }
+
+# Serialization
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+serde_bytes = { workspace = true }
+bincode     = { workspace = true }
+
+# Error handling
+anyhow    = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Async runtime (tokio::test in build.rs/render.rs tests; tokio uses elsewhere)
+tokio = { workspace = true }
+
+# Physical CPU detection (loader threadpool sizing)
+num_cpus = { workspace = true }
+
+# rust-analyzer syntax + IDE/HIR (for extraction, audits, signatures, ast_resolve)
+ra_ap_syntax        = { workspace = true }
+ra_ap_ide           = { workspace = true }
+ra_ap_ide_db        = { workspace = true }
+"ra_ap_load-cargo"  = { workspace = true }
+ra_ap_project_model = { workspace = true }
+ra_ap_vfs           = { workspace = true }
+ra_ap_hir           = { workspace = true }
+ra_ap_hir_def       = { workspace = true }
+
+# MCP schema derives used by graph query model
+rmcp = { workspace = true }
+
+# Workspace metadata + filesystem traversal + hashing + dirs
+cargo_metadata = { workspace = true }
+walkdir        = { workspace = true }
+sha2           = { workspace = true }
+directories    = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

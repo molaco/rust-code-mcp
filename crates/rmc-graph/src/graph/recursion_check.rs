@@ -16,13 +16,13 @@ use super::ids::NodeId;
 use super::snapshot::OpenedSnapshot;
 
 #[derive(Debug, Clone)]
-pub(crate) struct RecursionOpts {
+pub struct RecursionOpts {
     pub crate_id_filter: Option<NodeId>,
     pub max_cycle_length: usize,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RecursionCycleInternal {
+pub struct RecursionCycleInternal {
     pub fns: Vec<NodeId>,
     pub cycle_length: usize,
     pub direct_recursion: bool,
@@ -31,12 +31,12 @@ pub(crate) struct RecursionCycleInternal {
 pub(crate) const HARD_CAP_CYCLE_LENGTH: usize = 12;
 pub(crate) const DEFAULT_CYCLE_LENGTH: usize = 5;
 
-pub(crate) fn clamp_cycle_length(requested: Option<usize>) -> usize {
+pub fn clamp_cycle_length(requested: Option<usize>) -> usize {
     let n = requested.unwrap_or(DEFAULT_CYCLE_LENGTH);
     n.clamp(1, HARD_CAP_CYCLE_LENGTH)
 }
 
-pub(crate) fn recursion_check(
+pub fn recursion_check(
     snap: &OpenedSnapshot,
     opts: RecursionOpts,
 ) -> Result<Vec<RecursionCycleInternal>> {
@@ -209,7 +209,7 @@ pub(crate) fn canonicalize_cycle(mut cycle: Vec<NodeId>) -> Vec<NodeId> {
     cycle
 }
 
-pub(crate) fn enclosing_fn_qualified_names(
+pub fn enclosing_fn_qualified_names(
     snap: &OpenedSnapshot,
     cycle: &[NodeId],
 ) -> Result<Vec<String>> {

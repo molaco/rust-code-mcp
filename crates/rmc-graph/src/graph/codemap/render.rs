@@ -43,7 +43,7 @@ use crate::graph::ModuleTreeNode;
 /// Identifiers are sanitized: `:`, `<`, `>`, spaces, and other Mermaid-
 /// hostile characters are mapped to `_`. Display text (inside `["..."]`)
 /// is left as-is except for escaping `"`.
-pub(crate) fn render_mermaid(cm: &Codemap) -> String {
+pub fn render_mermaid(cm: &Codemap) -> String {
     let mut out = String::new();
     out.push_str("flowchart LR\n");
 
@@ -172,7 +172,7 @@ pub(crate) fn render_mermaid(cm: &Codemap) -> String {
 /// When `CodemapNode.snippet` is `Some`, each snippet line is appended
 /// under the item, prefixed with `        | ` (8 spaces + `| `) to make
 /// the snippet visually distinct from the structural outline.
-pub(crate) fn render_outline(cm: &Codemap) -> String {
+pub fn render_outline(cm: &Codemap) -> String {
     // Build a qualified-name -> &CodemapNode lookup so the recursive walk
     // can decide which `ModuleTreeNode`s correspond to retained items.
     let retained_by_qn: HashMap<&str, &CodemapNode> = cm

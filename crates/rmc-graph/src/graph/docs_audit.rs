@@ -22,7 +22,7 @@ pub struct DocsAuditOpts {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MissingDocsFinding {
+pub struct MissingDocsFinding {
     pub target: NodeId,
     pub qualified_name: String,
     pub item_kind: ItemKind,
@@ -31,7 +31,7 @@ pub(crate) struct MissingDocsFinding {
     pub span: Option<(u32, u32)>,
 }
 
-pub(crate) fn missing_docs_audit(
+pub fn missing_docs_audit(
     snap: &OpenedSnapshot,
     opts: DocsAuditOpts,
 ) -> Result<Vec<MissingDocsFinding>> {
@@ -176,7 +176,7 @@ pub(crate) fn is_undocumented_pub_item(
 
 /// Default kind set per Phase 8 plan: documentable kinds excluding
 /// EnumVariant, AssocConst, AssocType (rarely carry standalone docs).
-pub(crate) fn default_kind_filter() -> HashSet<ItemKind> {
+pub fn default_kind_filter() -> HashSet<ItemKind> {
     let mut s = HashSet::new();
     s.insert(ItemKind::Function);
     s.insert(ItemKind::Struct);

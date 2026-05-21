@@ -55,7 +55,7 @@ use crate::graph::snapshot::OpenedSnapshot;
 ///   returned `Codemap.diagnostics`. Used by the MCP handler to surface
 ///   pre-flight signals (e.g. snapshot staleness) without coupling the
 ///   algorithm core to filesystem I/O.
-pub(crate) async fn build_codemap(
+pub async fn build_codemap(
     snap: &OpenedSnapshot,
     prompt: Option<&str>,
     override_seeds: Option<&[String]>,
@@ -218,7 +218,7 @@ pub(crate) async fn build_codemap(
             // `&EmbeddingBackend` from its caller, replace this default
             // with the caller's choice so non-default Qwen3 variants
             // invalidate stale cache rows correctly.
-            let active_version = crate::embeddings::EmbeddingBackend::default().identity();
+            let active_version = rmc_engine::embeddings::EmbeddingBackend::default().identity();
             for nid in ordered {
                 let rec = snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())?;
                 let fresh = rec
@@ -242,7 +242,7 @@ pub(crate) async fn build_codemap(
         if opts.embedding_policy == EmbeddingPolicy::NoRerank || prompt.unwrap_or("").is_empty() {
             None
         } else {
-            let generator = crate::embeddings::EmbeddingGenerator::new()
+            let generator = rmc_engine::embeddings::EmbeddingGenerator::new()
                 .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
             // Query-side: the prompt is a retrieval query scored against
             // cached document vectors — apply the instruction prefix.
@@ -263,7 +263,7 @@ pub(crate) async fn build_codemap(
             let resolved = crate::graph::ensure_embeddings_for(
                 snap,
                 &missing,
-                &crate::embeddings::EmbeddingBackend::default(),
+                &rmc_engine::embeddings::EmbeddingBackend::default(),
             )
             .await?;
             let added = resolved.len();
@@ -592,7 +592,7 @@ fn extract_snippet(
 /// re-read the manifest by hand. Returns `None` if no `.rs` file is
 /// reachable or every walk entry fails — in that case the caller should
 /// skip the diagnostic rather than treat it as an error.
-pub(crate) fn newest_source_mtime(workspace_root: &Path) -> Option<u64> {
+pub fn newest_source_mtime(workspace_root: &Path) -> Option<u64> {
     let mut newest: Option<u64> = None;
     for entry in walkdir::WalkDir::new(workspace_root)
         .follow_links(false)

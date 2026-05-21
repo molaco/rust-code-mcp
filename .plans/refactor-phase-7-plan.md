@@ -446,6 +446,8 @@ Commit:
 
 - **B.7.a** — Move `src/graph/` → `crates/rmc-graph/src/graph/`; declare `pub mod graph;` in `rmc-graph/src/lib.rs`; rewrite cross-crate imports inside `graph/` from `crate::embeddings::…` to `rmc_engine::embeddings::…`; add `pub use rmc_graph::graph;` to main `src/lib.rs`.
 
+✅ DONE 2026-05-21. 28 top-level entries moved (26 .rs + `codemap/`, `query/` subdirs). The 5 `crate::embeddings → rmc_engine::embeddings` rewrites were all inline fully-qualified paths (not `use` statements) at `embedding_cache.rs:{38,136}` and `codemap/build.rs:{221,245,266}`. **24 third-party deps added** to `rmc-graph/Cargo.toml`: `rmc-engine` (path) + `heed, serde, serde_json, serde_bytes, bincode, anyhow, thiserror, tracing, tokio, num_cpus, ra_ap_{syntax,ide,ide_db,load-cargo,project_model,vfs,hir,hir_def}, rmcp, cargo_metadata, walkdir, sha2, directories`. `rmcp` is the external MCP SDK (used for `schemars` JsonSchema derive on `query/model.rs` types), NOT the in-tree `crate::mcp` module — no layering inversion. **~30 visibility widenings** required across `labels`, `recursion_check`, `channel_audit`, `fn_body_audit`, `docs_audit`, `derive_audit`, `codemap/*` modules — all driven by `tools/graph/*` consumers (audits.rs, response.rs, similarity.rs, surface.rs, codemap.rs, core.rs). Final-gate grep `use crate::(search|indexing|tools|mcp|config|...)` in `crates/rmc-graph/src/` returned zero. `cargo check --workspace --all-targets` green.
+
 Risk: Medium. The cross-crate import rewrite is concentrated (embeddings is the only foreign edge). Stage in two sub-commits if needed:
 
 - B.7.a.1: move files, declare module, accept compile errors.

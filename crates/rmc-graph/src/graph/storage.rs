@@ -200,7 +200,7 @@ impl GraphPaths {
     }
 }
 
-pub(crate) fn default_data_dir() -> PathBuf {
+pub fn default_data_dir() -> PathBuf {
     ProjectDirs::from("dev", "rust-code-mcp", "search")
         .map(|dirs| dirs.data_dir().join("graphs"))
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp").join("graphs"))

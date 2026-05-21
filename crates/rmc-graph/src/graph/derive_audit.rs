@@ -24,7 +24,7 @@ pub struct DeriveAuditOpts {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DeriveFinding {
+pub struct DeriveFinding {
     pub target: NodeId,
     pub qualified_name: String,
     pub item_kind: ItemKind,
@@ -35,7 +35,7 @@ pub(crate) struct DeriveFinding {
     pub missing_derives: Vec<String>,
 }
 
-pub(crate) fn derive_audit(snap: &OpenedSnapshot, opts: DeriveAuditOpts) -> Result<Vec<DeriveFinding>> {
+pub fn derive_audit(snap: &OpenedSnapshot, opts: DeriveAuditOpts) -> Result<Vec<DeriveFinding>> {
     let rtxn = snap.env.read_txn()?;
 
     let mut candidates: Vec<(NodeId, Node)> = Vec::new();
@@ -239,7 +239,7 @@ pub(crate) fn missing_required_derives(
 
 /// Default kind set per Phase 8 plan: `Struct`, `Enum`, `Union` — the three
 /// kinds that accept derive macros.
-pub(crate) fn default_kind_filter() -> HashSet<ItemKind> {
+pub fn default_kind_filter() -> HashSet<ItemKind> {
     let mut s = HashSet::new();
     s.insert(ItemKind::Struct);
     s.insert(ItemKind::Enum);

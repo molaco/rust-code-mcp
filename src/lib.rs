@@ -21,7 +21,7 @@ pub use rmc_engine::vector_store;
 
 pub mod semantic;
 
-pub mod graph;
+pub use rmc_graph::graph;
 
 // Will be added in later steps:
 // pub mod watcher;

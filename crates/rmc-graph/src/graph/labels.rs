@@ -5,7 +5,7 @@ use ra_ap_ide::RootDatabase;
 
 use super::model::{BindingKind, ItemKind, Node, NodeKind, UsageCategory};
 
-pub(crate) fn usage_category_label(c: UsageCategory) -> &'static str {
+pub fn usage_category_label(c: UsageCategory) -> &'static str {
     match c {
         UsageCategory::Read => "Read",
         UsageCategory::Write => "Write",
@@ -14,7 +14,7 @@ pub(crate) fn usage_category_label(c: UsageCategory) -> &'static str {
     }
 }
 
-pub(crate) fn binding_kind_label(kind: BindingKind) -> &'static str {
+pub fn binding_kind_label(kind: BindingKind) -> &'static str {
     match kind {
         BindingKind::Declared => "Declared",
         BindingKind::NamedImport => "NamedImport",
@@ -23,7 +23,7 @@ pub(crate) fn binding_kind_label(kind: BindingKind) -> &'static str {
     }
 }
 
-pub(crate) fn node_kind_label(
+pub fn node_kind_label(
     node: &Node,
     item_kind_label: fn(ItemKind) -> &'static str,
 ) -> String {
@@ -39,7 +39,7 @@ pub(crate) fn node_kind_label(
     }
 }
 
-pub(crate) fn item_kind_short_label(k: ItemKind) -> &'static str {
+pub fn item_kind_short_label(k: ItemKind) -> &'static str {
     match k {
         ItemKind::Function => "Fn",
         ItemKind::Struct => "Struct",
@@ -57,7 +57,7 @@ pub(crate) fn item_kind_short_label(k: ItemKind) -> &'static str {
     }
 }
 
-pub(crate) fn item_kind_display_label(k: ItemKind) -> &'static str {
+pub fn item_kind_display_label(k: ItemKind) -> &'static str {
     match k {
         ItemKind::Function => "Function",
         ItemKind::Struct => "Struct",

@@ -2,7 +2,7 @@
 ///
 /// Returns 0.0 when either vector has zero norm instead of NaN. Slices of
 /// unequal length are silently truncated to the shorter length via `zip`.
-pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
+pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let mut dot = 0f32;
     let mut na = 0f32;
     let mut nb = 0f32;

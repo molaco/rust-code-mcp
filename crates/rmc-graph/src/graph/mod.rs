@@ -17,7 +17,7 @@ pub mod fn_body_audit;
 pub mod hir_trim;
 pub mod ids;
 pub mod impls;
-pub(crate) mod labels;
+pub mod labels;
 pub mod loader;
 mod math;
 pub mod model;
@@ -32,10 +32,10 @@ pub(crate) mod test_support;
 pub mod unsafe_audit;
 pub mod usages;
 
-pub(crate) use embedding_cache::ensure_embeddings_for;
+pub use embedding_cache::ensure_embeddings_for;
 pub use ids::{BindingId, NodeId};
 pub use loader::{LoadedWorkspace, load};
-pub(crate) use math::cosine;
+pub use math::cosine;
 pub use model::{
     Binding, BindingVisibility, FunctionSignature, ItemKind, Namespace, Node, NodeKind, Usage,
 };

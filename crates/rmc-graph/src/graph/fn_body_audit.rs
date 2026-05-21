@@ -37,14 +37,14 @@ pub(crate) const ALL_PATTERNS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone)]
-pub(crate) struct FnBodyAuditOpts {
+pub struct FnBodyAuditOpts {
     pub crate_id_filter: Option<NodeId>,
     pub patterns: HashSet<&'static str>,
     pub skip_test_fns: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FnBodyFinding {
+pub struct FnBodyFinding {
     pub target: Option<NodeId>,
     pub qualified_name: Option<String>,
     pub pattern: String,
@@ -60,7 +60,7 @@ pub(crate) struct RawFinding {
     pub syntax_node: SyntaxNode,
 }
 
-pub(crate) fn parse_pattern_filter(input: Option<&[String]>) -> Result<HashSet<&'static str>, String> {
+pub fn parse_pattern_filter(input: Option<&[String]>) -> Result<HashSet<&'static str>, String> {
     let valid: &[&'static str] = ALL_PATTERNS;
     match input {
         None => Ok(valid.iter().copied().collect()),
@@ -350,7 +350,7 @@ pub(crate) fn match_self_recursion(
     out
 }
 
-pub(crate) fn fn_body_audit(
+pub fn fn_body_audit(
     loaded: &LoadedWorkspace,
     snap: &OpenedSnapshot,
     opts: FnBodyAuditOpts,
