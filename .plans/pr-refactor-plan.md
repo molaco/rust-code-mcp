@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 15 complete; PR 16 is next. This is the executable sequence for the
+Status: PR 16 complete; PR 17 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1555,6 +1555,79 @@ Exit:
 - External embedding paths remain unchanged.
 
 ## PR 16: Split Chunker And Parser Facades
+
+Status: DONE.
+
+Outcome:
+
+**Chunker** (`src/chunker/mod.rs` 805 → 11 LOC, pure facade):
+- `chunker/types.rs` (250 LOC) — `ChunkId`, `ChunkContext`, `CodeChunk` +
+  `format_for_embedding`, `ChunkSplitConfig` + 2 tests.
+- `chunker/chunker.rs` (297 LOC) — `Chunker` struct + main impl (`new`,
+  `with_overlap`, `chunk_file`, `extract_symbol_code`,
+  `extract_module_path`, `add_overlap`, `calculate_overlap`) + `Default`
+  impl + 4 tests.
+- `chunker/split.rs` (284 LOC) — second `impl Chunker` block with
+  `split_oversized_chunks` + private `split_leaf_chunk`; free helpers
+  (`make_part_chunk`, `token_count_or_estimate`, `is_container_kind`,
+  `strictly_contains`, `nearest_skipped_parent`) + 3 tests.
+- `chunker/mod.rs` body:
+  ```rust
+  mod chunker;
+  mod split;
+  mod types;
+
+  pub use chunker::Chunker;
+  pub use types::{ChunkContext, ChunkId, ChunkSplitConfig, CodeChunk};
+  ```
+
+**Parser** (`src/parser/mod.rs` 621 → 19 LOC, pure facade; existing
+`call_graph.rs`/`imports.rs`/`type_references.rs` untouched per spec):
+- `parser/types.rs` (103 LOC) — `Symbol`, `SymbolKind` + `as_str`,
+  `Visibility`, `Range`, `ParseResult`.
+- `parser/rust_parser.rs` (515 LOC) — `RustParser` struct + impl
+  (`new`, `with_edition`, `parse_file`, `parse_source`,
+  `parse_file_complete`, `parse_source_complete`) + 6 private helpers
+  (`line_of_offset`, `extract_visibility`, `extract_docstring`,
+  `node_to_range`, `extract_symbols_recursive`, `extract_item_symbols`) +
+  8 parser tests.
+- `parser/mod.rs` body:
+  ```rust
+  pub mod call_graph;
+  pub mod imports;
+  pub mod type_references;
+
+  mod rust_parser;
+  mod types;
+
+  pub use imports::{extract_imports, extract_imports_from_ast, get_external_dependencies};
+  pub use rust_parser::RustParser;
+  pub use types::{ParseResult, Range, Symbol, SymbolKind, Visibility};
+
+  pub(in crate::parser) use rust_parser::line_of_offset;
+  ```
+  `line_of_offset` is re-exported at `pub(in crate::parser)` so the
+  untouched `type_references.rs:?` import `use super::line_of_offset` keeps
+  resolving — narrowest workable widening per Guardrail 2.
+
+**Visibility decisions**:
+- `Chunker::add_overlap` widened from private to `pub(super)` (split.rs
+  calls it).
+- `Chunker::overlap_percentage` initially widened by subagent to
+  `pub(super)`, then **narrowed back to private** (the only consumers are
+  tests in the same `chunker.rs` file via `mod tests`, which already see
+  private fields via child-of-parent rule).
+- All other helpers remained at their original private visibility.
+- No `pub(crate)` widenings.
+
+**Public-path stability** verified: `crate::chunker::{Chunker, ChunkId,
+CodeChunk, ChunkContext, ChunkSplitConfig}` and `crate::parser::{RustParser,
+Symbol, SymbolKind, Visibility, Range, ParseResult, extract_imports,
+extract_imports_from_ast, get_external_dependencies, call_graph, imports,
+type_references}` all resolve unchanged.
+
+`nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+green. Engine→tools grep returns no hits.
 
 Operation: `Split`.
 
