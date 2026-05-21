@@ -143,7 +143,8 @@ pub(crate) async fn handle_build_codemap(
             .search(prompt, opts.top_k_seeds.saturating_mul(3))
             .await
             .map_err(|e| McpError::internal_error(format!("hybrid search: {e}"), None))?;
-        build_codemap(&snap, Some(prompt), None, Some(&hits), &opts, &pre_diagnostics)
+        let seed_hits = search_results_to_seed_hits(&hits);
+        build_codemap(&snap, Some(prompt), None, Some(&seed_hits), &opts, &pre_diagnostics)
             .await
             .map_err(internal_error("build_codemap"))?
     };
@@ -169,4 +170,22 @@ pub(crate) async fn handle_build_codemap(
         }
         _ => unreachable!("format validated above"),
     }
+}
+
+/// Adapt the search layer's `SearchResult` slice into the codemap-local
+/// `SeedHit` slice. Keeping this mapping on the tools side is what lets the
+/// `graph::codemap` algorithm core stay search-independent (PR 12 boundary
+/// fix).
+fn search_results_to_seed_hits(
+    results: &[crate::search::SearchResult],
+) -> Vec<crate::graph::codemap::SeedHit> {
+    results
+        .iter()
+        .map(|r| crate::graph::codemap::SeedHit {
+            file_path: r.chunk.context.file_path.clone(),
+            line_start: r.chunk.context.line_start as u32,
+            line_end: r.chunk.context.line_end as u32,
+            score: r.score,
+        })
+        .collect()
 }

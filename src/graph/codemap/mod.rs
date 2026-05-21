@@ -1,118 +1,33 @@
 //! Task-conditioned codemap response types and query-time helpers.
 //!
-//! The serializable shape returned by the `build_codemap` MCP tool lives
-//! at the top of this file. Below the types are query-time helpers used
-//! by the algorithm (Phase 5): a span-resolution helper that turns a
-//! workspace-relative file + line range into an enclosing Item NodeId,
-//! and a small path-normalization helper.
+//! The serializable response shape lives in [`model`]; the algorithm core
+//! (`build_codemap`), the renderers (`render_mermaid`, `render_outline`),
+//! and small helpers live here. Seed-resolution helpers plus the
+//! codemap-local [`seeds::SeedHit`] DTO live in [`seeds`] — the DTO lets the
+//! tools layer adapt `crate::search::SearchResult` into a codemap-local type
+//! so the graph layer carries no `graph → search` edge.
+
+pub mod model;
+pub(super) mod seeds;
+
+pub use model::*;
+pub use seeds::SeedHit;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use heed::RoTxn;
-use serde::{Deserialize, Serialize};
 
+use crate::graph::codemap::seeds::{
+    build_bm25_by_node, resolve_override_seeds, resolve_search_seeds,
+};
 use crate::graph::ids::NodeId;
-use crate::graph::model::{ItemKind, NodeKind};
+use crate::graph::model::NodeKind;
+#[cfg(test)]
+use crate::graph::model::ItemKind;
 use crate::graph::queries::ModuleTreeNode;
 use crate::graph::snapshot::OpenedSnapshot;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Codemap {
-    pub prompt: String,
-    pub snapshot_id: String,
-    pub generated_at_unix: u64,
-    pub seeds: Vec<NodeId>,
-    pub nodes: Vec<CodemapNode>,
-    pub edges: Vec<CodemapEdge>,
-    pub hierarchy: ModuleTreeNode,
-    pub stats: CodemapStats,
-    pub diagnostics: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodemapNode {
-    pub id: NodeId,
-    pub qualified_name: String,
-    pub kind: NodeKind,
-    pub item_kind: Option<ItemKind>,
-    pub file: Option<String>,
-    pub span: Option<(u32, u32)>,
-    /// 1-indexed source line of the node's `span.0` byte offset. Matches the
-    /// `ChunkContext.line_start` convention. `None` when the file isn't on
-    /// disk, when the span is absent, or when the line→byte table lookup
-    /// fails for any reason.
-    pub line: Option<u32>,
-    pub relevance: f32,
-    pub is_seed: bool,
-    pub snippet: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodemapEdge {
-    pub from: NodeId,
-    pub to: NodeId,
-    pub kind: EdgeKind,
-    /// Edge multiplicity. v1: always 1, since the raw-ID graph adapters
-    /// (callees_of / referrers_of) deduplicate by NodeId and the BFS
-    /// dedups re-visits. Future versions may carry call-site multiplicity
-    /// once the adapters expose counts.
-    pub weight: u32,
-}
-
-/// Edge kind. Marked `#[non_exhaustive]` so future variants
-/// (`Implements`, `Inherits`, …) are not semver-breaking — `EdgeKind`
-/// is part of the MCP tool's serialized JSON output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum EdgeKind {
-    Calls,
-    Uses,
-    Imports,
-    Contains,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodemapStats {
-    pub seed_count: usize,
-    pub node_count: usize,
-    pub edge_count: usize,
-    pub embedded_nodes: usize,
-    pub embeddings_computed: usize,
-    pub total_ms: u64,
-}
-
-/// Caller-tunable knobs. The MCP tool layer translates JSON params into this.
-#[derive(Debug, Clone)]
-pub struct CodemapOptions {
-    pub max_nodes: usize,
-    pub depth: u8,
-    pub top_k_seeds: usize,
-    pub max_incoming_per_node: usize,
-    pub embedding_policy: EmbeddingPolicy,
-    pub include_snippets: bool,
-}
-
-impl Default for CodemapOptions {
-    fn default() -> Self {
-        Self {
-            max_nodes: 80,
-            depth: 3,
-            top_k_seeds: 20,
-            max_incoming_per_node: 8,
-            embedding_policy: EmbeddingPolicy::NoRerank,
-            include_snippets: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmbeddingPolicy {
-    NoRerank,
-    UseCachedOnly,
-    ComputeMissing,
-}
 
 /// Convert a 1-indexed inclusive line range into a byte range for `file`,
 /// then find the smallest enclosing Item NodeId from the span index.
@@ -221,7 +136,7 @@ pub(crate) async fn build_codemap(
     snap: &OpenedSnapshot,
     prompt: Option<&str>,
     override_seeds: Option<&[String]>,
-    hits: Option<&[crate::search::SearchResult]>,
+    hits: Option<&[SeedHit]>,
     opts: &CodemapOptions,
     pre_diagnostics: &[String],
 ) -> anyhow::Result<Codemap> {
@@ -245,7 +160,7 @@ pub(crate) async fn build_codemap(
             let hs = hits.unwrap_or(&[]);
             // Defensively cap; the caller is supposed to have done this.
             let limit = opts.top_k_seeds.saturating_mul(3);
-            let slice: &[crate::search::SearchResult] = if hs.len() > limit {
+            let slice: &[SeedHit] = if hs.len() > limit {
                 &hs[..limit]
             } else {
                 hs
@@ -580,120 +495,6 @@ pub(crate) async fn build_codemap(
         stats,
         diagnostics,
     })
-}
-
-/// Resolve qualified-name seeds. Names that don't resolve become diagnostics
-/// (`"unresolved seed: <name>"`); no RA fallback. When the leaf fails but the
-/// parent path resolves to a `Module` node, the diagnostic is enriched with
-/// a hint so a user can distinguish "leaf is private / not indexed" from a
-/// straight typo.
-fn resolve_override_seeds(
-    snap: &OpenedSnapshot,
-    names: &[String],
-    diagnostics: &mut Vec<String>,
-) -> anyhow::Result<HashSet<NodeId>> {
-    let mut seeds: HashSet<NodeId> = HashSet::new();
-    for qn in names {
-        match snap.lookup_by_qualified_name(qn)? {
-            Some((nid, _)) => {
-                seeds.insert(nid);
-            }
-            None => {
-                let hint: &'static str = if let Some((parent, _)) = qn.rsplit_once("::") {
-                    match snap.lookup_by_qualified_name(parent)? {
-                        Some((_, node)) if matches!(node.kind, NodeKind::Module) => {
-                            " (parent module resolves; leaf likely private or not indexed)"
-                        }
-                        _ => "",
-                    }
-                } else {
-                    ""
-                };
-                diagnostics.push(format!("unresolved seed: {qn}{hint}"));
-            }
-        }
-    }
-    Ok(seeds)
-}
-
-/// Resolve search-hit seeds via the span index + line→byte bridge. Items
-/// that are not callable or type-shaped are filtered out (a const-literal hit
-/// is not a useful codemap seed).
-///
-/// Tracks three drop counters and pushes a single summary diagnostic if the
-/// total is > 0 (item 2 of pass-1 polish).
-fn resolve_search_seeds(
-    snap: &OpenedSnapshot,
-    hits: &[crate::search::SearchResult],
-    ws_root: &Path,
-    opts: &CodemapOptions,
-    diagnostics: &mut Vec<String>,
-) -> anyhow::Result<HashSet<NodeId>> {
-    let mut seeds: HashSet<NodeId> = HashSet::new();
-    let mut dropped_path_norm: usize = 0;
-    let mut dropped_line_resolve: usize = 0;
-    let mut dropped_kind_filter: usize = 0;
-    let rtxn = snap.read_txn()?;
-    for hit in hits {
-        if seeds.len() >= opts.top_k_seeds {
-            break;
-        }
-        let ctx = &hit.chunk.context;
-        let Some(rel) = canonicalize_and_strip(&ctx.file_path, ws_root) else {
-            dropped_path_norm += 1;
-            continue;
-        };
-        let ls = ctx.line_start as u32;
-        let le = ctx.line_end as u32;
-        let Some(nid) = enclosing_item_for_line_range(snap, &rel, ls, le) else {
-            dropped_line_resolve += 1;
-            continue;
-        };
-        let Some(node) = snap.node(&rtxn, nid)? else {
-            dropped_line_resolve += 1;
-            continue;
-        };
-        let kind_ok = node
-            .item_kind
-            .map_or(false, |k| k.is_callable() || k.is_type());
-        if !kind_ok {
-            dropped_kind_filter += 1;
-            continue;
-        }
-        seeds.insert(nid);
-    }
-    let total = dropped_path_norm + dropped_line_resolve + dropped_kind_filter;
-    if total > 0 {
-        diagnostics.push(format!(
-            "{total} search hits dropped: {dropped_path_norm} path-norm, {dropped_line_resolve} line-resolve, {dropped_kind_filter} kind-filter"
-        ));
-    }
-    Ok(seeds)
-}
-
-/// Pre-compute the `NodeId -> bm25 score` map by resolving each search hit
-/// the same way `resolve_search_seeds` does. We sum (rather than max) when
-/// multiple hits resolve to the same NodeId so that frequently-cited callers
-/// rank higher.
-fn build_bm25_by_node(
-    snap: &OpenedSnapshot,
-    hits: &[crate::search::SearchResult],
-    ws_root: &Path,
-) -> HashMap<NodeId, f32> {
-    let mut out: HashMap<NodeId, f32> = HashMap::new();
-    for hit in hits {
-        let ctx = &hit.chunk.context;
-        let Some(rel) = canonicalize_and_strip(&ctx.file_path, ws_root) else {
-            continue;
-        };
-        let ls = ctx.line_start as u32;
-        let le = ctx.line_end as u32;
-        let Some(nid) = enclosing_item_for_line_range(snap, &rel, ls, le) else {
-            continue;
-        };
-        *out.entry(nid).or_insert(0.0) += hit.score;
-    }
-    out
 }
 
 /// Deterministic ranking key for `referrers_of` results. Primary: negative

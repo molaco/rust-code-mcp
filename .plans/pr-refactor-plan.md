@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 11 complete; PR 12 is next. This is the executable sequence for the
+Status: PR 12 complete; PR 13 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1148,6 +1148,65 @@ Exit:
 - Query mega-file implementation is gone.
 
 ## PR 12: Split Codemap Model And Search Hit DTO
+
+Status: DONE.
+
+Outcome:
+
+- `src/graph/codemap.rs` (2056 LOC) converted to a directory:
+  `src/graph/codemap/{mod.rs, model.rs, seeds.rs}`.
+- **`codemap/model.rs`** (107 LOC) — codemap data model types moved verbatim:
+  `Codemap`, `CodemapNode`, `CodemapEdge`, `EdgeKind`, `CodemapStats`,
+  `CodemapOptions` + its `impl Default`, `EmbeddingPolicy`. Re-exported from
+  `mod.rs` via `pub use model::*;` so `crate::graph::codemap::Codemap` etc.
+  still resolve unchanged.
+- **`codemap/seeds.rs`** (145 LOC) — owns the new `SeedHit` DTO + seed
+  resolution helpers. The DTO mirrors only the four `SearchResult` fields
+  the algorithm reads (`file_path: PathBuf`, `line_start: u32`,
+  `line_end: u32`, `score: f32`); pre-casts to `u32` to match
+  `enclosing_item_for_line_range`'s signature. `seeds.rs` owns
+  `resolve_override_seeds`, `resolve_search_seeds`, and
+  `build_bm25_by_node` — search-hit normalization is now self-contained in
+  `seeds.rs` and operates on `&[SeedHit]`, not `&[SearchResult]`.
+- **`codemap/mod.rs`** (1857 LOC) keeps `build_codemap`, render fns,
+  hierarchy fns, helpers, the `#[cfg(test)] mod tests` block, and
+  `newest_source_mtime`. PR 13 will split these by concern. `build_codemap`'s
+  signature changed: `hits: Option<&[crate::search::SearchResult]>` →
+  `hits: Option<&[SeedHit]>`.
+- **Boundary fix verified**: `grep -rn "crate::search::SearchResult"
+  src/graph/codemap/` returns no code matches (only 3 doc-comment narrations
+  of the fix). The `graph::codemap → search::SearchResult` inline-path
+  dependency is gone.
+- **Tools-side mapping** added at `src/tools/graph/codemap.rs`:
+  ```rust
+  fn search_results_to_seed_hits(
+      results: &[crate::search::SearchResult],
+  ) -> Vec<crate::graph::codemap::SeedHit> {
+      results
+          .iter()
+          .map(|r| crate::graph::codemap::SeedHit {
+              file_path: r.chunk.context.file_path.clone(),
+              line_start: r.chunk.context.line_start as u32,
+              line_end: r.chunk.context.line_end as u32,
+              score: r.score,
+          })
+          .collect()
+  }
+  ```
+  Call site rewritten to `let seed_hits = search_results_to_seed_hits(&hits);
+  build_codemap(..., Some(&seed_hits), ...)`. The `SearchResult → SeedHit`
+  mapping is now an explicit tools-layer adapter; the graph algorithm is
+  search-independent.
+- **`SeedHit` exposed as `pub`** because the tools layer constructs it.
+  Internal helpers `resolve_override_seeds`, `resolve_search_seeds`,
+  `build_bm25_by_node` are `pub(super)` — visible only within
+  `graph::codemap::*` and `graph` (per Guardrail 2, narrowest workable
+  cross-file widening).
+- `ItemKind` import in `mod.rs` gated behind `#[cfg(test)]` since it's only
+  used by the hand-built codemap test fixture after the moves (avoids
+  dead-import warning).
+- `nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+  green. Engine→tools grep returns no hits.
 
 Operation: `Split` + adapter DTO.
 
