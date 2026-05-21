@@ -32,17 +32,20 @@ pub(crate) mod test_support;
 pub mod unsafe_audit;
 pub mod usages;
 
-pub use extract::extract;
 pub(crate) use embedding_cache::ensure_embeddings_for;
-pub use ids::{BindingId, NodeId, UsageId};
+pub use ids::{BindingId, NodeId};
 pub use loader::{LoadedWorkspace, load};
 pub(crate) use math::cosine;
 pub use model::{
-    Binding, BindingKind, BindingVisibility, EmbeddingRecord, ExtractionModel, FunctionSignature,
-    GenericBound, ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage,
-    UsageCategory,
+    Binding, BindingVisibility, FunctionSignature, ItemKind, Namespace, Node, NodeKind, Usage,
 };
-pub use query::model::*;
-pub use snapshot::{BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current};
-pub use unsafe_audit::UnsafeFinding;
-pub use storage::{GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths};
+pub(crate) use model::EmbeddingRecord;
+pub use query::model::{
+    CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EnrichedCallSite,
+    ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter, FunctionWithSignature,
+    ItemWithAttribute, ModuleDependency, ModuleDependencySymbol, ModuleTreeNode, OverlapScope,
+    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursiveCallersCount,
+    SelfKindFilter, UsageSummaryRow, WorkspaceStats,
+};
+pub use snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
+pub use storage::{GraphEnvOptions, GraphPaths};

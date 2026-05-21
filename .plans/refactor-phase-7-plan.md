@@ -225,7 +225,10 @@ Risk: Medium. The visibility audit on the four `pub(in crate::tools)` helpers is
 - A.2.a.1: move file + add shim + declare in `mcp/mod.rs` (cycle still present via in-crate callers).
 - A.2.a.2: rewrite in-crate caller imports; visibility audit.
 
-### 3.A.3 — Narrow `graph` public surface
+### 3.A.3 — Narrow `graph` public surface  ✅ DONE 2026-05-21
+
+Status: complete. Removed the `pub use query::model::*;` glob from `src/graph/mod.rs`. Surface narrowed from 66 declared re-exports → 42 individual items (38 `pub` cross-crate API, 3 `pub(crate)` graph-internal, 22 dead items removed from the facade). Additionally narrowed three module declarations: `mod query;`, `mod math;`, `mod embedding_cache;` are now private at the module level — only reachable via the explicit re-exports. Cross-crate-API decisions pinned by callers in `src/tools/`, `tests/`, `examples/`. `cargo check --all-targets` green.
+
 
 Goal: reduce `graph`'s 66 declared re-exports + 51 transitively-reachable pubs to a deliberate ~30-export contract. The 32 `query::model::*` types that arrive via glob (`pub use query::model::*;`) are the worst offenders — most are tool-response shapes (`DeadPubFinding`, `CrateEdge`, `EnrichedCallSite`, …) consumed by `tools/graph/*` endpoints by name.
 
