@@ -82,7 +82,7 @@ async fn call_index_tool_direct(
     codebase_path: &str,
     force_reindex: bool,
 ) -> Result<rmcp::model::CallToolResult> {
-    use rust_code_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+    use rust_code_mcp::tools::{index_codebase, IndexCodebaseParams};
 
     let params = IndexCodebaseParams {
         directory: codebase_path.to_string(),

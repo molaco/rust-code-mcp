@@ -21,7 +21,7 @@
 //! External callers should use the stable facade path:
 //!
 //! ```rust,no_run
-//! use rust_code_mcp::tools::search_tool::SearchTool;
+//! use rust_code_mcp::tools::SearchTool;
 //!
 //! let _router = SearchTool::new();
 //! ```
@@ -242,7 +242,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::BuildHypergraphParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::build_hypergraph(params).await
+        crate::tools::graph::core::build_hypergraph(params).await
     }
 
     #[tool(
@@ -252,7 +252,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::GraphImportsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::get_imports(params).await
+        crate::tools::graph::core::get_imports(params).await
     }
 
     #[tool(
@@ -262,7 +262,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ModuleDependenciesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::module_dependencies(params).await
+        crate::tools::graph::core::module_dependencies(params).await
     }
 
     #[tool(
@@ -272,7 +272,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::GraphExportsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::get_exports(params).await
+        crate::tools::graph::core::get_exports(params).await
     }
 
     #[tool(
@@ -282,7 +282,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::GraphReexportsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::get_reexports(params).await
+        crate::tools::graph::core::get_reexports(params).await
     }
 
     #[tool(
@@ -292,7 +292,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::GraphDeclaredReexportsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::get_declared_reexports(params).await
+        crate::tools::graph::core::get_declared_reexports(params).await
     }
 
     #[tool(
@@ -302,7 +302,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::WhoImportsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::who_imports(params).await
+        crate::tools::graph::core::who_imports(params).await
     }
 
     #[tool(
@@ -312,7 +312,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::WhoUsesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::who_uses(params).await
+        crate::tools::graph::core::who_uses(params).await
     }
 
     #[tool(
@@ -322,7 +322,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::WhoUsesSummaryParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::who_uses_summary(params).await
+        crate::tools::graph::core::who_uses_summary(params).await
     }
 
     #[tool(
@@ -332,7 +332,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::WhoCallsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::who_calls(params).await
+        crate::tools::graph::core::who_calls(params).await
     }
 
     #[tool(
@@ -342,7 +342,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::CallsFromParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::calls_from(params).await
+        crate::tools::graph::core::calls_from(params).await
     }
 
     #[tool(
@@ -352,7 +352,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::CallGraphParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::call_graph(params).await
+        crate::tools::graph::core::call_graph(params).await
     }
 
     #[tool(
@@ -362,7 +362,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::CallersInCrateParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::callers_in_crate(params).await
+        crate::tools::graph::core::callers_in_crate(params).await
     }
 
     #[tool(
@@ -372,7 +372,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::RecursiveCallersCountParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::recursive_callers_count(params).await
+        crate::tools::graph::core::recursive_callers_count(params).await
     }
 
     #[tool(
@@ -382,7 +382,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::DeadPubParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::dead_pub_in_crate(params).await
+        crate::tools::graph::surface::dead_pub_in_crate(params).await
     }
 
     #[tool(
@@ -392,7 +392,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::DeadPubReportParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::dead_pub_report(params).await
+        crate::tools::graph::surface::dead_pub_report(params).await
     }
 
     #[tool(
@@ -402,7 +402,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::CrateEdgesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::crate_edges(params).await
+        crate::tools::graph::crates::crate_edges(params).await
     }
 
     #[tool(
@@ -412,7 +412,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ForbiddenDependencyCheckParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::forbidden_dependency_check(params).await
+        crate::tools::graph::crates::forbidden_dependency_check(params).await
     }
 
     #[tool(
@@ -422,7 +422,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::EnumVariantsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::enum_variants(params).await
+        crate::tools::graph::surface::enum_variants(params).await
     }
 
     #[tool(
@@ -432,7 +432,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ItemAttributesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::item_attributes(params).await
+        crate::tools::graph::surface::item_attributes(params).await
     }
 
     #[tool(
@@ -442,7 +442,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ItemsWithAttributeParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::items_with_attribute(params).await
+        crate::tools::graph::surface::items_with_attribute(params).await
     }
 
     #[tool(
@@ -452,7 +452,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::PubUsePubTypeAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::pub_use_pub_type_audit(params).await
+        crate::tools::graph::surface::pub_use_pub_type_audit(params).await
     }
 
     #[tool(
@@ -462,7 +462,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ReExportChainParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::re_export_chain(params).await
+        crate::tools::graph::surface::re_export_chain(params).await
     }
 
     #[tool(
@@ -472,7 +472,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::CrateDependencyMetricParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::crate_dependency_metric(params).await
+        crate::tools::graph::crates::crate_dependency_metric(params).await
     }
 
     #[tool(
@@ -482,7 +482,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::OverlapsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::overlaps(params).await
+        crate::tools::graph::surface::overlaps(params).await
     }
 
     #[tool(
@@ -492,7 +492,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ModuleTreeParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::module_tree(params).await
+        crate::tools::graph::core::module_tree(params).await
     }
 
     #[tool(
@@ -502,7 +502,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::WorkspaceStatsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::workspace_stats(params).await
+        crate::tools::graph::core::workspace_stats(params).await
     }
 
     #[tool(
@@ -512,7 +512,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::FunctionSignatureParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::function_signature(params).await
+        crate::tools::graph::surface::function_signature(params).await
     }
 
     #[tool(
@@ -522,7 +522,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::FunctionsWithFilterParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::functions_with_filter(params).await
+        crate::tools::graph::surface::functions_with_filter(params).await
     }
 
     #[tool(
@@ -532,7 +532,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::UnsafeAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::unsafe_audit(params).await
+        crate::tools::graph::audits::unsafe_audit(params).await
     }
 
     #[tool(
@@ -542,7 +542,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::MutStaticAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::mut_static_audit(params).await
+        crate::tools::graph::audits::mut_static_audit(params).await
     }
 
     #[tool(
@@ -552,7 +552,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::MissingDocsAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::missing_docs_audit(params).await
+        crate::tools::graph::surface::missing_docs_audit(params).await
     }
 
     #[tool(
@@ -562,7 +562,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::DeriveAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::derive_audit(params).await
+        crate::tools::graph::surface::derive_audit(params).await
     }
 
     #[tool(
@@ -572,7 +572,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::RecursionCheckParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::recursion_check(params).await
+        crate::tools::graph::audits::recursion_check(params).await
     }
 
     #[tool(
@@ -582,7 +582,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::ChannelCapacityAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::channel_capacity_audit(params).await
+        crate::tools::graph::audits::channel_capacity_audit(params).await
     }
 
     #[tool(
@@ -592,7 +592,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::FnBodyAuditParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::fn_body_audit(params).await
+        crate::tools::graph::audits::fn_body_audit(params).await
     }
 
     #[tool(
@@ -602,7 +602,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::SimilarToItemParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::similar_to_item(params).await
+        crate::tools::graph::similarity::similar_to_item(params).await
     }
 
     #[tool(
@@ -612,7 +612,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::SemanticOverlapsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::semantic_overlaps(params).await
+        crate::tools::graph::similarity::semantic_overlaps(params).await
     }
 
     #[tool(description = "Build a task-conditioned subgraph (codemap) of the indexed workspace.
@@ -667,7 +667,7 @@ workspace.")]
             include_snippets,
         }): Parameters<crate::tools::params::BuildCodemapParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph_tools::handle_build_codemap(
+        crate::tools::graph::codemap::handle_build_codemap(
             &directory,
             task_prompt.as_deref(),
             seed_qualified_names.as_deref(),

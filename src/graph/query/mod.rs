@@ -17,3 +17,6 @@ pub(super) mod overlaps;
 pub(super) mod shared;
 pub(super) mod surface;
 pub(super) mod usage;
+
+#[cfg(test)]
+mod tests;

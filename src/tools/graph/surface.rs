@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 use crate::graph::labels::item_kind_display_label as item_kind_label;
-use crate::graph::queries::ItemWithAttribute;
+use crate::graph::ItemWithAttribute;
 use crate::graph::{
     CrateDeadPub, DeadPubFinding, FunctionFilter, FunctionSignature, FunctionWithSignature,
     ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport,

@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use rust_code_mcp::mcp::SyncManager;
-use rust_code_mcp::tools::index_tool::{index_codebase, IndexCodebaseParams};
+use rust_code_mcp::tools::{index_codebase, IndexCodebaseParams};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;

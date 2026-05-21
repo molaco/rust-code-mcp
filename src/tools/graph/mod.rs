@@ -14,3 +14,6 @@ pub(super) mod crates;
 pub(super) mod response;
 pub(super) mod similarity;
 pub(super) mod surface;
+
+#[cfg(test)]
+mod tests;

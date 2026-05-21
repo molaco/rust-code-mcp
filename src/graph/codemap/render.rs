@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::graph::codemap::model::{Codemap, CodemapEdge, CodemapNode, EdgeKind};
 use crate::graph::ids::NodeId;
-use crate::graph::queries::ModuleTreeNode;
+use crate::graph::ModuleTreeNode;
 
 // ---------------------------------------------------------------------------
 // Phase 6 — Mermaid + outline renderers.

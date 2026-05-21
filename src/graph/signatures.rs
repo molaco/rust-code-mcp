@@ -141,7 +141,7 @@ fn build_signature(
 mod tests {
     use super::*;
     use crate::graph::test_support::shared_snapshot;
-    use crate::graph::queries::{FunctionFilter, SelfKindFilter};
+    use crate::graph::{FunctionFilter, SelfKindFilter};
 
     fn sig_of(qualified: &str) -> FunctionSignature {
         let snap = shared_snapshot();
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn signature_workspace_stats_is_async() {
-        let sig = sig_of("rust_code_mcp::tools::graph_tools::workspace_stats");
+        let sig = sig_of("rust_code_mcp::tools::graph::core::workspace_stats");
         assert!(sig.is_async, "workspace_stats should be async");
     }
 

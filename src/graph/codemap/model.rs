@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graph::ids::NodeId;
 use crate::graph::model::{ItemKind, NodeKind};
-use crate::graph::queries::ModuleTreeNode;
+use crate::graph::ModuleTreeNode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Codemap {

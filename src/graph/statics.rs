@@ -70,7 +70,7 @@ pub fn extract_statics(
 mod tests {
     use super::*;
     use crate::graph::test_support::shared_snapshot;
-    use crate::graph::queries::classify_metadata;
+    use crate::graph::classify_metadata;
 
     #[test]
     fn classifier_detects_lazy_lock() {

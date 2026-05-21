@@ -1,6 +1,6 @@
 # PR-Based Refactor Plan
 
-Status: PR 18 complete; PR 19 is next. This is the executable sequence for the
+Status: PR 19 complete; PR 20 is next. This is the executable sequence for the
 module/file-boundary refactor in `.plans/refactor-plan.md`, corrected with the
 Phase 0.6 boundary fixes.
 
@@ -1872,6 +1872,91 @@ Exit:
 - No fake split of `embedding_batcher.rs`.
 
 ## PR 19: Remove Migration Facades After Caller Migration
+
+Status: DONE.
+
+Outcome:
+
+**10 facade files deleted** (~2160 LOC removed including tests-relocated):
+- `src/tools/{search_tool, search_tool_router, graph_tools, analysis_tools, clear_cache_tool, health_tool, index_tool, indexing_tools, query_tools}.rs`
+- `src/graph/queries.rs`
+- The `pub mod errors { ... }` compat facade inside `src/indexing/mod.rs`
+  (PR 18 fix-up that was no longer needed after migrating its sole
+  in-repo consumer).
+
+**Canonical re-exports established**:
+- `src/tools/mod.rs`:
+  ```rust
+  pub use router::SearchToolRouter;
+  pub use router::SearchToolRouter as SearchTool;
+  pub use endpoints::index::{index_codebase, IndexCodebaseParams};
+  ```
+- `src/graph/mod.rs` (replacing the previous 7-line `pub use queries::{...}`
+  block):
+  ```rust
+  pub use query::model::*;
+  pub use query::audits::classify_metadata;
+  ```
+
+**Caller migrations** (49 sites across 11 files):
+- `src/main.rs`: 1 site — `tools::search_tool::SearchTool` →
+  `tools::SearchTool`.
+- `src/tools/router.rs`: 39 sites — `crate::tools::graph_tools::FN` →
+  `crate::tools::graph::FAMILY::FN` (per PR 04-06 family mapping).
+- 3 in-repo tests (`tests/test_burn_performance.rs`,
+  `tests/test_index_tool_integration.rs`, `tests/test_gpu_index_jsonrpc.rs`):
+  `tools::index_tool::{index_codebase, IndexCodebaseParams}` →
+  `tools::{index_codebase, IndexCodebaseParams}`.
+- 7 graph-callers — `crate::graph::queries::Name` → `crate::graph::Name`
+  (across `statics.rs`, `signatures.rs::tests`, 4 files in `codemap/`,
+  `tools/graph/surface.rs`).
+- 3 doc-comments in `endpoints/{analysis, indexing_support}.rs` refreshed.
+
+**Test modules relocated** (preserving "test-only compatibility" content
+that the facades hosted — pure facade deletion would have lost ~2050 lines
+of tests):
+- `tools/graph_tools.rs::tests` (919 LOC) → `src/tools/graph/tests.rs` (929 LOC),
+  declared as `#[cfg(test)] mod tests;` in `tools/graph/mod.rs`. Old
+  `use super::*;` (which resolved through the facade's family glob) replaced
+  by explicit `use super::{audits, codemap, core, crates, response,
+  similarity, surface}::*;`.
+- `graph/queries.rs::tests` (1130 LOC) → `src/graph/query/tests.rs` (1144 LOC),
+  declared as `#[cfg(test)] mod tests;` in `graph/query/mod.rs`. Imports
+  rewritten to `use super::{model::*, navigation::{…}, shared::{…}};` and
+  `use super::super::{ids::NodeId, model::{…}, test_support::shared_snapshot};`.
+
+**Qualified-name string updates** (3 sites):
+- `src/graph/signatures.rs:210` (test) — `rust_code_mcp::tools::graph_tools::workspace_stats`
+  → `rust_code_mcp::tools::graph::core::workspace_stats`.
+- `query/tests.rs` — `rust_code_mcp::graph::queries::OpenedSnapshot::lookup_by_qualified_name`
+  → `rust_code_mcp::graph::query::navigation::OpenedSnapshot::lookup_by_qualified_name`.
+- `query/tests.rs` — `rust_code_mcp::graph::queries::ForbiddenDependencyRule`
+  → `rust_code_mcp::graph::query::model::ForbiddenDependencyRule`.
+
+**`src/tools/` final layout**: `mod.rs`, `router.rs`, `project_paths.rs`,
+`params/`, `endpoints/`, `graph/`. Matches plan §15 final tree.
+
+**`src/graph/` no longer contains `queries.rs`** — matches plan §15 final
+tree. `query/` subtree owns all 13 family files plus `tests.rs`.
+
+**Visibility discipline**: no widenings needed. All `pub(in crate::graph)`
+items from PR 11 (`impl_module_item_alias_parts`,
+`is_impl_module_item_alias_candidate`, `callees_of`, `referrers_of`,
+`dependency_node_for`, `MAX_REEXPORT_HOPS`) remain reachable from
+`query::tests` because `query::tests` is inside `graph::*`. Family modules
+under `tools::graph` are `pub(super)`, reachable from `tools::graph::tests`
+(sibling).
+
+**Decision note**: kept the rename re-export `pub use SearchToolRouter as
+SearchTool;` so both `rust_code_mcp::tools::SearchTool` and
+`rust_code_mcp::tools::SearchToolRouter` resolve. Test 1 in `query/tests.rs`
+(`explicit_pub_use_is_marked_on_pub_use_bindings`) was retargeted from the
+deleted `graph::queries` module to `graph::loader` (same invariant — a
+module with private `use` lines).
+
+`nix develop ../nix-devshells#cuda-code --command cargo check --all-targets`
+green. Engine→tools grep returns no hits. All facade-path greps return
+zero matches (only doc-comment historical references remain).
 
 Operation: Workflow C caller migration + adapter removal.
 

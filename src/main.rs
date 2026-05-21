@@ -5,7 +5,7 @@
 #![recursion_limit = "512"]
 
 use rust_code_mcp::mcp::SyncManager;
-use rust_code_mcp::tools::search_tool::SearchTool;
+use rust_code_mcp::tools::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
 use std::sync::Arc;
 use tracing_subscriber::{self, EnvFilter};

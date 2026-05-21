@@ -4,12 +4,6 @@ pub mod consistency;
 pub(crate) mod embedding_batcher;
 pub mod error;
 pub mod error_collection;
-/// Compatibility facade — implementation moved to
-/// [`error_collection`] in PR 18. PR 19's facade-cleanup pass will remove
-/// this once no in-repo consumer reaches `crate::indexing::errors::*`.
-pub mod errors {
-    pub use super::error_collection::*;
-}
 pub(crate) mod file_processor;
 pub mod identity;
 pub mod incremental;

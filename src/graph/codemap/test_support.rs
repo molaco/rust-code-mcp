@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use crate::graph::codemap::model::{Codemap, CodemapEdge, CodemapNode, CodemapStats, EdgeKind};
 use crate::graph::ids::NodeId;
 use crate::graph::model::{ItemKind, NodeKind};
-use crate::graph::queries::ModuleTreeNode;
+use crate::graph::ModuleTreeNode;
 use crate::graph::snapshot::OpenedSnapshot;
 
 /// Build a hex-filled NodeId from a single byte, e.g. `nid(0xAA)`

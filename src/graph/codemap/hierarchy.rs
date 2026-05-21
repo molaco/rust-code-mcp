@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use crate::graph::ids::NodeId;
 use crate::graph::model::NodeKind;
-use crate::graph::queries::ModuleTreeNode;
+use crate::graph::ModuleTreeNode;
 use crate::graph::snapshot::OpenedSnapshot;
 
 /// Project a hierarchy `ModuleTreeNode` over the retained set.

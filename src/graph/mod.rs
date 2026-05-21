@@ -21,7 +21,6 @@ pub(crate) mod labels;
 pub mod loader;
 mod math;
 pub mod model;
-pub mod queries;
 mod query;
 pub mod recursion_check;
 pub mod signatures;
@@ -43,14 +42,8 @@ pub use model::{
     GenericBound, ItemKind, Namespace, Node, NodeKind, Param, SelfKind, StaticMetadata, Usage,
     UsageCategory,
 };
-pub use queries::{
-    CallGraphNode, CommonFnName, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EdgeSymbol,
-    EnrichedCallSite, ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter,
-    FunctionWithSignature, ModuleDependency, ModuleDependencySymbol, ModuleShadow, ModuleTreeNode,
-    MutStaticFinding, NodeKindCounts, OverlapScope, OverlapsReport, PubTypeAliasMasqueradingAsReexport,
-    ReExportChain, ReExportLink, RecursiveCallersCount, SelfKindFilter, TypeCollision,
-    TypeLocation, UsageSummaryRow, VisibilityCounts, WithinCrateDuplicate, WorkspaceStats,
-};
+pub use query::model::*;
+pub use query::audits::classify_metadata;
 pub use snapshot::{
     BuildOptions, BuildResult, OpenedSnapshot, build_and_persist, open_current, open_specific,
 };
