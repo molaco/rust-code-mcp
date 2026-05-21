@@ -262,7 +262,10 @@ mcp__rust-code-mcp__dead_pub_in_crate krate=rust_code_mcp
 
 Risk: Medium-high. Tests and examples consume many of these types by qualified name. Each demotion needs a `who_imports` check first.
 
-### 3.A.4 — Settle pass
+### 3.A.4 — Settle pass  ⏳ READY-TO-AGE (no code change required) 2026-05-21
+
+A.1–A.3 landed cleanly on 2026-05-21 across four jj commits. Phase A is functionally complete at the code level. A.4 itself is the calendar wait — Phase B/C must not be started until normal feature work has aged through this state with no follow-up structural change. See `.docs/refactor-phase-7-plan-phase-A-report.md` for the full Phase A close-out.
+
 
 Do not start Phase B until the codebase has aged through one normal-feature-work pass after A.3 lands. This is the "one full verification pass unchanged" condition the parent plan §12 mandates. There is no command for this; it is a calendar wait. Use the time to verify:
 
