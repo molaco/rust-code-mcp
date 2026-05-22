@@ -256,7 +256,7 @@ Verification notes:
 |---|---|---|---|
 | 0 | MCP Tool Baseline | pass | Binaries/config verified; both MCP namespaces answered health/search smoke calls. |
 | 1 | Tool Inventory and Schemas | pass | 51 shared tools, no original/refactor-only tools, no breaking schema-key differences. |
-| 2 | Health, Cache, and Cold Start | pending | Verify isolated cache roots and health behavior before/after clear. |
+| 2 | Health, Cache, and Cold Start | pass | Isolated cache roots verified; both namespaces stayed degraded-but-functional before/after cache clear. |
 | 3 | Indexing and Retrieval | pending | Compare indexing, keyword search, hybrid search, and similar-code retrieval. |
 | 4 | Live Navigation and File Analysis | pending | Compare definitions, references, imports, dependencies, call graph, and complexity. |
 | 5 | Hypergraph Snapshot and Core Queries | pending | Compare snapshot metrics, exports, imports, uses, crate edges, and dependency rules. |
@@ -380,7 +380,7 @@ Notes:
 
 ## Phase 2: Health, Cache, and Cold Start
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -388,22 +388,52 @@ Verify both servers start cleanly, use isolated caches, and report health consis
 
 Checklist:
 
-- [ ] Run `health_check` before cache clearing.
-- [ ] Run `clear_cache` for original only and verify refactor health/cache state is unchanged.
-- [ ] Run `clear_cache` for refactor only and verify original health/cache state is unchanged.
-- [ ] Run cold `health_check` after cache clearing.
-- [ ] Run warm `health_check` immediately after cold.
-- [ ] Record cache/data directory existence and sizes.
-- [ ] Update result notes with any expected health-status differences.
+- [x] Run `health_check` before cache clearing.
+- [x] Run `clear_cache` for original only and verify refactor health/cache state is unchanged.
+- [x] Run `clear_cache` for refactor only and verify original health/cache state is unchanged.
+- [x] Run cold `health_check` after cache clearing.
+- [x] Run warm `health_check` immediately after cold.
+- [x] Record cache/data directory existence and sizes.
+- [x] Update result notes with any expected health-status differences.
 
 Results:
 
 | Check | Original | Refactor | Delta Classification | Notes |
 |---|---:|---:|---|---|
-| Pre-clear health | pending | pending | pending |  |
-| Post-clear health | pending | pending | pending |  |
-| Warm health ms | pending | pending | pending |  |
-| Cache isolation | pending | pending | pending |  |
+| Pre-clear health | degraded, 434 vectors, 5.8 ms | degraded, 434 vectors, 4.1 ms | compatible | BM25/vector healthy; Merkle snapshot missing on both. |
+| Post-clear health | degraded, 0 vectors, 2.6 ms | degraded, 0 vectors, 12.0 ms | compatible | After both clears, vector stores were empty and Merkle snapshots remained absent until indexing. |
+| Warm health ms | 2.7 | 2.9 | compatible | Warm call delta was +0.2 ms for refactor. |
+| Cache isolation | pass | pass | compatible | Original clear removed only original paths; refactor clear removed only refactor paths. Final data roots were separate and similarly small. |
+
+Notes:
+
+```text
+2026-05-22 Phase 2 results:
+- `jj show --summary` was run before starting this phase.
+- Pre-clear filesystem sizes:
+  - original cache root: missing
+  - original data root: 4320320 bytes
+  - refactor cache root: missing
+  - refactor data root: 4316303 bytes
+- Pre-clear health:
+  - original: degraded; BM25 healthy; vector healthy with 434 vectors; Merkle snapshot missing; 5.8 ms.
+  - refactor: degraded; BM25 healthy; vector healthy with 434 vectors; Merkle snapshot missing; 4.1 ms.
+- Original `clear_cache(directory = PRIMARY_WORKSPACE)` removed only original metadata cache, Tantivy index, and vector store paths under `/home/molaco/.local/share/mcp-rust-code-original-qwen3`.
+- After original clear, the original data root was 0 bytes and refactor data root remained present. A refactor health probe reported 932 vectors and grew the refactor data root to 11320689 bytes; this is recorded as refactor-side warm-state drift, not cross-root deletion.
+- Refactor `clear_cache(directory = PRIMARY_WORKSPACE)` removed only refactor metadata cache, Tantivy index, and vector store paths under `/home/molaco/.local/share/mcp-rust-code-refactor-qwen3`.
+- Original health after refactor clear remained degraded with BM25/vector healthy and 0 vectors.
+- Cold post-clear health:
+  - original: degraded; BM25 healthy; vector healthy with 0 vectors; Merkle snapshot missing; 2.6 ms.
+  - refactor: degraded; BM25 healthy; vector healthy with 0 vectors; Merkle snapshot missing; 12.0 ms.
+- Warm post-clear health:
+  - original: degraded; BM25 healthy; vector healthy with 0 vectors; Merkle snapshot missing; 2.7 ms.
+  - refactor: degraded; BM25 healthy; vector healthy with 0 vectors; Merkle snapshot missing; 2.9 ms.
+- Final filesystem sizes:
+  - original cache root: missing
+  - original data root: 10255 bytes
+  - refactor cache root: missing
+  - refactor data root: 10260 bytes
+```
 
 ## Phase 3: Indexing and Retrieval
 
