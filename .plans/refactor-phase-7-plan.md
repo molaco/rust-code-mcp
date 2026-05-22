@@ -692,6 +692,8 @@ Commit:
 
 - **C.4.a** — Simplify `src/lib.rs` to facade-only; verify all examples/tests still build.
 
+**Status: DONE** — see commit log (`phase 7 C.4`). `src/lib.rs` reduced to 11 lines (5 grouped facade `pub use` statements + module docs + lint attribute). Main crate `src/` already at the plan's `<5 files` target (`lib.rs`, `main.rs`, `bin/test_tools_direct.rs`). `cargo check --workspace --all-targets` green in 0.80s. Cargo.toml dep cleanup deferred (out of plan scope).
+
 ### 5.C Exit conditions
 
 - `cargo check --workspace --all-targets` green.
