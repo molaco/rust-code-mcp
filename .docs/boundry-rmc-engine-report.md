@@ -5,7 +5,7 @@
 - Crate: `rmc-engine`
 - Graph qualified name: `rmc_engine`
 - Analysis order: 1 of 4
-- Current phase: Phase 2 complete
+- Current phase: Phase 3 complete
 - Report state: in progress
 
 ## Phase Log
@@ -14,8 +14,8 @@
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | c35970b1 | Graph snapshot reused; workspace and dependency baseline captured. |
 | Phase 1: Public surface | Complete | b393df22 | Root exposes six domain modules; submodule facades reexport public API types. |
-| Phase 2: Dependency boundary | Complete | Pending commit | No outgoing `rmc_*` dependency violations; one outgoing edge to `fastembed`. |
-| Phase 3: Import and usage coupling | Pending | Not started |  |
+| Phase 2: Dependency boundary | Complete | 549dbff6 | No outgoing `rmc_*` dependency violations; one outgoing edge to `fastembed`. |
+| Phase 3: Import and usage coupling | Complete | Pending commit | Coupling centers on embedding, chunk, vector-store, parser, and search boundary types. |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
@@ -398,3 +398,182 @@ engine owns the canonical profile model.
 - Should `rmc_config` depend on engine profile types, or should profile config
   live in a smaller shared configuration model?
 - Are the many `rmc_indexing` references mostly through stable facade types?
+
+## Phase 3: Import And Usage Coupling
+
+### Required VCS Check
+
+Before Phase 3, `jj show --summary` reported:
+
+```text
+Commit ID: 21f5ca5e005118b37c65a8779cea6ef9399efd52
+Change ID: ztqywnttnzlsmzzqwoktowusoqtzyupw
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+get_imports(directory, module="rmc_engine", summary=true, limit=300)
+module_dependencies(directory, module="rmc_engine", summary=true, limit=300)
+
+who_imports(directory, target=<key engine type>, summary=true, limit=100)
+who_uses_summary(directory, target=<key engine type>, summary=true, limit=100)
+
+get_imports(directory, module=<MCP-identified consumer module>, summary=true, limit=200)
+```
+
+Root coupling:
+
+```text
+get_imports(rmc_engine): 0
+module_dependencies(rmc_engine): 0
+```
+
+Key import counts:
+
+```text
+Chunker: 8 import bindings
+CodeChunk: 25 import bindings
+EmbeddingBackend: 30 import bindings
+EmbeddingGenerator: 15 import bindings
+EmbeddingProfile: 11 import bindings
+VectorStore: 14 import bindings
+LanceDbBackend: 3 import bindings
+Bm25Search: 8 import bindings
+HybridSearch: 9 import bindings
+RustParser: 9 import bindings
+```
+
+Key usage summary:
+
+```text
+EmbeddingBackend:
+  total consumer modules: 26
+  highest external production consumers:
+    rmc_server::mcp::project_paths: 10
+    rmc_server::tools::endpoints::query: 10
+    rmc_indexing::indexing::incremental: 7
+    rmc_indexing::indexing::identity: 6
+    rmc_indexing::indexing::unified: 6
+
+VectorStore:
+  total consumer modules: 9
+  external production consumers:
+    rmc_indexing::indexing::unified: 3
+    rmc_indexing::indexing::consistency: 2
+    rmc_indexing::monitoring::health: 2
+    rmc_server::tools::endpoints::health: 1
+    rmc_server::tools::endpoints::query: 1
+
+CodeChunk:
+  total consumer modules: 14
+  external production consumers:
+    rmc_indexing::indexing::unified: 3
+    rmc_indexing::indexing::embedding_batcher: 2
+    rmc_indexing::indexing::indexer_core: 2
+    rmc_indexing::indexing::tantivy_adapter: 2
+
+EmbeddingGenerator:
+  total consumer modules: 12
+  external production consumers:
+    rmc_indexing::indexing::embedding_batcher: 3
+    rmc_indexing::indexing::indexer_core: 2
+    rmc_graph::graph::codemap::build: 1
+    rmc_graph::graph::embedding_cache: 1
+    rmc_indexing::indexing::unified: 1
+    rmc_server::tools::endpoints::query: 1
+```
+
+Consumer-module import samples:
+
+```text
+rmc_indexing::indexing::indexer_core imports:
+  rmc_engine::embeddings::backend::EmbeddingBackend
+  rmc_engine::chunker::chunker::Chunker
+  rmc_engine::chunker::types::ChunkSplitConfig
+  rmc_engine::parser::rust_parser::RustParser
+  rmc_engine::embeddings::Embedding
+  rmc_engine::embeddings::EmbeddingGenerator
+  rmc_engine::chunker::types::CodeChunk
+
+rmc_indexing::indexing::unified imports:
+  rmc_engine::embeddings::backend::EmbeddingBackend
+  rmc_engine::chunker::types::CodeChunk
+  rmc_engine::embeddings::EmbeddingGenerator
+  rmc_engine::chunker::types::ChunkId
+  rmc_engine::vector_store::VectorStore
+
+rmc_server::tools::endpoints::query imports:
+  rmc_engine::embeddings::backend::EmbeddingBackend
+  rmc_engine::vector_store::VectorStore
+  rmc_engine::embeddings::EmbeddingGenerator
+  rmc_engine::search::HybridSearch
+
+rmc_server::tools::endpoints::health imports:
+  rmc_engine::search::bm25::Bm25Search
+  rmc_engine::embeddings::backend::EmbeddingBackend
+  rmc_engine::vector_store::VectorStore
+
+rmc_config::config::indexer imports:
+  rmc_engine::embeddings::profile::EmbeddingProfile
+```
+
+### Phase 3 Interpretation
+
+`rmc_engine` itself has no root imports or module dependencies, which is
+consistent with a low-level crate root that only declares the public module
+tree.
+
+The important external coupling is concentrated in a small set of stable engine
+concepts:
+
+- embeddings: `EmbeddingBackend`, `EmbeddingGenerator`, `EmbeddingProfile`
+- chunking: `CodeChunk`, `Chunker`, `ChunkId`, `ChunkSplitConfig`
+- vector storage: `VectorStore`
+- search: `HybridSearch`, `Bm25Search`
+- parser: `RustParser`
+
+This is mostly coherent for an engine crate, but the import targets show a
+boundary sharpness issue: many canonical targets live in deep implementation
+modules such as `embeddings::backend`, `chunker::types`, `chunker::chunker`,
+`parser::rust_parser`, and `search::bm25`. Because the MCP import target is the
+canonical declaration, this does not prove callers wrote deep paths in source;
+some may import through one-level facade reexports. Phase 5 should verify the
+actual source paths for `rmc_server::tools::endpoints::health`,
+`rmc_indexing::indexing::indexer_core`, and `rmc_config::config::indexer`.
+
+`LanceDbBackend` looks contained: importers are the `vector_store` facade and
+engine tests, with no external production consumer found in this pass. That
+suggests the public `lancedb` module is not currently causing external
+coupling, even though it remains part of the public surface.
+
+### Phase 3 Findings
+
+- `EmbeddingBackend` is the largest cross-crate boundary type and is used by
+  server, indexing, graph, config/test utilities, and engine internals.
+- `CodeChunk` is shared across chunking, embeddings, search, vector store, and
+  indexing; it is a true engine data model boundary.
+- `VectorStore` is used by indexing and server endpoints, not just engine
+  search internals.
+- `Bm25Search` is imported by server health and indexing health modules; this
+  deserves source-path verification because it may represent direct dependence
+  on a concrete search backend.
+- `RustParser` is imported by indexing and server analysis paths; this is
+  expected for syntax-level parsing but should stay separate from graph's HIR
+  extraction ownership.
+- `EmbeddingProfile` is imported by `rmc_config`, confirming the config/engine
+  coupling observed in Phase 2.
+
+### Open Questions For Later Phases
+
+- Do source imports use `rmc_engine::embeddings::EmbeddingBackend` or
+  `rmc_engine::embeddings::backend::EmbeddingBackend`?
+- Should server health depend on concrete `Bm25Search`, or on an indexing/search
+  health abstraction?
+- Is `RustParser` still used by server only for file-local analysis, rather
+  than graph-level HIR analysis?
+- Can `EmbeddingProfile` be kept as an engine-owned canonical config model
+  without making `rmc_config` depend too heavily on engine?
