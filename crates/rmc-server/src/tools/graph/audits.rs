@@ -1,7 +1,7 @@
 //! Workspace-audit endpoint family.
 //!
 //! Bridges between the MCP tool router and the algorithmic audit cores in
-//! `crate::graph::*_audit` modules. Each endpoint follows the shape
+//! `rmc_graph::graph::*_audit` modules. Each endpoint follows the shape
 //! documented in `graph_tools.rs`: resolve directory, open snapshot, resolve
 //! optional crate filter, run the audit, render NodeIds as hex, serialize.
 //!
@@ -9,7 +9,7 @@
 //! `channel_capacity_audit`, `fn_body_audit`) wrap the synchronous loader +
 //! audit call in `spawn_blocking` so the tokio runtime worker stays free.
 
-use crate::graph::{NodeId, NodeKind};
+use rmc_graph::graph::{NodeId, NodeKind};
 use crate::tools::graph::response::*;
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
@@ -21,13 +21,13 @@ pub(crate) async fn unsafe_audit(
     // The audit calls `loader::load` (full RA workspace load, ~2-3s) and
     // then walks every file's syntax tree. Run on a blocking thread so the
     // tokio runtime worker stays free for concurrent tool calls.
-    let findings: Vec<crate::graph::unsafe_audit::UnsafeFinding> =
+    let findings: Vec<rmc_graph::graph::unsafe_audit::UnsafeFinding> =
         tokio::task::spawn_blocking(move || -> Result<_, McpError> {
             let snap = open_workspace_snapshot(&directory)?;
             let canonical = std::path::PathBuf::from(&directory)
                 .canonicalize()
                 .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-            let loaded = crate::graph::loader::load(&canonical)
+            let loaded = rmc_graph::graph::loader::load(&canonical)
                 .map_err(internal_error("loader::load"))?;
             snap.unsafe_audit(&loaded)
                 .map_err(internal_error("unsafe_audit"))
@@ -161,20 +161,20 @@ pub(crate) async fn recursion_check(
     };
 
     let max_cycle_length =
-        crate::graph::recursion_check::clamp_cycle_length(params.max_cycle_length);
+        rmc_graph::graph::recursion_check::clamp_cycle_length(params.max_cycle_length);
 
-    let opts = crate::graph::recursion_check::RecursionOpts {
+    let opts = rmc_graph::graph::recursion_check::RecursionOpts {
         crate_id_filter,
         max_cycle_length,
     };
 
-    let cycles = crate::graph::recursion_check::recursion_check(&snap, opts)
+    let cycles = rmc_graph::graph::recursion_check::recursion_check(&snap, opts)
         .map_err(internal_error("recursion_check"))?;
 
     let mut rendered: Vec<RecursionCycleRendered> = Vec::with_capacity(cycles.len());
     for cycle in cycles {
         let qualified_names =
-            crate::graph::recursion_check::enclosing_fn_qualified_names(&snap, &cycle.fns)
+            rmc_graph::graph::recursion_check::enclosing_fn_qualified_names(&snap, &cycle.fns)
                 .map_err(internal_error("enclosing_fn_qualified_names"))?;
         let starting_node_id = cycle
             .fns
@@ -234,7 +234,7 @@ pub(crate) async fn channel_capacity_audit(
     let crate_name = params.crate_name.clone();
     let skip_test_fns = params.skip_test_fns.unwrap_or(true);
 
-    let findings: Vec<crate::graph::channel_audit::ChannelFinding> =
+    let findings: Vec<rmc_graph::graph::channel_audit::ChannelFinding> =
         tokio::task::spawn_blocking(move || -> Result<_, McpError> {
             let snap = open_workspace_snapshot(&directory)?;
 
@@ -270,14 +270,14 @@ pub(crate) async fn channel_capacity_audit(
             let canonical = std::path::PathBuf::from(&directory)
                 .canonicalize()
                 .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-            let loaded = crate::graph::loader::load(&canonical)
+            let loaded = rmc_graph::graph::loader::load(&canonical)
                 .map_err(internal_error("loader::load"))?;
 
-            let opts = crate::graph::channel_audit::ChannelAuditOpts {
+            let opts = rmc_graph::graph::channel_audit::ChannelAuditOpts {
                 crate_id_filter,
                 skip_test_fns,
             };
-            crate::graph::channel_audit::channel_capacity_audit(&loaded, &snap, opts)
+            rmc_graph::graph::channel_audit::channel_capacity_audit(&loaded, &snap, opts)
                 .map_err(internal_error("channel_capacity_audit"))
         })
         .await
@@ -345,14 +345,14 @@ pub(crate) async fn fn_body_audit(
     let skip_test_fns = params.skip_test_fns.unwrap_or(true);
 
     let patterns_set =
-        crate::graph::fn_body_audit::parse_pattern_filter(patterns_input.as_deref())
+        rmc_graph::graph::fn_body_audit::parse_pattern_filter(patterns_input.as_deref())
             .map_err(|m| McpError::invalid_params(m, None))?;
 
     let mut patterns_used: Vec<String> =
         patterns_set.iter().map(|s| s.to_string()).collect();
     patterns_used.sort();
 
-    let findings: Vec<crate::graph::fn_body_audit::FnBodyFinding> =
+    let findings: Vec<rmc_graph::graph::fn_body_audit::FnBodyFinding> =
         tokio::task::spawn_blocking(move || -> Result<_, McpError> {
             let snap = open_workspace_snapshot(&directory)?;
 
@@ -388,15 +388,15 @@ pub(crate) async fn fn_body_audit(
             let canonical = std::path::PathBuf::from(&directory)
                 .canonicalize()
                 .map_err(|e| McpError::invalid_params(format!("canonicalize: {e}"), None))?;
-            let loaded = crate::graph::loader::load(&canonical)
+            let loaded = rmc_graph::graph::loader::load(&canonical)
                 .map_err(internal_error("loader::load"))?;
 
-            let opts = crate::graph::fn_body_audit::FnBodyAuditOpts {
+            let opts = rmc_graph::graph::fn_body_audit::FnBodyAuditOpts {
                 crate_id_filter,
                 patterns: patterns_set,
                 skip_test_fns,
             };
-            crate::graph::fn_body_audit::fn_body_audit(&loaded, &snap, opts)
+            rmc_graph::graph::fn_body_audit::fn_body_audit(&loaded, &snap, opts)
                 .map_err(internal_error("fn_body_audit"))
         })
         .await

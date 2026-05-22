@@ -88,7 +88,7 @@ use std::fs;
 use std::path::Path;
 use tracing;
 
-use crate::parser::RustParser;
+use rmc_engine::parser::RustParser;
 
 use crate::semantic::SEMANTIC;
 
@@ -391,17 +391,17 @@ pub(crate) async fn analyze_complexity(file_path: &str) -> Result<CallToolResult
     let function_count = parse_result
         .symbols
         .iter()
-        .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Function { .. }))
+        .filter(|s| matches!(s.kind, rmc_engine::parser::SymbolKind::Function { .. }))
         .count();
     let struct_count = parse_result
         .symbols
         .iter()
-        .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Struct))
+        .filter(|s| matches!(s.kind, rmc_engine::parser::SymbolKind::Struct))
         .count();
     let trait_count = parse_result
         .symbols
         .iter()
-        .filter(|s| matches!(s.kind, crate::parser::SymbolKind::Trait))
+        .filter(|s| matches!(s.kind, rmc_engine::parser::SymbolKind::Trait))
         .count();
 
     // Calculate cyclomatic complexity (simplified - count decision points)

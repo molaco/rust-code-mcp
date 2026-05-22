@@ -6,7 +6,7 @@
 //! - Uses IncrementalIndexer for fast change detection
 //! - Tracks multiple directories independently
 
-use crate::indexing::incremental::IncrementalIndexer;
+use rmc_indexing::indexing::incremental::IncrementalIndexer;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

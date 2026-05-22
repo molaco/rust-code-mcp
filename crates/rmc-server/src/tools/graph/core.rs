@@ -10,12 +10,12 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::graph::labels::{
+use rmc_graph::graph::labels::{
     binding_kind_label, item_kind_short_label as short_item_kind_label, node_kind_label,
     usage_category_label,
 };
-use crate::graph::snapshot::BuildOptions;
-use crate::graph::{
+use rmc_graph::graph::snapshot::BuildOptions;
+use rmc_graph::graph::{
     Binding, CallGraphNode, EnrichedCallSite, ModuleDependency, ModuleDependencySymbol,
     ModuleTreeNode, Namespace, NodeKind, OpenedSnapshot, RecursiveCallersCount, Usage,
     UsageSummaryRow, WorkspaceStats, build_and_persist,

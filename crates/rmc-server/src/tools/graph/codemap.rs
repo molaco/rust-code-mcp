@@ -36,7 +36,7 @@ pub(crate) async fn handle_build_codemap(
     format: Option<&str>,
     include_snippets: Option<bool>,
 ) -> Result<CallToolResult, McpError> {
-    use crate::graph::codemap::{
+    use rmc_graph::graph::codemap::{
         CodemapOptions, EmbeddingPolicy, build_codemap, render_mermaid, render_outline,
     };
 
@@ -99,7 +99,7 @@ pub(crate) async fn handle_build_codemap(
     let mut pre_diagnostics: Vec<String> = Vec::new();
     {
         let workspace_root = std::path::Path::new(&snap.manifest.workspace_root);
-        if let Some(newest) = crate::graph::codemap::newest_source_mtime(workspace_root) {
+        if let Some(newest) = rmc_graph::graph::codemap::newest_source_mtime(workspace_root) {
             let created = snap.manifest.created_at_unix;
             if newest > created {
                 let age = newest - created;
@@ -122,13 +122,13 @@ pub(crate) async fn handle_build_codemap(
         let dir_path = std::path::Path::new(directory);
         let paths = crate::mcp::project_paths::ProjectPaths::from_directory(
             dir_path,
-            &crate::embeddings::EmbeddingBackend::default(),
+            &rmc_engine::embeddings::EmbeddingBackend::default(),
         );
         // Best-effort BM25 open. If absent we get vector-only hits; that is
         // still a valid seed source.
         let bm25 = {
-            use crate::config::indexer::TantivyConfig;
-            use crate::indexing::tantivy_adapter::TantivyAdapter;
+            use rmc_config::config::indexer::TantivyConfig;
+            use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
             let config = TantivyConfig::default(&paths.tantivy_path);
             TantivyAdapter::new(config)
                 .and_then(|adapter| adapter.create_bm25_search())
@@ -137,7 +137,7 @@ pub(crate) async fn handle_build_codemap(
         let hybrid = crate::tools::endpoints::query::create_hybrid_search(
             &paths,
             bm25,
-            crate::embeddings::EmbeddingBackend::default(),
+            rmc_engine::embeddings::EmbeddingBackend::default(),
         )
         .await?;
         let hits = hybrid
@@ -178,11 +178,11 @@ pub(crate) async fn handle_build_codemap(
 /// `graph::codemap` algorithm core stay search-independent (PR 12 boundary
 /// fix).
 fn search_results_to_seed_hits(
-    results: &[crate::search::SearchResult],
-) -> Vec<crate::graph::codemap::SeedHit> {
+    results: &[rmc_engine::search::SearchResult],
+) -> Vec<rmc_graph::graph::codemap::SeedHit> {
     results
         .iter()
-        .map(|r| crate::graph::codemap::SeedHit {
+        .map(|r| rmc_graph::graph::codemap::SeedHit {
             file_path: r.chunk.context.file_path.clone(),
             line_start: r.chunk.context.line_start as u32,
             line_end: r.chunk.context.line_end as u32,

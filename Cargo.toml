@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [".", "crates/rmc-config", "crates/rmc-engine", "crates/rmc-graph", "crates/rmc-indexing"]
+members = [".", "crates/rmc-config", "crates/rmc-engine", "crates/rmc-graph", "crates/rmc-indexing", "crates/rmc-server"]
 
 [workspace.dependencies]
 # MCP and async runtime
@@ -194,6 +194,7 @@ rmc-config = { path = "crates/rmc-config" }
 rmc-engine = { path = "crates/rmc-engine" }
 rmc-graph = { path = "crates/rmc-graph" }
 rmc-indexing = { path = "crates/rmc-indexing" }
+rmc-server = { path = "crates/rmc-server" }
 
 [features]
 default = ["embedded"]  # LanceDB embedded backend (zero-config)

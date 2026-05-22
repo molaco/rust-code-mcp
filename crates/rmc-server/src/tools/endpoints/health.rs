@@ -7,11 +7,11 @@ use rmcp::{
     schemars, tool,
 };
 
-use crate::embeddings::EmbeddingBackend;
-use crate::monitoring::health::HealthMonitor;
-use crate::search::Bm25Search;
+use rmc_engine::embeddings::EmbeddingBackend;
+use rmc_indexing::monitoring::health::HealthMonitor;
+use rmc_engine::search::Bm25Search;
 use crate::mcp::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
-use crate::vector_store::VectorStore;
+use rmc_engine::vector_store::VectorStore;
 
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -43,7 +43,7 @@ pub(crate) async fn health_check(
     let backend = match embedding_profile.as_deref() {
         Some(name) => {
             let root = directory.as_deref().unwrap_or(".");
-            let profile = crate::embeddings::resolve_profile(name, std::path::Path::new(root))
+            let profile = rmc_engine::embeddings::resolve_profile(name, std::path::Path::new(root))
                 .map_err(|msg| McpError::invalid_params(msg, None))?;
             EmbeddingBackend::from_profile(profile)
         }
@@ -143,13 +143,13 @@ pub(crate) async fn health_check(
     let mut response = String::new();
 
     match health.overall {
-        crate::monitoring::health::Status::Healthy => {
+        rmc_indexing::monitoring::health::Status::Healthy => {
             response.push_str("✓ System Status: HEALTHY\n\n");
         }
-        crate::monitoring::health::Status::Degraded => {
+        rmc_indexing::monitoring::health::Status::Degraded => {
             response.push_str("⚠ System Status: DEGRADED (some components unavailable but system functional)\n\n");
         }
-        crate::monitoring::health::Status::Unhealthy => {
+        rmc_indexing::monitoring::health::Status::Unhealthy => {
             response.push_str("✗ System Status: UNHEALTHY (critical components failing)\n\n");
         }
     }

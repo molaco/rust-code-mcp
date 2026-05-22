@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn signature_workspace_stats_is_async() {
-        let sig = sig_of("rust_code_mcp::tools::graph::core::workspace_stats");
+        let sig = sig_of("rmc_server::tools::graph::core::workspace_stats");
         assert!(sig.is_async, "workspace_stats should be async");
     }
 

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 use serde::Serialize;
 
-use crate::graph::labels::item_kind_short_label as short_item_kind_label;
-use crate::graph::{Node, NodeId, NodeKind};
+use rmc_graph::graph::labels::item_kind_short_label as short_item_kind_label;
+use rmc_graph::graph::{Node, NodeId, NodeKind};
 use crate::tools::graph::response::*;
 use crate::tools::params::{SemanticOverlapsParams, SimilarToItemParams};
 
@@ -321,7 +321,7 @@ pub(crate) async fn semantic_overlaps(
     //    contains one entry per seed whose source was readable +
     //    non-empty + spannable.
     let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
-    let embeddings = crate::graph::ensure_embeddings_for(&snap, &seed_nids, &backend)
+    let embeddings = rmc_graph::graph::ensure_embeddings_for(&snap, &seed_nids, &backend)
         .await
         .map_err(internal_error("ensure_embeddings_for"))?;
 
@@ -406,7 +406,7 @@ pub(crate) async fn semantic_overlaps(
             if cross_crate_only && a.node.crate_id == b.node.crate_id {
                 continue;
             }
-            let score = crate::graph::cosine(va, vb);
+            let score = rmc_graph::graph::cosine(va, vb);
             if score < threshold {
                 continue;
             }
@@ -505,7 +505,7 @@ pub(crate) async fn semantic_overlaps(
 fn resolve_graph_tool_backend(
     embedding_profile: Option<&str>,
     directory: &str,
-) -> Result<crate::embeddings::EmbeddingBackend, McpError> {
+) -> Result<rmc_engine::embeddings::EmbeddingBackend, McpError> {
     crate::mcp::project_paths::resolve_embedding_backend(
         embedding_profile,
         Path::new(directory),

@@ -16,8 +16,8 @@ use rmcp::{
 };
 use serde::Serialize;
 
-use crate::graph::labels::item_kind_short_label as short_item_kind_label;
-use crate::graph::{
+use rmc_graph::graph::labels::item_kind_short_label as short_item_kind_label;
+use rmc_graph::graph::{
     BindingVisibility, GraphEnvOptions, GraphPaths, ItemKind, Node, NodeId, NodeKind,
     OpenedSnapshot, OverlapScope, open_current,
 };

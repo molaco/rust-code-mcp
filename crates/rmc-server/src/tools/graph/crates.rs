@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 
-use crate::graph::{CrateEdge, CrateMetric, ForbiddenDependencyViolation};
+use rmc_graph::graph::{CrateEdge, CrateMetric, ForbiddenDependencyViolation};
 use crate::tools::graph::response::*;
 use crate::tools::params::{
     CrateDependencyMetricParams, CrateEdgesParams, ForbiddenDependencyCheckParams,

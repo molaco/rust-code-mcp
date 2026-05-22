@@ -9,9 +9,9 @@
 
 use serde::Serialize;
 
-use crate::graph::labels::item_kind_display_label as item_kind_label;
-use crate::graph::ItemWithAttribute;
-use crate::graph::{
+use rmc_graph::graph::labels::item_kind_display_label as item_kind_label;
+use rmc_graph::graph::ItemWithAttribute;
+use rmc_graph::graph::{
     CrateDeadPub, DeadPubFinding, FunctionFilter, FunctionSignature, FunctionWithSignature,
     ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport,
     PubTypeAliasMasqueradingAsReexport, ReExportChain, SelfKindFilter,
@@ -534,7 +534,7 @@ pub(crate) async fn missing_docs_audit(
     };
 
     let kind_filter = match params.item_kind.as_deref() {
-        None => crate::graph::docs_audit::default_kind_filter(),
+        None => rmc_graph::graph::docs_audit::default_kind_filter(),
         Some(labels) => {
             let mut set = std::collections::HashSet::new();
             for label in labels {
@@ -551,13 +551,13 @@ pub(crate) async fn missing_docs_audit(
         }
     };
 
-    let opts = crate::graph::docs_audit::DocsAuditOpts {
+    let opts = rmc_graph::graph::docs_audit::DocsAuditOpts {
         crate_id_filter,
         kind_filter,
         skip_test_items: params.skip_test_items.unwrap_or(true),
     };
 
-    let findings = crate::graph::docs_audit::missing_docs_audit(&snap, opts)
+    let findings = rmc_graph::graph::docs_audit::missing_docs_audit(&snap, opts)
         .map_err(internal_error("missing_docs_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -649,7 +649,7 @@ pub(crate) async fn derive_audit(
     };
 
     let kind_filter = match params.item_kind.as_deref() {
-        None => crate::graph::derive_audit::default_kind_filter(),
+        None => rmc_graph::graph::derive_audit::default_kind_filter(),
         Some(labels) => {
             let mut set = std::collections::HashSet::new();
             for label in labels {
@@ -686,7 +686,7 @@ pub(crate) async fn derive_audit(
     let required_derives: std::collections::HashSet<String> =
         params.required_derives.iter().cloned().collect();
 
-    let opts = crate::graph::derive_audit::DeriveAuditOpts {
+    let opts = rmc_graph::graph::derive_audit::DeriveAuditOpts {
         crate_id_filter,
         kind_filter,
         required_derives,
@@ -694,7 +694,7 @@ pub(crate) async fn derive_audit(
         skip_test_items: params.skip_test_items.unwrap_or(true),
     };
 
-    let findings = crate::graph::derive_audit::derive_audit(&snap, opts)
+    let findings = rmc_graph::graph::derive_audit::derive_audit(&snap, opts)
         .map_err(internal_error("derive_audit"))?;
 
     #[derive(serde::Serialize)]

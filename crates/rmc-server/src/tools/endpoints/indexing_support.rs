@@ -43,8 +43,8 @@
 use tantivy::Index;
 use tracing;
 
-use crate::metadata_cache::MetadataCache;
-use crate::schema::FileSchema;
+use rmc_indexing::metadata_cache::MetadataCache;
+use rmc_engine::schema::FileSchema;
 use std::path::PathBuf;
 
 /// Get the path for storing persistent index and cache.

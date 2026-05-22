@@ -151,7 +151,7 @@ pub(crate) async fn clear_cache(
         // hash logic stay in one place.
         if include_hypergraph {
             let canonical = std::fs::canonicalize(dir_path).unwrap_or_else(|_| dir_path.into());
-            let paths = crate::graph::GraphPaths::for_workspace(&canonical);
+            let paths = rmc_graph::graph::GraphPaths::for_workspace(&canonical);
             clear_existing_dir(
                 "Hypergraph snapshot",
                 "hypergraph snapshot",
@@ -188,7 +188,7 @@ pub(crate) async fn clear_cache(
         // `graph::storage` — same parent that `GraphPaths::for_workspace`
         // hashes underneath.
         if include_hypergraph {
-            let graphs_dir = crate::graph::storage::default_data_dir();
+            let graphs_dir = rmc_graph::graph::storage::default_data_dir();
             clear_existing_dir(
                 "All hypergraph snapshots",
                 "hypergraph snapshots",

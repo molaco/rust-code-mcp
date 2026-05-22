@@ -5,11 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::embeddings::{EmbeddingBackend, resolve_profile};
-use crate::indexing::identity::{
+use rmc_engine::embeddings::{EmbeddingBackend, resolve_profile};
+use rmc_indexing::indexing::identity::{
     active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
-use crate::indexing::incremental::get_snapshot_path_for_identity;
+use rmc_indexing::indexing::incremental::get_snapshot_path_for_identity;
 use directories::ProjectDirs;
 use sha2::{Digest, Sha256};
 
@@ -232,7 +232,7 @@ pub(crate) fn read_embedder_identity(vector_path: &Path) -> Result<Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embeddings::{EmbeddingBackend, EmbeddingProfile};
+    use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingProfile};
     use tempfile::TempDir;
 
     fn write_metadata(collection: &Path, identity: &str) {

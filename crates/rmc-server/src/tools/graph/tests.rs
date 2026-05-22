@@ -11,7 +11,7 @@ use super::crates::*;
 use super::response::*;
 use super::surface::*;
 
-use crate::graph::{ItemKind, Node, NodeId, NodeKind};
+use rmc_graph::graph::{ItemKind, Node, NodeId, NodeKind};
 use crate::tools::params::{
     BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
     GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
@@ -62,7 +62,7 @@ async fn mcp_round_trip_against_self() {
 
     let dependencies = module_dependencies(ModuleDependenciesParams {
         directory: manifest_dir.to_string(),
-        module: "rust_code_mcp::indexing::tantivy_adapter".to_string(),
+        module: "rmc_indexing::indexing::tantivy_adapter".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
@@ -803,7 +803,7 @@ fn usage_summary_omits_navigation_fields() {
 
 #[test]
 fn call_site_summary_omits_navigation_fields() {
-    let site = crate::graph::EnrichedCallSite {
+    let site = rmc_graph::graph::EnrichedCallSite {
         caller_qualified_name: Some("crate::caller".to_string()),
         callee_qualified_name: "crate::callee".to_string(),
         file: "src/lib.rs".to_string(),

@@ -2,7 +2,7 @@
 
 use rmcp::schemars;
 
-use crate::graph::ForbiddenDependencyRule;
+use rmc_graph::graph::ForbiddenDependencyRule;
 
 use super::ListPaginationParams;
 

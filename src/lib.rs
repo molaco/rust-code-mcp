@@ -8,7 +8,7 @@ pub use rmc_engine::chunker;
 pub use rmc_config::config;
 pub use rmc_engine::embeddings;
 pub use rmc_indexing::indexing;
-pub mod mcp;
+pub use rmc_server::mcp;
 pub use rmc_indexing::metadata_cache;
 pub use rmc_indexing::metrics;
 pub use rmc_indexing::monitoring;
@@ -16,10 +16,10 @@ pub use rmc_engine::parser;
 pub use rmc_engine::schema;
 pub use rmc_engine::search;
 pub use rmc_indexing::security;
-pub mod tools;
+pub use rmc_server::tools;
 pub use rmc_engine::vector_store;
 
-pub mod semantic;
+pub use rmc_server::semantic;
 
 pub use rmc_graph::graph;
 

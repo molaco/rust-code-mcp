@@ -3,11 +3,11 @@
 //! Provides the `index_codebase` tool which allows manual triggering of
 //! incremental indexing with optional force reindex.
 
-use crate::embeddings::{EmbeddingBackend, Qwen3Variant};
-use crate::indexing::incremental::IncrementalIndexer;
-use crate::indexing::unified::IndexStats;
+use rmc_engine::embeddings::{EmbeddingBackend, Qwen3Variant};
+use rmc_indexing::indexing::incremental::IncrementalIndexer;
+use rmc_indexing::indexing::unified::IndexStats;
 use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend};
-use crate::vector_store::VectorStoreError;
+use rmc_engine::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
 use std::path::PathBuf;
 use tracing;

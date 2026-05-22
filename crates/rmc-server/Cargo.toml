@@ -1,0 +1,50 @@
+[package]
+name    = "rmc-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# In-workspace dependencies
+rmc-engine   = { path = "../rmc-engine" }
+rmc-graph    = { path = "../rmc-graph" }
+rmc-config   = { path = "../rmc-config" }
+rmc-indexing = { path = "../rmc-indexing" }
+
+# MCP and async runtime
+rmcp  = { workspace = true }
+tokio = { workspace = true }
+
+# Search and indexing
+tantivy = { workspace = true }
+
+# Serialization
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Cross-platform config/data directories
+directories = { workspace = true }
+
+# SHA-256 hashing
+sha2 = { workspace = true }
+
+# CPU count detection
+num_cpus = { workspace = true }
+
+# Persisted hypergraph store (used by graph response helpers)
+heed = { workspace = true }
+
+# IDE integration for semantic analysis
+ra_ap_ide           = { workspace = true }
+ra_ap_ide_db        = { workspace = true }
+"ra_ap_load-cargo"  = { workspace = true }
+ra_ap_project_model = { workspace = true }
+ra_ap_vfs           = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -11,12 +11,12 @@ use tokio::fs;
 use std::path::Path;
 use tracing;
 
-use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
-use crate::search::HybridSearch;
+use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+use rmc_engine::search::HybridSearch;
 use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend,
 };
-use crate::vector_store::VectorStore;
+use rmc_engine::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
 pub(crate) async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
@@ -85,9 +85,9 @@ pub(crate) async fn read_file_content(file_path: &str) -> Result<CallToolResult,
 
 /// Try to open BM25 search for an existing index.
 /// Returns None if the index doesn't exist or is corrupt.
-fn try_open_bm25(paths: &ProjectPaths) -> Option<crate::search::bm25::Bm25Search> {
-    use crate::config::indexer::TantivyConfig;
-    use crate::indexing::tantivy_adapter::TantivyAdapter;
+fn try_open_bm25(paths: &ProjectPaths) -> Option<rmc_engine::search::bm25::Bm25Search> {
+    use rmc_config::config::indexer::TantivyConfig;
+    use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
 
     let config = TantivyConfig::default(&paths.tantivy_path);
     TantivyAdapter::new(config)
@@ -152,8 +152,8 @@ async fn ensure_indexed(
     paths: &ProjectPaths,
     backend: EmbeddingBackend,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
-) -> Result<crate::indexing::unified::IndexStats, McpError> {
-    use crate::indexing::unified::UnifiedIndexer;
+) -> Result<rmc_indexing::indexing::unified::IndexStats, McpError> {
+    use rmc_indexing::indexing::unified::UnifiedIndexer;
 
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
     let resolved = resolve_query_backend(paths, backend)?;
@@ -247,7 +247,7 @@ fn resolve_query_backend(
 /// indexer was configured with a non-default variant.
 pub(crate) async fn create_hybrid_search(
     paths: &ProjectPaths,
-    bm25_search: Option<crate::search::bm25::Bm25Search>,
+    bm25_search: Option<rmc_engine::search::bm25::Bm25Search>,
     configured_backend: EmbeddingBackend,
 ) -> Result<HybridSearch, McpError> {
     let resolved = resolve_query_backend(paths, configured_backend)?;
@@ -295,9 +295,9 @@ fn resolve_requested_backend(
 
 /// Format search results into a display string
 fn format_results(
-    results: &[crate::search::SearchResult],
+    results: &[rmc_engine::search::SearchResult],
     keyword: &str,
-    stats: Option<&crate::indexing::unified::IndexStats>,
+    stats: Option<&rmc_indexing::indexing::unified::IndexStats>,
     rebuilt: bool,
 ) -> String {
     if results.is_empty() {
@@ -492,7 +492,7 @@ pub(crate) async fn get_similar_code(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embeddings::EmbeddingBackend;
+    use rmc_engine::embeddings::EmbeddingBackend;
     use std::path::PathBuf;
     use tempfile::TempDir;
 

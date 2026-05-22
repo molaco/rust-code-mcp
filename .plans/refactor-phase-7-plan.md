@@ -662,6 +662,8 @@ Stage in sub-commits:
 - C.3.a.4: rewrite imports in `semantic/`.
 - C.3.a.5: add main-crate compatibility re-exports.
 
+**Status: DONE** — see commit log (`phase 7 C.3`). 31 files moved (24 tools + 3 mcp + 4 semantic); single `sed -E` sweep with 13 `\b`-anchored rewrites covered both `^use` and body-position references across 32 files in scope. Five stale qualified-name strings fixed: `tests.rs:65` (`rust_code_mcp::indexing` → `rmc_indexing::indexing`), `signatures.rs:210` and `statics.rs:152,157,169,171` (`rust_code_mcp::{tools,semantic}` → `rmc_server::{tools,semantic}`). No `pub(crate)` widening needed (C.1/C.2 had already done the work). Extra body-position deps surfaced: `serde_json, heed, num_cpus, ra_ap_ide_db, tempfile (dev)`. `cargo check --workspace --all-targets` green.
+
 ### 5.C.4 — Main crate reduces to binary + glue
 
 After C.3, the main crate's `src/` directory contains:

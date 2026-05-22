@@ -7320,6 +7320,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmc-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "heed",
+ "num_cpus",
+ "ra_ap_ide",
+ "ra_ap_ide_db",
+ "ra_ap_load-cargo",
+ "ra_ap_project_model",
+ "ra_ap_vfs",
+ "rmc-config",
+ "rmc-engine",
+ "rmc-graph",
+ "rmc-indexing",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tantivy",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rmcp"
 version = "0.8.1"
 source = "git+https://github.com/modelcontextprotocol/rust-sdk?branch=main#11093bc830d77717b8f24813d888238a12d7eefe"
@@ -7420,6 +7447,7 @@ dependencies = [
  "rmc-engine",
  "rmc-graph",
  "rmc-indexing",
+ "rmc-server",
  "rmcp",
  "rs_merkle",
  "serde",
