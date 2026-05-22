@@ -565,7 +565,7 @@ Verification notes:
 
 ## Phase 6: Audit and Policy Tools
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -573,25 +573,33 @@ Compare audit tools that enforce documentation, visibility, safety, async, and a
 
 Checklist:
 
-- [ ] Compare `missing_docs_audit`.
-- [ ] Compare `derive_audit(required_derives = ["Debug"])`.
-- [ ] Compare `fn_body_audit`.
-- [ ] Compare `unsafe_audit`.
-- [ ] Compare `channel_capacity_audit`.
-- [ ] Compare `mut_static_audit`.
-- [ ] Compare `recursion_check`.
-- [ ] Compare `dead_pub_report`.
-- [ ] Explain expected count drift from crate-boundary changes.
+- [x] Compare `missing_docs_audit`.
+- [x] Compare `derive_audit(required_derives = ["Debug"])`.
+- [x] Compare `fn_body_audit`.
+- [x] Compare `unsafe_audit`.
+- [x] Compare `channel_capacity_audit`.
+- [x] Compare `mut_static_audit`.
+- [x] Compare `recursion_check`.
+- [x] Compare `dead_pub_report`.
+- [x] Explain expected count drift from crate-boundary changes.
 
 Results:
 
 | Tool/Input | Original | Refactor | Classification | Notes |
 |---|---:|---:|---|---|
-| `missing_docs_audit` | pending | pending | pending |  |
-| `derive_audit(Debug)` | pending | pending | pending |  |
-| `fn_body_audit` | pending | pending | pending |  |
-| `unsafe_audit` | pending | pending | pending |  |
-| `dead_pub_report` | pending | pending | pending |  |
+| `missing_docs_audit` | 115 | 115 | exact | Same first page and total count. |
+| `derive_audit(Debug)` | 50 | 50 | exact | Same first page and total count. |
+| `fn_body_audit` | 423 | 423 | exact | Same first page and pattern set. |
+| `unsafe_audit` | 8 | 8 | exact | Same unsafe blocks and safety-comment flags. |
+| `dead_pub_report` | 131 | 131 | exact | Same aggregated workspace count and first page. |
+
+Verification notes:
+
+- `channel_capacity_audit(summary=true)` returned 1 finding on both: one unbounded `std_mpsc` call in `crates/rust-code-mcp/tests/test_mcp_stdio_transport.rs`.
+- `mut_static_audit(summary=true)` returned 4 findings on both: two `OnceLock` findings in `fastembed`, `rmc_engine::embeddings::profile::BUILT_IN_PROFILES`, and `rmc_server::semantic::SEMANTIC`.
+- `recursion_check(summary=true, max_cycle_length=5)` returned 11 cycles on both: 10 direct-recursion cycles and one 2-function cycle around `OpenedSnapshot::lookup_impl_module_item_alias` / `lookup_by_qualified_name_inner`.
+- RA-backed audit timings were similar on both servers: `fn_body_audit` about 20.6s, `channel_capacity_audit` about 19.5s, and `unsafe_audit` about 14.2s.
+- No server-to-server count drift was expected or observed. The counts reflect the current post-C crate-lift workspace and include local benchmark/test/vendor crates that the hypergraph sees as local crates.
 
 ## Phase 7: Semantic Similarity Tools
 
