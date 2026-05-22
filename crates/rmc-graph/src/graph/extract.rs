@@ -395,7 +395,7 @@ mod tests {
         let graph_module = model
             .nodes
             .values()
-            .find(|n| n.kind == NodeKind::Module && n.qualified_name == "rust_code_mcp::graph")
+            .find(|n| n.kind == NodeKind::Module && n.qualified_name == "rmc_graph::graph")
             .expect("graph module");
         assert_eq!(graph_module.parent_id, Some(root_module.id));
 
@@ -422,7 +422,7 @@ mod tests {
             .find(|n| {
                 n.kind == NodeKind::Item
                     && matches!(n.item_kind, Some(ItemKind::Struct))
-                    && n.qualified_name == "rust_code_mcp::graph::snapshot::OpenedSnapshot"
+                    && n.qualified_name == "rmc_graph::graph::snapshot::OpenedSnapshot"
             })
             .expect("OpenedSnapshot struct Item node");
 
@@ -444,7 +444,7 @@ mod tests {
             );
         assert_eq!(
             method.qualified_name,
-            "rust_code_mcp::graph::snapshot::OpenedSnapshot::usages_of"
+            "rmc_graph::graph::snapshot::OpenedSnapshot::usages_of"
         );
         // Layer 4 backfills file/span via try_to_nav.
         assert!(method.file.is_some(), "method Item should have a file path");
@@ -458,7 +458,7 @@ mod tests {
         // Item: the `load` function we defined in src/graph/loader.rs.
         let load_fn = model.nodes.values().find(|n| {
             n.kind == NodeKind::Item
-                && n.qualified_name == "rust_code_mcp::graph::loader::load"
+                && n.qualified_name == "rmc_graph::graph::loader::load"
         });
         assert!(load_fn.is_some(), "expected graph::loader::load Item node");
 

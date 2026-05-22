@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn signature_loader_load() {
         // `fn load(directory: &Path) -> Result<LoadedWorkspace>`
-        let sig = sig_of("rust_code_mcp::graph::loader::load");
+        let sig = sig_of("rmc_graph::graph::loader::load");
         assert!(!sig.is_async, "load is sync");
         assert!(sig.self_param.is_none(), "load is a free fn");
         assert_eq!(sig.params.len(), 1, "load has one param");
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn signature_opened_snapshot_usages_of() {
         // `fn usages_of(&self, target: NodeId) -> Result<Vec<Usage>>`
-        let sig = sig_of("rust_code_mcp::graph::snapshot::OpenedSnapshot::usages_of");
+        let sig = sig_of("rmc_graph::graph::snapshot::OpenedSnapshot::usages_of");
         assert_eq!(
             sig.self_param,
             Some(SelfKind::Ref),
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn signature_node_id_from_components() {
         // `fn from_components(parts: &[&str]) -> Self`
-        let sig = sig_of("rust_code_mcp::graph::ids::NodeId::from_components");
+        let sig = sig_of("rmc_graph::graph::ids::NodeId::from_components");
         assert!(sig.self_param.is_none(), "from_components has no self");
         assert_eq!(sig.params.len(), 1, "from_components has one param");
     }

@@ -49,7 +49,7 @@ async fn mcp_round_trip_against_self() {
 
     let imports = get_imports(GraphImportsParams {
         directory: manifest_dir.to_string(),
-        module: "rust_code_mcp::graph".to_string(),
+        module: "rmc_graph::graph".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
@@ -69,24 +69,24 @@ async fn mcp_round_trip_against_self() {
     .expect("module_dependencies");
     let body = first_text(&dependencies);
     assert!(
-        body.contains("\"target_module\": \"rust_code_mcp::search::bm25\""),
+        body.contains("\"target_module\": \"rmc_engine::search::bm25\""),
         "expected inline Bm25Search dependency on search::bm25: {body}"
     );
     assert!(
-        body.contains("\"target_qualified\": \"rust_code_mcp::search::bm25::Bm25Search\""),
+        body.contains("\"target_qualified\": \"rmc_engine::search::bm25::Bm25Search\""),
         "expected Bm25Search symbol in module dependency payload: {body}"
     );
 
     let importers = who_imports(WhoImportsParams {
         directory: manifest_dir.to_string(),
-        target: "rust_code_mcp::graph::loader::load".to_string(),
+        target: "rmc_graph::graph::loader::load".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
     .expect("who_imports");
     let body = first_text(&importers);
     assert!(
-        body.contains("rust_code_mcp::graph"),
+        body.contains("rmc_graph::graph"),
         "expected graph mod among importers of loader::load: {body}"
     );
 }
@@ -114,7 +114,7 @@ async fn get_exports_accepts_crate_name_as_consumer() {
         directory: manifest_dir.to_string(),
         // `rust_code_mcp::graph` re-exports `load` (from loader),
         // visible from anywhere inside the crate.
-        module: "rust_code_mcp::graph".to_string(),
+        module: "rmc_graph::graph".to_string(),
         // Crate name, NOT a module path — must be transparently
         // promoted to the crate's root module.
         consumer: "rust_code_mcp".to_string(),
@@ -155,7 +155,7 @@ async fn who_uses_and_dead_pub_round_trip() {
     // who_uses against a fn we know is referenced inside the lib.
     let users = who_uses(WhoUsesParams {
         directory: manifest_dir.to_string(),
-        target: "rust_code_mcp::graph::loader::load".to_string(),
+        target: "rmc_graph::graph::loader::load".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await

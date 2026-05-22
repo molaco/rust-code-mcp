@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn attributes_of_known_struct() {
-        let attrs = attrs_of("rust_code_mcp::graph::model::Node");
+        let attrs = attrs_of("rmc_graph::graph::model::Node");
         let derive = attrs
             .iter()
             .find(|s| s.starts_with("#[derive("))
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn attributes_of_known_enum() {
-        let attrs = attrs_of("rust_code_mcp::graph::model::ItemKind");
+        let attrs = attrs_of("rmc_graph::graph::model::ItemKind");
         let derive = attrs
             .iter()
             .find(|s| s.starts_with("#[derive("))
@@ -340,7 +340,7 @@ mod tests {
         // private helper. `set_attrs_for` is a generic fn but its qualified
         // name is `rust_code_mcp::graph::attributes::set_attrs_for`.
         // It has no derive / must_use / inline attrs.
-        let attrs = attrs_of("rust_code_mcp::graph::attributes::set_attrs_for");
+        let attrs = attrs_of("rmc_graph::graph::attributes::set_attrs_for");
         let non_doc: Vec<&String> = attrs.iter().filter(|s| !s.starts_with("///")).collect();
         assert!(
             non_doc.is_empty(),

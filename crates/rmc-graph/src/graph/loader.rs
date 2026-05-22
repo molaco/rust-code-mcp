@@ -227,7 +227,13 @@ mod tests {
 
     #[test]
     fn load_crate_target_kinds_finds_workspace_targets() {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        // CARGO_MANIFEST_DIR is `crates/rmc-graph/` after Phase 7 B.7.
+        // The asserts below expect workspace-root targets (src/main.rs, examples/*.rs),
+        // so resolve up two levels to the workspace root.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace root is two levels above crates/rmc-graph");
         let (_by_name, by_root_file) = load_crate_target_kinds(manifest_dir);
 
         assert_eq!(

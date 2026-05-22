@@ -137,7 +137,8 @@ A subsequent narrowing pass could re-tighten some of these (e.g. via `pub(in cra
 | Forbidden module imports inside `rmc-engine` | `grep -rnE 'use crate::(graph\|tools\|indexing\|mcp\|config\|...)' crates/rmc-engine/src/` | 0 hits (B.6) |
 | Forbidden module imports inside `rmc-graph` | analogous grep | 0 hits (B.7 pre-close gate) |
 | Crate-level forbidden deps | `mcp__rust-code-mcp__forbidden_dependency_check` | 0 violations (B.8) |
-| Public-path stability for in-repo consumers | main `src/lib.rs` re-exports | All preserved |
+| Rust compile-time path stability for in-repo consumers | main `src/lib.rs` re-exports | All preserved — `use rust_code_mcp::graph::…` etc. continues to resolve at compile time |
+| **Hypergraph qualified-name stability** | none — inherent property of any crate lift | **NOT preserved.** Canonical qualified names shifted (`rust_code_mcp::graph::loader::load` → `rmc_graph::graph::loader::load`, `rust_code_mcp::parser::…` → `rmc_engine::parser::…`, etc.). See "Plan deviations" below |
 
 ## Plan deviations and decisions
 
@@ -152,6 +153,23 @@ A subsequent narrowing pass could re-tighten some of these (e.g. via `pub(in cra
 The inventory-from-grep procedure in §4.B.0 worked but inline fully-qualified paths (`directories::ProjectDirs::from(...)`) escape the `^use` grep — caught only by the compile error. Future moves should also grep for `<crate_root>::` patterns inline.
 
 **Five `crate::embeddings` references in `graph/` were inline paths, not `use` statements.** The plan called for "use crate::embeddings::… → use rmc_engine::embeddings::…" rewrites; the actual rewrite was a `sed` on `crate::embeddings` → `rmc_engine::embeddings` (no `use` keyword involvement). Functionally identical; worth noting for the report.
+
+**Hypergraph qualified-name stability (clarification — added in post-Phase-B review).** Phase B preserves *Rust compile-time path stability* via the `pub use rmc_graph::graph;` / `pub use rmc_engine::parser;` (etc.) re-exports in main `src/lib.rs`: any in-repo consumer writing `use rust_code_mcp::graph::OpenedSnapshot;` continues to compile. **However, the hypergraph's canonical qualified names** — derived from the *declaration site* module path — **did shift** as a direct consequence of the crate lift:
+
+| Symbol declared in | Pre-B canonical name | Post-B canonical name |
+|---|---|---|
+| `rmc-engine` modules | `rust_code_mcp::parser::…`, `rust_code_mcp::schema::…`, etc. | `rmc_engine::parser::…`, `rmc_engine::schema::…`, etc. |
+| `rmc-graph::graph::…` | `rust_code_mcp::graph::…` | `rmc_graph::graph::…` |
+| Modules still in main (tools/mcp/indexing/…) | `rust_code_mcp::tools::…` etc. | unchanged |
+
+This is **inherent to any crate lift** — Rust's canonical path for an item *is* the absolute path through real (declaration-site) modules, and the `pub use` facades in main `lib.rs` are compile-time re-exports, not name aliases. The hypergraph (and the MCP tools that read it) sees the canonical name only.
+
+**Consequences**:
+- In-repo code that uses `rust_code_mcp::…` paths via `use` keeps compiling (Rust resolves through the facade).
+- In-repo test fixtures and assertions that hardcode qualified-name **string literals** (`"rust_code_mcp::graph::loader::load"` as a string passed to `OpenedSnapshot::lookup_by_qualified_name`, etc.) DO break — those literals must be updated to the new canonical names. This was the source of the cargo test failures the parent plan's Guardrail 9 foresaw (the rule was originally written for module splits but applies identically at crate-lift scale).
+- External tooling that queries the hypergraph by `rust_code_mcp::…` paths must migrate.
+
+Phase B initially declared "public-path stability" without distinguishing these two senses. The verification gates table above (and §3 below) now make the distinction explicit. The test-string-literal migration was completed in a post-Phase-B fix commit (see §"Open follow-ups" / commit log).
 
 ## Readiness for Phase C
 

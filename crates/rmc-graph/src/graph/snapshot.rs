@@ -565,7 +565,7 @@ mod tests {
         for entry in opened.dbs.nodes_by_id.iter(&rtxn).unwrap() {
             let (key, node) = entry.unwrap();
             if node.kind == NodeKind::Item
-                && node.qualified_name == "rust_code_mcp::graph::loader::load"
+                && node.qualified_name == "rmc_graph::graph::loader::load"
             {
                 let mut id = [0u8; 32];
                 id.copy_from_slice(key);

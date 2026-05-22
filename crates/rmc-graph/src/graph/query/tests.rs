@@ -37,15 +37,15 @@ fn test_node(qualified_name: &str, display_name: &str, item_kind: Option<ItemKin
 #[test]
 fn impl_module_item_alias_matches_canonical_method_suffix() {
     let (module_prefix, type_name, member_name) = impl_module_item_alias_parts(
-        "rust_code_mcp::graph::query::navigation::OpenedSnapshot::lookup_by_qualified_name",
+        "rmc_graph::graph::query::navigation::OpenedSnapshot::lookup_by_qualified_name",
     )
     .expect("alias parts");
-    assert_eq!(module_prefix, "rust_code_mcp::graph::query::navigation");
+    assert_eq!(module_prefix, "rmc_graph::graph::query::navigation");
     assert_eq!(type_name, "OpenedSnapshot");
     assert_eq!(member_name, "lookup_by_qualified_name");
 
     let node = test_node(
-        "rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
+        "rmc_graph::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
         "lookup_by_qualified_name",
         Some(ItemKind::Method),
     );
@@ -61,7 +61,7 @@ fn impl_module_item_alias_matches_canonical_method_suffix() {
 #[test]
 fn impl_module_item_alias_rejects_wrong_crate_or_kind() {
     let method = test_node(
-        "rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
+        "rmc_graph::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
         "lookup_by_qualified_name",
         Some(ItemKind::Method),
     );
@@ -81,7 +81,7 @@ fn impl_module_item_alias_rejects_wrong_crate_or_kind() {
     ));
 
     let function = test_node(
-        "rust_code_mcp::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
+        "rmc_graph::graph::snapshot::OpenedSnapshot::lookup_by_qualified_name",
         "lookup_by_qualified_name",
         Some(ItemKind::Function),
     );
@@ -98,7 +98,7 @@ fn impl_module_item_alias_rejects_wrong_crate_or_kind() {
 fn lookup_by_qualified_name_resolves_known_modules() {
     let snap = shared_snapshot();
     let (_id, node) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader")
+        .lookup_by_qualified_name("rmc_graph::graph::loader")
         .unwrap()
         .expect("graph::loader module found");
     assert_eq!(node.kind, NodeKind::Module);
@@ -108,7 +108,7 @@ fn lookup_by_qualified_name_resolves_known_modules() {
 fn imports_of_graph_mod_includes_loader_load() {
     let snap = shared_snapshot();
     let (graph_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph")
+        .lookup_by_qualified_name("rmc_graph::graph")
         .unwrap()
         .unwrap();
     let imports = snap.imports_of(graph_mod_id).unwrap();
@@ -122,7 +122,7 @@ fn imports_of_graph_mod_includes_loader_load() {
 fn who_imports_finds_target() {
     let snap = shared_snapshot();
     let (load_fn_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
         .unwrap()
         .unwrap();
     let importers = snap.who_imports(load_fn_id).unwrap();
@@ -133,7 +133,7 @@ fn who_imports_finds_target() {
     // The graph::mod re-export should be among them.
     let from_modules: Vec<NodeId> = importers.iter().map(|b| b.from_module).collect();
     let (graph_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph")
+        .lookup_by_qualified_name("rmc_graph::graph")
         .unwrap()
         .unwrap();
     assert!(
@@ -146,11 +146,11 @@ fn who_imports_finds_target() {
 fn exports_of_loader_visible_from_graph_mod() {
     let snap = shared_snapshot();
     let (loader_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader")
+        .lookup_by_qualified_name("rmc_graph::graph::loader")
         .unwrap()
         .unwrap();
     let (graph_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph")
+        .lookup_by_qualified_name("rmc_graph::graph")
         .unwrap()
         .unwrap();
     let exports = snap.exports_of(loader_mod_id, graph_mod_id).unwrap();
@@ -168,12 +168,12 @@ fn lookup_by_qualified_name_resolves_reexport_facade() {
     // re-export and return the canonical Item node.
     let snap = shared_snapshot();
     let (_id, node) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::load")
+        .lookup_by_qualified_name("rmc_graph::graph::load")
         .unwrap()
         .expect("re-export facade should resolve to the canonical Item");
     assert_eq!(node.kind, NodeKind::Item);
     assert_eq!(
-        node.qualified_name, "rust_code_mcp::graph::loader::load",
+        node.qualified_name, "rmc_graph::graph::loader::load",
         "facade should resolve to the canonical declaration site"
     );
 }
@@ -184,11 +184,11 @@ fn lookup_by_qualified_name_canonical_still_works() {
     // and is not affected by the re-export fallback.
     let snap = shared_snapshot();
     let (_id, node) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
         .unwrap()
         .expect("canonical name should resolve directly");
     assert_eq!(node.kind, NodeKind::Item);
-    assert_eq!(node.qualified_name, "rust_code_mcp::graph::loader::load");
+    assert_eq!(node.qualified_name, "rmc_graph::graph::loader::load");
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn private_visibility_blocks_export() {
     // those should NOT be exported.
     let snap = shared_snapshot();
     let (extract_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::extract")
+        .lookup_by_qualified_name("rmc_graph::graph::extract")
         .unwrap()
         .unwrap();
     let (root_id, _) = snap
@@ -234,7 +234,7 @@ fn usages_of_loader_load_returns_at_least_one() {
     // Phase 2 must record at least one Usage row.
     let snap = shared_snapshot();
     let (load_fn_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
         .unwrap()
         .unwrap();
     let usages = snap.usages_of(load_fn_id).unwrap();
@@ -256,7 +256,7 @@ fn usages_in_consumer_filters_to_that_module() {
     // snapshot module's NodeId.
     let snap = shared_snapshot();
     let (snapshot_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::snapshot")
+        .lookup_by_qualified_name("rmc_graph::graph::snapshot")
         .unwrap()
         .unwrap();
     let usages = snap.usages_in(snapshot_mod_id).unwrap();
@@ -558,7 +558,7 @@ fn declared_reexports_of_lists_all_pub_uses() {
     // and every binding in the result must satisfy is_explicit_pub_use.
     let snap = shared_snapshot();
     let (graph_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph")
+        .lookup_by_qualified_name("rmc_graph::graph")
         .unwrap()
         .unwrap();
     let reexports = snap.declared_reexports_of(graph_mod_id).unwrap();
@@ -588,7 +588,7 @@ fn explicit_pub_use_is_marked_on_pub_use_bindings() {
     // `pub use`) must have `is_explicit_pub_use == false`.
     let snap = shared_snapshot();
     let (graph_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph")
+        .lookup_by_qualified_name("rmc_graph::graph")
         .unwrap()
         .unwrap();
     let imports = snap.imports_of(graph_mod_id).unwrap();
@@ -604,7 +604,7 @@ fn explicit_pub_use_is_marked_on_pub_use_bindings() {
     // A non-pub `use` should land with is_explicit_pub_use == false.
     // Pick a module with private `use` lines: `rust_code_mcp::graph::loader`.
     let (loader_mod_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader")
+        .lookup_by_qualified_name("rmc_graph::graph::loader")
         .unwrap()
         .unwrap();
     let loader_imports = snap.imports_of(loader_mod_id).unwrap();
@@ -622,7 +622,7 @@ fn explicit_pub_use_is_marked_on_pub_use_bindings() {
 fn who_uses_summary_aggregates_by_consumer() {
     let snap = shared_snapshot();
     let (load_fn_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
         .unwrap()
         .unwrap();
     let summary = snap.who_uses_summary(load_fn_id).unwrap();
@@ -664,7 +664,7 @@ fn calls_from_returns_callees() {
     // body — at minimum the loader::load call must be present).
     let snap = shared_snapshot();
     let (caller_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::snapshot::build_and_persist")
+        .lookup_by_qualified_name("rmc_graph::graph::snapshot::build_and_persist")
         .unwrap()
         .expect("build_and_persist not in graph");
     let calls = snap
@@ -685,7 +685,7 @@ fn calls_from_returns_callees() {
     for c in &calls {
         assert_eq!(
             c.caller_qualified_name.as_deref(),
-            Some("rust_code_mcp::graph::snapshot::build_and_persist"),
+            Some("rmc_graph::graph::snapshot::build_and_persist"),
             "caller mismatch on {:?}",
             c
         );
@@ -710,7 +710,7 @@ fn call_graph_returns_root_with_callees() {
     // a depth-2 descent must produce a non-empty `callees` vec on the root.
     let snap = shared_snapshot();
     let (root_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::snapshot::build_and_persist")
+        .lookup_by_qualified_name("rmc_graph::graph::snapshot::build_and_persist")
         .unwrap()
         .expect("build_and_persist not in graph");
     let tree = snap
@@ -718,7 +718,7 @@ fn call_graph_returns_root_with_callees() {
         .expect("call_graph failed");
     assert_eq!(
         tree.fn_qualified_name,
-        "rust_code_mcp::graph::snapshot::build_and_persist"
+        "rmc_graph::graph::snapshot::build_and_persist"
     );
     assert!(
         !tree.callees.is_empty(),
@@ -741,7 +741,7 @@ fn call_graph_respects_depth_zero() {
     // outgoing edges).
     let snap = shared_snapshot();
     let (root_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::snapshot::build_and_persist")
+        .lookup_by_qualified_name("rmc_graph::graph::snapshot::build_and_persist")
         .unwrap()
         .expect("build_and_persist not in graph");
     let tree = snap
@@ -761,7 +761,7 @@ fn callers_in_crate_filters_correctly() {
     // crate must return a strict subset of who_calls — equal or smaller.
     let snap = shared_snapshot();
     let (target_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
         .unwrap()
         .expect("loader::load not in graph");
     let all = snap.who_calls(target_id).expect("who_calls failed");
@@ -801,7 +801,7 @@ fn callers_in_crate_filters_correctly() {
 fn enum_variants_returns_expected_set() {
     let snap = shared_snapshot();
     let (enum_id, enum_node) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::model::BindingKind")
+        .lookup_by_qualified_name("rmc_graph::graph::model::BindingKind")
         .unwrap()
         .expect("BindingKind enum not in graph");
     assert_eq!(enum_node.kind, NodeKind::Item);
@@ -829,7 +829,7 @@ fn enum_variants_returns_expected_set() {
         assert_eq!(v.parent_id, Some(enum_id));
         assert_eq!(
             v.qualified_name,
-            format!("rust_code_mcp::graph::model::BindingKind::{}", v.display_name)
+            format!("rmc_graph::graph::model::BindingKind::{}", v.display_name)
         );
         assert!(v.file.is_some(), "variant should have a file path");
         assert!(v.span.is_some(), "variant should have a span");
@@ -844,7 +844,7 @@ fn enum_variants_returns_expected_set() {
 fn item_attributes_of_node_struct_includes_derive() {
     let snap = shared_snapshot();
     let (id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::model::Node")
+        .lookup_by_qualified_name("rmc_graph::graph::model::Node")
         .unwrap()
         .expect("Node struct not in snapshot");
     let attrs = snap.item_attributes(id).expect("item_attributes failed");
@@ -863,15 +863,15 @@ fn item_attributes_of_node_struct_includes_derive() {
 /// v8: `items_with_attribute(crate, pattern)` anchor-matches the
 /// attribute strings on every Item in the crate. Searching for bare
 /// `derive` (attribute-path match) across
-/// `rust_code_mcp` should find at least the `Node` and `ItemKind`
-/// types.
+/// `rmc_graph` should find at least the `Node` and `ItemKind`
+/// types (moved here from `rust_code_mcp::graph::model` in Phase 7 B.7).
 #[test]
 fn items_with_attribute_finds_derive_users() {
     let snap = shared_snapshot();
-    // Resolve the crate node — `rust_code_mcp` resolves to the crate
+    // Resolve the crate node — `rmc_graph` resolves to the crate
     // root MODULE; promote to the actual Crate node via parent_id.
     let (root_id, root_node) = snap
-        .lookup_by_qualified_name("rust_code_mcp")
+        .lookup_by_qualified_name("rmc_graph")
         .unwrap()
         .unwrap();
     let crate_id = if root_node.kind == NodeKind::Crate {
@@ -884,19 +884,19 @@ fn items_with_attribute_finds_derive_users() {
         .expect("items_with_attribute failed");
     assert!(
         !hits.is_empty(),
-        "expected at least one derive-bearing item in rust_code_mcp"
+        "expected at least one derive-bearing item in rmc_graph"
     );
     let qnames: Vec<String> = hits.iter().map(|h| h.qualified_name.clone()).collect();
     assert!(
         qnames
             .iter()
-            .any(|q| q == "rust_code_mcp::graph::model::Node"),
+            .any(|q| q == "rmc_graph::graph::model::Node"),
         "expected Node among derive-bearing items, got {qnames:?}"
     );
     assert!(
         qnames
             .iter()
-            .any(|q| q == "rust_code_mcp::graph::model::ItemKind"),
+            .any(|q| q == "rmc_graph::graph::model::ItemKind"),
         "expected ItemKind among derive-bearing items, got {qnames:?}"
     );
     for h in &hits {
@@ -1032,7 +1032,7 @@ fn re_export_chain_finds_known_facade() {
     let snap = shared_snapshot();
     let (target_id, _) = snap
         .lookup_by_qualified_name(
-            "rust_code_mcp::graph::query::model::ForbiddenDependencyRule",
+            "rmc_graph::graph::query::model::ForbiddenDependencyRule",
         )
         .unwrap()
         .expect("ForbiddenDependencyRule canonical decl not in snapshot");
@@ -1044,10 +1044,19 @@ fn re_export_chain_finds_known_facade() {
         !chain.links.is_empty(),
         "expected at least one re-export link for ForbiddenDependencyRule, got 0"
     );
-    // Sanity: every link must carry the same visible_name (the type
-    // is re-exported under its own name) and a sane depth.
+    // Sanity: at least one link must re-export the type under its own name
+    // (the `pub use query::model::ForbiddenDependencyRule;` in graph::mod);
+    // module-level re-export hops added by Phase 7 B.7's main `lib.rs` facade
+    // (`pub use rmc_graph::graph;`) carry visible_name = "graph", which is also
+    // a valid re-export hop for the type (transitive via module re-export).
+    assert!(
+        chain
+            .links
+            .iter()
+            .any(|l| l.visible_name == "ForbiddenDependencyRule"),
+        "expected at least one same-name re-export link"
+    );
     for link in &chain.links {
-        assert_eq!(link.visible_name, "ForbiddenDependencyRule");
         assert!(link.depth >= 1, "depth must be >= 1");
         assert!(
             (link.depth as usize) <= MAX_REEXPORT_HOPS,
@@ -1108,7 +1117,7 @@ fn recursive_callers_count_grows_with_depth() {
     // count must be >= depth=1 count.
     let snap = shared_snapshot();
     let (target_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp::graph::loader::load")
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
         .unwrap()
         .expect("loader::load not in graph");
     let depth1 = snap
