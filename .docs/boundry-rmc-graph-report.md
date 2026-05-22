@@ -5,7 +5,7 @@
 - Crate: `rmc-graph`
 - Graph qualified name: `rmc_graph`
 - Analysis order: 2 of 4
-- Current phase: Phase 1 complete
+- Current phase: Phase 2 complete
 - Report state: in progress
 
 ## Phase Log
@@ -13,8 +13,8 @@
 | Phase | Status | Commit evidence | Notes |
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | 7a9aa8f4 | Graph snapshot reused; workspace and dependency baseline captured. |
-| Phase 1: Public surface | Complete | Pending commit | Crate root is narrow, but `graph` exports a broad internal API surface. |
-| Phase 2: Dependency boundary | Pending | Not started |  |
+| Phase 1: Public surface | Complete | 2a193829 | Crate root is narrow, but `graph` exports a broad internal API surface. |
+| Phase 2: Dependency boundary | Complete | Pending commit | Outgoing edge is only to `rmc_engine`; expected layering rules have no violations. |
 | Phase 3: Import and usage coupling | Pending | Not started |  |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
@@ -248,3 +248,160 @@ from explicit modules/reexports, not disguised type-alias reexports.
   audit wrappers while graph keeps lower-level helpers private?
 - Should examples/debug binaries be allowed to depend on deeper graph internals
   while production crates use a smaller facade?
+
+## Phase 2: Dependency Boundary
+
+### Required VCS Check
+
+Before Phase 2, `jj show --summary` reported:
+
+```text
+Commit ID: 8e35a9941c6a33633218cac43227b72910f53297
+Change ID: zxysnyryuouqoqnvtnnwtnksrxlqxous
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+crate_dependency_metric(directory, sort_by="efferent", summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[rmc_graph -> *], consumer_kinds=[lib, bin, example, test, bench], summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[* -> rmc_graph], consumer_kinds=[lib, bin, example, test, bench], summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[expected layering rules], consumer_kinds=[lib, bin, example, test, bench], summary=true, limit=200)
+```
+
+`rmc_graph` dependency metric:
+
+```text
+crate_name: rmc_graph
+item_count: 585
+efferent: 1
+afferent: 11
+instability: 0.08333333333333333
+abstractness: 0.0
+```
+
+Outgoing edge inventory:
+
+```text
+rmc_graph -> rmc_engine
+sample_symbol: rmc_engine::embeddings::backend::EmbeddingBackend
+unique_symbols: 7
+total_refs: 11
+```
+
+Incoming edge inventory:
+
+```text
+count_items -> rmc_graph
+  sample_symbol: rmc_graph::graph::snapshot::BuildOptions
+  unique_symbols: 6
+  total_refs: 11
+
+dead_pub_report -> rmc_graph
+  sample_symbol: rmc_graph::graph::snapshot::BuildOptions
+  unique_symbols: 8
+  total_refs: 13
+
+debug_burn_loader -> rmc_graph
+  sample_symbol: rmc_graph::graph::loader::LoadedWorkspace
+  unique_symbols: 2
+  total_refs: 4
+
+debug_burn_target -> rmc_graph
+  sample_symbol: rmc_graph::graph::snapshot::OpenedSnapshot::read_txn
+  unique_symbols: 11
+  total_refs: 24
+
+debug_itemscope -> rmc_graph
+  sample_symbol: rmc_graph::graph::loader
+  unique_symbols: 2
+  total_refs: 2
+
+graph_burn -> rmc_graph
+  sample_symbol: rmc_graph::graph::snapshot::BuildOptions
+  unique_symbols: 7
+  total_refs: 12
+
+probe_workspace -> rmc_graph
+  sample_symbol: rmc_graph::graph::snapshot::BuildOptions
+  unique_symbols: 10
+  total_refs: 15
+
+rebuild_burn_default -> rmc_graph
+  sample_symbol: rmc_graph::graph::snapshot::BuildOptions
+  unique_symbols: 2
+  total_refs: 4
+
+rmc_server -> rmc_graph
+  sample_symbol: rmc_graph::graph::model::NodeKind
+  unique_symbols: 108
+  total_refs: 334
+
+spike_usages -> rmc_graph
+  sample_symbol: rmc_graph::graph::loader
+  unique_symbols: 2
+  total_refs: 2
+
+timing_extract -> rmc_graph
+  sample_symbol: rmc_graph::graph::ids::NodeId
+  unique_symbols: 22
+  total_refs: 36
+```
+
+Expected layering check:
+
+```text
+rule_count: 5
+violation_count: 0
+```
+
+Checked rules:
+
+```text
+rmc_engine should not depend on rmc_* crates.
+rmc_graph should not depend on rmc_server.
+rmc_graph should not depend on rmc_indexing.
+rmc_indexing should not depend on rmc_server.
+rmc_indexing should not depend on rmc_graph.
+```
+
+### Phase 2 Interpretation
+
+The crate-level dependency direction is healthy. `rmc_graph` depends only on
+`rmc_engine`, and the sampled outgoing symbol is the embedding backend. That is
+consistent with graph owning persisted graph/query semantics while delegating
+embedding primitives to the lower engine crate.
+
+No layering rule fired for graph/server/indexing. There is no graph-to-server
+edge and no graph-to-indexing edge in the MCP edge inventory. This means the
+main graph boundary risk is not crate direction; it is API breadth and consumer
+coupling.
+
+The incoming edge inventory makes that risk concrete. Most incoming consumers
+are examples, probes, debug binaries, or reports, but `rmc_server` references
+`108` unique graph symbols across `334` total refs. Phase 3 must determine
+whether those server references go through stable snapshot/query DTOs or through
+implementation modules such as `model`, `ids`, `storage`, `loader`, and
+specific audit internals.
+
+### Phase 2 Findings
+
+- `rmc_graph` has one outgoing crate edge: `rmc_engine`.
+- No `rmc_graph -> rmc_server` edge exists.
+- No `rmc_graph -> rmc_indexing` edge exists.
+- The expected cross-layer rules returned zero violations.
+- `rmc_server` is the dominant production consumer of graph, with `108` unique
+  symbols and `334` refs.
+- Example/debug/report crates also use graph directly, often via snapshot,
+  loader, ID, and model symbols.
+
+### Open Questions For Later Phases
+
+- Which `rmc_server` modules account for the 108 unique graph symbols?
+- Is `rmc_server` using high-level query APIs, or is it coupled to graph's
+  internal model/storage modules?
+- Should debug and report binaries be allowed to keep deeper graph access while
+  production crates are restricted to a smaller facade?
