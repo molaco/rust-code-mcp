@@ -5,7 +5,7 @@
 - Crate: `rmc-graph`
 - Graph qualified name: `rmc_graph`
 - Analysis order: 2 of 4
-- Current phase: Phase 3 complete
+- Current phase: Phase 4 complete
 - Report state: in progress
 
 ## Phase Log
@@ -15,8 +15,8 @@
 | Phase 0: Snapshot readiness and baseline | Complete | 7a9aa8f4 | Graph snapshot reused; workspace and dependency baseline captured. |
 | Phase 1: Public surface | Complete | 2a193829 | Crate root is narrow, but `graph` exports a broad internal API surface. |
 | Phase 2: Dependency boundary | Complete | ff821ccd | Outgoing edge is only to `rmc_engine`; expected layering rules have no violations. |
-| Phase 3: Import and usage coupling | Complete | Pending commit | Server uses the graph facade path, but that facade exposes deep graph modules and DTOs. |
-| Phase 4: Internal cohesion | Pending | Not started |  |
+| Phase 3: Import and usage coupling | Complete | f483c864 | Server uses the graph facade path, but that facade exposes deep graph modules and DTOs. |
+| Phase 4: Internal cohesion | Complete | Pending commit | Large cohesive graph/query crate with small duplication clusters around audits, storage helpers, labels, and test support. |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
 ## Phase 0: Snapshot Readiness And Baseline
@@ -622,3 +622,196 @@ storage path construction is not fully encapsulated by graph.
   of letting server audit tools call multiple internal audit modules directly?
 - Should `GraphPaths` remain visible to server cache code, or should graph own
   cache/snapshot path derivation behind a smaller storage facade?
+
+## Phase 4: Internal Cohesion
+
+### Required VCS Check
+
+Before Phase 4, `jj show --summary` reported:
+
+```text
+Commit ID: e3b19d78ba34e8d2db4eaa882f38c7c8167a1916
+Change ID: zrzmlxtvklqyyxrvxxnxkksqxnukzmsn
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+functions_with_filter(directory, krate="rmc_graph", summary=true, limit=300)
+functions_with_filter(directory, krate="rmc_graph", has_param_type="rmc_engine", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_graph", has_param_type="EmbeddingBackend", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_graph", has_param_type="OpenedSnapshot", summary=true, limit=200)
+functions_with_filter(directory, krate="rmc_graph", has_param_type="NodeId", summary=true, limit=200)
+functions_with_filter(directory, krate="rmc_graph", has_param_type="GraphPaths", summary=true, limit=100)
+overlaps(directory, scope="local_no_vendor")
+semantic_overlaps(directory, crate_name="rmc_graph", item_kind="Struct", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_graph", item_kind="Enum", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_graph", item_kind="Function", summary=true, max_pairs=25)
+```
+
+Function inventory:
+
+```text
+total indexed rmc_graph functions: 431
+returned first page: 300
+```
+
+Boundary-signature filters:
+
+```text
+has_param_type="rmc_engine"
+  total: 0
+
+has_param_type="EmbeddingBackend"
+  total: 1
+  rmc_graph::graph::embedding_cache::ensure_embeddings_for
+
+has_param_type="OpenedSnapshot"
+  total: 20
+  representative functions:
+    audit_util::resolve_enclosing_function
+    channel_audit::channel_capacity_audit
+    codemap::build::build_codemap
+    codemap::seeds::resolve_search_seeds
+    derive_audit::derive_audit
+    docs_audit::missing_docs_audit
+    embedding_cache::ensure_embeddings_for
+    fn_body_audit::fn_body_audit
+    recursion_check::recursion_check
+    unsafe_audit::unsafe_audit_impl
+
+has_param_type="NodeId"
+  total: 72
+  representative areas:
+    attributes
+    bindings
+    codemap
+    embedding_cache
+    extract
+    impls
+    query
+    recursion_check
+    signatures
+    snapshot
+    statics
+    usages
+
+has_param_type="GraphPaths"
+  total: 3
+  rmc_graph::graph::snapshot::open_current
+  rmc_graph::graph::snapshot::open_specific
+  rmc_graph::graph::snapshot::publish_current
+```
+
+Name-overlap context:
+
+```text
+cross_crate_type_collisions: 0
+module_shadows: 0
+common_fn_names: 0
+within_crate_type_duplicates:
+  rmc_graph::graph::test_support::SharedSnap
+  rmc_graph::graph::usages::tests::SharedSnap
+```
+
+Semantic overlap, structs:
+
+```text
+seed_count: 73
+total_pair_count: 10
+total_cluster_count: 6
+
+notable clusters:
+  ReExportLink / ReExportChain
+  ModuleDependencySymbol / ModuleDependency /
+    ModuleDependencyAccumulator / ModuleDependencySymbolAccumulator
+  CrateDeadPub / DeadPubFinding
+  DocsAuditOpts / DeriveAuditOpts
+  ForbiddenDependencyViolation / ForbiddenDependencyRule
+  Codemap / CodemapStats
+```
+
+Semantic overlap, enums:
+
+```text
+seed_count: 11
+total_pair_count: 0
+total_cluster_count: 0
+```
+
+Semantic overlap, functions:
+
+```text
+seed_count: 153
+total_pair_count: 12
+total_cluster_count: 9
+
+notable clusters:
+  docs_audit::default_kind_filter / derive_audit::default_kind_filter
+  fn_body_audit::match_unwrap / fn_body_audit::match_unwrap_unchecked
+  storage::open_or_create_str_bytes /
+    storage::open_or_create_bytes_bytes /
+    storage::open_or_create_bytes_bincode
+  labels::item_kind_id_label /
+    labels::item_kind_display_label /
+    labels::item_kind_short_label
+  bindings::classify_value_provenance /
+    bindings::classify_type_provenance
+  storage::read_manifest / storage::read_manifest_compatible
+  attributes::visit_assoc_item / impls::emit_assoc_item
+  loader::target_kind_label / loader::canonical_target_kind
+  codemap::test_support::shared_fixture /
+    test_support::shared_snapshot
+```
+
+### Phase 4 Interpretation
+
+`rmc_graph` is large but mostly coherent for its current role: extraction,
+snapshot persistence, graph query APIs, codemap construction, and graph-backed
+audits all orbit the persisted graph model. The high `NodeId` and
+`OpenedSnapshot` signature counts are expected for this architecture. They show
+the crate has a strong internal shared model rather than several disconnected
+subsystems.
+
+The cohesion issue is scale and surface shape, not dependency direction.
+`OpenedSnapshot` has become the central query object for many functions and
+tools, while `NodeId` is the common identity currency across extraction, query,
+audit, codemap, and storage-facing code. That is understandable, but it means
+the public boundary needs to be curated carefully; otherwise the same internal
+model that makes the crate cohesive becomes an oversized public API.
+
+The duplicate/semantic overlap findings are small and mostly intentional
+pairs. The strongest cleanup candidates are repeated audit option/filter helpers,
+storage open/read helper variants, label formatting functions, and duplicate
+test-support snapshot fixtures. None of these imply a broken crate boundary by
+themselves.
+
+### Phase 4 Findings
+
+- `rmc_graph` has 431 indexed functions, making it the largest analyzed crate
+  so far.
+- No function signature directly contains `rmc_engine`; only
+  `ensure_embeddings_for` takes `EmbeddingBackend`.
+- `OpenedSnapshot` appears in 20 function signatures and acts as the central
+  graph query/snapshot context.
+- `NodeId` appears in 72 function signatures and is the common identity type
+  across most graph subsystems.
+- `GraphPaths` is concentrated in snapshot open/publish functions, which is a
+  good internal cohesion signal.
+- No cross-crate type collisions or module shadows were reported.
+- The only within-crate type duplicate is test-support `SharedSnap`.
+- Semantic overlap found no enum duplication and only small struct/function
+  clusters, mostly around paired DTOs, helper variants, and tests.
+
+### Open Questions For Phase 5
+
+- Which broad public modules should remain exposed because server tools need
+  them, and which can be hidden behind `OpenedSnapshot` methods or query
+  functions?
+- Should repeated audit option/filter structs be unified, or are they clearer
+  as separate audit-specific inputs?
+- Should storage helper variants remain separate functions, or be normalized
+  behind one typed helper before any storage API cleanup?
