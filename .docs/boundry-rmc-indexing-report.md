@@ -5,8 +5,8 @@
 - Crate: `rmc-indexing`
 - Graph qualified name: `rmc_indexing`
 - Analysis order: 3 of 4
-- Current phase: Phase 4 complete
-- Report state: in progress
+- Current phase: Phase 5 complete
+- Report state: complete
 
 ## Phase Log
 
@@ -16,8 +16,8 @@
 | Phase 1: Public surface | Complete | 1a332a1a | Root is narrow, but public submodules expose indexing internals directly. |
 | Phase 2: Dependency boundary | Complete | 07e23561 | Outgoing edges are only to `rmc_config` and `rmc_engine`; expected layering rules have no violations. |
 | Phase 3: Import and usage coupling | Complete | df3f0b8c | Server uses unified/index stats APIs, but also reaches into incremental and Tantivy adapter modules. |
-| Phase 4: Internal cohesion | Complete | Pending commit | Cohesive indexing crate; overlap findings are small variant/helper pairs. |
-| Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
+| Phase 4: Internal cohesion | Complete | e86b1df6 | Cohesive indexing crate; overlap findings are small variant/helper pairs. |
+| Phase 5: Targeted source reads and recommendations | Complete | Pending commit | Final score and recommendations recorded. |
 
 ## Phase 0: Snapshot Readiness And Baseline
 
@@ -796,3 +796,152 @@ production server-facing.
   implementation details of `UnifiedIndexer`?
 - Should default/backend-specific helper pairs remain public, or be kept
   internal behind backend-aware constructors?
+
+## Phase 5: Targeted Source Reads And Recommendations
+
+### Required VCS Check
+
+Before Phase 5, `jj show --summary` reported:
+
+```text
+Commit ID: 24bce29423f9b09b30b0f7423d9e992ca3b3612c
+Change ID: kvpvtozqwwnwxnsxmtvnlmqournnulxm
+Description: (no description set)
+```
+
+### Source Reads
+
+Source reads were limited to files and symbols identified by the MCP evidence:
+
+```text
+crates/rmc-indexing/src/lib.rs
+crates/rmc-indexing/src/indexing/mod.rs
+crates/rmc-indexing/src/indexing/unified.rs
+crates/rmc-indexing/src/indexing/incremental.rs
+crates/rmc-indexing/src/indexing/tantivy_adapter.rs
+crates/rmc-indexing/src/indexing/indexer_core.rs
+crates/rmc-server/src/tools/endpoints/index.rs
+crates/rmc-server/src/tools/endpoints/query.rs
+crates/rmc-server/src/mcp/sync.rs
+crates/rmc-server/src/mcp/project_paths.rs
+crates/rmc-server/src/tools/graph/codemap.rs
+crates/rmc-server/src/tools/endpoints/health.rs
+crates/rmc-server/src/tools/endpoints/indexing_support.rs
+```
+
+Key source observations:
+
+```text
+rmc_indexing::lib
+  exposes five public root modules:
+  indexing, metadata_cache, metrics, monitoring, security.
+
+rmc_indexing::indexing
+  exposes public implementation modules:
+  consistency, error, error_collection, identity, incremental,
+  indexer_core, merkle, retry, tantivy_adapter, unified.
+
+rmc_indexing::indexing
+  reexports likely facade APIs:
+  UnifiedIndexer, IndexStats, IndexFileResult,
+  IncrementalIndexer, get_snapshot_path, TantivyAdapter.
+
+UnifiedIndexer
+  owns the high-level Tantivy + vector indexing flow.
+  It constructs IndexerCore, TantivyAdapter, and VectorStore internally.
+  It exposes search/index support methods including index_directory,
+  create_bm25_search, tantivy accessors, vector store cloning, and
+  embedding generator cloning.
+
+IncrementalIndexer
+  wraps UnifiedIndexer and Merkle change detection.
+  Server index and background sync paths use it directly.
+
+TantivyAdapter
+  is a focused BM25 adapter over Tantivy index/writer/schema.
+  Server query and graph codemap paths open it directly to obtain BM25
+  search handles.
+
+IndexerCore
+  is pub(crate) despite the public module path.
+  It orchestrates FileProcessor, Chunker, and EmbeddingBatcher internally.
+
+Server callers
+  endpoints/index.rs imports incremental::IncrementalIndexer and
+  unified::IndexStats.
+  mcp/sync.rs imports incremental::IncrementalIndexer.
+  endpoints/query.rs imports tantivy_adapter::TantivyAdapter inline and
+  uses unified::UnifiedIndexer for ensure-indexed behavior.
+  mcp/project_paths.rs imports identity helpers and
+  get_snapshot_path_for_identity.
+  health.rs imports monitoring::health::HealthMonitor and names
+  monitoring health statuses directly.
+```
+
+### Final Boundary Assessment
+
+Boundary score: `8/10`.
+
+`rmc_indexing` has a strong directional boundary. It depends only on engine and
+configuration crates, has no graph/server dependency, and cleanly owns indexing
+responsibilities: parsing/chunking orchestration, embedding generation, Tantivy
+index writes, vector index coordination, incremental/Merkle state, metadata
+cache, security filtering, metrics, and health support.
+
+The reason it is not `10/10` is API shape. The crate has a useful high-level
+facade in `UnifiedIndexer` and a legitimate incremental facade in
+`IncrementalIndexer`, but it also makes several implementation modules public.
+Server production code imports those internals directly in a few places,
+especially `TantivyAdapter`, identity/path helpers, and monitoring health
+status types. That means some indexing internals are effectively part of the
+server contract even where a narrower indexing service API could hide them.
+
+This is still cleaner than the graph boundary because indexing's dependency
+direction is correct and the public leakage is concentrated. Most deep
+consumer usage outside server is test, benchmark, or standalone-tool oriented.
+
+### Recommendations
+
+1. Keep `rmc_indexing -> rmc_engine` and `rmc_indexing -> rmc_config` as the
+   only outgoing production dependencies.
+
+2. Treat `UnifiedIndexer`, `IndexStats`, and `IndexFileResult` as the preferred
+   general indexing facade. Document that server-facing indexing should start
+   there unless it specifically needs incremental change detection.
+
+3. Decide whether `IncrementalIndexer` is an official public facade. If yes,
+   expose it deliberately as a sync/indexing API and document the use cases. If
+   no, wrap the server index and background sync paths behind a narrower
+   service function that owns Merkle change detection inside indexing.
+
+4. Reduce direct server dependency on `TantivyAdapter`. Query and codemap only
+   need "open BM25 search for these paths"; that can be exposed as a small
+   indexing-level function or method without making the adapter itself a
+   server contract.
+
+5. Reconsider public module visibility for `identity`, `tantivy_adapter`,
+   `merkle`, `retry`, `consistency`, and `indexer_core`. If production server
+   only needs a few helper functions, expose those helpers through a smaller
+   facade and make implementation modules `pub(crate)` over time.
+
+6. Keep `metadata_cache`, `metrics`, `monitoring`, and `security` public only
+   where they are intentionally reusable operational APIs. The MCP evidence
+   showed several of these are mostly internal/test/benchmark consumers.
+
+7. Leave the semantic-overlap pairs alone for now. The reported pairs are
+   understandable variants: async/sync retry, sorted/unsorted token summaries,
+   default/backend-aware identity helpers, and default/backend-aware snapshot
+   helpers.
+
+### Final Findings
+
+- Directional layering is correct: indexing does not depend on graph or server.
+- `UnifiedIndexer` is a coherent high-level facade over indexing internals.
+- `IncrementalIndexer` is a real facade, but server imports it from a deep
+  module path.
+- `TantivyAdapter` is focused and useful, but server query/codemap usage makes
+  it part of the practical public API.
+- Several implementation modules are public even when their primary consumers
+  are internal modules, tests, benchmarks, or server support helpers.
+- The crate is cohesive; the main boundary improvement is facade tightening,
+  not moving responsibilities across crates.
