@@ -140,9 +140,6 @@ Hypergraph and architecture-query tools:
 build_hypergraph
 workspace_stats
 module_tree
-crate_edges
-crate_dependency_metric
-forbidden_dependency_check
 get_imports
 module_dependencies
 get_exports
@@ -153,8 +150,22 @@ who_uses
 who_uses_summary
 who_calls
 calls_from
+call_graph
+callers_in_crate
+recursive_callers_count
+crate_edges
+crate_dependency_metric
+forbidden_dependency_check
 enum_variants
+item_attributes
+items_with_attribute
+dead_pub_in_crate
+dead_pub_report
 pub_use_pub_type_audit
+re_export_chain
+overlaps
+function_signature
+functions_with_filter
 build_codemap
 ```
 
@@ -168,7 +179,6 @@ unsafe_audit
 channel_capacity_audit
 mut_static_audit
 recursion_check
-dead_pub_report
 ```
 
 Semantic tools:
@@ -177,6 +187,8 @@ Semantic tools:
 similar_to_item
 semantic_overlaps
 ```
+
+Full tool count per namespace: 51.
 
 ## Measurement Rules
 
@@ -243,7 +255,7 @@ Verification notes:
 | Phase | Name | Status | Result Summary |
 |---|---|---|---|
 | 0 | MCP Tool Baseline | pass | Binaries/config verified; both MCP namespaces answered health/search smoke calls. |
-| 1 | Tool Inventory and Schemas | pending | Compare Codex-exposed MCP tool names and accepted input schemas. |
+| 1 | Tool Inventory and Schemas | pass | 51 shared tools, no original/refactor-only tools, no breaking schema-key differences. |
 | 2 | Health, Cache, and Cold Start | pending | Verify isolated cache roots and health behavior before/after clear. |
 | 3 | Indexing and Retrieval | pending | Compare indexing, keyword search, hybrid search, and similar-code retrieval. |
 | 4 | Live Navigation and File Analysis | pending | Compare definitions, references, imports, dependencies, call graph, and complexity. |
@@ -320,7 +332,7 @@ MCP tool execution:
 
 ## Phase 1: Tool Inventory and Schemas
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -328,16 +340,16 @@ Confirm both servers expose the same intended tool surface and compare tool desc
 
 Checklist:
 
-- [ ] Use `tool_search` to expose the original namespace tool definitions.
-- [ ] Use `tool_search` to expose the refactor namespace tool definitions.
-- [ ] Capture the Codex-exposed tool name set for original.
-- [ ] Capture the Codex-exposed tool name set for refactor.
-- [ ] Compare tool name sets.
-- [ ] Compare input schema keys for every shared tool.
-- [ ] Identify refactor-only tools.
-- [ ] Identify original-only tools.
-- [ ] Classify schema differences as compatible or breaking.
-- [ ] Update the results table.
+- [x] Use `tool_search` to expose the original namespace tool definitions.
+- [x] Use `tool_search` to expose the refactor namespace tool definitions.
+- [x] Capture the Codex-exposed tool name set for original.
+- [x] Capture the Codex-exposed tool name set for refactor.
+- [x] Compare tool name sets.
+- [x] Compare input schema keys for every shared tool.
+- [x] Identify refactor-only tools.
+- [x] Identify original-only tools.
+- [x] Classify schema differences as compatible or breaking.
+- [x] Update the results table.
 
 Required outcome:
 
@@ -347,11 +359,24 @@ Results:
 
 | Metric | Original | Refactor | Delta Classification | Notes |
 |---|---:|---:|---|---|
-| Tool count | pending | pending | pending |  |
-| Shared tool count | pending | pending | pending |  |
-| Original-only tool count | pending | pending | pending |  |
-| Refactor-only tool count | pending | pending | pending |  |
-| Breaking schema differences | pending | pending | pending |  |
+| Tool count | 51 | 51 | exact | Counted `#[tool]` router methods visible through both MCP namespaces. |
+| Shared tool count | 51 | 51 | exact | Sorted tool-name sets matched exactly. |
+| Original-only tool count | 0 | 0 | exact | No missing refactor tools found. |
+| Refactor-only tool count | 0 | 0 | exact | No unexpected refactor-only tools found. |
+| Breaking schema differences | 0 | 0 | exact | Parameter field-key sets matched for every shared tool; refactor changes were module-path moves only. |
+
+Notes:
+
+```text
+2026-05-22 Phase 1 results:
+- `jj show --summary` was run before starting this phase.
+- `tool_search` was run for both `mcp__rust_code_mcp_original__` and `mcp__rust_code_mcp_refactor__`.
+- Original router source checked: /home/molaco/Documents/rust-code-mcp-final/src/tools/search_tool_router.rs.
+- Refactor router source checked: /home/molaco/Documents/rust-code-mcp-refactor/crates/rmc-server/src/tools/router.rs.
+- Tool names were extracted from `async fn` methods carrying MCP router tool definitions; both sides had 51 names and `diff` returned no differences.
+- Parameter schema keys were compared from the `*Params` structs used by the routers. The sorted field-key map matched exactly after deduplication.
+- Module path differences were expected from the refactor, for example `crate::tools::search_tool::*Params` moved to `crate::tools::params::*Params`, with no accepted input-key changes.
+```
 
 ## Phase 2: Health, Cache, and Cold Start
 
