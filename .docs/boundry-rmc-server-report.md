@@ -5,7 +5,7 @@
 - Crate: `rmc-server`
 - Graph qualified name: `rmc_server`
 - Analysis order: 4 of 4
-- Current phase: Phase 1 complete
+- Current phase: Phase 2 complete
 - Report state: in progress
 
 ## Phase Log
@@ -13,8 +13,8 @@
 | Phase | Status | Commit evidence | Notes |
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | 98e49844 | Graph snapshot reused; workspace and server dependency baseline captured. |
-| Phase 1: Public surface | Complete | Pending commit | Root is narrow, but server exposes public implementation namespaces. |
-| Phase 2: Dependency boundary | Pending | Not started |  |
+| Phase 1: Public surface | Complete | aedffaec | Root is narrow, but server exposes public implementation namespaces. |
+| Phase 2: Dependency boundary | Complete | Pending commit | Outgoing edges match expected top-layer dependencies; no lower-layer rule violations. |
 | Phase 3: Import and usage coupling | Pending | Not started |  |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
@@ -272,3 +272,154 @@ the container modules.
 - Are `mcp::project_paths` and `tools::project_paths` duplicate path surfaces?
 - Do tool endpoints depend on graph/indexing internals directly or through
   stable lower-crate facades?
+
+## Phase 2: Dependency Boundary
+
+### Required VCS Check
+
+Before Phase 2, `jj show --summary` reported:
+
+```text
+Commit ID: fd8d990f44252f6cc0416f57053ef53a07ec0568
+Change ID: lkxknrmzkomyztlyzlulwvztrrvxtusv
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+crate_dependency_metric(directory, sort_by="efferent", summary=true, limit=200)
+crate_dependency_metric(directory, sort_by="afferent", summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[rmc_server -> *], consumer_kinds=[lib, bin, test, bench, example], summary=true, limit=300)
+forbidden_dependency_check(directory, rules=[* -> rmc_server], consumer_kinds=[lib, bin, test, bench, example], summary=true, limit=300)
+forbidden_dependency_check(directory, rules=[expected layering rules], consumer_kinds=[lib, bin, test, bench, example], summary=true, limit=300)
+```
+
+`rmc_server` dependency metric:
+
+```text
+crate_name: rmc_server
+item_count: 370
+efferent: 4
+afferent: 6
+instability: 0.4
+abstractness: 0.0
+```
+
+Outgoing edge inventory:
+
+```text
+rmc_server -> rmc_config
+  sample_symbol: rmc_config::config::indexer::TantivyConfig
+  unique_symbols: 2
+  total_refs: 4
+
+rmc_server -> rmc_engine
+  sample_symbol: rmc_engine::embeddings::backend::EmbeddingBackend
+  unique_symbols: 38
+  total_refs: 153
+
+rmc_server -> rmc_graph
+  sample_symbol: rmc_graph::graph::model::NodeKind
+  unique_symbols: 108
+  total_refs: 334
+
+rmc_server -> rmc_indexing
+  sample_symbol: rmc_indexing::indexing::unified::IndexStats
+  unique_symbols: 21
+  total_refs: 55
+```
+
+Incoming edge inventory:
+
+```text
+rust-code-mcp -> rmc_server
+  sample_symbol: rmc_server::mcp::sync::SyncManager
+  unique_symbols: 5
+  total_refs: 6
+
+test_burn_performance -> rmc_server
+  sample_symbol: rmc_server::tools::endpoints::index::IndexCodebaseParams
+  unique_symbols: 2
+  total_refs: 2
+
+test_gpu_index_jsonrpc -> rmc_server
+  sample_symbol: rmc_server::tools::endpoints::index::IndexCodebaseParams
+  unique_symbols: 2
+  total_refs: 2
+
+test_index_tool_integration -> rmc_server
+  sample_symbol: rmc_server::tools::endpoints::index::index_codebase
+  unique_symbols: 5
+  total_refs: 30
+
+test_mcp_stdio_transport -> rmc_server
+  sample_symbol: rmc_server::mcp::project_paths::ProjectPaths
+  unique_symbols: 2
+  total_refs: 3
+
+test_sync_manager_integration -> rmc_server
+  sample_symbol: rmc_server::mcp::sync::SyncManager::track_directory
+  unique_symbols: 9
+  total_refs: 36
+```
+
+Expected layering check:
+
+```text
+rule_count: 5
+violation_count: 0
+```
+
+Checked rules:
+
+```text
+rmc_engine should not depend on rmc_* crates.
+rmc_graph should not depend on rmc_server.
+rmc_graph should not depend on rmc_indexing.
+rmc_indexing should not depend on rmc_server.
+rmc_indexing should not depend on rmc_graph.
+```
+
+### Phase 2 Interpretation
+
+`rmc_server` is correctly positioned as the top layer. Its four outgoing edges
+match the expected dependency direction: config, engine, graph, and indexing.
+No MCP evidence shows `rmc_graph` or `rmc_indexing` depending back on server.
+
+The volume of the graph edge is notable: `108` unique graph symbols and `334`
+refs. That does not violate layering, but it means server likely imports graph
+implementation details heavily rather than only a small graph facade. The
+indexing and engine edges are also substantial, but smaller. Phase 3 should
+identify whether these edges are concentrated in a few orchestration modules or
+spread across many tool endpoints.
+
+Incoming edges are almost entirely test/integration oriented. The one
+non-test-looking consumer is `rust-code-mcp`, which appears to be the binary
+entrypoint and uses server APIs such as `SyncManager`. That is appropriate for
+an executable depending on the server library.
+
+### Phase 2 Findings
+
+- Server has exactly the expected four outgoing local-crate edges:
+  `rmc_config`, `rmc_engine`, `rmc_graph`, and `rmc_indexing`.
+- The expected lower-layer dependency rules returned zero violations.
+- No graph or indexing crate depends on server.
+- The strongest server dependency is graph: `108` unique symbols and `334`
+  refs.
+- Server also depends significantly on engine: `38` unique symbols and `153`
+  refs.
+- Incoming dependencies are the binary crate plus tests/integration probes.
+- `test_mcp_stdio_transport` uses `ProjectPaths`, confirming that the public
+  path surface is externally consumed by tests.
+
+### Open Questions For Later Phases
+
+- Which server modules account for the heavy `rmc_graph` edge?
+- Does server mostly call graph facade functions, or does it directly use graph
+  storage/model/snapshot internals?
+- Are engine uses low-level search/vector primitives that should be hidden
+  behind indexing or graph services?
+- Should `ProjectPaths` stay public for tests, or move behind test helpers?
