@@ -5,7 +5,7 @@
 - Crate: `rmc-engine`
 - Graph qualified name: `rmc_engine`
 - Analysis order: 1 of 4
-- Current phase: Phase 1 complete
+- Current phase: Phase 2 complete
 - Report state: in progress
 
 ## Phase Log
@@ -13,8 +13,8 @@
 | Phase | Status | Commit evidence | Notes |
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | c35970b1 | Graph snapshot reused; workspace and dependency baseline captured. |
-| Phase 1: Public surface | Complete | Pending commit | Root exposes six domain modules; submodule facades reexport public API types. |
-| Phase 2: Dependency boundary | Pending | Not started |  |
+| Phase 1: Public surface | Complete | b393df22 | Root exposes six domain modules; submodule facades reexport public API types. |
+| Phase 2: Dependency boundary | Complete | Pending commit | No outgoing `rmc_*` dependency violations; one outgoing edge to `fastembed`. |
 | Phase 3: Import and usage coupling | Pending | Not started |  |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
@@ -283,3 +283,118 @@ provider-specific policy upward.
   they be hidden behind `EmbeddingProfile` or `EmbeddingBackend`?
 - Is `parser` still a true low-level engine primitive now that graph owns
   rust-analyzer/HIR extraction?
+
+## Phase 2: Dependency Boundary
+
+### Required VCS Check
+
+Before Phase 2, `jj show --summary` reported:
+
+```text
+Commit ID: 96b5a6778c2e940325d6550e88ae2d5481637d25
+Change ID: utlyyskvnwzyvulnvzvxlmpqpxszrnls
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+crate_dependency_metric(directory, sort_by="efferent", summary=true, limit=200)
+crate_dependency_metric(directory, sort_by="afferent", summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[{ consumer="rmc_engine", producer="*" }], summary=false, limit=100)
+forbidden_dependency_check(directory, rules=[{ consumer="*", producer="rmc_engine" }], summary=true, limit=200)
+forbidden_dependency_check(directory, rules=<expected layering rules>, summary=false, limit=300)
+```
+
+`rmc_engine` dependency metric:
+
+```text
+efferent: 1
+afferent: 14
+instability: 0.06666666666666667
+abstractness: 0.0018018018018018018
+item_count: 555
+```
+
+Outgoing edge filter:
+
+```text
+consumer: rmc_engine
+producer: fastembed
+sample_symbol: fastembed::models::qwen3::Qwen3TextEmbedding
+unique_symbols: 11
+total_refs: 18
+```
+
+Incoming production/library edge filter from `forbidden_dependency_check`:
+
+```text
+rmc_config -> rmc_engine
+  sample_symbol: rmc_engine::embeddings::profile::EmbeddingProfile
+  unique_symbols: 4
+  total_refs: 7
+
+rmc_graph -> rmc_engine
+  sample_symbol: rmc_engine::embeddings::backend::EmbeddingBackend
+  unique_symbols: 7
+  total_refs: 11
+
+rmc_indexing -> rmc_engine
+  sample_symbol: rmc_engine::embeddings::backend::EmbeddingBackend
+  unique_symbols: 46
+  total_refs: 198
+
+rmc_server -> rmc_engine
+  sample_symbol: rmc_engine::embeddings::backend::EmbeddingBackend
+  unique_symbols: 38
+  total_refs: 153
+```
+
+Expected-layering rule result:
+
+```text
+violation_count: 0
+```
+
+### Phase 2 Interpretation
+
+The dependency boundary is healthy. `rmc_engine` does not depend on `rmc_server`,
+`rmc_graph`, `rmc_indexing`, or any other `rmc_*` crate in the MCP dependency
+graph. Its single outgoing edge is to `fastembed`, represented by Qwen3
+embedding model usage, which fits the engine role because embedding backends are
+owned by the engine layer.
+
+The inbound production/library edges show that `rmc_engine` is a genuine
+foundation crate. `rmc_indexing` and `rmc_server` are the heaviest production
+consumers by symbol/reference count. Both consume `EmbeddingBackend` heavily,
+so the embedding backend/profile API is the most important engine boundary to
+keep stable and intentional.
+
+`rmc_config` depending on `rmc_engine::embeddings::profile::EmbeddingProfile` is
+not an immediate violation of the stated layering hypothesis, but it is worth
+watching. Config depending on engine profile types means embedding profile
+configuration is not purely external to engine; that can be acceptable if
+engine owns the canonical profile model.
+
+### Phase 2 Findings
+
+- No expected-layering violations were reported.
+- `rmc_engine` has no outgoing dependency to another `rmc_*` crate.
+- The only outgoing dependency edge is `rmc_engine -> fastembed`.
+- Production/library incoming edges are from `rmc_config`, `rmc_graph`,
+  `rmc_indexing`, and `rmc_server`.
+- The highest incoming production usage is from `rmc_indexing` with 46 unique
+  engine symbols and 198 total references.
+- `EmbeddingBackend` is the central boundary type for graph, indexing, and
+  server consumers.
+
+### Open Questions For Later Phases
+
+- Are consumers using the engine embedding facade or deep provider-specific
+  modules?
+- Is `EmbeddingBackend` carrying too much cross-layer policy?
+- Should `rmc_config` depend on engine profile types, or should profile config
+  live in a smaller shared configuration model?
+- Are the many `rmc_indexing` references mostly through stable facade types?
