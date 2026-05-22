@@ -5,8 +5,8 @@
 - Crate: `rmc-server`
 - Graph qualified name: `rmc_server`
 - Analysis order: 4 of 4
-- Current phase: Phase 4 complete
-- Report state: in progress
+- Current phase: Phase 5 complete
+- Report state: complete
 
 ## Phase Log
 
@@ -16,8 +16,8 @@
 | Phase 1: Public surface | Complete | aedffaec | Root is narrow, but server exposes public implementation namespaces. |
 | Phase 2: Dependency boundary | Complete | 4da7a3c2 | Outgoing edges match expected top-layer dependencies; no lower-layer rule violations. |
 | Phase 3: Import and usage coupling | Complete | c8f88d50 | Coupling is concentrated in router, endpoints, and graph tool modules. |
-| Phase 4: Internal cohesion | Complete | Pending commit | Cohesive server crate, with expected MCP boilerplate and a few helper overlaps. |
-| Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
+| Phase 4: Internal cohesion | Complete | fa7835ca | Cohesive server crate, with expected MCP boilerplate and a few helper overlaps. |
+| Phase 5: Targeted source reads and recommendations | Complete | Pending commit | Final score and recommendations recorded. |
 
 ## Phase 0: Snapshot Readiness And Baseline
 
@@ -959,3 +959,186 @@ rather than passed through server APIs.
   direct dependency on snapshot/model/storage internals?
 - Which public server modules should remain external API after tests are
   accounted for?
+
+## Phase 5: Targeted Source Reads And Recommendations
+
+### Required VCS Check
+
+Before Phase 5, `jj show --summary` reported:
+
+```text
+Commit ID: df5598b68c311670e3b3c7d82e8875a8e668f9cb
+Change ID: nxwpqymvsprqlmkkpkwpkwvwxvzozpxt
+Description: (no description set)
+```
+
+### Source Reads
+
+Source reads were limited to files and symbols identified by the MCP evidence:
+
+```text
+crates/rmc-server/src/lib.rs
+crates/rmc-server/src/tools/mod.rs
+crates/rmc-server/src/tools/router.rs
+crates/rmc-server/src/tools/project_paths.rs
+crates/rmc-server/src/mcp/project_paths.rs
+crates/rmc-server/src/mcp/sync.rs
+crates/rmc-server/src/tools/graph/response.rs
+crates/rmc-server/src/tools/graph/core.rs
+crates/rmc-server/src/tools/graph/surface.rs
+crates/rmc-server/src/tools/graph/codemap.rs
+crates/rmc-server/src/tools/graph/similarity.rs
+crates/rmc-server/src/tools/endpoints/analysis.rs
+crates/rmc-server/src/tools/endpoints/query.rs
+crates/rmc-server/src/tools/endpoints/index.rs
+crates/rmc-server/src/tools/endpoints/health.rs
+crates/rmc-server/src/tools/endpoints/indexing_support.rs
+crates/rmc-server/src/semantic/mod.rs
+```
+
+Key source observations:
+
+```text
+crate root
+  public modules are tools, mcp, semantic.
+  crate docs describe tools as rmcp adapter endpoints, mcp as SyncManager
+  plus project-path resolver, and semantic as rust-analyzer wrapper.
+
+tools::router
+  SearchToolRouter is the MCP protocol entry point.
+  The module docs explicitly say router bodies should delegate to focused
+  endpoints and graph modules and avoid business logic.
+  Source matches that intent: methods unwrap parameters and call endpoint
+  or graph functions.
+
+tools::mod
+  exposes SearchToolRouter, SearchTool alias, index_codebase, and
+  IndexCodebaseParams.
+
+tools::project_paths
+  is a compatibility reexport of crate::mcp::project_paths.
+  Its doc says the canonical home moved to mcp::project_paths.
+
+mcp::project_paths
+  owns data_dir, dir_hash, embedder identity, backend resolution,
+  collection naming, vector/cache/tantivy/snapshot paths, and indexed
+  profile discovery.
+  It depends on engine embedding backends/profile resolution and indexing
+  identity/snapshot helpers.
+  ProjectPaths and IndexedProfilePaths are public structs.
+
+mcp::sync
+  owns background directory tracking and periodic sync.
+  It constructs IncrementalIndexer directly for each indexed profile.
+
+graph::response
+  centralizes pagination, snapshot opening, response serialization, and
+  graph node/item view helpers.
+  It imports graph snapshot/storage/model/id/visibility types directly.
+
+graph::core and graph::surface
+  are mostly MCP adapters over graph snapshot methods, but they also shape
+  server response DTOs and perform graph-node enrichment locally.
+
+graph::codemap and graph::similarity
+  are explicit bridges across graph, search/indexing, engine embeddings,
+  and MCP response shapes.
+  codemap opens TantivyAdapter directly to seed hybrid search.
+  similarity calls create_hybrid_search and uses ProjectPaths.
+
+endpoints::query
+  owns query-side index path selection, stale-index cleanup, BM25 opening,
+  HybridSearch construction, on-disk embedding identity resolution, and
+  result formatting.
+  It opens TantivyAdapter directly and constructs UnifiedIndexer when
+  indexing is needed.
+
+endpoints::index
+  owns manual index_codebase request validation, backend resolution, force
+  reindex handling, IncrementalIndexer construction, version-mismatch error
+  shaping, sync tracking, and response formatting.
+
+endpoints::health
+  owns health-check response shaping and directly constructs engine BM25,
+  engine VectorStore, and indexing HealthMonitor.
+
+endpoints::analysis and semantic
+  analysis endpoints are MCP adapters over semantic service plus direct
+  engine parser/call-graph functionality.
+  semantic is an internal rust-analyzer service with a global LazyLock.
+```
+
+### Final Boundary Assessment
+
+Boundary score: `7/10`.
+
+`rmc_server` is correctly positioned as the top layer. It depends on graph,
+indexing, engine, and config; no lower target crate depends back on it; and the
+binary/tests are the only meaningful incoming consumers. The router itself is
+well-shaped as a thin `rmcp` adapter.
+
+The reason it is not higher is that server knows too much about lower-crate
+implementation details. Graph tool modules and response helpers import graph
+snapshot, storage, model, query-model, ids, labels, audit, codemap, and
+similarity internals directly. Query and codemap open `TantivyAdapter`
+directly. Index and sync construct `IncrementalIndexer` directly. Project path
+logic combines engine embedding identity, indexing identity, indexing snapshot
+paths, and server data directories in a public server module.
+
+This does not create an upward dependency violation; it is a boundary-shape
+issue. The top layer is allowed to orchestrate, but some of the orchestration
+has become reusable indexing/search/graph policy that lower crates could own
+behind narrower APIs.
+
+### Recommendations
+
+1. Keep `rmc_server` as the top-level MCP adapter. The current dependency
+   direction is right and should not be inverted.
+
+2. Keep `SearchToolRouter`/`SearchTool` as the primary public server facade.
+   Treat `tools::router` as the stable external entry point for the binary and
+   clients.
+
+3. Narrow public infrastructure modules. Consider making `semantic` internal
+   if no external consumer needs it, and keep `tools::project_paths` only as a
+   short-lived compatibility reexport.
+
+4. Decide where project path identity belongs. Because it combines embedding
+   backend identity with indexing identity, snapshot paths, vector collection
+   names, and indexed profile discovery, it likely belongs in indexing or a
+   small shared support crate more than in the MCP server facade.
+
+5. Consolidate duplicated path/backend helpers. The semantic scan found
+   duplicate `data_dir` and four backend-resolution variants. A single support
+   API would reduce drift between index, query, graph similarity, and health.
+
+6. Ask graph for a narrower server-facing API. Server should not need to know
+   as much about `OpenedSnapshot`, graph model/storage/query internals, and
+   response enrichment. A graph-level query/DTO facade would reduce the
+   strongest server coupling.
+
+7. Ask indexing for a narrower search/index support API. Server query/codemap
+   should not need to open `TantivyAdapter` directly, and sync/index endpoints
+   could call an indexing-owned service for incremental indexing.
+
+8. Keep router methods thin. The current router shape is good; avoid moving
+   parsing, indexing, graph traversal, or response enrichment into the router.
+
+9. Watch `endpoints::analysis`. It is currently an MCP adapter over semantic
+   and engine parser functionality; if complexity grows, move reusable
+   analysis behavior behind semantic or engine APIs.
+
+### Final Findings
+
+- `rmc_server` has correct top-layer dependency direction.
+- The crate root is narrow, but public modules expose implementation
+  namespaces.
+- `SearchToolRouter` is intentionally and practically thin.
+- Graph coupling is the largest boundary concern, especially response code
+  depending on graph model/snapshot/storage internals.
+- Indexing coupling is narrower but still reaches into `IncrementalIndexer`,
+  `TantivyAdapter`, identity helpers, and health internals.
+- Project path and embedding backend policy is spread across server support,
+  query, index, graph similarity, and health paths.
+- Server cohesion is acceptable; the main improvement path is lower-crate
+  facade tightening and server public API narrowing.
