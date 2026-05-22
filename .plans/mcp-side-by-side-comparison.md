@@ -216,11 +216,11 @@ After each phase:
 
 ## Preflight Observations
 
-Status: partial
+Status: pass
 
 | Check | Original | Refactor | Notes |
 |---|---|---|---|
-| Release binary present | yes | no | Refactor release binary must be built before binary metadata checks. MCP comparison still uses the exposed refactor namespace. |
+| Release binary present | yes | yes | Both release binaries are present and executable. |
 | Devshell contains both MCP entries | yes | yes | `rust-code-mcp-original` and `rust-code-mcp-refactor`. |
 | XDG roots isolated | yes | yes | Separate original/refactor Qwen3 roots are required for cache integrity. |
 | Default `RUSTFLAGS` configured | yes | yes | Present in devshell env and MCP server env. |
@@ -235,13 +235,14 @@ Verification notes:
 - The generated `.mcp.toml` pointed original/refactor to distinct XDG cache/data roots.
 - Original release binary exists at `/home/molaco/Documents/rust-code-mcp-final/target/release/rust-code-mcp`.
 - Refactor release binary was not present yet under `/home/molaco/Documents/rust-code-mcp-refactor/target/release/`.
+- Phase 0 recheck found both release binaries present and executable.
 ```
 
 ## Phase Status Summary
 
 | Phase | Name | Status | Result Summary |
 |---|---|---|---|
-| 0 | MCP Tool Baseline | pending | Verify binaries/config metadata and smoke-test the exposed MCP namespaces. |
+| 0 | MCP Tool Baseline | pass | Binaries/config verified; both MCP namespaces answered health/search smoke calls. |
 | 1 | Tool Inventory and Schemas | pending | Compare Codex-exposed MCP tool names and accepted input schemas. |
 | 2 | Health, Cache, and Cold Start | pending | Verify isolated cache roots and health behavior before/after clear. |
 | 3 | Indexing and Retrieval | pending | Compare indexing, keyword search, hybrid search, and similar-code retrieval. |
@@ -254,7 +255,7 @@ Verification notes:
 
 ## Phase 0: MCP Tool Baseline
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -262,18 +263,18 @@ Establish that the available MCP namespaces are usable and capture binary/enviro
 
 Checklist:
 
-- [ ] Enter `cuda-code` and confirm `RUSTFLAGS=-C linker-features=-lld`.
-- [ ] Confirm `.mcp.toml` contains `rust-code-mcp-original` and `rust-code-mcp-refactor`.
-- [ ] Verify original release binary exists and is executable.
-- [ ] Build or verify refactor release binary.
-- [ ] Capture original binary size and modified timestamp.
-- [ ] Capture refactor binary size and modified timestamp.
-- [ ] Capture `jj log -r @-` for the refactor workspace commit under test.
-- [ ] Use `tool_search` to expose both `mcp__rust_code_mcp_original__` and `mcp__rust_code_mcp_refactor__` tool definitions.
-- [ ] Confirm the available original MCP namespace maps to the original XDG roots documented above.
-- [ ] Confirm the available refactor MCP namespace maps to the refactor XDG roots documented above.
-- [ ] Run smoke MCP calls against both namespaces with identical request bodies.
-- [ ] Update this phase with baseline measurements.
+- [x] Enter `cuda-code` and confirm `RUSTFLAGS=-C linker-features=-lld`.
+- [x] Confirm `.mcp.toml` contains `rust-code-mcp-original` and `rust-code-mcp-refactor`.
+- [x] Verify original release binary exists and is executable.
+- [x] Build or verify refactor release binary.
+- [x] Capture original binary size and modified timestamp.
+- [x] Capture refactor binary size and modified timestamp.
+- [x] Capture `jj log -r @-` for the refactor workspace commit under test.
+- [x] Use `tool_search` to expose both `mcp__rust_code_mcp_original__` and `mcp__rust_code_mcp_refactor__` tool definitions.
+- [x] Confirm the available original MCP namespace maps to the original XDG roots documented above.
+- [x] Confirm the available refactor MCP namespace maps to the refactor XDG roots documented above.
+- [x] Run smoke MCP calls against both namespaces with identical request bodies.
+- [x] Update this phase with baseline measurements.
 
 Suggested checks:
 
@@ -288,10 +289,10 @@ Results:
 
 | Check | Original Result | Refactor Result | Delta | Notes |
 |---|---:|---:|---:|---|
-| Binary exists | pending | pending | pending |  |
-| Binary size bytes | pending | pending | pending |  |
-| Visible MCP tool count | pending | pending | pending | Use `tool_search` output, not raw `tools/list`. |
-| `health_check` smoke duration ms | pending | pending | pending |  |
+| Binary exists | yes | yes | exact | Both are regular executable files. |
+| Binary size bytes | 290810664 | 271642248 | -19168416 (-6.59%) | Refactor release binary is smaller. |
+| Visible MCP tool count | exposed | exposed | compatible | `tool_search` returned both namespaces; exact tool-count comparison is Phase 1. |
+| `health_check` smoke duration ms | 59.2 | 26.0 | -56.1% | Tool-call wall time from Codex MCP output. Both returned degraded due to missing Merkle snapshot before indexing. |
 
 Notes:
 
@@ -302,6 +303,19 @@ MCP tool execution:
 - Refactor namespace: mcp__rust_code_mcp_refactor__
 - Original XDG roots: /home/molaco/.cache/mcp-rust-code-original-qwen3, /home/molaco/.local/share/mcp-rust-code-original-qwen3
 - Refactor XDG roots: /home/molaco/.cache/mcp-rust-code-refactor-qwen3, /home/molaco/.local/share/mcp-rust-code-refactor-qwen3
+
+2026-05-22 Phase 0 results:
+- `jj show --summary` was run before starting this phase.
+- `nix develop ../nix-devshells#cuda-code --command env RUSTFLAGS="-C linker-features=-lld" sh -c 'printf "RUSTFLAGS=%s\n" "$RUSTFLAGS"'` reported `RUSTFLAGS=-C linker-features=-lld`.
+- `.mcp.toml` contained both MCP server entries and the expected isolated XDG roots.
+- Original binary: size 290810664 bytes, mtime 2026-05-18 17:04:31.199355329 +0200.
+- Refactor binary: size 271642248 bytes, mtime 2026-05-22 16:15:08.499883678 +0200.
+- Commit under test from `jj log -r @-`: skmktsptlwvuouzxwyrztzxwvnrnqrrm d20af7157036c2844244d65b63822d550fa10d73 docs + plans update.
+- `tool_search` exposed both `mcp__rust_code_mcp_original__` and `mcp__rust_code_mcp_refactor__` tool definitions.
+- `mcp__rust_code_mcp_original__health_check(directory = PRIMARY_WORKSPACE)` returned overall `degraded`: BM25 healthy, vector healthy with 0 vectors, Merkle snapshot missing.
+- `mcp__rust_code_mcp_refactor__health_check(directory = PRIMARY_WORKSPACE)` returned overall `degraded`: BM25 healthy, vector healthy with 0 vectors, Merkle snapshot missing.
+- `mcp__rust_code_mcp_original__search(directory = PRIMARY_WORKSPACE, keyword = "SearchTool")` completed in 1255.8 ms and returned no results before indexing.
+- `mcp__rust_code_mcp_refactor__search(directory = PRIMARY_WORKSPACE, keyword = "SearchTool")` completed in 577.5 ms and returned no results before indexing.
 ```
 
 ## Phase 1: Tool Inventory and Schemas
