@@ -5,7 +5,7 @@
 - Crate: `rmc-indexing`
 - Graph qualified name: `rmc_indexing`
 - Analysis order: 3 of 4
-- Current phase: Phase 1 complete
+- Current phase: Phase 2 complete
 - Report state: in progress
 
 ## Phase Log
@@ -13,8 +13,8 @@
 | Phase | Status | Commit evidence | Notes |
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | e3004234 | Graph snapshot reused; workspace and dependency baseline captured. |
-| Phase 1: Public surface | Complete | Pending commit | Root is narrow, but public submodules expose indexing internals directly. |
-| Phase 2: Dependency boundary | Pending | Not started |  |
+| Phase 1: Public surface | Complete | 1a332a1a | Root is narrow, but public submodules expose indexing internals directly. |
+| Phase 2: Dependency boundary | Complete | Pending commit | Outgoing edges are only to `rmc_config` and `rmc_engine`; expected layering rules have no violations. |
 | Phase 3: Import and usage coupling | Pending | Not started |  |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
@@ -271,3 +271,176 @@ whether consumers use the high-level facade types or import deep modules.
   or are some of them only server operational support?
 - Are examples/tests the only consumers of lower-level modules such as
   `merkle` and `tantivy_adapter`?
+
+## Phase 2: Dependency Boundary
+
+### Required VCS Check
+
+Before Phase 2, `jj show --summary` reported:
+
+```text
+Commit ID: a50bc01a787d357a81fa8d49e29b565c7a2d76fb
+Change ID: monpqutyvrvktromorlrrpuklrqzxryt
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+crate_dependency_metric(directory, sort_by="efferent", summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[rmc_indexing -> *], consumer_kinds=[lib, bin, example, test, bench], summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[* -> rmc_indexing], consumer_kinds=[lib, bin, example, test, bench], summary=true, limit=200)
+forbidden_dependency_check(directory, rules=[expected layering rules], consumer_kinds=[lib, bin, example, test, bench], summary=true, limit=200)
+```
+
+`rmc_indexing` dependency metric:
+
+```text
+crate_name: rmc_indexing
+item_count: 308
+efferent: 2
+afferent: 14
+instability: 0.125
+abstractness: 0.003246753246753247
+```
+
+Outgoing edge inventory:
+
+```text
+rmc_indexing -> rmc_config
+  sample_symbol: rmc_config::config::indexer::IndexerCoreConfig
+  unique_symbols: 10
+  total_refs: 30
+
+rmc_indexing -> rmc_engine
+  sample_symbol: rmc_engine::embeddings::backend::EmbeddingBackend
+  unique_symbols: 46
+  total_refs: 198
+```
+
+Incoming edge inventory:
+
+```text
+bench_incremental_performance -> rmc_indexing
+  sample_symbol: IncrementalIndexer::index_with_change_detection
+  unique_symbols: 3
+  total_refs: 13
+
+benchmark_gpu_performance -> rmc_indexing
+  sample_symbol: IncrementalIndexer
+  unique_symbols: 8
+  total_refs: 21
+
+benchmark_phases -> rmc_indexing
+  sample_symbol: IncrementalIndexer
+  unique_symbols: 15
+  total_refs: 17
+
+embedding_profile_smoke -> rmc_indexing
+  sample_symbol: IncrementalIndexer
+  unique_symbols: 4
+  total_refs: 5
+
+evaluation -> rmc_indexing
+  sample_symbol: UnifiedIndexer
+  unique_symbols: 6
+  total_refs: 7
+
+index_codebase -> rmc_indexing
+  sample_symbol: IncrementalIndexer
+  unique_symbols: 6
+  total_refs: 7
+
+quick_bench -> rmc_indexing
+  sample_symbol: IncrementalIndexer
+  unique_symbols: 6
+  total_refs: 8
+
+rmc_server -> rmc_indexing
+  sample_symbol: rmc_indexing::indexing::unified::IndexStats
+  unique_symbols: 21
+  total_refs: 55
+
+test_full_incremental_flow -> rmc_indexing
+  sample_symbol: IncrementalIndexer::index_with_change_detection
+  unique_symbols: 4
+  total_refs: 10
+
+test_gpu_index_jsonrpc -> rmc_indexing
+  sample_symbol: MemoryMonitor::usage_percent
+  unique_symbols: 4
+  total_refs: 6
+
+test_hybrid_search -> rmc_indexing
+  sample_symbol: UnifiedIndexer
+  unique_symbols: 6
+  total_refs: 14
+
+test_incremental_indexing -> rmc_indexing
+  sample_symbol: IncrementalIndexer::index_with_change_detection
+  unique_symbols: 4
+  total_refs: 24
+
+test_mcp_stdio_transport -> rmc_indexing
+  sample_symbol: get_snapshot_path
+  unique_symbols: 1
+  total_refs: 2
+
+test_merkle_standalone -> rmc_indexing
+  sample_symbol: FileSystemMerkle
+  unique_symbols: 11
+  total_refs: 69
+```
+
+Expected layering check:
+
+```text
+rule_count: 5
+violation_count: 0
+```
+
+Checked rules:
+
+```text
+rmc_engine should not depend on rmc_* crates.
+rmc_graph should not depend on rmc_server.
+rmc_graph should not depend on rmc_indexing.
+rmc_indexing should not depend on rmc_server.
+rmc_indexing should not depend on rmc_graph.
+```
+
+### Phase 2 Interpretation
+
+`rmc_indexing` has the expected dependency direction. It depends on engine
+primitives and configuration, and it does not depend on graph or server. That
+keeps indexing as a sibling of graph rather than a consumer of persisted graph
+internals.
+
+The incoming edge inventory shows two consumer categories. Production server
+code uses indexing with `21` unique symbols and `55` refs. Most other incoming
+consumers are benchmarks, examples, integration tests, or standalone tools.
+Those tools often use lower-level indexing APIs such as `IncrementalIndexer`,
+`FileSystemMerkle`, and `get_snapshot_path`, which phase 3 should separate from
+production server usage.
+
+### Phase 2 Findings
+
+- `rmc_indexing` has two outgoing crate edges: `rmc_engine` and `rmc_config`.
+- No `rmc_indexing -> rmc_server` edge exists.
+- No `rmc_indexing -> rmc_graph` edge exists.
+- The expected cross-layer rules returned zero violations.
+- `rmc_server` is the main production consumer of indexing, with `21` unique
+  symbols and `55` refs.
+- Lower-level indexing internals are heavily used by tests, benchmarks, and
+  standalone tools, especially `IncrementalIndexer`, `FileSystemMerkle`, and
+  `get_snapshot_path`.
+
+### Open Questions For Later Phases
+
+- Which `rmc_server` modules account for the 21 indexing symbols?
+- Does server use `UnifiedIndexer` as the stable facade, or does it reach into
+  incremental, monitoring, metadata cache, and security modules directly?
+- Should benchmark/test-only lower-level surfaces be public, or can they move
+  behind narrower dev/test APIs?
