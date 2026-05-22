@@ -5,15 +5,15 @@
 - Crate: `rmc-indexing`
 - Graph qualified name: `rmc_indexing`
 - Analysis order: 3 of 4
-- Current phase: Phase 0 complete
+- Current phase: Phase 1 complete
 - Report state: in progress
 
 ## Phase Log
 
 | Phase | Status | Commit evidence | Notes |
 | --- | --- | --- | --- |
-| Phase 0: Snapshot readiness and baseline | Complete | Pending commit | Graph snapshot reused; workspace and dependency baseline captured. |
-| Phase 1: Public surface | Pending | Not started |  |
+| Phase 0: Snapshot readiness and baseline | Complete | e3004234 | Graph snapshot reused; workspace and dependency baseline captured. |
+| Phase 1: Public surface | Complete | Pending commit | Root is narrow, but public submodules expose indexing internals directly. |
 | Phase 2: Dependency boundary | Pending | Not started |  |
 | Phase 3: Import and usage coupling | Pending | Not started |  |
 | Phase 4: Internal cohesion | Pending | Not started |  |
@@ -115,3 +115,159 @@ The two outgoing dependencies need phase 2 validation. The expected shape is
 - Does indexing stay independent from persisted graph internals?
 - Are security, monitoring, and sync responsibilities cohesive inside indexing,
   or should some be server-owned?
+
+## Phase 1: Public Surface
+
+### Required VCS Check
+
+Before Phase 1, `jj show --summary` reported:
+
+```text
+Commit ID: 3d2e3eb7d1d4dd4585428bee2f4cb4da789f4edd
+Change ID: kupyymnxlwuxwmmynqwsuxnyzvxupyro
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+module_tree(directory, krate="rmc_indexing", depth=2)
+get_exports(directory, module="rmc_indexing", consumer="rmc_indexing", summary=true, limit=300)
+get_declared_reexports(directory, module="rmc_indexing", summary=false, limit=300)
+pub_use_pub_type_audit(directory, crate_name="rmc_indexing", summary=true, limit=300)
+module_tree(directory, krate="rmc_indexing", depth=3)
+get_exports(directory, module="rmc_indexing::indexing", consumer="rmc_indexing", summary=true, limit=500)
+get_declared_reexports(directory, module="rmc_indexing::indexing", summary=false, limit=500)
+get_exports(directory, module=<important public submodules>, consumer="rmc_indexing", summary=true, limit=300)
+```
+
+Crate root:
+
+```text
+exports: 5
+declared reexports: 0
+
+public root modules:
+  indexing
+  metadata_cache
+  metrics
+  monitoring
+  security
+```
+
+`pub_use_pub_type_audit` findings:
+
+```text
+count: 0
+```
+
+`rmc_indexing::indexing` surface:
+
+```text
+exports: 20
+declared reexports: 7
+
+public modules:
+  consistency
+  error
+  error_collection
+  identity
+  incremental
+  indexer_core
+  merkle
+  retry
+  tantivy_adapter
+  unified
+
+pub(crate) modules visible inside rmc_indexing:
+  backup
+  embedding_batcher
+  file_processor
+
+public reexports:
+  UnifiedIndexer -> indexing::unified::UnifiedIndexer
+  IndexStats -> indexing::unified::IndexStats
+  IndexFileResult -> indexing::unified::IndexFileResult
+  IncrementalIndexer -> indexing::incremental::IncrementalIndexer
+  get_snapshot_path -> indexing::incremental::get_snapshot_path
+  TantivyAdapter -> indexing::tantivy_adapter::TantivyAdapter
+```
+
+Other public submodule surfaces:
+
+```text
+metadata_cache:
+  MetadataCache is public.
+  FileMetadata and FileStat are pub(crate).
+
+metrics:
+  IndexingMetrics is public.
+  memory module is public.
+  PhaseTimer is pub(crate).
+
+metrics::memory:
+  MemoryMonitor is public.
+
+monitoring:
+  health and backup modules are public.
+
+monitoring::health:
+  ComponentHealth, HealthMonitor, HealthStatus, Status are public.
+
+security:
+  SensitiveFileFilter and secrets module are public.
+
+security::secrets:
+  SecretMatch and SecretsScanner are public.
+
+indexing::unified:
+  UnifiedIndexer, IndexStats, IndexFileResult are public.
+
+indexing::incremental:
+  IncrementalIndexer, get_snapshot_path, get_snapshot_path_for_identity are public.
+  get_snapshot_path_for_backend is pub(crate).
+```
+
+### Phase 1 Interpretation
+
+The crate root is intentionally narrow: it exposes five responsibility modules
+and no root-level reexports. The main API is one level down, especially under
+`rmc_indexing::indexing`.
+
+`rmc_indexing::indexing` is both facade and implementation namespace. It
+reexports the likely primary APIs (`UnifiedIndexer`, `IncrementalIndexer`,
+`IndexStats`, `IndexFileResult`) while also exposing implementation modules
+such as `tantivy_adapter`, `merkle`, `retry`, `identity`, `consistency`, and
+`indexer_core`. That mirrors the graph crate pattern, but the surface is
+smaller.
+
+Security, metadata cache, metrics, and monitoring are also public API groups.
+Some of that is probably intentional because server and tests need health,
+memory, sensitive-file, and secret-scanning primitives. Phase 3 must check
+whether consumers use the high-level facade types or import deep modules.
+
+### Phase 1 Findings
+
+- Root facade is narrow: five public modules and no root reexports.
+- `rmc_indexing::indexing` has a curated facade layer, but it also exposes
+  implementation modules directly.
+- `UnifiedIndexer`, `IncrementalIndexer`, `IndexStats`, and `IndexFileResult`
+  appear to be primary public APIs.
+- `TantivyAdapter`, `merkle`, `retry`, `identity`, `consistency`, and
+  `indexer_core` are public implementation surfaces.
+- `metadata_cache::MetadataCache`, `metrics::IndexingMetrics`,
+  `metrics::memory::MemoryMonitor`, monitoring health types,
+  `SensitiveFileFilter`, `SecretsScanner`, and `SecretMatch` are public.
+- No `pub type` masquerading findings were reported.
+
+### Open Questions For Later Phases
+
+- Which external crates import `TantivyAdapter`, `FileSystemMerkle`,
+  `get_snapshot_path`, or monitoring/security internals directly?
+- Is `UnifiedIndexer` sufficient as the preferred indexing facade?
+- Should `metadata_cache`, `monitoring`, and `metrics` be public indexing APIs,
+  or are some of them only server operational support?
+- Are examples/tests the only consumers of lower-level modules such as
+  `merkle` and `tantivy_adapter`?
