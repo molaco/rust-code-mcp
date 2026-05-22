@@ -5,8 +5,8 @@
 - Crate: `rmc-engine`
 - Graph qualified name: `rmc_engine`
 - Analysis order: 1 of 4
-- Current phase: Phase 4 complete
-- Report state: in progress
+- Current phase: Phase 5 complete
+- Report state: complete
 
 ## Phase Log
 
@@ -16,8 +16,8 @@
 | Phase 1: Public surface | Complete | b393df22 | Root exposes six domain modules; submodule facades reexport public API types. |
 | Phase 2: Dependency boundary | Complete | 549dbff6 | No outgoing `rmc_*` dependency violations; one outgoing edge to `fastembed`. |
 | Phase 3: Import and usage coupling | Complete | b1a7c450 | Coupling centers on embedding, chunk, vector-store, parser, and search boundary types. |
-| Phase 4: Internal cohesion | Complete | Pending commit | No `rmc_*` parameter dependency inside engine; scoped overlap findings are mostly expected helper/DTO families. |
-| Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
+| Phase 4: Internal cohesion | Complete | 9eaf40b8 | No `rmc_*` parameter dependency inside engine; scoped overlap findings are mostly expected helper/DTO families. |
+| Phase 5: Targeted source reads and recommendations | Complete | Pending commit | Source reads confirm mostly facade-based imports; recommendations recorded. |
 
 ## Phase 0: Snapshot Readiness And Baseline
 
@@ -749,3 +749,201 @@ both.
   than deep implementation paths?
 - Does `Bm25Search` usage from server/indexing health indicate a public backend
   abstraction gap?
+
+## Phase 5: Targeted Source Reads And Recommendations
+
+### Required VCS Check
+
+Before Phase 5, `jj show --summary` reported:
+
+```text
+Commit ID: 5f652f987616197f827f3379223421518df71fd5
+Change ID: uytmurwrnvlxxuvxowktrkvpovnyypvr
+Description: (no description set)
+```
+
+### Source Evidence
+
+Source reads were limited to files identified by MCP phases 1-4.
+
+Files read:
+
+```text
+crates/rmc-engine/src/lib.rs
+crates/rmc-engine/src/chunker/mod.rs
+crates/rmc-engine/src/embeddings/mod.rs
+crates/rmc-engine/src/vector_store/mod.rs
+crates/rmc-engine/src/parser/mod.rs
+crates/rmc-engine/src/search/mod.rs
+crates/rmc-indexing/src/indexing/indexer_core.rs
+crates/rmc-indexing/src/indexing/unified.rs
+crates/rmc-indexing/src/monitoring/health.rs
+crates/rmc-server/src/tools/endpoints/query.rs
+crates/rmc-server/src/tools/endpoints/health.rs
+crates/rmc-config/src/config/indexer.rs
+```
+
+Facade definitions:
+
+```text
+rmc_engine root:
+  pub mod chunker;
+  pub mod embeddings;
+  pub mod parser;
+  pub mod schema;
+  pub mod search;
+  pub mod vector_store;
+
+chunker facade:
+  pub use chunker::Chunker;
+  pub use types::{ChunkContext, ChunkId, ChunkSplitConfig, CodeChunk};
+
+embeddings facade:
+  pub use backend::{EmbeddingBackend, EmbeddingRuntime};
+  pub use profile::{EmbeddingProfile, Qwen3Variant};
+  pub use profile::{FastembedCpuModel, LocalLoaderSpec, QueryPolicy};
+  pub use profile_registry::resolve_profile;
+  pub use openrouter::{openrouter_runtime_config, OpenRouter...};
+  pub use token_lengths::{EmbeddingTextLen, EmbeddingTokenCounter};
+
+parser facade:
+  pub use rust_parser::RustParser;
+  pub use types::{ParseResult, Range, Symbol, SymbolKind, Visibility};
+
+search facade:
+  pub mod bm25;
+  pub mod error;
+  pub mod resilient;
+  pub mod rrf_tuner;
+  pub use bm25::Bm25Search;
+  pub use error::SearchError;
+  pub use resilient::ResilientHybridSearch;
+
+vector_store facade:
+  pub mod error;
+  pub mod lancedb;
+  pub mod traits;
+  pub use error::VectorStoreError;
+  pub use lancedb::LanceDbBackend;
+  pub use traits::VectorStoreBackend;
+```
+
+External import path samples:
+
+```text
+rmc_indexing::indexing::indexer_core:
+  use rmc_engine::chunker::{Chunker, ChunkSplitConfig, CodeChunk};
+  use rmc_engine::embeddings::{Embedding, EmbeddingBackend, EmbeddingGenerator};
+  use rmc_engine::parser::RustParser;
+
+rmc_indexing::indexing::unified:
+  use rmc_engine::chunker::{ChunkId, CodeChunk};
+  use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+  use rmc_engine::vector_store::VectorStore;
+
+rmc_server::tools::endpoints::query:
+  use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+  use rmc_engine::search::HybridSearch;
+  use rmc_engine::vector_store::VectorStore;
+
+rmc_server::tools::endpoints::health:
+  use rmc_engine::embeddings::EmbeddingBackend;
+  use rmc_engine::search::Bm25Search;
+  use rmc_engine::vector_store::VectorStore;
+
+rmc_indexing::monitoring::health:
+  use rmc_engine::search::Bm25Search;
+  use rmc_engine::vector_store::VectorStore;
+
+rmc_config::config::indexer:
+  use rmc_engine::embeddings::EmbeddingProfile;
+```
+
+DTO source evidence:
+
+```text
+VectorSearchResult:
+  chunk_id: ChunkId
+  score: f32
+  chunk: CodeChunk
+
+SearchResult:
+  chunk_id: ChunkId
+  score: f32
+  bm25_score: Option<f32>
+  vector_score: Option<f32>
+  bm25_rank: Option<usize>
+  vector_rank: Option<usize>
+  chunk: CodeChunk
+```
+
+### Final Boundary Assessment
+
+Boundary score: 8/10.
+
+`rmc_engine` is a clean foundation crate. It has no upward `rmc_*` dependencies,
+no engine functions accepting `rmc_*` parameter types, and no name-collision
+findings. Its root facade is intentionally narrow and the actual consumer
+imports mostly use one-level subsystem facades such as `rmc_engine::chunker`,
+`rmc_engine::embeddings`, `rmc_engine::search`, and
+`rmc_engine::vector_store`.
+
+The main reason this is not a 10/10 boundary is public surface breadth inside
+some subsystems:
+
+- `embeddings` exposes backend/runtime/profile/provider concepts and
+  OpenRouter-specific runtime config from one module.
+- `search` exposes concrete backend modules (`bm25`, `resilient`,
+  `rrf_tuner`) as public modules as well as facade reexports.
+- `vector_store` exposes `lancedb` and `traits` as public modules as well as
+  facade reexports.
+- `rmc_config` depends directly on `EmbeddingProfile`, which makes engine the
+  owner of profile configuration rather than keeping config fully independent.
+
+These are manageable design choices, not current correctness problems.
+
+### Recommendations
+
+1. Keep `rmc_engine` as the lowest-level primitive crate.
+   The MCP evidence supports this strongly. Do not move server, graph, or
+   indexing concepts into engine.
+
+2. Preserve the one-level facades.
+   Existing consumers already import from `rmc_engine::chunker`,
+   `rmc_engine::embeddings`, `rmc_engine::search`, and
+   `rmc_engine::vector_store`. That should remain the preferred public API.
+
+3. Consider hiding public implementation modules later.
+   `search::bm25`, `search::resilient`, `search::rrf_tuner`,
+   `vector_store::lancedb`, and `vector_store::traits` are public. If external
+   callers do not need the modules directly, keep only the facade reexports
+   public and make the modules private or `pub(crate)`.
+
+4. Treat `EmbeddingBackend` as a formal boundary type.
+   It is shared across server, graph, indexing, config-adjacent paths, and
+   engine internals. Changes to it should be treated as cross-crate API changes.
+
+5. Decide whether `EmbeddingProfile` belongs in engine long term.
+   Current evidence says config imports it directly. That is acceptable if
+   engine owns the canonical embedding profile model; otherwise, a smaller
+   shared profile/config crate may be cleaner.
+
+6. Leave `VectorSearchResult` and `SearchResult` separate for now.
+   They are similar but not identical. `SearchResult` adds BM25/vector score and
+   rank metadata for hybrid search. A shared base DTO is only worth adding if
+   both types continue to change together.
+
+7. Leave OpenRouter config helpers alone unless churn continues.
+   The semantic overlap is real, but the split improves explicit handling for
+   env defaults, explicit config, and runtime resolution. Consolidation would be
+   cleanup, not a boundary fix.
+
+### Final Findings
+
+- Strong boundary: no upward dependency on server, graph, indexing, or config.
+- Strong boundary: consumers mostly use facade imports.
+- Watch item: public implementation modules in `search` and `vector_store`.
+- Watch item: embedding subsystem has a wide public API.
+- Watch item: `rmc_config -> rmc_engine::EmbeddingProfile` makes engine own
+  profile configuration semantics.
+- No immediate refactor is required before analyzing the other crates.
