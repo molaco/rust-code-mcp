@@ -7,8 +7,8 @@
 //!
 //! Health states: Healthy, Degraded, Unhealthy
 
-use crate::search::Bm25Search;
-use crate::vector_store::VectorStore;
+use rmc_engine::search::Bm25Search;
+use rmc_engine::vector_store::VectorStore;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use std::time::Instant;
 
 /// Overall system health status
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct HealthStatus {
+pub struct HealthStatus {
     /// Overall system status
     pub overall: Status,
     /// BM25 search component health
@@ -30,7 +30,7 @@ pub(crate) struct HealthStatus {
 /// Health status levels
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Status {
+pub enum Status {
     /// All systems operational
     Healthy,
     /// Some systems degraded but functional
@@ -41,7 +41,7 @@ pub(crate) enum Status {
 
 /// Individual component health
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ComponentHealth {
+pub struct ComponentHealth {
     /// Component status
     pub status: Status,
     /// Status message
@@ -81,7 +81,7 @@ impl ComponentHealth {
 }
 
 /// Health monitor for the search system
-pub(crate) struct HealthMonitor {
+pub struct HealthMonitor {
     bm25: Option<Arc<Bm25Search>>,
     vector_store: Option<Arc<VectorStore>>,
     merkle_path: PathBuf,

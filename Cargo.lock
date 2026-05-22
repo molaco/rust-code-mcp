@@ -7293,6 +7293,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmc-indexing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode 1.3.3",
+ "directories",
+ "glob",
+ "num_cpus",
+ "rayon",
+ "regex",
+ "rmc-config",
+ "rmc-engine",
+ "rs_merkle",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sled",
+ "sysinfo",
+ "tantivy",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "rmcp"
 version = "0.8.1"
 source = "git+https://github.com/modelcontextprotocol/rust-sdk?branch=main#11093bc830d77717b8f24813d888238a12d7eefe"
@@ -7392,6 +7419,7 @@ dependencies = [
  "rmc-config",
  "rmc-engine",
  "rmc-graph",
+ "rmc-indexing",
  "rmcp",
  "rs_merkle",
  "serde",

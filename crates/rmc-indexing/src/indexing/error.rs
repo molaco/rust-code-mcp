@@ -2,8 +2,8 @@
 
 use thiserror::Error;
 
-use crate::embeddings::EmbeddingError;
-use crate::vector_store::VectorStoreError;
+use rmc_engine::embeddings::EmbeddingError;
+use rmc_engine::vector_store::VectorStoreError;
 
 /// Errors that can occur during indexing operations
 #[derive(Error, Debug)]

@@ -1,7 +1,7 @@
 //! Shared cache identity helpers for indexing artifacts.
 
-use crate::config::IndexerCoreConfig;
-use crate::embeddings::EmbeddingBackend;
+use rmc_config::config::IndexerCoreConfig;
+use rmc_engine::embeddings::EmbeddingBackend;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -14,7 +14,7 @@ pub(crate) fn active_chunking_identity() -> String {
 }
 
 /// Active chunking identity for a specific embedding backend.
-pub(crate) fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
+pub fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
     IndexerCoreConfig::default()
         .with_embedding_profile(backend.profile.clone())
         .with_env_overrides()
@@ -30,7 +30,7 @@ pub(crate) fn canonical_codebase_path(codebase_path: &Path) -> PathBuf {
 }
 
 /// Stable identity for all embedding-sensitive indexing artifacts.
-pub(crate) fn indexing_identity(
+pub fn indexing_identity(
     codebase_path: &Path,
     backend: &EmbeddingBackend,
     chunking_identity: &str,
@@ -45,7 +45,7 @@ pub(crate) fn indexing_identity(
 }
 
 /// SHA-256 hex digest for a stable identity string.
-pub(crate) fn identity_hash(identity: &str) -> String {
+pub fn identity_hash(identity: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(identity.as_bytes());
     format!("{:x}", hasher.finalize())

@@ -31,14 +31,14 @@
 //! # }
 //! ```
 
-use crate::chunker::{Chunker, ChunkSplitConfig, CodeChunk};
-use crate::config::IndexerCoreConfig;
-use crate::embeddings::{Embedding, EmbeddingBackend, EmbeddingGenerator};
+use rmc_engine::chunker::{Chunker, ChunkSplitConfig, CodeChunk};
+use rmc_config::config::IndexerCoreConfig;
+use rmc_engine::embeddings::{Embedding, EmbeddingBackend, EmbeddingGenerator};
 use crate::indexing::embedding_batcher::EmbeddingBatcher;
 use crate::indexing::file_processor::FileProcessor;
 use crate::indexing::IndexingError;
 use crate::metadata_cache::MetadataCache;
-use crate::parser::RustParser;
+use rmc_engine::parser::RustParser;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 

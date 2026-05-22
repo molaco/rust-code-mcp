@@ -2,13 +2,13 @@
 //!
 //! Verifies that Tantivy and vector store indexes are in sync
 
-use crate::chunker::ChunkId;
+use rmc_engine::chunker::ChunkId;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use tantivy::{Index, IndexReader};
 use tantivy::schema::Value;
-use crate::vector_store::VectorStore;
-use crate::schema::ChunkSchema;
+use rmc_engine::vector_store::VectorStore;
+use rmc_engine::schema::ChunkSchema;
 
 /// Results from a consistency check
 #[derive(Debug, Clone)]

@@ -3,9 +3,9 @@
 //! Extracted from `IndexerCore` to encapsulate embedding pipeline concerns:
 //! GPU-optimized batch embedding generation and memory-aware batch sizing.
 
-use crate::chunker::CodeChunk;
-use crate::embeddings::batching::{BatchPlan as EmbeddingBatchPlan, plan_batches};
-use crate::embeddings::{
+use rmc_engine::chunker::CodeChunk;
+use rmc_engine::embeddings::batching::{BatchPlan as EmbeddingBatchPlan, plan_batches};
+use rmc_engine::embeddings::{
     Embedding, EmbeddingGenerator, EmbeddingRuntime, EmbeddingTextLen, EmbeddingTokenCounter,
 };
 use crate::indexing::IndexingError;

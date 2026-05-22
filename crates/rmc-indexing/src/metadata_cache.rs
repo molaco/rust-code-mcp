@@ -69,7 +69,7 @@ impl FileMetadata {
 }
 
 /// Cache for tracking file metadata
-pub(crate) struct MetadataCache {
+pub struct MetadataCache {
     db: Db,
 }
 

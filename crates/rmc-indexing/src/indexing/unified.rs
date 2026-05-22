@@ -5,16 +5,16 @@
 //! - VectorStore: Vector indexing operations (LanceDB embedded backend)
 //! - IndexerCore: Core file processing and embedding generation
 
-use crate::chunker::{ChunkId, CodeChunk};
-use crate::config::IndexerConfig;
-use crate::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+use rmc_engine::chunker::{ChunkId, CodeChunk};
+use rmc_config::config::IndexerConfig;
+use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use crate::indexing::indexer_core::IndexerCore;
 use crate::indexing::tantivy_adapter::TantivyAdapter;
 use crate::indexing::unified_parallel::{
     collect_rust_files, parallel_parse_batch, process_batch_errors,
 };
 use crate::metrics::IndexingMetrics;
-use crate::vector_store::VectorStore;
+use rmc_engine::vector_store::VectorStore;
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -461,7 +461,7 @@ impl UnifiedIndexer {
     }
 
     /// Get access to the Tantivy schema
-    pub fn tantivy_schema(&self) -> &crate::schema::ChunkSchema {
+    pub fn tantivy_schema(&self) -> &rmc_engine::schema::ChunkSchema {
         self.tantivy.schema()
     }
 
@@ -471,7 +471,7 @@ impl UnifiedIndexer {
     }
 
     /// Create a Bm25Search instance from the Tantivy index
-    pub fn create_bm25_search(&self) -> Result<crate::search::bm25::Bm25Search> {
+    pub fn create_bm25_search(&self) -> Result<rmc_engine::search::bm25::Bm25Search> {
         self.tantivy.create_bm25_search()
     }
 

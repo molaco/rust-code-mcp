@@ -612,6 +612,8 @@ Stage in sub-commits if the diff is too large to review:
 
 Risk: Medium-high. `indexing::unified` has the largest fan-out in the codebase (11 targets); the import-rewrite touches more lines than any other single commit in this plan.
 
+**Status: DONE** — see commit log (`phase 7 C.2`). 5 modules moved (23 files); 25 `^use crate::*` rewrites + 4 body-position rewrites in `unified.rs` and `tantivy_adapter.rs` (non-`^use` matches); 9 `pub(crate)` → `pub` widenings (`MetadataCache`, `HealthStatus`, `Status`, `ComponentHealth`, `HealthMonitor`, `active_chunking_identity_for_backend`, `indexing_identity`, `identity_hash`, `get_snapshot_path_for_identity`). Three extra deps added beyond pre-survey: `num_cpus`, `directories`, `tempfile` (dev). `cargo check --workspace --all-targets` green.
+
 ### 5.C.3 — Lift `tools + mcp + semantic` as `rmc-server`
 
 Three modules go into `rmc-server`:

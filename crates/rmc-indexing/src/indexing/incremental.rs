@@ -9,7 +9,7 @@
 //!
 //! This achieves 100-1000x speedup vs full reindexing for unchanged codebases.
 
-use crate::embeddings::EmbeddingBackend;
+use rmc_engine::embeddings::EmbeddingBackend;
 use crate::indexing::identity::{
     active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
@@ -37,7 +37,7 @@ pub(crate) fn get_snapshot_path_for_backend(
 }
 
 /// Get snapshot storage path for a precomputed indexing identity.
-pub(crate) fn get_snapshot_path_for_identity(indexing_identity: &str) -> PathBuf {
+pub fn get_snapshot_path_for_identity(indexing_identity: &str) -> PathBuf {
     use directories::ProjectDirs;
 
     // Use same ProjectDirs config as data_dir() for consistency
