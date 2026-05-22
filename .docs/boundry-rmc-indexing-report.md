@@ -5,7 +5,7 @@
 - Crate: `rmc-indexing`
 - Graph qualified name: `rmc_indexing`
 - Analysis order: 3 of 4
-- Current phase: Phase 3 complete
+- Current phase: Phase 4 complete
 - Report state: in progress
 
 ## Phase Log
@@ -15,8 +15,8 @@
 | Phase 0: Snapshot readiness and baseline | Complete | e3004234 | Graph snapshot reused; workspace and dependency baseline captured. |
 | Phase 1: Public surface | Complete | 1a332a1a | Root is narrow, but public submodules expose indexing internals directly. |
 | Phase 2: Dependency boundary | Complete | 07e23561 | Outgoing edges are only to `rmc_config` and `rmc_engine`; expected layering rules have no violations. |
-| Phase 3: Import and usage coupling | Complete | Pending commit | Server uses unified/index stats APIs, but also reaches into incremental and Tantivy adapter modules. |
-| Phase 4: Internal cohesion | Pending | Not started |  |
+| Phase 3: Import and usage coupling | Complete | df3f0b8c | Server uses unified/index stats APIs, but also reaches into incremental and Tantivy adapter modules. |
+| Phase 4: Internal cohesion | Complete | Pending commit | Cohesive indexing crate; overlap findings are small variant/helper pairs. |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
 ## Phase 0: Snapshot Readiness And Baseline
@@ -631,3 +631,168 @@ should call `IncrementalIndexer` and Tantivy adapter details directly.
   touching `TantivyAdapter`?
 - Are public monitoring/security modules deliberately reusable, or just public
   because examples and benchmarks import them?
+
+## Phase 4: Internal Cohesion
+
+### Required VCS Check
+
+Before Phase 4, `jj show --summary` reported:
+
+```text
+Commit ID: 58f2e97329480920d423fbfdbf060d2b10f7a328
+Change ID: olrwqlvrzqpswnzwyxnzmlmuwyupvwpq
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+functions_with_filter(directory, krate="rmc_indexing", summary=true, limit=300)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="rmc_engine", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="EmbeddingBackend", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="IndexerCoreConfig", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="CodeChunk", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="VectorStore", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="UnifiedIndexer", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_indexing", has_param_type="IncrementalIndexer", summary=true, limit=100)
+overlaps(directory, scope="local_no_vendor")
+semantic_overlaps(directory, crate_name="rmc_indexing", item_kind="Struct", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_indexing", item_kind="Enum", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_indexing", item_kind="Function", summary=true, max_pairs=25)
+```
+
+Function inventory:
+
+```text
+total indexed rmc_indexing functions: 259
+returned first page: 259
+```
+
+Boundary-signature filters:
+
+```text
+has_param_type="rmc_engine"
+  total: 0
+
+has_param_type="EmbeddingBackend"
+  total: 6
+  identity::active_chunking_identity_for_backend
+  identity::indexing_identity
+  incremental::IncrementalIndexer::with_backend
+  incremental::get_snapshot_path_for_backend
+  indexer_core::IndexerCore::with_backend
+  unified::UnifiedIndexer::for_embedded_with_backend
+
+has_param_type="IndexerCoreConfig"
+  total: 2
+  indexer_core::IndexerCore::new
+  indexer_core::IndexerCore::with_backend
+
+has_param_type="CodeChunk"
+  total: 5
+  embedding_batcher::EmbeddingBatcher::count_chunk_raw_tokens
+  embedding_batcher::EmbeddingBatcher::generate_embeddings_batched
+  indexer_core::IndexerCore::generate_embeddings_batched
+  tantivy_adapter::TantivyAdapter::index_chunk
+  tantivy_adapter::TantivyAdapter::index_chunks
+
+has_param_type="VectorStore"
+  total: 2
+  consistency::ConsistencyChecker::new
+  monitoring::health::HealthMonitor::new
+
+has_param_type="UnifiedIndexer"
+  total: 0
+
+has_param_type="IncrementalIndexer"
+  total: 0
+```
+
+Name-overlap context:
+
+```text
+cross_crate_type_collisions: 0
+module_shadows: 0
+common_fn_names: 0
+within_crate_type_duplicates:
+  none for rmc_indexing
+```
+
+Semantic overlap, structs:
+
+```text
+seed_count: 31
+total_pair_count: 1
+total_cluster_count: 1
+
+cluster:
+  FileSystemMerkle / MerkleSnapshot
+```
+
+Semantic overlap, enums:
+
+```text
+seed_count: 4
+total_pair_count: 0
+total_cluster_count: 0
+```
+
+Semantic overlap, functions:
+
+```text
+seed_count: 19
+total_pair_count: 4
+total_cluster_count: 4
+
+clusters:
+  retry::retry_sync_with_backoff / retry::retry_with_backoff
+  embedding_batcher::summarize_token_lengths /
+    embedding_batcher::summarize_unsorted_token_lengths
+  identity::active_chunking_identity /
+    identity::active_chunking_identity_for_backend
+  incremental::get_snapshot_path_for_backend /
+    incremental::get_snapshot_path
+```
+
+### Phase 4 Interpretation
+
+`rmc_indexing` is internally cohesive. Its function set clusters around
+indexing work: file processing, metadata cache, embedding batching, incremental
+indexing, Merkle snapshots, Tantivy writes, unified indexing, consistency,
+monitoring, and security filtering. The boundary signatures show expected
+dependencies on engine primitives (`EmbeddingBackend`, `CodeChunk`,
+`VectorStore`) and config (`IndexerCoreConfig`), without any signature-level
+dependency on graph or server types.
+
+The semantic overlap findings are small and understandable. The async/sync
+retry pair and default/backend-specific identity/path helpers are variant
+pairs. The Merkle struct pair reflects one module's core data model rather than
+duplicated ownership. There are no indexing-specific name-collision findings.
+
+The main cohesion question remains API layering rather than duplicated logic:
+`UnifiedIndexer`, `IncrementalIndexer`, `IndexerCore`, `TantivyAdapter`, and
+supporting modules are all valid pieces of indexing, but only some should be
+production server-facing.
+
+### Phase 4 Findings
+
+- `rmc_indexing` has 259 indexed functions.
+- No function signature directly contains `rmc_engine`; concrete engine types
+  appear as `EmbeddingBackend`, `CodeChunk`, and `VectorStore`.
+- No function signature takes `UnifiedIndexer` or `IncrementalIndexer`, so
+  those types are construction/use APIs rather than callback/service inputs.
+- Config coupling is localized to `IndexerCore` constructors.
+- No rmc-indexing name collisions or module shadows were reported.
+- Semantic overlap found only one struct cluster and four function clusters,
+  all explainable as paired variants or local data-model relationships.
+
+### Open Questions For Phase 5
+
+- Should the public API guide server toward `UnifiedIndexer` and away from
+  `IncrementalIndexer`/`TantivyAdapter`?
+- Are `IndexerCore` and `TantivyAdapter` intended public extension points or
+  implementation details of `UnifiedIndexer`?
+- Should default/backend-specific helper pairs remain public, or be kept
+  internal behind backend-aware constructors?
