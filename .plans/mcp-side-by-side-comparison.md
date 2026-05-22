@@ -526,7 +526,7 @@ Verification notes:
 
 ## Phase 5: Hypergraph Snapshot and Core Queries
 
-Status: pending
+Status: partial
 
 Purpose:
 
@@ -534,24 +534,34 @@ Compare persisted hypergraph extraction and graph-query behavior.
 
 Checklist:
 
-- [ ] Run `build_hypergraph(directory = PRIMARY_WORKSPACE, force_rebuild = true)` on both.
-- [ ] Run warm `build_hypergraph(directory = PRIMARY_WORKSPACE, force_rebuild = false)` on both.
-- [ ] Compare `workspace_stats`.
-- [ ] Compare `module_tree` for `rmc_engine`, `rmc_graph`, `rmc_indexing`, `rmc_server`.
-- [ ] Compare `crate_edges`.
-- [ ] Compare `crate_dependency_metric`.
-- [ ] Compare `forbidden_dependency_check` using the Phase 7 post-C rule set.
-- [ ] Compare `who_uses`, `who_calls`, and `get_exports` for canonical symbols/modules.
+- [x] Run `build_hypergraph(directory = PRIMARY_WORKSPACE, force_rebuild = true)` on both.
+- [x] Run warm `build_hypergraph(directory = PRIMARY_WORKSPACE, force_rebuild = false)` on both.
+- [x] Compare `workspace_stats`.
+- [x] Compare `module_tree` for `rmc_engine`, `rmc_graph`, `rmc_indexing`, `rmc_server`.
+- [x] Compare `crate_edges`.
+- [x] Compare `crate_dependency_metric`.
+- [x] Compare `forbidden_dependency_check` using the Phase 7 post-C rule set.
+- [x] Compare `who_uses`, `who_calls`, and `get_exports` for canonical symbols/modules.
 
 Results:
 
 | Tool/Input | Original ms | Refactor ms | Delta % | Classification | Notes |
 |---|---:|---:|---:|---|---|
-| `build_hypergraph(force_rebuild=true)` | pending | pending | pending | pending |  |
-| `build_hypergraph(force_rebuild=false)` | pending | pending | pending | pending |  |
-| `workspace_stats` | pending | pending | pending | pending |  |
-| `crate_edges` | pending | pending | pending | pending |  |
-| `forbidden_dependency_check` | pending | pending | pending | pending |  |
+| `build_hypergraph(force_rebuild=true)` | 21506.8 | 21125.9 | -1.8 | needs-review | Output exact; both exceed the 10s threshold. |
+| `build_hypergraph(force_rebuild=false)` | 14476.3 | 13892.2 | -4.0 | needs-review | Output exact with `reused=true`; both exceed the 10s threshold. |
+| `workspace_stats` | 10.8 | 3.2 | -70.4 | exact | Same node, item, binding, visibility, and `pub_crate_share` counts. |
+| `crate_edges` | 16.9 | 9.8 | -42.0 | exact | 49 total edges on both. |
+| `forbidden_dependency_check` | 6.3 | 6.8 | 7.9 | exact | Full post-C 17-rule boundary set returned 0 violations on both. |
+
+Verification notes:
+
+- Cold and warm `build_hypergraph` returned the same graph id `4fc200b6ab2a6d0ef4162f4fec31da5f`, fingerprint `a2800cb435de19d32f27bf58901fd5efb037e85565033279dd50611589501073`, 3040 nodes, 5371 bindings, and 7963 usages. Snapshot paths stayed isolated under original/refactor XDG data roots.
+- `workspace_stats` matched exactly: 45 crates, 296 modules, 2448 items, 250 external symbols, 1830 declared bindings, 1583 glob imports, and 1958 named imports.
+- `module_tree(depth=2)` matched exactly for `rmc_engine`, `rmc_graph`, `rmc_indexing`, and `rmc_server`. `rmc_engine` exposes top-level `chunker`, `embeddings`, `parser`, `schema`, `search`, and `vector_store`; `rmc_graph` exposes `graph`; `rmc_indexing` exposes `indexing`, `metadata_cache`, `metrics`, `monitoring`, and `security`; `rmc_server` exposes `mcp`, `semantic`, and `tools`.
+- `crate_dependency_metric(summary=true)` matched exactly with 45 crate metrics. Key local crate metrics: `rmc_engine` Ce 1 / Ca 14 / I 0.0667; `rmc_graph` 1 / 11 / 0.0833; `rmc_config` 1 / 3 / 0.25; `rmc_indexing` 2 / 14 / 0.125; `rmc_server` 4 / 6 / 0.4.
+- `who_uses(rmc_server::tools::SearchTool)` resolved through the re-export to `rmc_server::tools::router::SearchToolRouter` and returned 5 usages on both.
+- `who_calls(rmc_server::tools::graph::core::build_hypergraph)` returned 10 call sites on both, including `SearchToolRouter::build_hypergraph` plus test callers.
+- `get_exports(module=rmc_server::tools, consumer=rust-code-mcp)` returned 5 exports on both: `project_paths`, `IndexCodebaseParams`, `index_codebase`, `SearchTool`, and `SearchToolRouter`. The first attempt with consumer `rust_code_mcp` failed identically on both with `no node found for qualified name`.
 
 ## Phase 6: Audit and Policy Tools
 
