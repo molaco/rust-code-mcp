@@ -5,7 +5,7 @@
 - Crate: `rmc-engine`
 - Graph qualified name: `rmc_engine`
 - Analysis order: 1 of 4
-- Current phase: Phase 3 complete
+- Current phase: Phase 4 complete
 - Report state: in progress
 
 ## Phase Log
@@ -15,8 +15,8 @@
 | Phase 0: Snapshot readiness and baseline | Complete | c35970b1 | Graph snapshot reused; workspace and dependency baseline captured. |
 | Phase 1: Public surface | Complete | b393df22 | Root exposes six domain modules; submodule facades reexport public API types. |
 | Phase 2: Dependency boundary | Complete | 549dbff6 | No outgoing `rmc_*` dependency violations; one outgoing edge to `fastembed`. |
-| Phase 3: Import and usage coupling | Complete | Pending commit | Coupling centers on embedding, chunk, vector-store, parser, and search boundary types. |
-| Phase 4: Internal cohesion | Pending | Not started |  |
+| Phase 3: Import and usage coupling | Complete | b1a7c450 | Coupling centers on embedding, chunk, vector-store, parser, and search boundary types. |
+| Phase 4: Internal cohesion | Complete | Pending commit | No `rmc_*` parameter dependency inside engine; scoped overlap findings are mostly expected helper/DTO families. |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
 ## Phase 0: Snapshot Readiness And Baseline
@@ -577,3 +577,175 @@ coupling, even though it remains part of the public surface.
   than graph-level HIR analysis?
 - Can `EmbeddingProfile` be kept as an engine-owned canonical config model
   without making `rmc_config` depend too heavily on engine?
+
+## Phase 4: Internal Cohesion
+
+### Required VCS Check
+
+Before Phase 4, `jj show --summary` reported:
+
+```text
+Commit ID: 5fd84a761d0aceec6316002bdf99a7c729a8dcf5
+Change ID: rovyzwvpnnvpkukqvzvmrwynturuqwkw
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+functions_with_filter(directory, krate="rmc_engine", summary=true, limit=300)
+functions_with_filter(directory, krate="rmc_engine", has_param_type="rmc_", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_engine", has_param_type="EmbeddingBackend", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_engine", has_param_type="CodeChunk", summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_engine", has_param_type="VectorStore", summary=true, limit=100)
+overlaps(directory, scope="local_no_vendor")
+semantic_overlaps(directory, crate_name="rmc_engine", item_kind="Struct", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_engine", item_kind="Enum", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_engine", item_kind="Function", summary=true, max_pairs=25)
+```
+
+Function inventory:
+
+```text
+total functions/methods matched in rmc_engine: 391
+first page returned: 300
+```
+
+Focused parameter-type searches:
+
+```text
+has_param_type="rmc_": 0 matches
+has_param_type="EmbeddingBackend": 5 matches
+has_param_type="CodeChunk": 14 matches
+has_param_type="VectorStore": 6 matches
+```
+
+`EmbeddingBackend` parameter matches:
+
+```text
+rmc_engine::embeddings::EmbeddingGenerator::with_backend
+rmc_engine::embeddings::fastembed_cpu::FastembedCpuEmbedder::new
+rmc_engine::embeddings::openrouter::client::OpenRouterEmbedder::new
+rmc_engine::embeddings::qwen3::Qwen3Embedder::new
+rmc_engine::embeddings::token_lengths::EmbeddingTokenCounter::from_backend
+```
+
+`CodeChunk` parameter matches concentrate in:
+
+```text
+rmc_engine::chunker::chunker
+rmc_engine::chunker::split
+rmc_engine::embeddings
+rmc_engine::search
+rmc_engine::vector_store
+```
+
+`VectorStore` parameter matches concentrate in:
+
+```text
+rmc_engine::search
+rmc_engine::search::resilient
+rmc_engine::vector_store
+```
+
+`overlaps(scope="local_no_vendor")` result:
+
+```text
+cross_crate_type_collisions: []
+module_shadows: []
+common_fn_names: []
+within_crate_type_duplicates:
+  rmc_graph::SharedSnap only, not rmc_engine
+```
+
+Scoped semantic overlap results:
+
+```text
+Structs:
+  seed_count: 51
+  total_pair_count: 6
+  total_cluster_count: 5
+
+Enums:
+  seed_count: 17
+  total_pair_count: 0
+  total_cluster_count: 0
+
+Functions:
+  seed_count: 80
+  total_pair_count: 9
+  total_cluster_count: 7
+```
+
+Notable struct clusters:
+
+```text
+EmbeddingResponseItem / EmbeddingResponse: similarity 0.92408353
+VectorSearchResult / SearchResult: similarity 0.88933444
+HybridSearch / HybridSearchConfig / ResilientHybridSearch: avg 0.888394
+ProfileDocument / TomlProfile: similarity 0.87218755
+Qwen3Embedder / FastembedCpuEmbedder: similarity 0.8577923
+```
+
+Notable function clusters:
+
+```text
+calculate_precision_at_k / calculate_recall_at_k: similarity 0.9130853
+build_type_references_with_edition / build_type_references: 0.9054038
+openrouter_runtime_config / openrouter_runtime_config_from_env / resolve_openrouter_runtime_config: avg 0.90271
+extract_imports_with_edition / extract_imports: 0.90069354
+optional_usize_from_env / positive_usize_from_env / optional_f64_from_env: avg 0.89775515
+parse_profiles_toml / load_profiles_from_path: 0.89438385
+api_key_from_env / resolve_api_key: 0.87135535
+```
+
+### Phase 4 Interpretation
+
+The internal cohesion picture is good for a broad primitive crate. No engine
+function accepts an `rmc_*` type, which is the strongest signal that engine is
+not depending upward into server, graph, indexing, or config models through
+function signatures.
+
+The `CodeChunk` and `VectorStore` parameter matches show expected internal
+coupling between chunking, embeddings, search, and vector storage. That is a
+real engine-internal responsibility cluster, not a cross-crate boundary problem.
+
+The semantic-overlap findings are mostly coherent families:
+
+- response DTO pairs inside the OpenRouter embedding client
+- search result DTOs in vector search versus hybrid search
+- search wrapper/config/resilient search types
+- profile registry document/TOML conversion types
+- parallel local embedder implementations
+- wrapper functions that add default edition/config behavior
+- small environment-variable helper functions
+
+The most actionable duplication signal is `VectorSearchResult` versus
+`SearchResult`. They likely represent adjacent result DTOs for vector-only and
+hybrid search. They may be intentionally separate, but the similarity suggests a
+possible shared result shape or conversion trait if future changes keep touching
+both.
+
+### Phase 4 Findings
+
+- Engine has 391 function/method items in the graph.
+- No function signature search found an `rmc_*` parameter inside engine.
+- `overlaps(local_no_vendor)` reported no engine type collisions or module
+  shadows.
+- Scoped enum semantic overlap found no enum clusters.
+- Struct/function semantic overlap found small, explainable clusters rather
+  than evidence of unrelated responsibilities mixed into the crate.
+- The biggest cohesion risk is not layering; it is duplicate-shaped DTO/helper
+  code in search results, profile loading, and OpenRouter runtime config.
+
+### Open Questions For Phase 5
+
+- Should `VectorSearchResult` and `SearchResult` stay separate DTOs?
+- Are the OpenRouter env/config helpers intentionally separate for user-facing
+  clarity, or should they be consolidated?
+- Do source imports confirm that external callers use subsystem facades rather
+  than deep implementation paths?
+- Does `Bm25Search` usage from server/indexing health indicate a public backend
+  abstraction gap?
