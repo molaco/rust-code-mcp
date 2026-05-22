@@ -5,7 +5,7 @@
 - Crate: `rmc-server`
 - Graph qualified name: `rmc_server`
 - Analysis order: 4 of 4
-- Current phase: Phase 2 complete
+- Current phase: Phase 3 complete
 - Report state: in progress
 
 ## Phase Log
@@ -14,8 +14,8 @@
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | 98e49844 | Graph snapshot reused; workspace and server dependency baseline captured. |
 | Phase 1: Public surface | Complete | aedffaec | Root is narrow, but server exposes public implementation namespaces. |
-| Phase 2: Dependency boundary | Complete | Pending commit | Outgoing edges match expected top-layer dependencies; no lower-layer rule violations. |
-| Phase 3: Import and usage coupling | Pending | Not started |  |
+| Phase 2: Dependency boundary | Complete | 4da7a3c2 | Outgoing edges match expected top-layer dependencies; no lower-layer rule violations. |
+| Phase 3: Import and usage coupling | Complete | Pending commit | Coupling is concentrated in router, endpoints, and graph tool modules. |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
@@ -423,3 +423,322 @@ an executable depending on the server library.
 - Are engine uses low-level search/vector primitives that should be hidden
   behind indexing or graph services?
 - Should `ProjectPaths` stay public for tests, or move behind test helpers?
+
+## Phase 3: Import And Usage Coupling
+
+### Required VCS Check
+
+Before Phase 3, `jj show --summary` reported:
+
+```text
+Commit ID: d84807e5124ccc42d81d88da24061e6478d8b6e3
+Change ID: yvlqvoxxroqpultznpxmpnslrmvpnwmm
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+get_imports(directory, module="rmc_server", summary=true, limit=500)
+module_dependencies(directory, module="rmc_server", summary=true, limit=500)
+get_imports(directory, module=<server top modules>, summary=true, limit=500)
+module_dependencies(directory, module=<server top modules>, summary=true, limit=500)
+module_dependencies(directory, module=<key endpoint and graph modules>, summary=true, limit=500)
+who_imports(directory, target=<key public server symbols>, summary=true, limit=200)
+who_uses_summary(directory, target=<key public server symbols>, summary=true, limit=200)
+```
+
+Crate root imports/dependencies:
+
+```text
+rmc_server imports: 0
+rmc_server module dependencies: 0
+```
+
+Top-level module rollups:
+
+```text
+rmc_server::tools
+  imports:
+    IndexCodebaseParams
+    index_codebase
+    SearchTool
+    SearchToolRouter
+  module dependencies:
+    tools::endpoints::index import_count 2
+    tools::router import_count 2
+
+rmc_server::mcp
+  imports:
+    SyncManager
+  module dependencies:
+    mcp::sync import_count 1
+
+rmc_server::semantic
+  local server dependencies:
+    semantic::loader usage_count 1
+    semantic::position import_count 1, usage_count 6
+    semantic::rename import_count 1, usage_count 2
+  external rust-analyzer dependencies include:
+    ra_ap_ide::AnalysisHost
+    ra_ap_vfs::Vfs
+```
+
+Router dependency rollup:
+
+```text
+rmc_server::tools::router
+  dispatches to:
+    endpoints::analysis usage_count 6
+    endpoints::cache usage_count 2
+    endpoints::health usage_count 2
+    endpoints::index usage_count 2
+    endpoints::query usage_count 3
+    graph::audits usage_count 5
+    graph::codemap usage_count 1
+    graph::core usage_count 16
+    graph::crates usage_count 3
+    graph::similarity usage_count 2
+    graph::surface usage_count 12
+  parameter modules:
+    params::graph usage_count 32
+    params::search import_count 9, usage_count 18
+    params::audit usage_count 7
+    params::indexing usage_count 1
+```
+
+Graph tool module lower-crate dependencies:
+
+```text
+tools::graph::core
+  rmc_graph::graph::labels: imports 4, usages 3
+  rmc_graph::graph::model: imports 4, usages 12
+  rmc_graph::graph::query::model: imports 8, usages 10
+  rmc_graph::graph::snapshot: imports 3, usages 35
+
+tools::graph::surface
+  rmc_graph::graph::derive_audit: usages 3
+  rmc_graph::graph::docs_audit: usages 3
+  rmc_graph::graph::ids: imports 1, usages 4
+  rmc_graph::graph::labels: imports 1
+  rmc_graph::graph::model: imports 4, usages 19
+  rmc_graph::graph::query::model: imports 9, usages 12
+  rmc_graph::graph::snapshot: imports 1, usages 26
+
+tools::graph::audits
+  rmc_graph::graph::channel_audit: usages 3
+  rmc_graph::graph::fn_body_audit: usages 4
+  rmc_graph::graph::ids: imports 1, usages 8
+  rmc_graph::graph::loader: usages 3
+  rmc_graph::graph::model: imports 1, usages 6
+  rmc_graph::graph::recursion_check: usages 4
+  rmc_graph::graph::snapshot: usages 5
+  rmc_graph::graph::unsafe_audit: usages 1
+
+tools::graph::response
+  rmc_graph::graph::ids: imports 1, usages 8
+  rmc_graph::graph::labels: imports 1
+  rmc_graph::graph::model: imports 4, usages 25
+  rmc_graph::graph::query::model: imports 1, usages 4
+  rmc_graph::graph::snapshot: imports 2, usages 9
+  rmc_graph::graph::storage: imports 2, usages 3
+
+tools::graph::codemap
+  rmc_graph::graph::codemap::{build, model, render, seeds}: usages 13 total
+  rmc_config::config::indexer: usages 2
+  rmc_engine::{embeddings::backend, search}: usages 4 total
+  rmc_indexing::indexing::tantivy_adapter: usages 3
+
+tools::graph::similarity
+  rmc_graph::graph::embedding_cache: usages 1
+  rmc_graph::graph::ids: imports 1, usages 15
+  rmc_graph::graph::labels: imports 1
+  rmc_graph::graph::math: usages 1
+  rmc_graph::graph::model: imports 2, usages 6
+  rmc_graph::graph::snapshot: usages 2
+  rmc_engine::{embeddings::backend, search}: usages 3 total
+```
+
+Endpoint lower-crate dependencies:
+
+```text
+tools::endpoints::index
+  rmc_engine::embeddings::backend: imports 1, usages 11
+  rmc_engine::embeddings::profile: imports 1, usages 12
+  rmc_engine::vector_store::error: imports 1, usages 2
+  rmc_indexing::indexing::incremental: imports 1, usages 4
+  rmc_indexing::indexing::unified: imports 1, usages 4
+  rmc_server::mcp::project_paths: imports 2, usages 3
+
+tools::endpoints::query
+  rmc_config::config::indexer: usages 2
+  rmc_engine::embeddings: imports 1, usages 3
+  rmc_engine::embeddings::backend: imports 1, usages 17
+  rmc_engine::embeddings::profile: usages 3
+  rmc_engine::search: imports 1, usages 6
+  rmc_engine::search::bm25: usages 2
+  rmc_engine::vector_store: imports 1, usages 2
+  rmc_indexing::indexing::tantivy_adapter: usages 3
+  rmc_indexing::indexing::unified: usages 5
+  rmc_server::mcp::project_paths: imports 3, usages 15
+
+tools::endpoints::health
+  rmc_engine::embeddings::backend: imports 1, usages 8
+  rmc_engine::search::bm25: imports 1, usages 2
+  rmc_engine::vector_store: imports 1, usages 2
+  rmc_indexing::monitoring::health: imports 1, usages 6
+  rmc_server::mcp::project_paths: imports 3, usages 5
+
+tools::endpoints::analysis
+  rmc_engine::parser::rust_parser: imports 1, usages 9
+  rmc_engine::parser::call_graph: usages 6
+  rmc_engine::parser::types: usages 3
+  rmc_server::semantic: imports 1, usages 6
+
+tools::endpoints::cache
+  rmc_graph::graph::storage: usages 3
+  rmc_server::mcp::project_paths: imports 2, usages 3
+```
+
+MCP support module lower-crate dependencies:
+
+```text
+mcp::project_paths
+  rmc_engine::embeddings::backend: imports 1, usages 22
+  rmc_engine::embeddings::profile: usages 3
+  rmc_engine::embeddings::profile_registry: imports 1, usages 1
+  rmc_indexing::indexing::identity: imports 3, usages 5
+  rmc_indexing::indexing::incremental: imports 1, usages 2
+
+mcp::sync
+  rmc_engine::embeddings::backend: usages 1
+  rmc_indexing::indexing::incremental: imports 1, usages 3
+  rmc_server::mcp::project_paths: usages 2
+```
+
+Key public server API usage:
+
+```text
+SyncManager
+  who_imports total: 5
+  external importers:
+    rust-code-mcp
+    test_sync_manager_integration
+    test_index_tool_integration
+  internal import/reexport:
+    rmc_server::mcp
+    rmc_server::mcp::sync::tests
+  who_uses_summary includes:
+    rmc_server::tools::router total_count 3
+    rmc_server::tools::endpoints::query total_count 2
+    rmc_server::tools::endpoints::index total_count 1
+    rust-code-mcp total_count 1
+
+ProjectPaths
+  who_imports total: 8
+  external importer:
+    test_mcp_stdio_transport
+  internal importers include:
+    tools::project_paths
+    endpoints::query
+    endpoints::health
+    endpoints::index
+    tests
+  who_uses_summary includes:
+    endpoints::query total_count 11
+    mcp::sync, endpoints::health, endpoints::index,
+    graph::codemap, graph::similarity, test_mcp_stdio_transport
+
+index_codebase
+  who_imports total: 3
+  external importer:
+    test_index_tool_integration
+  internal import/reexport:
+    rmc_server::tools
+    endpoints::index::tests
+  who_uses_summary includes:
+    test_index_tool_integration total_count 16
+    tools::router total_count 1
+    test_burn_performance total_count 1
+    test_gpu_index_jsonrpc total_count 1
+
+IndexCodebaseParams
+  who_imports total: 3
+  external importer:
+    test_index_tool_integration
+  internal import/reexport:
+    rmc_server::tools
+    endpoints::index::tests
+  who_uses_summary includes:
+    test_index_tool_integration total_count 7
+    tools::router total_count 1
+    test_burn_performance total_count 1
+    test_gpu_index_jsonrpc total_count 1
+
+SearchToolRouter
+  who_imports total: 4
+  external importer:
+    rust-code-mcp, under the alias SearchTool
+  internal imports/reexports:
+    rmc_server::tools as SearchTool and SearchToolRouter
+    router tests
+  who_uses_summary:
+    rmc_server::tools::router total_count 5
+```
+
+### Phase 3 Interpretation
+
+Server coupling is concentrated in the expected places: router dispatch,
+endpoint modules, graph-tool modules, `mcp::project_paths`, and `mcp::sync`.
+The crate root itself has no imports, and the top-level `tools`/`mcp` modules
+mostly reexport implementation items.
+
+The strongest architectural concern is graph coupling. Server graph modules do
+not just call a small graph facade; they reference graph model, query model,
+snapshot, storage, ids, labels, loader, audit, codemap, embedding cache, math,
+and render/build modules directly. That matches the high edge volume from
+phase 2 and means the server response layer knows a lot about graph internals.
+
+Indexing coupling is narrower but still deep. Index and sync use
+`IncrementalIndexer`; query and codemap use `TantivyAdapter`; project path
+logic uses indexing identity and snapshot helpers. These are legitimate server
+tasks, but the imports confirm the indexing boundary is still partly
+implementation-facing.
+
+Engine coupling appears in query/search, health, project path resolution, and
+analysis endpoints. Some of it is server-specific orchestration, but the
+analysis endpoint directly uses parser/call-graph primitives from engine,
+which may be reusable logic that belongs below the MCP endpoint layer if it
+grows.
+
+### Phase 3 Findings
+
+- Root module imports are empty; coupling lives below public namespaces.
+- `tools::router` is the central dispatcher and references most endpoint and
+  graph tool modules.
+- Graph tool modules depend directly on graph internals, especially
+  `graph::model`, `graph::query::model`, `graph::snapshot`, `graph::storage`,
+  `graph::ids`, and audit/codemap modules.
+- The response formatting module also imports graph model/snapshot/storage
+  types, so response shaping is coupled to graph internals.
+- Query and codemap depend on `rmc_indexing::indexing::tantivy_adapter`
+  directly.
+- Index and sync depend on `rmc_indexing::indexing::incremental` directly.
+- `mcp::project_paths` depends on indexing identity/snapshot helpers and engine
+  embedding profile/backend details.
+- External incoming usage is mostly binary/test oriented: `rust-code-mcp`
+  imports `SearchTool` and `SyncManager`; tests import `ProjectPaths`,
+  `index_codebase`, `IndexCodebaseParams`, and `SyncManager`.
+
+### Open Questions For Later Phases
+
+- Should graph expose server-ready DTO/query functions so server response code
+  does not need graph model/snapshot/storage internals?
+- Should indexing expose a "open BM25 search" helper to remove server's direct
+  `TantivyAdapter` usage?
+- Should project path identity live in indexing rather than server, since it
+  combines engine embedding identity with indexing identity and snapshot paths?
+- Is `tools::endpoints::analysis` an MCP adapter over semantic/engine logic, or
+  is it growing reusable analysis behavior that should move down?

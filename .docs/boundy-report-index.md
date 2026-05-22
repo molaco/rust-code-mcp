@@ -12,7 +12,7 @@ Track execution of `.plans/boundry-anal-plan.md` for the four requested crates:
 | 1 | `rmc-engine` | `.docs/boundry-rmc-engine-report.md` | Complete |
 | 2 | `rmc-graph` | `.docs/boundry-rmc-graph-report.md` | Complete |
 | 3 | `rmc-indexing` | `.docs/boundry-rmc-indexing-report.md` | Complete |
-| 4 | `rmc-server` | `.docs/boundry-rmc-server-report.md` | Phase 2 complete |
+| 4 | `rmc-server` | `.docs/boundry-rmc-server-report.md` | Phase 3 complete |
 
 ## Phase Status
 
@@ -21,7 +21,7 @@ Track execution of `.plans/boundry-anal-plan.md` for the four requested crates:
 | `rmc-engine` | Complete | Complete | Complete | Complete | Complete | Complete |
 | `rmc-graph` | Complete | Complete | Complete | Complete | Complete | Complete |
 | `rmc-indexing` | Complete | Complete | Complete | Complete | Complete | Complete |
-| `rmc-server` | Complete | Complete | Complete | Pending | Pending | Pending |
+| `rmc-server` | Complete | Complete | Complete | Complete | Pending | Pending |
 
 ## Evidence Notes
 
