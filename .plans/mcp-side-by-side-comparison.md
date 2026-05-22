@@ -490,7 +490,7 @@ Notes:
 
 ## Phase 4: Live Navigation and File Analysis
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -498,23 +498,31 @@ Compare rust-analyzer-backed live navigation and file-local analysis behavior.
 
 Checklist:
 
-- [ ] Compare `find_definition` for canonical symbols.
-- [ ] Compare `find_references` for canonical symbols.
-- [ ] Compare `get_dependencies` on canonical files.
-- [ ] Compare `get_call_graph` on canonical files.
-- [ ] Compare `analyze_complexity` on canonical files.
-- [ ] Compare output counts and representative paths.
-- [ ] Mark canonical-name drift as expected only when declaration crates changed.
+- [x] Compare `find_definition` for canonical symbols.
+- [x] Compare `find_references` for canonical symbols.
+- [x] Compare `get_dependencies` on canonical files.
+- [x] Compare `get_call_graph` on canonical files.
+- [x] Compare `analyze_complexity` on canonical files.
+- [x] Compare output counts and representative paths.
+- [x] Mark canonical-name drift as expected only when declaration crates changed.
 
 Results:
 
 | Tool/Input | Original | Refactor | Classification | Notes |
 |---|---:|---:|---|---|
-| `find_definition(SearchTool)` | pending | pending | pending |  |
-| `find_references(SearchTool)` | pending | pending | pending |  |
-| `get_dependencies(router.rs)` | pending | pending | pending |  |
-| `get_call_graph(router.rs)` | pending | pending | pending |  |
-| `analyze_complexity(router.rs)` | pending | pending | pending |  |
+| `find_definition(SearchTool)` | 1 | 1 | exact | Same declaration path: `crates/rmc-server/src/tools/mod.rs:12:37`. |
+| `find_references(SearchTool)` | 14 | 14 | exact | Same count and representative paths. |
+| `get_dependencies(router.rs)` | 21 | 21 | exact | Same import list. |
+| `get_call_graph(router.rs)` | 70 funcs / 72 rels | 70 funcs / 72 rels | compatible | Same function/callee sets; list ordering differed. |
+| `analyze_complexity(router.rs)` | 721 lines / 56 funcs / 163 cyclo / 72 calls | 721 lines / 56 funcs / 163 cyclo / 72 calls | exact | Same metrics. |
+
+Verification notes:
+
+- Definition counts matched for all canonical symbols: `SearchTool` 1, `SyncManager` 1, `UnifiedIndexer` 2, `OpenedSnapshot` 2, `build_hypergraph` 2, and `workspace_stats` 3.
+- Reference counts matched for all canonical symbols: `SearchTool` 14, `SyncManager` 19, `UnifiedIndexer` 15, `OpenedSnapshot` 59, `build_hypergraph` 3, and `workspace_stats` 4.
+- Dependency counts matched for canonical files: `main.rs` 7, `rmc-engine/src/lib.rs` 0, `snapshot.rs` 37, `unified.rs` 18, and `router.rs` 21.
+- Call graph counts matched for canonical files: `main.rs` 19 funcs / 18 rels, `rmc-engine/src/lib.rs` 0 / 0, `snapshot.rs` 79 / 135, `unified.rs` 76 / 111, and `router.rs` 70 / 72.
+- Complexity metrics matched for canonical files: `main.rs` 55 lines / 1 func / 4 cyclo / 18 calls; `rmc-engine/src/lib.rs` 8 / 0 / 1 / 0; `snapshot.rs` 667 / 16 / 129 / 135; `unified.rs` 666 / 22 / 67 / 111; `router.rs` 721 / 56 / 163 / 72.
 
 ## Phase 5: Hypergraph Snapshot and Core Queries
 
