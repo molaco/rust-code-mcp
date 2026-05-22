@@ -183,7 +183,6 @@ Checklist:
 - [ ] Capture original binary size and modified timestamp.
 - [ ] Capture refactor binary size and modified timestamp.
 - [ ] Capture `jj log -r @-` for the refactor workspace commit under test.
-- [ ] Create or copy a direct stdio JSON-RPC timing harness, likely from `/home/molaco/Documents/rust-code-2/.plans/mcp_stdio_probe.py`.
 - [ ] Confirm the harness launches original with original XDG roots.
 - [ ] Confirm the harness launches refactor with refactor XDG roots.
 - [ ] Run a smoke `initialize` and `tools/list` against both binaries.
