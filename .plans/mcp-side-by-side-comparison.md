@@ -266,11 +266,11 @@ Verification notes:
 | 1 | Tool Inventory and Schemas | pass | 51 shared tools, no original/refactor-only tools, no breaking schema-key differences. |
 | 2 | Health, Cache, and Cold Start | pass | Isolated cache roots verified; both namespaces stayed degraded-but-functional before/after cache clear. |
 | 3 | Indexing and Retrieval | partial | Retrieval compatible; cold forced indexing had a one-chunk count drift needing review. |
-| 4 | Live Navigation and File Analysis | pending | Compare definitions, references, imports, dependencies, call graph, and complexity. |
-| 5 | Hypergraph Snapshot and Core Queries | pending | Compare snapshot metrics, exports, imports, uses, crate edges, and dependency rules. |
-| 6 | Audit and Policy Tools | pending | Compare docs/derive/body/unsafe/channel/recursion/global-state audits. |
-| 7 | Semantic Similarity Tools | pending | Compare `similar_to_item` and `semantic_overlaps`. |
-| 8 | Failure Modes and Robustness | pending | Compare invalid inputs, repeated warm calls, and large-output behavior. |
+| 4 | Live Navigation and File Analysis | pass | Definition, reference, dependency, call-graph, and complexity counts matched. |
+| 5 | Hypergraph Snapshot and Core Queries | partial | Functional output exact; cold and warm hypergraph builds exceeded the 10s threshold on both servers. |
+| 6 | Audit and Policy Tools | pass | Audit counts and representative findings matched across all sampled policy tools. |
+| 7 | Semantic Similarity Tools | partial | Scoped semantic tools matched exactly; unscoped workspace overlap timed out on both servers. |
+| 8 | Failure Modes and Robustness | pass | Invalid inputs, repeated warm calls, expensive repeats, and pagination matched; repeated search had only equal-score ordering drift. |
 | 9 | Final Speed and Functionality Report | pending | Summarize compatibility, speed deltas, regressions, and follow-ups. |
 
 ## Phase 0: MCP Tool Baseline
@@ -645,7 +645,7 @@ Verification notes:
 
 ## Phase 8: Failure Modes and Robustness
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -653,23 +653,37 @@ Compare invalid-input behavior, repeated warm calls, and large-output handling.
 
 Checklist:
 
-- [ ] Call a nonexistent directory for representative tools.
-- [ ] Call unknown symbols for navigation and hypergraph tools.
-- [ ] Call malformed/empty required params where schemas allow the server to respond.
-- [ ] Repeat 5 warm calls for representative fast tools.
-- [ ] Repeat 2 warm calls for representative expensive tools.
-- [ ] Compare MCP error shapes and messages.
-- [ ] Compare output truncation/limit behavior.
+- [x] Call a nonexistent directory for representative tools.
+- [x] Call unknown symbols for navigation and hypergraph tools.
+- [x] Call malformed/empty required params where schemas allow the server to respond.
+- [x] Repeat 5 warm calls for representative fast tools.
+- [x] Repeat 2 warm calls for representative expensive tools.
+- [x] Compare MCP error shapes and messages.
+- [x] Compare output truncation/limit behavior.
 
 Results:
 
 | Case | Original | Refactor | Classification | Notes |
 |---|---:|---:|---|---|
-| Unknown directory | pending | pending | pending |  |
-| Unknown symbol | pending | pending | pending |  |
-| Repeated warm `search` | pending | pending | pending |  |
-| Repeated warm `workspace_stats` | pending | pending | pending |  |
-| Large `who_uses` with limit/offset | pending | pending | pending |  |
+| Unknown directory | `-32602` | `-32602` | exact | Same not-a-directory error for a missing workspace path. |
+| Unknown symbol | nav: no definition; graph: `-32602` | nav: no definition; graph: `-32602` | exact | Same messages for unknown `find_definition` and `who_uses` targets. |
+| Malformed required params | `-32602` | `-32602` | exact | `derive_audit(required_derives=[])` rejected the empty list with the same message. |
+| Repeated warm `search` | 10 results; median 339.3 ms | 10 results; median 362.3 ms | compatible | +6.8%; same top set and scores, with equal-score top-two ordering drift. |
+| Repeated warm `workspace_stats` | median 3.9 ms | median 3.5 ms | exact | -10.3%; counts matched exactly across all 5 calls. |
+| Repeated warm `semantic_overlaps` | 21.2 ms, 21.2 ms | 22.2 ms, 23.0 ms | exact | Scoped `rmc_server` pair mode returned 46 pairs and 32 clusters on both repeats. |
+| Large `who_uses` with limit/offset | 52 total; 10 returned | 52 total; 10 returned | exact | Same `OpenedSnapshot` page at `offset=10`, `limit=10`. |
+
+Verification notes:
+
+- `jj show --summary` was run before starting this phase.
+- Unknown directory input used `search(directory=/home/molaco/Documents/rust-code-mcp-refactor/does-not-exist, keyword=SearchTool)`. Both servers returned `Mcp error: -32602: The specified path '/home/molaco/Documents/rust-code-mcp-refactor/does-not-exist' is not a directory`.
+- Unknown navigation symbol input used `find_definition(symbol_name=DefinitelyNotASymbolForPhase8, exact=true)`. Both servers returned `No definition found for symbol 'DefinitelyNotASymbolForPhase8'`.
+- Unknown hypergraph symbol input used `who_uses(target=rmc_server::DefinitelyNotASymbolForPhase8, summary=true, limit=10)`. Both servers returned `Mcp error: -32602: no node found for qualified name 'rmc_server::DefinitelyNotASymbolForPhase8'`.
+- Empty required-param input used `derive_audit(required_derives=[], summary=true, limit=10)`. Both servers returned `Mcp error: -32602: required_derives must be a non-empty list of derive identifiers`.
+- Five warm `search(keyword=SearchTool)` calls returned 10 results on both servers every time. Original wall times were 334.9, 339.3, 411.1, 339.8, and 322.8 ms; refactor wall times were 331.3, 370.6, 362.3, 396.0, and 325.2 ms.
+- Five warm `workspace_stats` calls returned identical metrics every time: 45 crates, 296 modules, 2448 items, and 250 external symbols. Original wall times were 3.9, 3.5, 4.0, 3.5, and 4.6 ms; refactor wall times were 3.5, 4.8, 3.5, 3.6, and 2.7 ms.
+- Two warm scoped `semantic_overlaps(crate_name=rmc_server, output_mode=pairs, threshold=0.9, summary=true, max_pairs=50)` calls matched exactly: 297 seeds, 46 pairs, 32 clusters, and the same first page of pair endpoints and scores.
+- Large-output pagination used `who_uses(target=rmc_graph::graph::snapshot::OpenedSnapshot, summary=true, offset=10, limit=10)`. Both servers reported `total_match_count=52`, `returned_match_count=10`, and the same consumer-module page.
 
 ## Phase 9: Final Speed and Functionality Report
 
