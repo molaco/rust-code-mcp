@@ -17,6 +17,21 @@ The comparison should leave a written result trail in this file. Each phase must
 | Original | `mcp__rust_code_mcp_original__` | `/home/molaco/Documents/rust-code-mcp-final/target/release/rust-code-mcp` | Original repo MCP server |
 | Refactor | `mcp__rust_code_mcp_refactor__` | `/home/molaco/Documents/rust-code-mcp-refactor/target/release/rust-code-mcp` | Phase 7 crate-boundary refactor MCP server |
 
+## MCP Tool Execution Rule
+
+This plan must be executed through the MCP tools exposed to Codex, not by creating a JSON-RPC client, Python script, or direct server process harness.
+
+When a phase says to run a tool on both servers, use the matching available MCP tool calls:
+
+```text
+mcp__rust_code_mcp_original__<tool_name>(...)
+mcp__rust_code_mcp_refactor__<tool_name>(...)
+```
+
+Use `tool_search` only to discover or re-expose the available tool definitions and schemas in the current Codex context. Do not use `tools/list`, `initialize`, or a hand-written stdio protocol harness for this comparison.
+
+Shell commands are allowed only for project metadata, VCS metadata, filesystem checks, and build/check commands. Build/check commands must use the `cuda-code` devshell command form documented below.
+
 The `cuda-code` devshell config gives the two servers separate XDG roots:
 
 | Label | `XDG_CACHE_HOME` | `XDG_DATA_HOME` |
@@ -93,11 +108,82 @@ semantic_overlaps
 forbidden_dependency_check
 ```
 
+## Available MCP Tool Surface
+
+Use `tool_search` to refresh this list if Codex does not currently expose one of these tools.
+
+Core, cache, and search tools:
+
+```text
+health_check
+clear_cache
+index_codebase
+search
+get_similar_code
+read_file_content
+```
+
+Live navigation and file-analysis tools:
+
+```text
+find_definition
+find_references
+rename_symbol
+get_dependencies
+get_call_graph
+analyze_complexity
+```
+
+Hypergraph and architecture-query tools:
+
+```text
+build_hypergraph
+workspace_stats
+module_tree
+crate_edges
+crate_dependency_metric
+forbidden_dependency_check
+get_imports
+module_dependencies
+get_exports
+get_reexports
+get_declared_reexports
+who_imports
+who_uses
+who_uses_summary
+who_calls
+calls_from
+enum_variants
+pub_use_pub_type_audit
+build_codemap
+```
+
+Audit and policy tools:
+
+```text
+missing_docs_audit
+derive_audit
+fn_body_audit
+unsafe_audit
+channel_capacity_audit
+mut_static_audit
+recursion_check
+dead_pub_report
+```
+
+Semantic tools:
+
+```text
+similar_to_item
+semantic_overlaps
+```
+
 ## Measurement Rules
 
 - Measure server runtime, not model reasoning time.
-- Prefer a direct stdio JSON-RPC harness for timing once Phase 0 creates or copies it.
-- Use the Codex MCP namespaces for quick functional checks when timing is not the focus.
+- Use only the available Codex MCP tool calls for functional comparison.
+- Measure timing from the MCP tool-call elapsed time reported by the Codex client or surrounding execution metadata. If the client does not expose elapsed time for a call, record `timing-unavailable` and keep the functional comparison.
+- Use `tool_search` for MCP tool inventory/schema discovery; do not call raw JSON-RPC methods.
 - Run original and refactor with identical request bodies.
 - Run cold tests after `clear_cache` or with `force_reindex` / `force_rebuild`.
 - Run warm tests immediately after the corresponding cold test.
@@ -134,7 +220,7 @@ Status: partial
 
 | Check | Original | Refactor | Notes |
 |---|---|---|---|
-| Release binary present | yes | no | Refactor release binary must be built before direct MCP launch checks. |
+| Release binary present | yes | no | Refactor release binary must be built before binary metadata checks. MCP comparison still uses the exposed refactor namespace. |
 | Devshell contains both MCP entries | yes | yes | `rust-code-mcp-original` and `rust-code-mcp-refactor`. |
 | XDG roots isolated | yes | yes | Separate original/refactor Qwen3 roots are required for cache integrity. |
 | Default `RUSTFLAGS` configured | yes | yes | Present in devshell env and MCP server env. |
@@ -155,8 +241,8 @@ Verification notes:
 
 | Phase | Name | Status | Result Summary |
 |---|---|---|---|
-| 0 | Harness and Baseline | pending | Build/verify binaries, generated MCP config, and direct stdio harness. |
-| 1 | Tool Inventory and Schemas | pending | Compare `tools/list` names and accepted input schemas. |
+| 0 | MCP Tool Baseline | pending | Verify binaries/config metadata and smoke-test the exposed MCP namespaces. |
+| 1 | Tool Inventory and Schemas | pending | Compare Codex-exposed MCP tool names and accepted input schemas. |
 | 2 | Health, Cache, and Cold Start | pending | Verify isolated cache roots and health behavior before/after clear. |
 | 3 | Indexing and Retrieval | pending | Compare indexing, keyword search, hybrid search, and similar-code retrieval. |
 | 4 | Live Navigation and File Analysis | pending | Compare definitions, references, imports, dependencies, call graph, and complexity. |
@@ -166,13 +252,13 @@ Verification notes:
 | 8 | Failure Modes and Robustness | pending | Compare invalid inputs, repeated warm calls, and large-output behavior. |
 | 9 | Final Speed and Functionality Report | pending | Summarize compatibility, speed deltas, regressions, and follow-ups. |
 
-## Phase 0: Harness and Baseline
+## Phase 0: MCP Tool Baseline
 
 Status: pending
 
 Purpose:
 
-Establish a repeatable comparison harness and capture binary/environment facts before tool-level comparisons begin.
+Establish that the available MCP namespaces are usable and capture binary/environment facts before tool-level comparisons begin.
 
 Checklist:
 
@@ -183,18 +269,19 @@ Checklist:
 - [ ] Capture original binary size and modified timestamp.
 - [ ] Capture refactor binary size and modified timestamp.
 - [ ] Capture `jj log -r @-` for the refactor workspace commit under test.
-- [ ] Confirm the harness launches original with original XDG roots.
-- [ ] Confirm the harness launches refactor with refactor XDG roots.
-- [ ] Run a smoke `initialize` and `tools/list` against both binaries.
+- [ ] Use `tool_search` to expose both `mcp__rust_code_mcp_original__` and `mcp__rust_code_mcp_refactor__` tool definitions.
+- [ ] Confirm the available original MCP namespace maps to the original XDG roots documented above.
+- [ ] Confirm the available refactor MCP namespace maps to the refactor XDG roots documented above.
+- [ ] Run smoke MCP calls against both namespaces with identical request bodies.
 - [ ] Update this phase with baseline measurements.
 
 Suggested checks:
 
 ```text
-original: tools/list
-refactor: tools/list
-original: health_check(directory = PRIMARY_WORKSPACE)
-refactor: health_check(directory = PRIMARY_WORKSPACE)
+mcp__rust_code_mcp_original__health_check(directory = PRIMARY_WORKSPACE)
+mcp__rust_code_mcp_refactor__health_check(directory = PRIMARY_WORKSPACE)
+mcp__rust_code_mcp_original__search(directory = PRIMARY_WORKSPACE, keyword = "SearchTool")
+mcp__rust_code_mcp_refactor__search(directory = PRIMARY_WORKSPACE, keyword = "SearchTool")
 ```
 
 Results:
@@ -203,16 +290,16 @@ Results:
 |---|---:|---:|---:|---|
 | Binary exists | pending | pending | pending |  |
 | Binary size bytes | pending | pending | pending |  |
-| `tools/list` duration ms | pending | pending | pending |  |
+| Visible MCP tool count | pending | pending | pending | Use `tool_search` output, not raw `tools/list`. |
 | `health_check` smoke duration ms | pending | pending | pending |  |
 
 Notes:
 
 ```text
-Direct stdio harness:
+MCP tool execution:
 
-- Original command: /home/molaco/Documents/rust-code-mcp-final/target/release/rust-code-mcp
-- Refactor command: /home/molaco/Documents/rust-code-mcp-refactor/target/release/rust-code-mcp
+- Original namespace: mcp__rust_code_mcp_original__
+- Refactor namespace: mcp__rust_code_mcp_refactor__
 - Original XDG roots: /home/molaco/.cache/mcp-rust-code-original-qwen3, /home/molaco/.local/share/mcp-rust-code-original-qwen3
 - Refactor XDG roots: /home/molaco/.cache/mcp-rust-code-refactor-qwen3, /home/molaco/.local/share/mcp-rust-code-refactor-qwen3
 ```
@@ -227,8 +314,10 @@ Confirm both servers expose the same intended tool surface and compare tool desc
 
 Checklist:
 
-- [ ] Capture `tools/list` output from original.
-- [ ] Capture `tools/list` output from refactor.
+- [ ] Use `tool_search` to expose the original namespace tool definitions.
+- [ ] Use `tool_search` to expose the refactor namespace tool definitions.
+- [ ] Capture the Codex-exposed tool name set for original.
+- [ ] Capture the Codex-exposed tool name set for refactor.
 - [ ] Compare tool name sets.
 - [ ] Compare input schema keys for every shared tool.
 - [ ] Identify refactor-only tools.
