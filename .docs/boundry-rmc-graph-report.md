@@ -5,8 +5,9 @@
 - Crate: `rmc-graph`
 - Graph qualified name: `rmc_graph`
 - Analysis order: 2 of 4
-- Current phase: Phase 4 complete
-- Report state: in progress
+- Current phase: Phase 5 complete
+- Report state: complete
+- Boundary score: 7/10
 
 ## Phase Log
 
@@ -16,8 +17,8 @@
 | Phase 1: Public surface | Complete | 2a193829 | Crate root is narrow, but `graph` exports a broad internal API surface. |
 | Phase 2: Dependency boundary | Complete | ff821ccd | Outgoing edge is only to `rmc_engine`; expected layering rules have no violations. |
 | Phase 3: Import and usage coupling | Complete | f483c864 | Server uses the graph facade path, but that facade exposes deep graph modules and DTOs. |
-| Phase 4: Internal cohesion | Complete | Pending commit | Large cohesive graph/query crate with small duplication clusters around audits, storage helpers, labels, and test support. |
-| Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
+| Phase 4: Internal cohesion | Complete | f90b3c41 | Large cohesive graph/query crate with small duplication clusters around audits, storage helpers, labels, and test support. |
+| Phase 5: Targeted source reads and recommendations | Complete | Pending commit | Dependency direction is healthy, but the graph facade exposes implementation modules used directly by server. |
 
 ## Phase 0: Snapshot Readiness And Baseline
 
@@ -815,3 +816,181 @@ themselves.
   as separate audit-specific inputs?
 - Should storage helper variants remain separate functions, or be normalized
   behind one typed helper before any storage API cleanup?
+
+## Phase 5: Targeted Source Reads And Recommendations
+
+### Required VCS Check
+
+Before Phase 5, `jj show --summary` reported:
+
+```text
+Commit ID: 5058ac1b5bccf50c4242b51dde9e0f9ca4dc70a3
+Change ID: xwylovkoqlyzyppnovyvoqnsssmxopsy
+Description: (no description set)
+```
+
+### Source Reads
+
+Source reads were limited to files identified by MCP phases 1-4:
+
+```text
+crates/rmc-graph/src/lib.rs
+crates/rmc-graph/src/graph/mod.rs
+crates/rmc-graph/src/graph/snapshot.rs
+crates/rmc-graph/src/graph/storage.rs
+crates/rmc-graph/src/graph/loader.rs
+crates/rmc-graph/src/graph/embedding_cache.rs
+crates/rmc-graph/src/graph/math.rs
+crates/rmc-graph/src/graph/query/model.rs
+crates/rmc-server/src/tools/graph/core.rs
+crates/rmc-server/src/tools/graph/response.rs
+crates/rmc-server/src/tools/graph/surface.rs
+crates/rmc-server/src/tools/graph/audits.rs
+crates/rmc-server/src/tools/graph/similarity.rs
+crates/rmc-server/src/tools/endpoints/cache.rs
+```
+
+Key source evidence:
+
+```text
+crates/rmc-graph/src/lib.rs:
+  pub mod graph;
+
+crates/rmc-graph/src/graph/mod.rs:
+  public modules include:
+    ast_resolve, attributes, bindings, channel_audit, codemap,
+    derive_audit, docs_audit, extract, fn_body_audit, hir_trim,
+    ids, impls, labels, loader, model, recursion_check,
+    signatures, snapshot, statics, storage, unsafe_audit, usages
+
+  private modules reexport public helpers:
+    mod embedding_cache;
+    mod math;
+    pub use embedding_cache::ensure_embeddings_for;
+    pub use math::cosine;
+
+  public loader and storage reexports:
+    pub use loader::{LoadedWorkspace, load};
+    pub use storage::{GraphEnvOptions, GraphPaths};
+
+crates/rmc-graph/src/graph/snapshot.rs:
+  BuildOptions is public.
+  OpenedSnapshot is public.
+  OpenedSnapshot exposes public fields:
+    manifest, snapshot_dir, env, dbs
+  OpenedSnapshot exposes public read/write transaction helpers.
+  open_current is public.
+  open_specific is pub(crate).
+
+crates/rmc-graph/src/graph/storage.rs:
+  GraphPaths owns workspace hash, root dir, current pointer path,
+  and snapshots dir.
+  default_data_dir is public through the public storage module.
+
+crates/rmc-graph/src/graph/query/model.rs:
+  Comment states that external callers reach query result types through the
+  graph facade and that the explicit reexport list is the public contract.
+
+crates/rmc-server/src/tools/graph/core.rs:
+  Imports BuildOptions from rmc_graph::graph::snapshot and many DTOs from
+  rmc_graph::graph.
+  Runs build_and_persist in spawn_blocking.
+
+crates/rmc-server/src/tools/graph/response.rs:
+  Opens snapshots by constructing GraphPaths and calling open_current.
+  Imports GraphEnvOptions, GraphPaths, Node, NodeId, OpenedSnapshot, and
+  open_current from rmc_graph::graph.
+
+crates/rmc-server/src/tools/graph/audits.rs:
+  Calls rmc_graph::graph::loader::load directly for audits that need a full
+  rust-analyzer workspace load.
+  Calls graph audit modules directly from the server layer.
+
+crates/rmc-server/src/tools/graph/similarity.rs:
+  Calls rmc_graph::graph::ensure_embeddings_for.
+  Calls rmc_graph::graph::cosine.
+
+crates/rmc-server/src/tools/endpoints/cache.rs:
+  Uses rmc_graph::graph::GraphPaths::for_workspace to clear hypergraph
+  snapshot directories.
+```
+
+### Final Boundary Assessment
+
+Boundary score: 7/10.
+
+`rmc_graph` has the right dependency direction. It depends only on
+`rmc_engine`, has no edge to server or indexing, and has no forbidden layering
+violations. Internally, the crate is coherent: extraction, persistence, query,
+codemap, audit, and semantic-overlap cache behavior all revolve around the
+persisted hypergraph model.
+
+The reason this is not an 8-10 boundary is public API shape. The crate root is
+minimal, but `rmc_graph::graph` is both the facade and the implementation
+namespace. It exposes many implementation modules directly and reexports
+low-level helpers (`loader::load`, `ensure_embeddings_for`, `cosine`,
+`GraphPaths`, `GraphEnvOptions`) alongside stable query DTOs and snapshot
+operations. Server code then relies on that broad surface for MCP tool behavior.
+
+The most important boundary leak is not that server imports graph types; that
+is expected. The leak is that server owns orchestration around graph internals:
+it opens graph storage paths, calls the graph loader for audit endpoints, calls
+audit modules directly, and performs semantic-overlap embedding/cosine control
+using helpers reexported from graph.
+
+### Recommendations
+
+1. Keep `rmc_graph -> rmc_engine` as the only graph dependency.
+   The current crate direction is correct. Do not introduce dependencies from
+   graph to server or indexing.
+
+2. Treat `rmc_graph::graph` as a compatibility facade, then narrow new API.
+   Existing callers can continue using it, but new server-facing work should
+   prefer explicit facade groups such as snapshot/query/audit/similarity rather
+   than exposing every implementation module.
+
+3. Move server audit orchestration behind graph-owned functions.
+   Server audit endpoints currently call `loader::load` and audit modules
+   directly. A cleaner boundary would expose higher-level graph audit entry
+   points that accept directory/options and own the load/snapshot/audit details.
+
+4. Stop exporting `loader::load` unless debug binaries require it as API.
+   MCP evidence shows production server audit tooling uses it. If that logic
+   moves behind graph audit APIs, `load` can become `pub(crate)` or remain only
+   for examples/debug binaries through a clearly marked dev surface.
+
+5. Hide or reduce `ensure_embeddings_for` and `cosine` as public graph exports.
+   These are implementation helpers for graph semantic-overlap behavior.
+   Server similarity currently coordinates them directly. Prefer a graph-owned
+   semantic-overlap operation or a small similarity service API.
+
+6. Encapsulate graph storage cleanup.
+   `rmc_server::tools::endpoints::cache` reaches into `GraphPaths` and graph
+   storage layout. A graph-owned `clear_workspace_snapshot` or path-planning
+   helper would keep storage layout decisions in graph while still supporting
+   server cache tools.
+
+7. Keep query DTOs public, but separate them from implementation modules.
+   `query/model.rs` already documents the explicit reexport list as the public
+   contract. That is good. The next cleanup should make this contract visually
+   and structurally distinct from extraction/storage/loader/audit internals.
+
+8. Leave the small semantic-overlap clusters alone unless churn continues.
+   Audit option structs, storage open helpers, label helpers, and test fixtures
+   show duplication, but they are local cleanup opportunities rather than
+   current boundary failures.
+
+### Final Findings
+
+- Strong boundary: dependency direction is correct and layering rules are clean.
+- Strong boundary: `GraphPaths` is concentrated in snapshot/storage code inside
+  graph, although server currently reaches into it for cache cleanup.
+- Strong boundary: internal model cohesion is high around `OpenedSnapshot` and
+  `NodeId`.
+- Weak boundary: `rmc_graph::graph` mixes facade API and implementation modules.
+- Weak boundary: server audit/similarity tools call graph internals directly.
+- Weak boundary: `OpenedSnapshot` exposes public storage/environment fields.
+- Watch item: `loader::load`, `ensure_embeddings_for`, `cosine`, `GraphPaths`,
+  and `GraphEnvOptions` should be treated as boundary-sensitive APIs.
+- No immediate dependency-direction refactor is required before analyzing
+  `rmc_indexing` and `rmc_server`.
