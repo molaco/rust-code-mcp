@@ -271,7 +271,7 @@ Verification notes:
 | 6 | Audit and Policy Tools | pass | Audit counts and representative findings matched across all sampled policy tools. |
 | 7 | Semantic Similarity Tools | partial | Scoped semantic tools matched exactly; unscoped workspace overlap timed out on both servers. |
 | 8 | Failure Modes and Robustness | pass | Invalid inputs, repeated warm calls, expensive repeats, and pagination matched; repeated search had only equal-score ordering drift. |
-| 9 | Final Speed and Functionality Report | pending | Summarize compatibility, speed deltas, regressions, and follow-ups. |
+| 9 | Final Speed and Functionality Report | pass | Refactor is functionally compatible in sampled MCP usage; replacement is recommended after reviewing indexing chunk drift and expensive-query timeout behavior. |
 
 ## Phase 0: MCP Tool Baseline
 
@@ -687,7 +687,7 @@ Verification notes:
 
 ## Phase 9: Final Speed and Functionality Report
 
-Status: pending
+Status: pass
 
 Purpose:
 
@@ -695,22 +695,36 @@ Produce the final judgement: whether the refactor server is functionally compati
 
 Checklist:
 
-- [ ] Summarize tool-surface compatibility.
-- [ ] Summarize schema compatibility.
-- [ ] Summarize functional output compatibility.
-- [ ] Summarize speed wins/regressions.
-- [ ] List expected differences caused by crate-boundary canonical-name drift.
-- [ ] List real regressions with reproduction inputs.
-- [ ] List follow-up fixes and suggested priority.
-- [ ] Give a final rating out of 10 for readiness to replace the original.
+- [x] Summarize tool-surface compatibility.
+- [x] Summarize schema compatibility.
+- [x] Summarize functional output compatibility.
+- [x] Summarize speed wins/regressions.
+- [x] List expected differences caused by crate-boundary canonical-name drift.
+- [x] List real regressions with reproduction inputs.
+- [x] List follow-up fixes and suggested priority.
+- [x] Give a final rating out of 10 for readiness to replace the original.
 
 Final Rollup:
 
 | Area | Result | Notes |
 |---|---|---|
-| Tool surface | pending |  |
-| Schema compatibility | pending |  |
-| Functional parity | pending |  |
-| Performance | pending |  |
-| Reliability | pending |  |
-| Replacement readiness rating | pending |  |
+| Tool surface | pass | Both namespaces exposed 51 tools; no original-only or refactor-only tools were found. |
+| Schema compatibility | pass | Shared tool parameter field-key sets matched; observed differences were module-path moves only. |
+| Functional parity | pass with review items | Navigation, graph queries, audits, bounded semantic tools, invalid inputs, and pagination matched. Cold indexing had a one-chunk drift: original 2401 chunks, refactor 2402. |
+| Performance | mixed but acceptable | Refactor was faster on binary size, health smoke, indexing, workspace stats, crate edges, and hypergraph build timings, but slower on some warm search and semantic calls. Both servers exceeded 10s on hypergraph builds. |
+| Reliability | pass with shared limits | Error shapes and repeated warm calls matched. Unscoped workspace `semantic_overlaps` timed out at 120s on both; refactor had one transient post-timeout `environment already open` retry failure that cleared after 30s. |
+| Replacement readiness rating | 8/10 | MCP-tool behavior is compatible in the sampled surface. Resolve or explicitly accept the chunk-count drift and expensive semantic/hypergraph timeout behavior before treating the refactor as a drop-in replacement. |
+
+Final judgement:
+
+The refactor server is functionally compatible with the original across the sampled MCP tool surface. Tool inventory and schemas matched exactly, and the MCP-only comparison found no refactor-only missing tool, schema break, error-shape mismatch, audit-count drift, graph-query drift, or bounded semantic-output drift.
+
+Speed results were mixed. The refactor was generally comparable and often faster on structural graph queries and build/index timings, but not uniformly faster on repeated warm search or semantic calls. The most important performance concern is shared rather than refactor-specific: cold and warm `build_hypergraph` exceeded the 10 second threshold on both servers, and unscoped workspace-wide `semantic_overlaps` timed out at the MCP client boundary on both.
+
+Needs-review items:
+
+- Priority 1: Investigate the Phase 3 cold forced indexing chunk-count drift using `index_codebase(directory=PRIMARY_WORKSPACE, force_reindex=true)`: original reported 2401 chunks and refactor reported 2402.
+- Priority 2: Improve or document expensive-query behavior for `build_hypergraph` and unscoped `semantic_overlaps`; both servers currently exceed the plan's latency threshold or client timeout.
+- Priority 3: Check timeout cleanup around refactor `semantic_overlaps`; after the unscoped timeout, one scoped retry failed with `environment already open in this program`, then succeeded after 30 seconds.
+
+No real refactor-specific functional regression was confirmed. The expected crate-boundary/module-path changes did not surface as breaking MCP input-schema or sampled output differences.
