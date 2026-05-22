@@ -37,7 +37,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::embeddings::EmbeddingProfile;
+use rmc_engine::embeddings::EmbeddingProfile;
 
 /// Environment variable for overriding the GPU embedding batch size.
 pub(crate) const EMBED_BATCH_SIZE_ENV: &str = "RUST_CODE_MCP_EMBED_BATCH_SIZE";
@@ -64,7 +64,7 @@ const MAX_CHUNK_TOKENS: usize = 16_384;
 /// - IndexerCore (file processing settings)
 /// - TantivyAdapter (BM25 indexing settings)
 #[derive(Debug, Clone)]
-pub(crate) struct IndexerConfig {
+pub struct IndexerConfig {
     /// Core processing settings
     pub core: IndexerCoreConfig,
     /// Tantivy BM25 settings
@@ -138,7 +138,7 @@ impl IndexerConfig {
 
 /// Core indexing configuration
 #[derive(Debug, Clone)]
-pub(crate) struct IndexerCoreConfig {
+pub struct IndexerCoreConfig {
     /// Path to metadata cache directory
     pub cache_path: PathBuf,
     /// Maximum file size to process (in bytes)

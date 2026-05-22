@@ -7224,6 +7224,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmc-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "rmc-engine",
+ "tracing",
+]
+
+[[package]]
 name = "rmc-engine"
 version = "0.1.0"
 dependencies = [
@@ -7379,6 +7389,7 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest",
+ "rmc-config",
  "rmc-engine",
  "rmc-graph",
  "rmcp",

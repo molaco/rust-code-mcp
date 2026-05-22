@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [".", "crates/rmc-engine", "crates/rmc-graph"]
+members = [".", "crates/rmc-config", "crates/rmc-engine", "crates/rmc-graph"]
 
 [workspace.dependencies]
 # MCP and async runtime
@@ -190,6 +190,7 @@ rayon = { workspace = true }
 num_cpus = { workspace = true }
 
 # Workspace member path deps (populated as Phase 7 B.1+ lifts modules)
+rmc-config = { path = "crates/rmc-config" }
 rmc-engine = { path = "crates/rmc-engine" }
 rmc-graph = { path = "crates/rmc-graph" }
 

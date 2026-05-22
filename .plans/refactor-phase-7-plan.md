@@ -552,6 +552,8 @@ Commit:
 
 Risk: Low. Three files; one foreign import to rewrite.
 
+**Status: DONE** — see commit log (`phase 7 C.1`). `pub(crate)` → `pub` widening on `IndexerConfig` (`indexer.rs:67`) and `IndexerCoreConfig` (`indexer.rs:141`) was required for `src/indexing/*` to reach them through the facade. `Config` and the env-var constants stayed `pub(crate)` (unused externally). `cargo check --workspace --all-targets` green.
+
 ### 5.C.2 — Lift `indexing + monitoring + metadata_cache + metrics + security` as `rmc-indexing`
 
 All five modules go into `rmc-indexing` together because `indexing` directly consumes the utility three (`metadata_cache`, `metrics`, `security`) and reaches `monitoring` post-A.1 via the `Backup` trait that lives in `indexing` itself. Lifting them piecewise would either create transient main-crate ↔ rmc-indexing cycles, or force a separate crate for each utility leaf — unjustified given their tiny size.

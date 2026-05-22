@@ -1,0 +1,17 @@
+[package]
+name    = "rmc-config"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# In-workspace engine crate (EmbeddingProfile)
+rmc-engine = { path = "../rmc-engine" }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Cross-platform data directories
+directories = { workspace = true }

@@ -7,7 +7,7 @@ pub mod indexer;
 
 pub use errors::{Error, Result};
 pub use indexer::TantivyConfig;
-pub(crate) use indexer::{IndexerConfig, IndexerCoreConfig};
+pub use indexer::{IndexerConfig, IndexerCoreConfig};
 
 use std::env;
 use std::path::PathBuf;
