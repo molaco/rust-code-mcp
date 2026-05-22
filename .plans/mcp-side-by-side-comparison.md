@@ -257,7 +257,7 @@ Verification notes:
 | 0 | MCP Tool Baseline | pass | Binaries/config verified; both MCP namespaces answered health/search smoke calls. |
 | 1 | Tool Inventory and Schemas | pass | 51 shared tools, no original/refactor-only tools, no breaking schema-key differences. |
 | 2 | Health, Cache, and Cold Start | pass | Isolated cache roots verified; both namespaces stayed degraded-but-functional before/after cache clear. |
-| 3 | Indexing and Retrieval | pending | Compare indexing, keyword search, hybrid search, and similar-code retrieval. |
+| 3 | Indexing and Retrieval | partial | Retrieval compatible; cold forced indexing had a one-chunk count drift needing review. |
 | 4 | Live Navigation and File Analysis | pending | Compare definitions, references, imports, dependencies, call graph, and complexity. |
 | 5 | Hypergraph Snapshot and Core Queries | pending | Compare snapshot metrics, exports, imports, uses, crate edges, and dependency rules. |
 | 6 | Audit and Policy Tools | pending | Compare docs/derive/body/unsafe/channel/recursion/global-state audits. |
@@ -437,7 +437,7 @@ Notes:
 
 ## Phase 3: Indexing and Retrieval
 
-Status: pending
+Status: partial
 
 Purpose:
 
@@ -445,22 +445,48 @@ Compare indexing and search behavior on the same workspace.
 
 Checklist:
 
-- [ ] Run `index_codebase(directory = PRIMARY_WORKSPACE, force_reindex = true)` on original.
-- [ ] Run `index_codebase(directory = PRIMARY_WORKSPACE, force_reindex = true)` on refactor.
-- [ ] Run warm `index_codebase(directory = PRIMARY_WORKSPACE, force_reindex = false)` on both.
-- [ ] Compare `search` for canonical queries.
-- [ ] Compare `get_similar_code` for canonical queries.
-- [ ] Compare result counts, top result file paths, and output sizes.
-- [ ] Record cold/warm timing deltas.
+- [x] Run `index_codebase(directory = PRIMARY_WORKSPACE, force_reindex = true)` on original.
+- [x] Run `index_codebase(directory = PRIMARY_WORKSPACE, force_reindex = true)` on refactor.
+- [x] Run warm `index_codebase(directory = PRIMARY_WORKSPACE, force_reindex = false)` on both.
+- [x] Compare `search` for canonical queries.
+- [x] Compare `get_similar_code` for canonical queries.
+- [x] Compare result counts, top result file paths, and output sizes.
+- [x] Record cold/warm timing deltas.
 
 Results:
 
 | Tool/Input | Original ms | Refactor ms | Delta % | Classification | Notes |
 |---|---:|---:|---:|---|---|
-| `index_codebase(force_reindex=true)` | pending | pending | pending | pending |  |
-| `index_codebase(force_reindex=false)` | pending | pending | pending | pending |  |
-| `search(SearchTool)` | pending | pending | pending | pending |  |
-| `get_similar_code(build_hypergraph)` | pending | pending | pending | pending |  |
+| `index_codebase(force_reindex=true)` | 46668.6 | 46151.5 | -1.1 | needs-review | Both indexed 185/187 Rust files, but original reported 2401 chunks and refactor reported 2402. |
+| `index_codebase(force_reindex=false)` | 11.8 | 11.2 | -5.2 | exact | Both reported already up to date, 254 unchanged files, 0 changed files, 0 chunks. |
+| `search(SearchTool)` | 334.9 | 312.1 | -6.8 | compatible | Both returned 10 results with the same top-path set; first two equal-score results were swapped. |
+| `get_similar_code(build_hypergraph)` | 371.5 | 390.1 | +5.0 | compatible | Both returned 5 results with the same top-path set; first two near-equal results were swapped. |
+
+Notes:
+
+```text
+2026-05-22 Phase 3 results:
+- `jj show --summary` was run before starting this phase.
+- Cold forced indexing:
+  - original: 187 total Rust files, 185 indexed files, 2 skipped/removed files, 2401 chunks, 46.668629381s server time, 47.2675s MCP wall time.
+  - refactor: 187 total Rust files, 185 indexed files, 2 skipped/removed files, 2402 chunks, 46.151507604s server time, 46.7377s MCP wall time.
+  - Classification: `needs-review` because the refactor produced one additional chunk for the same workspace and profile.
+- Warm indexing:
+  - original: already up to date, 254 total Rust files, 254 unchanged, 0 changed, 0 chunks, 11.827068ms server time, 0.5448s MCP wall time.
+  - refactor: already up to date, 254 total Rust files, 254 unchanged, 0 changed, 0 chunks, 11.211083ms server time, 0.5140s MCP wall time.
+- Canonical `search` query summary:
+  - `SearchTool`: 10 results on both; same top-path set; top two equal-score results swapped.
+  - `SyncManager`: 10 results on both; same top 6; positions 7 and 8 swapped.
+  - `build_hypergraph`: 10 results on both; same top-path set with small ordering drift.
+  - `semantic_overlaps`: 10 results on both; same main files/symbol families with line-split ordering drift inside `similarity.rs`.
+  - `forbidden_dependency_check`: 10 results on both; same top-path set; top two equal-score results swapped.
+- Canonical `get_similar_code(limit = 5)` summary:
+  - `SearchTool`: 5 results on both; same order and paths, minor score drift.
+  - `SyncManager`: 5 results on both; same order and paths, same displayed scores.
+  - `build_hypergraph`: 5 results on both; same paths, first two near-equal results swapped.
+  - `semantic_overlaps`: 5 results on both; same top two, positions 3-5 reordered among closely related symbols/modules.
+  - `forbidden_dependency_check`: 5 results on both; same order and paths, minor score drift.
+```
 
 ## Phase 4: Live Navigation and File Analysis
 
