@@ -5,7 +5,7 @@
 - Crate: `rmc-indexing`
 - Graph qualified name: `rmc_indexing`
 - Analysis order: 3 of 4
-- Current phase: Phase 2 complete
+- Current phase: Phase 3 complete
 - Report state: in progress
 
 ## Phase Log
@@ -14,8 +14,8 @@
 | --- | --- | --- | --- |
 | Phase 0: Snapshot readiness and baseline | Complete | e3004234 | Graph snapshot reused; workspace and dependency baseline captured. |
 | Phase 1: Public surface | Complete | 1a332a1a | Root is narrow, but public submodules expose indexing internals directly. |
-| Phase 2: Dependency boundary | Complete | Pending commit | Outgoing edges are only to `rmc_config` and `rmc_engine`; expected layering rules have no violations. |
-| Phase 3: Import and usage coupling | Pending | Not started |  |
+| Phase 2: Dependency boundary | Complete | 07e23561 | Outgoing edges are only to `rmc_config` and `rmc_engine`; expected layering rules have no violations. |
+| Phase 3: Import and usage coupling | Complete | Pending commit | Server uses unified/index stats APIs, but also reaches into incremental and Tantivy adapter modules. |
 | Phase 4: Internal cohesion | Pending | Not started |  |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
@@ -444,3 +444,190 @@ production server usage.
   incremental, monitoring, metadata cache, and security modules directly?
 - Should benchmark/test-only lower-level surfaces be public, or can they move
   behind narrower dev/test APIs?
+
+## Phase 3: Import And Usage Coupling
+
+### Required VCS Check
+
+Before Phase 3, `jj show --summary` reported:
+
+```text
+Commit ID: 6c77a89326d4be12e7e2bc8f3e43d33c8cd61bb7
+Change ID: vmroopnkxunvvopzstsmlqrvqkmkssnx
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+get_imports(directory, module="rmc_indexing", summary=true, limit=300)
+module_dependencies(directory, module="rmc_indexing", summary=true, limit=300)
+get_imports(directory, module="rmc_indexing::indexing", summary=true, limit=300)
+module_dependencies(directory, module="rmc_indexing::indexing", summary=true, limit=300)
+who_imports(directory, target=<key indexing symbols>, summary=true, limit=200)
+who_uses_summary(directory, target=<key indexing symbols>, summary=true, limit=200)
+module_dependencies(directory, module=<server indexing consumer modules>, summary=true, limit=200)
+```
+
+Crate root imports/dependencies:
+
+```text
+rmc_indexing imports: 0
+rmc_indexing module dependencies: 0
+```
+
+`rmc_indexing::indexing` facade imports:
+
+```text
+total imports: 7
+dependency modules: 4
+
+rmc_indexing::indexing::unified
+  import_count: 3
+
+rmc_indexing::indexing::incremental
+  import_count: 2
+
+rmc_indexing::indexing::tantivy_adapter
+  import_count: 1
+
+rmc_indexing::indexing::error
+  import_count: 1
+```
+
+Key symbol import/usage rollups:
+
+```text
+UnifiedIndexer
+  who_imports total: 6
+  who_uses_summary total modules: 5
+  production/server use:
+    rmc_server::tools::endpoints::query
+  non-server external use:
+    evaluation, test_hybrid_search
+
+IncrementalIndexer
+  who_imports total: 14
+  who_uses_summary total modules: 11
+  production/server use:
+    rmc_server::mcp::sync
+    rmc_server::tools::endpoints::index
+  non-server external use:
+    benchmarks, tests, index_codebase, quick_bench, embedding_profile_smoke
+
+IndexStats
+  who_imports total: 9
+  who_uses_summary total modules: 6
+  production/server use:
+    rmc_server::tools::endpoints::index
+    rmc_server::tools::endpoints::query
+
+TantivyAdapter
+  who_imports total: 4
+  importers:
+    rmc_indexing::indexing
+    rmc_indexing::indexing::unified
+    rmc_indexing::indexing::unified::tests
+    rmc_indexing::indexing::tantivy_adapter::tests
+
+FileSystemMerkle
+  who_imports total: 8
+  external importer:
+    test_merkle_standalone
+  internal/importing modules include:
+    indexing::incremental
+    indexing::backup
+    monitoring::backup
+    tests
+
+get_snapshot_path
+  who_imports total: 4
+  external importers:
+    test_full_incremental_flow
+    test_mcp_stdio_transport
+  plus indexing facade and incremental tests
+
+MemoryMonitor
+  who_imports total: 3
+  importers are internal/tests:
+    indexing::embedding_batcher
+    indexing::embedding_batcher::tests
+    metrics::memory::tests
+
+SensitiveFileFilter
+  who_imports total: 4
+  external importer:
+    benchmark_phases
+  internal/importing modules include:
+    indexing::file_processor
+    tests
+
+SecretsScanner
+  who_imports total: 4
+  external importer:
+    benchmark_phases
+  internal/importing modules include:
+    indexing::file_processor
+    tests
+```
+
+Server module dependency rollups:
+
+```text
+rmc_server::tools::endpoints::index
+  rmc_indexing::indexing::incremental: imports 1, usages 4
+  rmc_indexing::indexing::unified: imports 1, usages 4
+
+rmc_server::mcp::sync
+  rmc_indexing::indexing::incremental: imports 1, usages 3
+
+rmc_server::tools::endpoints::query
+  rmc_indexing::indexing::unified: imports 0, usages 5
+  rmc_indexing::indexing::tantivy_adapter: imports 0, usages 3
+```
+
+### Phase 3 Interpretation
+
+Consumers use two different indexing surfaces. `UnifiedIndexer` and
+`IndexStats` look like intended high-level APIs and are used by server query
+and index endpoints. However, server also imports `IncrementalIndexer` directly
+from `indexing::incremental` for sync and index endpoints. The query endpoint
+also has inline usage of `indexing::tantivy_adapter`, which means server is not
+fully insulated from indexing implementation details.
+
+The deepest APIs are mostly not production-server dependencies. `FileSystemMerkle`
+is primarily internal and test/standalone-tool facing. `get_snapshot_path` is
+used by tests and transport integration checks. `SensitiveFileFilter` and
+`SecretsScanner` are internal to file processing plus benchmarks. `MemoryMonitor`
+is internal/test-only in the MCP evidence despite being public.
+
+The practical boundary concern is therefore focused: keep `UnifiedIndexer` and
+`IndexStats` as the preferred server contract, and evaluate whether server
+should call `IncrementalIndexer` and Tantivy adapter details directly.
+
+### Phase 3 Findings
+
+- The crate root has no imports/dependencies; coupling is under public
+  submodules.
+- `rmc_indexing::indexing` reexports seven items from four internal modules.
+- Server uses both high-level indexing APIs and lower-level implementation
+  modules.
+- `rmc_server::tools::endpoints::index` imports both `incremental` and
+  `unified`.
+- `rmc_server::mcp::sync` imports `incremental`.
+- `rmc_server::tools::endpoints::query` uses both `unified` and
+  `tantivy_adapter`.
+- `FileSystemMerkle`, `get_snapshot_path`, security scanners, and memory
+  monitoring are mostly used by internal modules, tests, benchmarks, or
+  standalone tools rather than production server paths.
+
+### Open Questions For Later Phases
+
+- Should sync/index server flows depend on `IncrementalIndexer`, or should that
+  be wrapped by a higher-level indexing service API?
+- Should query create/use Tantivy search through `UnifiedIndexer` rather than
+  touching `TantivyAdapter`?
+- Are public monitoring/security modules deliberately reusable, or just public
+  because examples and benchmarks import them?
