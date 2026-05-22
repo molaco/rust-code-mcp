@@ -162,9 +162,9 @@ fn exports_of_loader_visible_from_graph_mod() {
 
 #[test]
 fn lookup_by_qualified_name_resolves_reexport_facade() {
-    // `rust_code_mcp::graph::load` is exposed via `pub use loader::load;`
-    // in src/graph/mod.rs. The canonical declaration lives at
-    // `rust_code_mcp::graph::loader::load`. The fallback should follow the
+    // `rmc_graph::graph::load` is exposed via `pub use loader::load;`
+    // in crates/rmc-graph/src/graph/mod.rs. The canonical declaration lives at
+    // `rmc_graph::graph::loader::load`. The fallback should follow the
     // re-export and return the canonical Item node.
     let snap = shared_snapshot();
     let (_id, node) = snap

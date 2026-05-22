@@ -112,7 +112,7 @@ async fn get_exports_accepts_crate_name_as_consumer() {
 
     let exports = get_exports(GraphExportsParams {
         directory: manifest_dir.to_string(),
-        // `rust_code_mcp::graph` re-exports `load` (from loader),
+        // `rmc_graph::graph` re-exports `load` (from loader),
         // visible from anywhere inside the crate.
         module: "rmc_graph::graph".to_string(),
         // Crate name, NOT a module path — must be transparently

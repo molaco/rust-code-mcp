@@ -338,7 +338,7 @@ mod tests {
         // `extract_attributes` itself has a doc comment but no `#[...]`
         // attributes. We can still pick something simpler — a closure-free
         // private helper. `set_attrs_for` is a generic fn but its qualified
-        // name is `rust_code_mcp::graph::attributes::set_attrs_for`.
+        // name is `rmc_graph::graph::attributes::set_attrs_for`.
         // It has no derive / must_use / inline attrs.
         let attrs = attrs_of("rmc_graph::graph::attributes::set_attrs_for");
         let non_doc: Vec<&String> = attrs.iter().filter(|s| !s.starts_with("///")).collect();

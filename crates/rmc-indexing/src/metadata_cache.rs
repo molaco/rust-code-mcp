@@ -85,7 +85,7 @@ impl MetadataCache {
     }
 
     /// Get cached metadata for a file
-    pub fn get(&self, file_path: &str) -> Result<Option<FileMetadata>, Box<dyn std::error::Error>> {
+    pub(crate) fn get(&self, file_path: &str) -> Result<Option<FileMetadata>, Box<dyn std::error::Error>> {
         match self.db.get(file_path)? {
             Some(bytes) => {
                 let metadata: FileMetadata = bincode::deserialize(&bytes)?;
@@ -96,7 +96,7 @@ impl MetadataCache {
     }
 
     /// Store metadata for a file
-    pub fn set(&self, file_path: &str, metadata: &FileMetadata) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn set(&self, file_path: &str, metadata: &FileMetadata) -> Result<(), Box<dyn std::error::Error>> {
         let bytes = bincode::serialize(metadata)?;
         self.db.insert(file_path, bytes)?;
         Ok(())
@@ -113,7 +113,7 @@ impl MetadataCache {
     /// This avoids reading file content entirely. Returns:
     /// - `true` if file is not cached or stat differs (may need content hash to confirm)
     /// - `false` if stat matches (file almost certainly unchanged)
-    pub fn has_stat_changed(&self, file_path: &str, stat: &FileStat) -> Result<bool, Box<dyn std::error::Error>> {
+    pub(crate) fn has_stat_changed(&self, file_path: &str, stat: &FileStat) -> Result<bool, Box<dyn std::error::Error>> {
         match self.get(file_path)? {
             Some(cached) => Ok(cached.last_modified != stat.last_modified || cached.size != stat.size),
             None => Ok(true), // Not in cache = needs indexing
