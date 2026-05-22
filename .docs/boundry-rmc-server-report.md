@@ -5,7 +5,7 @@
 - Crate: `rmc-server`
 - Graph qualified name: `rmc_server`
 - Analysis order: 4 of 4
-- Current phase: Phase 3 complete
+- Current phase: Phase 4 complete
 - Report state: in progress
 
 ## Phase Log
@@ -15,8 +15,8 @@
 | Phase 0: Snapshot readiness and baseline | Complete | 98e49844 | Graph snapshot reused; workspace and server dependency baseline captured. |
 | Phase 1: Public surface | Complete | aedffaec | Root is narrow, but server exposes public implementation namespaces. |
 | Phase 2: Dependency boundary | Complete | 4da7a3c2 | Outgoing edges match expected top-layer dependencies; no lower-layer rule violations. |
-| Phase 3: Import and usage coupling | Complete | Pending commit | Coupling is concentrated in router, endpoints, and graph tool modules. |
-| Phase 4: Internal cohesion | Pending | Not started |  |
+| Phase 3: Import and usage coupling | Complete | c8f88d50 | Coupling is concentrated in router, endpoints, and graph tool modules. |
+| Phase 4: Internal cohesion | Complete | Pending commit | Cohesive server crate, with expected MCP boilerplate and a few helper overlaps. |
 | Phase 5: Targeted source reads and recommendations | Pending | Not started |  |
 
 ## Phase 0: Snapshot Readiness And Baseline
@@ -742,3 +742,220 @@ grows.
   combines engine embedding identity with indexing identity and snapshot paths?
 - Is `tools::endpoints::analysis` an MCP adapter over semantic/engine logic, or
   is it growing reusable analysis behavior that should move down?
+
+## Phase 4: Internal Cohesion
+
+### Required VCS Check
+
+Before Phase 4, `jj show --summary` reported:
+
+```text
+Commit ID: a5795b6a998e4ef5e4550c2db16f44efd04fbb95
+Change ID: nqkxsutrzskxkqpmymynklyonnvxovpm
+Description: (no description set)
+```
+
+### MCP Evidence
+
+Commands used:
+
+```text
+functions_with_filter(directory, krate="rmc_server", summary=true, limit=500)
+functions_with_filter(directory, krate="rmc_server", has_param_type=<boundary type>, summary=true, limit=100)
+functions_with_filter(directory, krate="rmc_server", returns_type_pattern="CallToolResult", summary=true, limit=200)
+functions_with_filter(directory, krate="rmc_server", is_async=true, summary=true, limit=200)
+overlaps(directory, scope="local_no_vendor")
+semantic_overlaps(directory, crate_name="rmc_server", item_kind="Struct", summary=true, max_pairs=60)
+semantic_overlaps(directory, crate_name="rmc_server", item_kind="Enum", summary=true, max_pairs=25)
+semantic_overlaps(directory, crate_name="rmc_server", item_kind="Function", summary=true, max_pairs=60)
+```
+
+Function inventory:
+
+```text
+total indexed rmc_server functions: 260
+async functions: 149
+functions returning CallToolResult: 105
+functions returning McpError pattern: 0
+```
+
+Boundary-signature filters:
+
+```text
+has_param_type="OpenedSnapshot"
+  total: 7
+  graph::core::enrich_bindings
+  graph::core::enrich_usages
+  graph::response::resolve_chunk_to_item
+  graph::response::resolve_required_node
+  graph::response::visibility_label
+  graph::surface::enrich_crate_dead_pub
+  graph::surface::enrich_dead_pub
+
+has_param_type="GraphPaths"
+  total: 0
+
+has_param_type="ProjectPaths"
+  total: 6
+  endpoints::query::clean_stale_index
+  endpoints::query::create_hybrid_search
+  endpoints::query::ensure_indexed
+  endpoints::query::resolve_query_backend
+  endpoints::query::try_open_bm25
+  endpoints::query::vector_metadata_exists
+
+has_param_type="SyncManager"
+  total: 4
+  endpoints::index::index_codebase
+  endpoints::query::ensure_indexed
+  endpoints::query::search
+  router::SearchToolRouter::with_sync_manager
+
+has_param_type="EmbeddingBackend"
+  total: 8
+  mcp::project_paths::ProjectPaths::from_directory
+  mcp::project_paths::ProjectPaths::from_directory_with_chunking_identity
+  mcp::project_paths::ProjectPaths::from_existing_collection_name
+  endpoints::query::backend_matches_request
+  endpoints::query::create_hybrid_search
+  endpoints::query::ensure_indexed
+  endpoints::query::resolve_query_backend
+  endpoints::query::select_index_paths
+
+has_param_type="IncrementalIndexer"
+  total: 0
+
+has_param_type="CallToolResult"
+  total: 1
+  tools::graph::tests::first_text
+```
+
+Name-overlap context:
+
+```text
+cross_crate_type_collisions: 0
+module_shadows: 0
+common_fn_names: 0
+within_crate_type_duplicates:
+  none for rmc_server
+  one unrelated rmc_graph test duplicate: SharedSnap
+```
+
+Semantic overlap, structs:
+
+```text
+seed_count: 106
+total_pair_count: 26
+total_cluster_count: 10
+
+high-signal clusters:
+  ItemsWithAttributeParams / ItemAttributesParams
+  GraphDeclaredReexportsParams / GraphReexportsParams / GraphExportsParams
+  DeadPubResponse / DeadPubReportResponse / DeadPubReportParams /
+    DeadPubParams / EnrichedCrateDeadPub
+  CallsFromParams / WhoCallsParams / WhoUsesSummaryParams /
+    WhoUsesParams / CallersInCrateParams / WhoImportsParams /
+    GraphImportsParams / CallGraphParams / RecursiveCallersCountParams
+  MutStaticAuditParams / UnsafeAuditParams / PubUsePubTypeAuditParams
+  ItemAttributesResponse / ItemsWithAttributeResponse
+  FindDefinitionParams / FindReferencesParams
+  ItemRef / SeedItemRef
+  OverlapsParams / SemanticOverlapsParams
+  MissingDocsAuditParams / DeriveAuditParams
+```
+
+Semantic overlap, enums:
+
+```text
+seed_count: 0
+total_pair_count: 0
+total_cluster_count: 0
+```
+
+Semantic overlap, functions:
+
+```text
+seed_count: 112
+total_pair_count: 22
+total_cluster_count: 11
+
+clusters:
+  mcp::project_paths::data_dir /
+    tools::endpoints::indexing_support::data_dir
+  endpoints::analysis::find_definition /
+    endpoints::analysis::find_definition_with_options
+  graph::core::get_declared_reexports /
+    graph::core::get_reexports / graph::core::get_exports
+  semantic::position::symbol_search /
+    semantic::position::symbol_search_with_exact /
+    semantic::position::find_references_by_name_with_exact /
+    semantic::position::find_references_by_name /
+    endpoints::analysis::find_references_with_options /
+    endpoints::analysis::find_references
+  graph::core::who_uses_summary / graph::core::who_uses
+  graph::core::get_imports / graph::core::who_imports
+  mcp::project_paths::resolve_embedding_backend /
+    endpoints::query::resolve_requested_backend /
+    graph::similarity::resolve_graph_tool_backend /
+    endpoints::index::resolve_backend
+  graph::surface::dead_pub_report / graph::surface::dead_pub_in_crate
+  graph::core::who_calls / graph::core::calls_from /
+    graph::core::callers_in_crate
+  semantic::rename::rename_by_name /
+    endpoints::analysis::rename_symbol
+  graph::surface::item_attributes /
+    graph::surface::items_with_attribute
+```
+
+### Phase 4 Interpretation
+
+`rmc_server` is cohesive as an MCP-facing crate. The high counts of async
+functions and `CallToolResult` return signatures confirm that much of the
+crate is endpoint/router surface. The modules cluster around MCP tool routing,
+graph tool adapters, search/index endpoints, cache/health operations, project
+path resolution, background sync, and semantic editor operations.
+
+The overlap findings are mostly expected MCP boilerplate: many parameter DTOs
+differ only by the specific graph query they represent, and many router or
+endpoint functions are shape-similar because they validate params, call a lower
+service, and return `CallToolResult`.
+
+There are a few real consolidation candidates:
+
+- `mcp::project_paths::data_dir` and
+  `tools::endpoints::indexing_support::data_dir` are near-duplicate helpers.
+- Embedding backend resolution exists in four shape-similar functions across
+  project paths, query, graph similarity, and index endpoints.
+- `find_definition`/`find_definition_with_options`, reference search pairs,
+  and exact/non-exact semantic helper pairs are intentional variants but should
+  stay thin wrappers.
+
+Boundary-signature filters reinforce phase 3. Graph snapshot types appear in
+server graph response/core/surface helpers, and project-path and embedding
+backend types appear in query/search path selection. No signatures take
+`IncrementalIndexer`, which means indexing internals are constructed locally
+rather than passed through server APIs.
+
+### Phase 4 Findings
+
+- `rmc_server` has 260 indexed functions.
+- `149` functions are async, consistent with MCP endpoint/router work.
+- `105` functions return `CallToolResult`, confirming a large request/response
+  surface.
+- No server-specific name collisions or module shadows were reported.
+- Struct overlaps are mostly parameter/response DTO families for graph tools.
+- Function overlaps are mostly endpoint/router wrappers and variant helper
+  pairs.
+- `data_dir` and embedding backend resolver duplication are worth considering
+  for cleanup.
+- Server cohesion is acceptable; the main issue remains coupling direction
+  within the top-layer adapter, especially graph and indexing internals.
+
+### Open Questions For Phase 5
+
+- Should project path and embedding backend resolution be centralized into one
+  server support module or moved into indexing?
+- Should graph query/response DTO shaping move into graph to reduce server's
+  direct dependency on snapshot/model/storage internals?
+- Which public server modules should remain external API after tests are
+  accounted for?
