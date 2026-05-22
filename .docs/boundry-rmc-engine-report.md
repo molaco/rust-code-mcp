@@ -17,7 +17,7 @@
 | Phase 2: Dependency boundary | Complete | 549dbff6 | No outgoing `rmc_*` dependency violations; one outgoing edge to `fastembed`. |
 | Phase 3: Import and usage coupling | Complete | b1a7c450 | Coupling centers on embedding, chunk, vector-store, parser, and search boundary types. |
 | Phase 4: Internal cohesion | Complete | 9eaf40b8 | No `rmc_*` parameter dependency inside engine; scoped overlap findings are mostly expected helper/DTO families. |
-| Phase 5: Targeted source reads and recommendations | Complete | Pending commit | Source reads confirm mostly facade-based imports; recommendations recorded. |
+| Phase 5: Targeted source reads and recommendations | Complete | 6d94be58 | Source reads confirm mostly facade-based imports; recommendations recorded. |
 
 ## Phase 0: Snapshot Readiness And Baseline
 
