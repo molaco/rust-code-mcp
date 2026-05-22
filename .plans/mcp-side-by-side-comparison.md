@@ -108,6 +108,14 @@ semantic_overlaps
 forbidden_dependency_check
 ```
 
+Phase 7 bounded semantic-overlap scope:
+
+```text
+crate_name = rmc_server
+```
+
+Use this scope when unscoped workspace-wide `semantic_overlaps` exceeds the MCP client timeout; record the unscoped timeout in the Phase 7 notes.
+
 ## Available MCP Tool Surface
 
 Use `tool_search` to refresh this list if Codex does not currently expose one of these tools.
@@ -603,7 +611,7 @@ Verification notes:
 
 ## Phase 7: Semantic Similarity Tools
 
-Status: pending
+Status: partial
 
 Purpose:
 
@@ -611,21 +619,29 @@ Compare embedding-backed item similarity behavior and semantic-overlap clusterin
 
 Checklist:
 
-- [ ] Confirm both servers use isolated vector stores.
-- [ ] Ensure `index_codebase` and `build_hypergraph` have completed for both.
-- [ ] Compare `similar_to_item` for canonical items.
-- [ ] Compare `semantic_overlaps` in cluster mode.
-- [ ] Compare `semantic_overlaps` in pair mode at a strict threshold.
-- [ ] Record warm-call timing deltas.
-- [ ] Classify first-page ordering drift separately from count drift.
+- [x] Confirm both servers use isolated vector stores.
+- [x] Ensure `index_codebase` and `build_hypergraph` have completed for both.
+- [x] Compare `similar_to_item` for canonical items.
+- [x] Compare `semantic_overlaps` in cluster mode.
+- [x] Compare `semantic_overlaps` in pair mode at a strict threshold.
+- [x] Record warm-call timing deltas.
+- [x] Classify first-page ordering drift separately from count drift.
 
 Results:
 
 | Tool/Input | Original ms | Refactor ms | Delta % | Classification | Notes |
 |---|---:|---:|---:|---|---|
-| `similar_to_item(SearchTool)` | pending | pending | pending | pending |  |
-| `semantic_overlaps(clusters)` | pending | pending | pending | pending |  |
-| `semantic_overlaps(pairs, threshold=0.90)` | pending | pending | pending | pending |  |
+| `similar_to_item(SearchTool)` | 345.8 | 354.0 | 2.4 | exact | Same seed, five matches, order, and scores. |
+| `semantic_overlaps(clusters)` | 23.8 | 21.2 | -10.9 | exact | Scoped to `rmc_server`; same 297 seeds, 140 pairs, 52 clusters, first page, and scores. |
+| `semantic_overlaps(pairs, threshold=0.90)` | 20.7 | 20.8 | 0.5 | exact | Scoped to `rmc_server`; same 46 pairs, 32 clusters, first page, and scores. |
+
+Verification notes:
+
+- Original and refactor vector stores remain isolated under the XDG roots documented in the server table. Phase 3 completed `index_codebase` on both; Phase 5 completed `build_hypergraph` on both.
+- `similar_to_item(target=rmc_server::tools::SearchTool, limit=5)` resolved the seed to `rmc_server::tools::router::SearchToolRouter` on both. The top matches were `impl SearchToolRouter`, `with_sync_manager`, `tests`, `test_router_with_sync_manager`, and `new`.
+- Unscoped workspace-wide `semantic_overlaps(output_mode=clusters, summary=true, max_pairs=50)` timed out at the MCP client 120s boundary on both servers.
+- After the refactor timeout, the first scoped refactor retry failed with `environment already open in this program`; after a 30s wait, the same scoped request completed and matched original exactly. This looks like timeout cleanup lag rather than output drift.
+- No first-page ordering drift or score drift was observed in the bounded semantic-overlap results.
 
 ## Phase 8: Failure Modes and Robustness
 
