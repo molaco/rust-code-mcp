@@ -496,7 +496,7 @@ If any of these fail, Phase C is not yet eligible.
 
 ## 5. Phase C: Server Cluster Lift
 
-Purpose: lift the application/adapter layer (`indexing + monitoring`, `tools + mcp`, plus the small adapter-utility modules) so that the main crate becomes just the binary entry point + glue. After Phase C, the main crate's `src/` directory is much smaller than today.
+Purpose: lift the application/adapter layer (`indexing + monitoring`, `tools + mcp`, plus the small adapter-utility modules) so that the workspace root becomes a virtual manifest and all Rust source lives under `crates/`. After Phase C, there is no root `src/` directory.
 
 Operation: `Lift`. Each move is a workspace-member relocation; SCCs are pre-broken in Phase A, so no code-restructuring work remains.
 
@@ -521,7 +521,7 @@ Phase C therefore lifts in this order:
 1. **C.1** — `rmc-config` (single-module crate; depends only on `rmc-engine`).
 2. **C.2** — `rmc-indexing` carrying `indexing`, `monitoring`, **and** the adapter-utility modules it consumes (`metadata_cache`, `metrics`, `security`) — all in one crate / one commit because they form indexing's natural dependency set.
 3. **C.3** — `rmc-server` carrying `tools`, `mcp`, `semantic` (and anything left in main other than the binary).
-4. **C.4** — Main crate collapses to binary + glue.
+4. **C.4** — Root package is eliminated; the MCP stdio executable moves to `crates/rust-code-mcp`.
 
 ### 5.C.1 — Lift `config` as `rmc-config`
 
@@ -664,35 +664,33 @@ Stage in sub-commits:
 
 **Status: DONE** — see commit log (`phase 7 C.3`). 31 files moved (24 tools + 3 mcp + 4 semantic); single `sed -E` sweep with 13 `\b`-anchored rewrites covered both `^use` and body-position references across 32 files in scope. Five stale qualified-name strings fixed: `tests.rs:65` (`rust_code_mcp::indexing` → `rmc_indexing::indexing`), `signatures.rs:210` and `statics.rs:152,157,169,171` (`rust_code_mcp::{tools,semantic}` → `rmc_server::{tools,semantic}`). No `pub(crate)` widening needed (C.1/C.2 had already done the work). Extra body-position deps surfaced: `serde_json, heed, num_cpus, ra_ap_ide_db, tempfile (dev)`. `cargo check --workspace --all-targets` green.
 
-### 5.C.4 — Main crate reduces to binary + glue
+### 5.C.4 — Root package eliminated; executable package moved under `crates/`
 
-After C.3, the main crate's `src/` directory contains:
+After C.3, the remaining root package is not an admissible final state. The workspace root must become a virtual manifest only:
 
 ```text
-src/
-  lib.rs           # facade re-exports of all member crates' public surfaces
-  main.rs          # binary entry point
-  bin/
-    test_tools_direct.rs
+Cargo.toml                    # [workspace] only; no [package]
+crates/
+  rust-code-mcp/
+    Cargo.toml                # MCP stdio executable package
+    src/main.rs               # moved from root src/main.rs
+    tests/                    # former root integration tests
+    examples/                 # former root examples, minus stale test_tools_direct
 ```
 
-`src/lib.rs` becomes a thin facade:
+There is no compatibility facade crate after this step. Former `rust_code_mcp::*` test/example imports migrate to the declaring crates directly:
 
-```rust
-pub use rmc_engine::{chunker, embeddings, parser, schema, search, vector_store};
-pub use rmc_graph::graph;
-pub use rmc_config::config;
-pub use rmc_indexing::{indexing, monitoring, metadata_cache, metrics, security};
-pub use rmc_server::{tools, mcp, semantic};
-```
-
-This keeps every existing `rust_code_mcp::tools::…` path resolving for the 26 examples + 12 tests + 1 binary.
+- `rmc_engine::{chunker, embeddings, parser, schema, search, vector_store}`
+- `rmc_graph::graph`
+- `rmc_config::config`
+- `rmc_indexing::{indexing, monitoring, metadata_cache, metrics, security}`
+- `rmc_server::{tools, mcp, semantic}`
 
 Commit:
 
-- **C.4.a** — Simplify `src/lib.rs` to facade-only; verify all examples/tests still build.
+- **C.4.a** — Move the executable package to `crates/rust-code-mcp`; migrate root tests/examples; delete root `src/`; make root `Cargo.toml` virtual.
 
-**Status: DONE** — see commit log (`phase 7 C.4`). `src/lib.rs` reduced to 11 lines (5 grouped facade `pub use` statements + module docs + lint attribute). Main crate `src/` already at the plan's `<5 files` target (`lib.rs`, `main.rs`, `bin/test_tools_direct.rs`). `cargo check --workspace --all-targets` green in 0.80s. Cargo.toml dep cleanup deferred (out of plan scope).
+**Status: DONE** — post-review remediation moved `src/main.rs` to `crates/rust-code-mcp/src/main.rs`, moved root `tests/` and `examples/` into `crates/rust-code-mcp/`, deleted stale `src/bin/test_tools_direct.rs`, deleted root `src/lib.rs`, and converted the root manifest to a virtual workspace manifest. `cargo metadata`, `cargo check -p rust-code-mcp --bin rust-code-mcp`, and `cargo check -p rust-code-mcp --test test_mcp_stdio_transport` are green with the project `RUSTFLAGS`.
 
 ### 5.C Exit conditions
 
@@ -704,8 +702,8 @@ Commit:
   - `rmc-config` depends only on `rmc-engine`.
   - `rmc-indexing` depends only on `rmc-engine`, `rmc-config`.
   - `rmc-server` depends on `rmc-engine`, `rmc-graph`, `rmc-config`, `rmc-indexing`.
-  - **Main binary crate's `Cargo.toml` lists `rmc-engine`, `rmc-graph`, `rmc-config`, `rmc-indexing`, `rmc-server` as direct path dependencies** — Cargo requires direct deps for any crate named in `src/lib.rs`, and the facade re-exports five workspace crates. Transitive-only deps would compile but the `pub use` re-exports in §5.C.4 would not resolve.
-- Main crate's `src/` has fewer than 5 files (lib.rs, main.rs, bin/*).
+  - **Executable package `crates/rust-code-mcp/Cargo.toml` depends on `rmc-server` at runtime and keeps `rmc-engine`, `rmc-graph`, `rmc-config`, `rmc-indexing` available to moved examples/tests through `dev-dependencies`**.
+- Root `Cargo.toml` is a virtual manifest with no `[package]`, no root `[dependencies]`, and no root `src/`.
 - Each new crate has a `README.md`.
 
 ## 6. Phase Output Template
@@ -763,12 +761,13 @@ Phase B success:
 - `rmc-engine` is self-contained (no `use crate::` outside the engine cluster).
 - `rmc-graph` depends only on `rmc-engine`.
 - `forbidden_dependency_check` passes the §4.B.8 rule set.
-- Main crate's `lib.rs` has facade re-exports keeping all in-repo consumer paths stable.
+- Until Phase C.4, the main crate's `lib.rs` has temporary facade re-exports keeping in-repo consumer paths stable.
 
 Phase C success:
 
 - All structural code lives in workspace member crates.
-- Main crate is binary + glue only (`src/main.rs` + `src/lib.rs` facade + `src/bin/`).
+- Workspace root is a virtual manifest; there is no root `src/`.
+- MCP stdio executable lives in `crates/rust-code-mcp/src/main.rs`.
 - `forbidden_dependency_check` passes the §5.C exit rule set.
 - The repo can be reorganized for distribution: each member crate could in principle ship to crates.io as its own package without further refactoring.
 
@@ -785,7 +784,7 @@ Phase C success:
 | C.1 | Low | `rmc-config` is three small files; mostly a rename | `cargo check --workspace` after the import rewrite |
 | C.2 | Medium-high | `indexing::unified`'s 11-target fan-out import rewrite; sequencing assumes C.1 already landed | Stage as C.2.a.1 (move all five modules) + C.2.a.2-4 (rewrites). Verify `Backup` trait from A.1 is in place before starting |
 | C.3 | High | `tools` is the most-connected module; rewrite is largest | Multi-sub-commit staging is mandatory here |
-| C.4 | Low | Main `lib.rs` facade misses a re-export and breaks `tests/` | `cargo check --workspace --all-targets` (the `--all-targets` is the gate) |
+| C.4 | Medium | Removing the facade exposes stale `rust_code_mcp::*` imports in examples/tests | Move tests/examples into `crates/rust-code-mcp`, rewrite imports to direct `rmc_*` crates, then check the executable and focused integration targets |
 
 ## 10. When to Abandon a Phase
 
@@ -800,14 +799,16 @@ The default outcome of this plan is: **Phase A done, Phases B and C deferred ind
 
 ```text
 rust-code-mcp-final/
-  Cargo.toml                       # [workspace] members = [".", "crates/*"]
-  src/
-    main.rs                        # binary entry
-    lib.rs                         # facade re-exports of all crates
-    bin/
-      test_tools_direct.rs
+  Cargo.toml                       # virtual [workspace] manifest only
 
   crates/
+    rust-code-mcp/
+      Cargo.toml
+      src/
+        main.rs                    # MCP stdio server executable
+      tests/
+      examples/
+
     rmc-engine/
       Cargo.toml
       README.md
@@ -866,6 +867,6 @@ Notes:
 - **Does not split `rmc-engine` into per-concern crates** (`rmc-parser`, `rmc-chunker`, …). The engine cluster has small declared surfaces (3–16 each) and tight internal coupling; one umbrella crate is the right granularity. If demand for sub-crate ships arises, that's a future plan.
 - **Does not introduce a separate `rmc-core` for shared types**. There are no shared types across the proposed crates that aren't already in `rmc-engine`.
 - **Does not version-publish anything**. The workspace is in-repo only. crates.io publishing is its own separate decision with separate concerns (semver discipline, MSRV policy, dependency pinning).
-- **Does not change MCP tool names or param-struct external paths**. The §15 guardrail of the parent plan continues to hold — through facade re-exports in main `lib.rs`, all `rust_code_mcp::tools::…` paths resolve unchanged.
+- **Does not change MCP tool names or param structs**. Rust import paths in examples/tests do change after C.4 because the root facade is removed; canonical code paths are now the direct `rmc_*` crates.
 - **Does not touch `vendor/fastembed/`**. Out of scope, always.
 - **Does not require Phase B or C to run.** Phase A standing alone is a valid successful outcome of this plan; B and C are optional escalations.

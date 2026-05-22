@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = [".", "crates/rmc-config", "crates/rmc-engine", "crates/rmc-graph", "crates/rmc-indexing", "crates/rmc-server"]
+members = [
+  "crates/rust-code-mcp",
+  "crates/rmc-config",
+  "crates/rmc-engine",
+  "crates/rmc-graph",
+  "crates/rmc-indexing",
+  "crates/rmc-server",
+]
+default-members = ["crates/rust-code-mcp"]
 
 [workspace.dependencies]
 # MCP and async runtime
@@ -102,159 +110,5 @@ tokenizers = "0.22"
 rayon = "1.10"         # Data parallelism
 num_cpus = "1.16"      # CPU count detection
 
-[package]
-name = "rust-code-mcp"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-# MCP and async runtime
-rmcp = { workspace = true }
-tokio = { workspace = true }
-
-# Search and indexing
-tantivy = { workspace = true }
-
-# Serialization
-serde = { workspace = true }
-serde_bytes = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }
-bincode = { workspace = true }
-uuid = { workspace = true }
-reqwest = { workspace = true }
-
-# Logging
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-# Phase 1: Persistent Index + Incremental Updates
-notify = { workspace = true }
-sled = { workspace = true }
-sha2 = { workspace = true }
-directories = { workspace = true }
-
-# Phase 2: Rust code parsing with rust-analyzer syntax
-ra_ap_syntax = { workspace = true }
-
-# IDE integration for semantic analysis (find_definition, find_references)
-ra_ap_ide = { workspace = true }
-ra_ap_ide_db = { workspace = true }
-"ra_ap_load-cargo" = { workspace = true }
-ra_ap_project_model = { workspace = true }
-ra_ap_vfs = { workspace = true }
-ra_ap_paths = { workspace = true }
-ra_ap_hir = { workspace = true }
-ra_ap_hir_def = { workspace = true }
-ra_ap_base_db = { workspace = true }
-
-# Persisted hypergraph store
-heed = { workspace = true }
-
-# Phase 3: Semantic Code Chunking
-text-splitter = { workspace = true }
-
-# Phase 4: Embedding Generation
-fastembed = { workspace = true }
-candle-core = { workspace = true }
-hf-hub = { workspace = true }
-
-# Phase 5: Vector Database
-async-trait = { workspace = true }
-thiserror = { workspace = true }
-futures = { workspace = true }
-
-# Vector database - embedded (default)
-lancedb = { workspace = true }
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
-
-# Additional dependencies for Phase 1
-walkdir = { workspace = true }
-anyhow = { workspace = true }
-regex = { workspace = true }
-glob = { workspace = true }
-cargo_metadata = { workspace = true }
-
-# Merkle tree for 100x faster change detection (Week 2)
-rs_merkle = { workspace = true }
-
-# Performance monitoring
-sysinfo = { workspace = true }
-
-# Tokenizer (used directly by examples; transitively in fastembed)
-tokenizers = { workspace = true }
-
-# Parallel processing
-rayon = { workspace = true }
-num_cpus = { workspace = true }
-
-# Workspace member path deps (populated as Phase 7 B.1+ lifts modules)
-rmc-config = { path = "crates/rmc-config" }
-rmc-engine = { path = "crates/rmc-engine" }
-rmc-graph = { path = "crates/rmc-graph" }
-rmc-indexing = { path = "crates/rmc-indexing" }
-rmc-server = { path = "crates/rmc-server" }
-
-[features]
-default = ["embedded"]  # LanceDB embedded backend (zero-config)
-embedded = []  # LanceDB is always included, this is just a marker
-
 [patch.crates-io]
 fastembed = { path = "vendor/fastembed" }
-
-[[example]]
-name = "load_benchmark"
-path = "examples/load_benchmark.rs"
-
-[[example]]
-name = "ide_load_benchmark"
-path = "examples/ide_load_benchmark.rs"
-
-[[example]]
-name = "ide_functional_test"
-path = "examples/ide_functional_test.rs"
-
-[[example]]
-name = "graph_burn"
-path = "examples/graph_burn.rs"
-
-[[example]]
-name = "debug_burn_loader"
-path = "examples/debug_burn_loader.rs"
-
-[[example]]
-name = "debug_burn_target"
-path = "examples/debug_burn_target.rs"
-
-[[example]]
-name = "rebuild_burn_default"
-path = "examples/rebuild_burn_default.rs"
-
-[[example]]
-name = "debug_itemscope"
-path = "examples/debug_itemscope.rs"
-
-[[example]]
-name = "probe_workspace"
-path = "examples/probe_workspace.rs"
-
-[[example]]
-name = "spike_usages"
-path = "examples/spike_usages.rs"
-
-[[example]]
-name = "dead_pub_report"
-path = "examples/dead_pub_report.rs"
-
-[dev-dependencies]
-tempfile = "3"         # Temporary directories for tests
-walkdir = { workspace = true }  # For test file discovery
-
-[[example]]
-name = "count_items"
-path = "examples/count_items.rs"
-
-[[example]]
-name = "chunk_token_stats"
-path = "examples/chunk_token_stats.rs"

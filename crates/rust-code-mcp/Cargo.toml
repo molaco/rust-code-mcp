@@ -1,0 +1,70 @@
+[package]
+name = "rust-code-mcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rmc-server = { path = "../rmc-server" }
+
+rmcp = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Examples and integration tests moved here with the executable package, so they
+# retain direct access to the lower crates without widening the binary target's
+# runtime dependency surface.
+rmc-config = { path = "../rmc-config" }
+rmc-engine = { path = "../rmc-engine" }
+rmc-graph = { path = "../rmc-graph" }
+rmc-indexing = { path = "../rmc-indexing" }
+
+tantivy = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+bincode = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+notify = { workspace = true }
+sled = { workspace = true }
+sha2 = { workspace = true }
+directories = { workspace = true }
+ra_ap_syntax = { workspace = true }
+ra_ap_ide = { workspace = true }
+ra_ap_ide_db = { workspace = true }
+"ra_ap_load-cargo" = { workspace = true }
+ra_ap_project_model = { workspace = true }
+ra_ap_vfs = { workspace = true }
+ra_ap_paths = { workspace = true }
+ra_ap_hir = { workspace = true }
+ra_ap_hir_def = { workspace = true }
+ra_ap_base_db = { workspace = true }
+heed = { workspace = true }
+text-splitter = { workspace = true }
+fastembed = { workspace = true }
+candle-core = { workspace = true }
+hf-hub = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+lancedb = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+walkdir = { workspace = true }
+anyhow = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+cargo_metadata = { workspace = true }
+rs_merkle = { workspace = true }
+sysinfo = { workspace = true }
+tokenizers = { workspace = true }
+rayon = { workspace = true }
+num_cpus = { workspace = true }
+tempfile = "3"
+
+[features]
+default = ["embedded"]
+embedded = []

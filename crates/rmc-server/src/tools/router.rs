@@ -21,7 +21,7 @@
 //! External callers should use the stable facade path:
 //!
 //! ```rust,no_run
-//! use rust_code_mcp::tools::SearchTool;
+//! use rmc_server::tools::SearchTool;
 //!
 //! let _router = SearchTool::new();
 //! ```

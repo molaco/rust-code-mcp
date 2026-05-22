@@ -31,7 +31,7 @@
 //!
 //! ### Find Symbol Definition
 //! ```rust,no_run
-//! use rust_code_mcp::tools::endpoints::analysis::find_definition;
+//! use rmc_server::tools::endpoints::analysis::find_definition;
 //!
 //! # async fn example() -> Result<(), rmcp::ErrorData> {
 //! // Find where a function is defined
@@ -45,7 +45,7 @@
 //!
 //! ### Analyze Code Complexity
 //! ```rust,no_run
-//! use rust_code_mcp::tools::endpoints::analysis::analyze_complexity;
+//! use rmc_server::tools::endpoints::analysis::analyze_complexity;
 //!
 //! # async fn example() -> Result<(), rmcp::ErrorData> {
 //! // Get complexity metrics for a file
@@ -59,7 +59,7 @@
 //!
 //! ### Get Call Graph
 //! ```rust,no_run
-//! use rust_code_mcp::tools::endpoints::analysis::get_call_graph;
+//! use rmc_server::tools::endpoints::analysis::get_call_graph;
 //!
 //! # async fn example() -> Result<(), rmcp::ErrorData> {
 //! // Get call graph for a specific function

@@ -24,7 +24,7 @@
 //! ## Examples
 //!
 //! ```rust,no_run
-//! use rust_code_mcp::tools::endpoints::indexing_support::{data_dir, open_cache};
+//! use rmc_server::tools::endpoints::indexing_support::{data_dir, open_cache};
 //!
 //! // Get data directory (cross-platform)
 //! let data = data_dir();

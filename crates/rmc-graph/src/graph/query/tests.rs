@@ -198,7 +198,7 @@ fn lookup_by_qualified_name_unresolvable_terminates() {
     // rather than spinning.
     let snap = shared_snapshot();
     let result = snap
-        .lookup_by_qualified_name("rust_code_mcp::nonexistent::thing")
+        .lookup_by_qualified_name("rmc_graph::nonexistent::thing")
         .unwrap();
     assert!(
         result.is_none(),
@@ -208,7 +208,7 @@ fn lookup_by_qualified_name_unresolvable_terminates() {
 
 #[test]
 fn private_visibility_blocks_export() {
-    // rust_code_mcp::graph::extract has private helpers like `crate_display_name`.
+    // rmc_graph::graph::extract has private helpers like `crate_display_name`.
     // From outside the loader/extract sibling (e.g., rust_code_mcp root module),
     // those should NOT be exported.
     let snap = shared_snapshot();
@@ -553,7 +553,7 @@ fn module_tree_respects_depth_limit() {
 
 #[test]
 fn declared_reexports_of_lists_all_pub_uses() {
-    // `rust_code_mcp::graph` has `pub use loader::load;` (and other
+    // `rmc_graph::graph` has `pub use loader::load;` (and other
     // `pub use`s). declared_reexports_of(graph_mod_id) must include `load`
     // and every binding in the result must satisfy is_explicit_pub_use.
     let snap = shared_snapshot();
@@ -582,7 +582,7 @@ fn declared_reexports_of_lists_all_pub_uses() {
 
 #[test]
 fn explicit_pub_use_is_marked_on_pub_use_bindings() {
-    // `rust_code_mcp::graph::mod` carries `pub use loader::load;`. The
+    // `rmc_graph::graph::mod` carries `pub use loader::load;`. The
     // resulting binding must have `is_explicit_pub_use == true`. The
     // declared binding for `loader` (sibling module declaration with no
     // `pub use`) must have `is_explicit_pub_use == false`.
@@ -602,7 +602,7 @@ fn explicit_pub_use_is_marked_on_pub_use_bindings() {
     );
 
     // A non-pub `use` should land with is_explicit_pub_use == false.
-    // Pick a module with private `use` lines: `rust_code_mcp::graph::loader`.
+    // Pick a module with private `use` lines: `rmc_graph::graph::loader`.
     let (loader_mod_id, _) = snap
         .lookup_by_qualified_name("rmc_graph::graph::loader")
         .unwrap()
@@ -864,7 +864,7 @@ fn item_attributes_of_node_struct_includes_derive() {
 /// attribute strings on every Item in the crate. Searching for bare
 /// `derive` (attribute-path match) across
 /// `rmc_graph` should find at least the `Node` and `ItemKind`
-/// types (moved here from `rust_code_mcp::graph::model` in Phase 7 B.7).
+/// types (moved here from `rmc_graph::graph::model` in Phase 7 B.7).
 #[test]
 fn items_with_attribute_finds_derive_users() {
     let snap = shared_snapshot();

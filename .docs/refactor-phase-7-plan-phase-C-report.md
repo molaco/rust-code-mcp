@@ -2,20 +2,21 @@
 
 **Plan**: `.plans/refactor-phase-7-plan.md` — Refactor Plan: Phase 7 — Cleanup & Crate Lift
 **Phase**: C — Server cluster lift (config, indexing, server)
-**Status**: complete — workspace now contains 5 member crates plus the main binary crate; main crate reduced to binary + facade only; `cargo check --workspace --all-targets` green at every commit
+**Status**: complete — workspace now contains 5 library crates plus the `crates/rust-code-mcp` MCP stdio executable package; root `Cargo.toml` is virtual and root `src/` has been removed
 **Workspace**: `/home/molaco/Documents/rust-code-mcp-refactor`
 **Date**: 2026-05-22
 
 ## Summary
 
-Four `jj` commits land the server-cluster lift: `rmc-config` (C.1), `rmc-indexing` (C.2), `rmc-server` (C.3), and a main-crate `lib.rs` simplification (C.4). After Phase C, **all structural code lives in workspace member crates**; the main crate `src/` directory contains exactly three files (`lib.rs`, `main.rs`, `bin/test_tools_direct.rs`), satisfying the §11 end-state target tree and the §5.C exit gate's `<5 files` criterion.
+Four `jj` commits land the server-cluster lift: `rmc-config` (C.1), `rmc-indexing` (C.2), `rmc-server` (C.3), and an initial main-crate simplification (C.4). A post-review remediation then corrected the final workspace shape: the root package was removed, root `src/` was deleted, and the MCP stdio executable moved to `crates/rust-code-mcp`. After this remediation, **all Rust source lives under `crates/`**.
 
 Phase C builds on Phase B (engine + graph crates) and inherits its conventions: `pub(crate) → pub` widening when consumers cross the new crate boundary, hypergraph canonical-name shifts wherever a module moves declaration sites, and `cargo check --workspace --all-targets` as the per-commit gate (full test suite explicitly deferred per the user's environment-cost guidance).
 
 ## Commits
 
 ```
-4c7668ad  phase 7 C.4: simplify src/lib.rs to facade-only (5 grouped pub use statements, 11 lines)
+<post-review> phase 7 C.4 remediation: virtual root manifest; move executable/tests/examples to crates/rust-code-mcp; delete root src
+4c7668ad  phase 7 C.4: simplify src/lib.rs to facade-only (superseded by post-review remediation)
 522f02a5  phase 7 C.3: lift tools+mcp+semantic into rmc-server; 31 files; 13-pattern sed sweep
 d83f1a03  phase 7 C.2: lift indexing+monitoring+metadata_cache+metrics+security into rmc-indexing
 12f54b94  phase 7 C.1: lift config into rmc-config
@@ -82,25 +83,23 @@ The highest-risk step in the plan — `tools` is the most-connected module; 13 d
 - **Main `src/lib.rs`**: replaced 3 `pub mod X;` with `pub use rmc_server::{tools, mcp, semantic};`.
 - **Gate**: `cargo check --workspace --all-targets` green.
 
-## C.4 — Main crate reduces to binary + glue
+## C.4 — Root package eliminated
 
-- **`src/lib.rs`** rewritten to the §5.C.4 target shape — 11 lines, 5 grouped `pub use` statements (one per workspace crate), module docstring, `#![warn(unreachable_pub, dead_code)]` lint. Stale `// Will be added in later steps: // pub mod watcher;` comment removed.
-- **Main crate `src/`** now contains exactly: `lib.rs`, `main.rs`, `bin/test_tools_direct.rs` — 3 files (target: `<5`).
-- **`Cargo.toml` cleanup deferred**: the main crate's `[dependencies]` block still lists ~50 third-party workspace deps, most of which are now transitive via the path deps. Cargo will not complain about unused deps unless `unused-crate-dependencies` lint is enabled (it isn't). Cleaning this up is risk-positive and out of plan scope; left for future engineering.
-- **Gate**: `cargo check --workspace --all-targets` green (0.80s warm).
+- **Root `Cargo.toml`** converted to a virtual workspace manifest: no `[package]`, no root `[dependencies]`, no root package targets.
+- **`src/main.rs`** moved to `crates/rust-code-mcp/src/main.rs`.
+- **Root `tests/` and `examples/`** moved to `crates/rust-code-mcp/tests/` and `crates/rust-code-mcp/examples/`.
+- **Root `src/lib.rs` facade removed**. Former `rust_code_mcp::*` imports in the moved package were rewritten to direct `rmc_*` crate imports.
+- **`src/bin/test_tools_direct.rs` deleted** instead of moved; it was stale and hardcoded the old monolithic `src/` layout.
+- **Gate**: `cargo metadata --no-deps`, `cargo check -p rust-code-mcp --bin rust-code-mcp`, and `cargo check -p rust-code-mcp --test test_mcp_stdio_transport` are green with `RUSTFLAGS="-C linker-features=-lld"`.
 
 ## Workspace shape after Phase C
 
 ```text
 rust-code-mcp-refactor/
-  Cargo.toml             # [workspace] members = [".", "crates/rmc-config", "crates/rmc-engine", "crates/rmc-graph", "crates/rmc-indexing", "crates/rmc-server"]
-  src/
-    main.rs              # binary entry
-    lib.rs               # 11-line facade
-    bin/
-      test_tools_direct.rs
-
+  Cargo.toml             # virtual [workspace] manifest
   crates/
+    rust-code-mcp/       # MCP stdio executable package; owns tests/examples
+
     rmc-engine/          # parser, schema, chunker, embeddings, vector_store, search   (40 .rs)
     rmc-graph/           # graph                                                       (48 .rs)
     rmc-config/          # config                                                       (4 .rs)
@@ -108,7 +107,7 @@ rust-code-mcp-refactor/
     rmc-server/          # tools, mcp, semantic                                        (32 .rs)
 ```
 
-**Total files in `crates/`**: 148 .rs files distributed across 5 crates. Main crate `src/` now hosts 3 files (148 + 3 = 151 .rs in code-bearing roles; rest are examples + tests).
+Root `src/`, root `tests/`, and root `examples/` no longer exist. The executable, integration tests, and examples now live under `crates/rust-code-mcp/`.
 
 ## Dependency graph (crate-level)
 
@@ -124,7 +123,7 @@ rmc-indexing      depends on: rmc-engine, rmc-config
 rmc-server        depends on: rmc-engine, rmc-graph, rmc-config, rmc-indexing
    ↑
 rust-code-mcp     depends on: rmc-engine, rmc-graph, rmc-config, rmc-indexing, rmc-server
-(main, binary)
+(MCP stdio executable package)
 ```
 
 Strictly acyclic. Verified by Cargo (workspace would fail to resolve under a cycle).
@@ -140,8 +139,8 @@ Strictly acyclic. Verified by Cargo (workspace would fail to resolve under a cyc
 | `rmc-config` depends only on `rmc-engine` | ✅ |
 | `rmc-indexing` depends only on `rmc-engine`, `rmc-config` | ✅ |
 | `rmc-server` depends on `rmc-engine`, `rmc-graph`, `rmc-config`, `rmc-indexing` | ✅ |
-| Main crate's `Cargo.toml` lists all 5 path deps | ✅ |
-| Main crate's `src/` has fewer than 5 files | ✅ (3 files) |
+| Executable package `crates/rust-code-mcp/Cargo.toml` has narrow runtime deps and moved test/example deps | ✅ |
+| Root `Cargo.toml` is virtual and root `src/` is absent | ✅ |
 | Each new crate has a `README.md` | ✅ (3 added in C.1/C.2/C.3 — `rmc-config`, `rmc-indexing`, `rmc-server`; `rmc-engine` and `rmc-graph` already had theirs from Phase B) |
 | `forbidden_dependency_check` returns zero violations against full §5.C rule set | ⏳ not re-run in Phase C; rule set unchanged at crate granularity from Phase B's codification (`.docs/architectural-rules.md`); should be re-verified as a settle gate |
 
@@ -160,7 +159,7 @@ The C.3 sed approach (drop the `^use` anchor, use `\b` word boundaries) handles 
 
 **Pre-survey accuracy: medium.** The pre-survey done before C.2 and C.3 missed three deps each time (always body-position or inline-function `use`s). The compiler's error-driven discovery worked fine, but a better pre-survey would also grep `<crate>::` patterns in body positions, not just `^use <crate>::`. This is the same lesson Phase B drew about `directories::ProjectDirs` and is now codifiable as a rule: **inventory body-position cross-crate references with a non-anchored grep, in addition to `^use`**.
 
-**Cargo.toml dep cleanup not done.** Main crate's `Cargo.toml` still carries ~50 third-party workspace deps, most of which are now transitive via the path deps. Risk-positive cleanup, out of plan scope; left as a future task. The §5.C exit gate is met without it.
+**Executable package dependency split done.** `crates/rust-code-mcp` now keeps the binary target's runtime surface to `rmc-server` plus runtime libraries, while moved examples/tests get lower-crate access through `dev-dependencies`.
 
 **No runtime test verification.** Per user environment-cost guidance, full `cargo test --workspace --all-targets` was not run. The Phase B post-review pattern (one focused test group as a gate) should be applied to Phase C too — likely targets:
 - The 5 stale-string fixes in C.3 (verify `graph::query`, `graph::statics`, `graph::signatures`).
@@ -169,7 +168,7 @@ The C.3 sed approach (drop the `^use` anchor, use `\b` word boundaries) handles 
 
 ## Open follow-ups (not in Phase C scope)
 
-- **Cargo.toml main-crate dep cleanup.** Identify which third-party deps are *direct* consumers in `src/main.rs` + `src/bin/` + `examples/` + `tests/` versus transitive-only-via-workspace-crates; trim the latter from `[dependencies]`. Risk-positive; ~30 minutes of grep + iterate.
+- **`crates/rust-code-mcp/Cargo.toml` dev-dep trimming.** Runtime deps are narrow now, but the moved examples/tests still carry a broad former-root support set. A follow-up can trim those entries target-by-target.
 - **Runtime verification gate.** Run targeted `cargo test` groups (one binary at a time per the project memory rule) to confirm the 5 string-literal fixes and 9 visibility widenings haven't broken runtime test assertions.
 - **`forbidden_dependency_check` re-run.** The rule set in `.docs/architectural-rules.md` was codified at Phase B end. The crate granularity is unchanged in Phase C, so the rule set still applies — but re-verifying with the post-C workspace would catch any latent boundary violations introduced during the lifts.
 - **B.8 CI wiring** (originally an open follow-up from Phase B). The `forbidden_dependency_check` rule set is codified; running it on every PR is still a separate task. Now more valuable post-C because more crate boundaries exist to enforce.
@@ -182,14 +181,10 @@ The post-C layout exactly matches the §11 target (modulo file-count discrepanci
 
 ```text
 rust-code-mcp-refactor/
-  Cargo.toml                       # [workspace] members = [".", "crates/*"]
-  src/
-    main.rs
-    lib.rs
-    bin/
-      test_tools_direct.rs
+  Cargo.toml                       # virtual [workspace] manifest
 
   crates/
+    rust-code-mcp/                 # executable, tests, examples
     rmc-engine/                    (B.1-B.5)
     rmc-graph/                     (B.7)
     rmc-config/                    (C.1) ← new
@@ -201,12 +196,12 @@ The §12 "What This Plan Deliberately Does NOT Do" guardrails all hold post-C:
 - No per-concern engine sub-crates.
 - No `rmc-core` shared-types crate.
 - No version-publishing.
-- No MCP tool-name / param-struct external-path changes (the main `src/lib.rs` facade keeps `rust_code_mcp::tools::*` resolving for all 26 examples + 12 tests + 1 binary).
+- No MCP tool-name / param-struct changes. Rust import paths in moved examples/tests now use direct `rmc_*` crates because the root facade was deliberately removed.
 - `vendor/fastembed/` untouched.
 
 ## Conclusion
 
-Phase C landed cleanly in one work session, building on Phase B's foundation. Four `jj` commits, 5,500+ LOC of code across 57 files relocated to three new workspace crates, with a uniform `cargo check --workspace --all-targets` green gate throughout. The visibility-widening cost was distributed front-loaded (C.1: 2, C.2: 9, C.3: 0), as the plan's ordering predicted. The total widening cost across Phases B+C is ~47 `pub(crate) → pub` promotions — the inherent architectural cost of the lift.
+Phase C landed cleanly and the post-review remediation corrected the final shape: there is no root package and no root `src/`. The visibility-widening cost was distributed front-loaded (C.1: 2, C.2: 9, C.3: 0), as the plan's ordering predicted. The total widening cost across Phases B+C is ~47 `pub(crate) → pub` promotions — the inherent architectural cost of the lift.
 
 The workspace is now positioned for distribution: each member crate could in principle ship to crates.io as its own package (with semver discipline, MSRV pinning, etc. — those are publishing concerns, not refactor concerns). The plan's primary §0 success criterion ("All structural code lives in workspace member crates") is met.
 

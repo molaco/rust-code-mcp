@@ -30,8 +30,8 @@
 //! ## Examples
 //!
 //! ```rust,no_run
-//! use rust_code_mcp::indexing::tantivy_adapter::TantivyAdapter;
-//! use rust_code_mcp::config::TantivyConfig;
+//! use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
+//! use rmc_config::config::TantivyConfig;
 //! use std::path::Path;
 //!
 //! # fn example() -> anyhow::Result<()> {
