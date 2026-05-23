@@ -13,6 +13,7 @@ use tracing;
 
 use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use rmc_engine::search::HybridSearch;
+use rmc_indexing::indexing::open_bm25_search;
 use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend,
 };
@@ -85,14 +86,8 @@ pub(crate) async fn read_file_content(file_path: &str) -> Result<CallToolResult,
 
 /// Try to open BM25 search for an existing index.
 /// Returns None if the index doesn't exist or is corrupt.
-fn try_open_bm25(paths: &ProjectPaths) -> Option<rmc_engine::search::bm25::Bm25Search> {
-    use rmc_config::config::indexer::TantivyConfig;
-    use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
-
-    let config = TantivyConfig::default(&paths.tantivy_path);
-    TantivyAdapter::new(config)
-        .and_then(|adapter| adapter.create_bm25_search())
-        .ok()
+fn try_open_bm25(paths: &ProjectPaths) -> Option<rmc_engine::search::Bm25Search> {
+    open_bm25_search(&paths.tantivy_path).ok()
 }
 
 /// Remove stale index artifacts so ensure_indexed does a full rebuild.

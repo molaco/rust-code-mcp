@@ -163,6 +163,9 @@
 - Step 3 Tantivy ownership check: completed after pre-step summary at commit
   `826a427bd20ff885143d396195828ca36321d25e`, change
   `xvtmnykxqyvylnvynkktokluvtwmkqut`.
+- Step 4 server query migration: completed after pre-step summary at commit
+  `21f9c6e315ce37e8daf902f72316778732fb576e`, change
+  `quoqqmqpumlzytqmpkwxsnluuutxltxl`.
 
 ### MCP Evidence
 
@@ -178,9 +181,10 @@
 
 - `crates/rmc-indexing/src/indexing/search.rs`
 - `crates/rmc-indexing/src/indexing/mod.rs`
+- `crates/rmc-server/src/tools/endpoints/query.rs`
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
 
 ### Remaining Follow-Up
 
-- Migrate server query code to `open_bm25_search`.
+- Migrate server codemap code to `open_bm25_search`.

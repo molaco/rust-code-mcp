@@ -601,7 +601,12 @@ For every phase, record:
   `TantivyAdapter::new` remains used inside `rmc_indexing::indexing::search`
   and `rmc_indexing::indexing::unified`, while `TantivyAdapter` remains a
   public compatibility reexport.
-- Step 4 migrate server query code: pending.
+- Step 4 migrate server query code: completed. Pre-step `jj show --summary`
+  reported working-copy commit `21f9c6e315ce37e8daf902f72316778732fb576e`
+  on change `quoqqmqpumlzytqmpkwxsnluuutxltxl`. Updated
+  `rmc_server::tools::endpoints::query::try_open_bm25` to call
+  `rmc_indexing::indexing::open_bm25_search` instead of constructing
+  `TantivyConfig` and `TantivyAdapter` directly.
 - Step 5 migrate graph codemap server code: pending.
 - Step 6 leave `TantivyAdapter` public for compatibility: pending.
 - Step 7 verify server production modules no longer depend on
