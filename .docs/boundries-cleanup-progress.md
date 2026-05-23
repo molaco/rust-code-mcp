@@ -289,6 +289,9 @@
 - Step 7 production dependency verification: completed after pre-step summary
   at commit `5d5ca5eb3e431d1b093b24d4b2c088ddc7dea252`, change
   `uyvppnvykoqwuvquzxtmtpllusxxrtnt`.
+- Step 8 focused nix check: completed after pre-step summary at commit
+  `15406891d014fe215287d928780808286fb44c87`, change
+  `xvmqvywzlmwrwmurvnquzuvtolwxqpxy`.
 
 ### MCP Evidence
 
@@ -345,6 +348,8 @@
   passed with existing warnings.
 - `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`
   passed again after the `SyncManager` migration, with existing warnings.
+- `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`
+  passed with existing warnings.
 
 ### Commits
 
@@ -352,4 +357,4 @@
 
 ### Remaining Follow-Up
 
-- Run the focused Phase 3 checks through the nix dev shell.
+- Update the Phase 3 ledger and commit list.

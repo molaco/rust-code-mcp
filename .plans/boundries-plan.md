@@ -726,6 +726,11 @@ For every phase, record:
   `IncrementalIndexer` dropped from 14 to 11 bindings; remaining direct
   importers are compatibility consumers, tests, benches, tools, the public
   reexport, and the indexing-owned service.
+- Step 8 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `15406891d014fe215287d928780808286fb44c87` on change
+  `xvmqvywzlmwrwmurvnquzuvtolwxqpxy`. Verification passed with
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
 
 ## Phase 0: Baseline And Safety Checks
 
