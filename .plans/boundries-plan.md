@@ -845,6 +845,11 @@ For every phase, record:
   `qzyowuwkxmunktkrkonlmvwxqpkuzsxl`. Updated
   `.docs/boundries-cleanup-progress.md` with Phase 4 Step 9 status, commit
   ledger, verification summary, and remaining report follow-up.
+- Phase completion report: completed. Pre-step `jj show --summary` reported
+  working-copy commit `e200d879e10f59b95d28e632234c17b37cd81eb3` on change
+  `rqltnpzptqsxmlovkmloswopywrmyopu`. Wrote
+  `.docs/phase-4-boundrie-fix-report.md` and marked the Phase 4 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 

@@ -376,7 +376,7 @@
 
 ## Phase 4: Project Path And Identity Boundary
 
-- Status: in progress.
+- Status: complete.
 - Purpose: move or centralize project/index identity logic so server does not
   own mixed engine/indexing path policy.
 
@@ -412,6 +412,9 @@
 - Step 9 ledger update: completed after pre-step summary at commit
   `ed4702930e69011dd382d14da4f25609465062f8`, change
   `qzyowuwkxmunktkrkonlmvwxqpkuzsxl`.
+- Phase completion report: completed after pre-step summary at commit
+  `e200d879e10f59b95d28e632234c17b37cd81eb3`, change
+  `rqltnpzptqsxmlovkmloswopywrmyopu`.
 
 ### MCP Evidence
 
@@ -567,6 +570,7 @@
 - `crates/rmc-server/src/tools/endpoints/indexing_support.rs`
 - `crates/rmc-server/src/tools/endpoints/query.rs`
 - `crates/rmc-server/src/tools/graph/similarity.rs`
+- `.docs/phase-4-boundrie-fix-report.md`
 
 ### Verification
 
@@ -600,7 +604,8 @@
 - Backend resolver consolidation: `bdc2d9f4` (`refactor: consolidate backend resolver helpers`).
 - Helper consolidation verification: `d216b1ba` (`docs: verify phase 4 helper consolidation`).
 - Check-result docs: `b8b107e8` (`docs: record phase 4 check result`).
+- Ledger docs: `1d050d0c` (`docs: record phase 4 ledger`).
 
 ### Remaining Follow-Up
 
-- Write the Phase 4 report.
+- Start Phase 5.
