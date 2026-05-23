@@ -94,6 +94,9 @@
 - Step 6 forbidden dependency verification: completed after pre-step summary
   at commit `f587295397281439ef951c0286b01a9d16033ff1`, change
   `qpquqlooskzunwwvvxukkkntlxvquvnr`.
+- Step 7 focused nix check: completed as not required after pre-step summary
+  at commit `5886379b36dec1c556d5b35f0331a153b60d3e96`, change
+  `kulsqlwqynuwtnnrlypvklnrmnvoozpn`.
 
 ### MCP Evidence
 
@@ -128,5 +131,4 @@
 
 ### Remaining Follow-Up
 
-- Record that no focused nix check was needed because Phase 1 has only
-  documentation changes.
+- Record the Phase 1 ledger commit.

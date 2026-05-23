@@ -563,7 +563,12 @@ For every phase, record:
   `forbidden_dependency_check` ran the documented five-rule set with
   `summary=false` and `limit=300`; result was `rule_count=5`,
   `violation_count=0`, `total_match_count=0`, and `returned_match_count=0`.
-- Step 7 focused nix check if a Rust test/check is added: pending.
+- Step 7 focused nix check if a Rust test/check is added: completed as not
+  required. Pre-step `jj show --summary` reported working-copy commit
+  `5886379b36dec1c556d5b35f0331a153b60d3e96` on change
+  `kulsqlwqynuwtnnrlypvklnrmnvoozpn`. Phase 1 added documentation-only
+  boundary rules and did not add or change a Rust test/check, so no nix build or
+  check command was required.
 - Step 8 update ledger and commit: pending.
 - Phase completion report: pending.
 
