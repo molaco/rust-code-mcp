@@ -839,6 +839,12 @@ For every phase, record:
   `qmowvluwlrxounuyozuztlmtkykqklpx`. The focused check passed with existing
   warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-indexing -p rmc-server`.
+- Step 9 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `ed4702930e69011dd382d14da4f25609465062f8` on change
+  `qzyowuwkxmunktkrkonlmvwxqpkuzsxl`. Updated
+  `.docs/boundries-cleanup-progress.md` with Phase 4 Step 9 status, commit
+  ledger, verification summary, and remaining report follow-up.
 
 ## Phase 0: Baseline And Safety Checks
 

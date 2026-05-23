@@ -409,6 +409,9 @@
 - Step 8 focused nix checks: completed after pre-step summary at commit
   `f39ef4930e029d287024ee687529aec909c539a8`, change
   `qmowvluwlrxounuyozuztlmtkykqklpx`.
+- Step 9 ledger update: completed after pre-step summary at commit
+  `ed4702930e69011dd382d14da4f25609465062f8`, change
+  `qzyowuwkxmunktkrkonlmvwxqpkuzsxl`.
 
 ### MCP Evidence
 
@@ -596,7 +599,8 @@
 - Data dir helper consolidation: `9c666fdd` (`refactor: consolidate server data dir helper`).
 - Backend resolver consolidation: `bdc2d9f4` (`refactor: consolidate backend resolver helpers`).
 - Helper consolidation verification: `d216b1ba` (`docs: verify phase 4 helper consolidation`).
+- Check-result docs: `b8b107e8` (`docs: record phase 4 check result`).
 
 ### Remaining Follow-Up
 
-- Update the Phase 4 ledger and write the phase report.
+- Write the Phase 4 report.
