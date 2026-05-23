@@ -629,7 +629,17 @@ For every phase, record:
   `codemap`; both now depend on `rmc_indexing::indexing::search` for
   `open_bm25_search`, and neither reports
   `rmc_indexing::indexing::tantivy_adapter`.
-- Step 8 run focused nix checks if code changed: pending.
+- Step 8 run focused nix checks if code changed: completed with external
+  toolchain failure. Pre-step `jj show --summary` reported working-copy commit
+  `a30f01c4c2f463ca12c0ef66f165c5fc8436538f` on change
+  `ymxovsnvyuzuoolovssznxttulpkqkly`. Ran
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-indexing -p rmc-server`;
+  it failed before checking the touched crates because `candle-kernels v0.10.2`
+  hit a CUDA/GCC internal compiler error in `cc1plus` while compiling
+  `src/moe/moe_wmma_gguf.cu`, then Cargo did not exit promptly and the cargo
+  process was terminated. Retried with
+  `nix develop ../nix-devshells#cuda-code --command env CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`;
+  it exited with the same `candle-kernels` CUDA/GCC ICE.
 - Step 9 update ledger and commit: pending.
 - Phase completion report: pending.
 

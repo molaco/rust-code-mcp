@@ -175,6 +175,9 @@
 - Step 7 server dependency verification: completed after pre-step summary at
   commit `5b923b94b5bf4227102442c81d7766111c23d9a9`, change
   `rpuomsqkxvovryzpmpslxlnwlkxomsss`.
+- Step 8 focused nix checks: attempted after pre-step summary at commit
+  `a30f01c4c2f463ca12c0ef66f165c5fc8436538f`, change
+  `ymxovsnvyuzuoolovssznxttulpkqkly`.
 
 ### MCP Evidence
 
@@ -200,6 +203,21 @@
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
 
+### Verification
+
+- MCP verification passed after rebuilding the hypergraph: server `query` and
+  `codemap` depend on `rmc_indexing::indexing::search`, not
+  `rmc_indexing::indexing::tantivy_adapter`.
+- Focused nix check attempted:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-indexing -p rmc-server`.
+  Result: failed before checking touched crates because `candle-kernels v0.10.2`
+  hit a CUDA/GCC `cc1plus` internal compiler error compiling
+  `src/moe/moe_wmma_gguf.cu`; Cargo then did not exit promptly and was
+  terminated.
+- Focused nix check retry attempted:
+  `nix develop ../nix-devshells#cuda-code --command env CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
+  Result: same `candle-kernels` CUDA/GCC internal compiler error.
+
 ### Remaining Follow-Up
 
-- Run focused nix checks for the code changes.
+- Record the Phase 2 ledger commit.
