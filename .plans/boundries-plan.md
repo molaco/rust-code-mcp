@@ -856,6 +856,28 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `1244e9892186d5c681827698217f9393db4642aa` on change
   `vkxwsvmtrwvvuzvrsuuqznxrlwoyrurx`, with no description set.
+- Step 2 identify server response helpers that only translate graph internals
+  to MCP DTOs: completed. Pre-step `jj show --summary` reported working-copy
+  commit `46cf2ba5e96637b7f6f24525b6adbb8079db2d16` on change
+  `psuzmtoxpqzwynpxqtrosrnozstxmqpx`, with no description set.
+  MCP evidence reused graph `2c6dfe88c8bad3b7db1838a94b00287b` with
+  fingerprint
+  `680958b42dd9eaa0c1d72a5958fc985c38673f053fd17072d09aeda0eaa58b6d`.
+  The response/core/surface modules still depend on raw graph
+  `snapshot`, `storage`, `model`, `ids`, `labels`, and `query::model`
+  modules. `functions_with_filter(has_param_type="OpenedSnapshot")`
+  reported seven server graph helpers that still accept snapshots directly:
+  `core::enrich_bindings`, `core::enrich_usages`,
+  `response::resolve_chunk_to_item`, `response::resolve_required_node`,
+  `response::visibility_label`, `surface::enrich_crate_dead_pub`, and
+  `surface::enrich_dead_pub`.
+- Step 2 source-read result: the best first migration target is the repeated
+  translation/enrichment path, not MCP result wrapping. Move or mirror
+  `core::enrich_bindings`, `core::enrich_usages`, `surface::enrich_dead_pub`,
+  and `surface::enrich_crate_dead_pub` behind graph-owned query/DTO helpers.
+  Keep `open_workspace_snapshot` server-owned for now because it maps
+  directory/storage failures into MCP tool errors. Leave `resolve_chunk_to_item`
+  for a later pass because it currently has no production caller.
 
 ## Phase 0: Baseline And Safety Checks
 

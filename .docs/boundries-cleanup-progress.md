@@ -622,10 +622,42 @@
 - Step 1 `jj show --summary`: completed at working-copy commit
   `1244e9892186d5c681827698217f9393db4642aa`, change
   `vkxwsvmtrwvvuzvrsuuqznxrlwoyrurx`.
+- Step 2 response-helper inventory: completed after pre-step summary at
+  working-copy commit `46cf2ba5e96637b7f6f24525b6adbb8079db2d16`, change
+  `psuzmtoxpqzwynpxqtrosrnozstxmqpx`.
 
 ### MCP Evidence
 
-- Pending Step 2 evidence refresh.
+- `build_hypergraph(force_rebuild=false)` reused graph
+  `2c6dfe88c8bad3b7db1838a94b00287b`, fingerprint
+  `680958b42dd9eaa0c1d72a5958fc985c38673f053fd17072d09aeda0eaa58b6d`.
+- `get_imports` and `module_dependencies` show server graph response/core/surface
+  still importing raw graph internals:
+  - `response`: `rmc_graph::graph::{ids, labels, model, query::model,
+    snapshot, storage}`
+  - `core`: `rmc_graph::graph::{labels, model, query::model, snapshot}`
+  - `surface`: `rmc_graph::graph::{derive_audit, docs_audit, ids, labels,
+    model, query::model, snapshot}`
+- `functions_with_filter(has_param_type="OpenedSnapshot")` reported seven
+  server graph helpers with direct snapshot parameters:
+  `core::enrich_bindings`, `core::enrich_usages`,
+  `response::resolve_chunk_to_item`, `response::resolve_required_node`,
+  `response::visibility_label`, `surface::enrich_crate_dead_pub`, and
+  `surface::enrich_dead_pub`.
+
+### Source-Read Result
+
+- `response::open_workspace_snapshot` should stay server-owned in this phase
+  because it converts directory/storage failures into MCP tool errors.
+- `response::resolve_required_node` and `response::visibility_label` are graph
+  lookup/label translations and are candidates for graph-owned helpers, but
+  the lower-risk first move is the repeated enrichment path.
+- `core::enrich_bindings`, `core::enrich_usages`,
+  `surface::enrich_dead_pub`, and `surface::enrich_crate_dead_pub` only enrich
+  graph findings for response DTOs. Step 3 should move or mirror these behind
+  graph-owned query/DTO helpers while keeping MCP wrapping in the server.
+- `response::resolve_chunk_to_item` also translates graph internals but has no
+  production caller, so it is not the first facade target.
 
 ### Files Changed
 
@@ -635,12 +667,14 @@
 ### Verification
 
 - Step 1 was VCS-only; no build command required.
+- Step 2 was evidence/docs-only; no build command required.
 
 ### Commits
 
-- Pending.
+- Step 1 documentation: `ecd3f445` (`docs: record phase 5 step 1`).
+- Step 2 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Identify server response helpers that only translate graph internals to MCP
-  DTOs.
+- Add graph-owned query/DTO helpers for the repeated binding, usage, and
+  dead-pub enrichment paths.
