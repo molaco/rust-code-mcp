@@ -100,46 +100,29 @@ violation_count=0
 total_match_count=0
 ```
 
-## Phase C extension (planned, not yet enforced)
+## Current Dependency Direction
 
-When Phase C lands, append these rules:
-
-```json
-[
-  {"consumer": "rmc-graph",    "producer": "rust-code-mcp", "severity": "error"},
-  {"consumer": "rmc-config",   "producer": "rmc-graph",     "severity": "error"},
-  {"consumer": "rmc-config",   "producer": "rmc-indexing",  "severity": "error"},
-  {"consumer": "rmc-config",   "producer": "rmc-server",    "severity": "error"},
-  {"consumer": "rmc-config",   "producer": "rust-code-mcp", "severity": "error"},
-  {"consumer": "rmc-indexing", "producer": "rmc-server",    "severity": "error"},
-  {"consumer": "rmc-indexing", "producer": "rust-code-mcp", "severity": "error"},
-  {"consumer": "rmc-server",   "producer": "rust-code-mcp", "severity": "error"}
-]
-```
-
-This encodes the dependency hierarchy:
+The intended crate direction is:
 
 ```text
-rmc-engine    ←  rmc-graph
-              ←  rmc-config
-              ←  rmc-indexing  (also ← rmc-config)
-              ←  rmc-server    (← rmc-graph, rmc-config, rmc-indexing)
-              ←  rust-code-mcp (main binary; → all above)
+rmc_server   -> rmc_graph, rmc_indexing, rmc_engine, rmc_config
+rmc_graph    -> rmc_engine
+rmc_indexing -> rmc_engine, rmc_config
+rmc_config   -> rmc_engine
+rmc_engine   -> no rmc_* dependencies
 ```
 
-## §2 rule equivalents (not directly expressible)
+The current rule set enforces the direction that is most relevant to the
+boundaries cleanup:
 
-The parent plan's §2 listed these forbidden edges at module level:
+- `rmc_engine` stays foundation-only.
+- `rmc_graph` does not depend on server and should not depend on indexing.
+- `rmc_indexing` does not depend on server and should not depend on graph.
 
-- `graph → tools`, `graph → mcp` — now enforced by `rmc-graph` not depending on `rust-code-mcp` (which holds tools, mcp).
-- `engine → tools`, `engine → mcp` — enforced by `rmc-engine` not depending on `rust-code-mcp`.
-- `embeddings → indexing` — still a module-level edge within `rmc-engine` and the (future) `rmc-indexing` crate. After Phase C this becomes a real crate boundary (`rmc-engine` must not depend on `rmc-indexing`), expressible as the rule:
-  ```json
-  {"consumer": "rmc-engine", "producer": "rmc-indexing", "severity": "error"}
-  ```
-
-Until Phase C, that one rule has no crate boundary to anchor on (everything in `rmc-indexing` still lives in the main crate); enforce it by grep inside `crates/rmc-engine/src/`.
+Edges from top-level server code into lower crates are allowed; this cleanup
+narrows those APIs rather than inverting the dependency direction.
 
 ## Status
 
-Last verified: 2026-05-21 (Phase B.8). Result: `violation_count = 0` against the Phase B rule set.
+Last verified during Phase 0 of `.plans/boundries-plan.md` execution on
+2026-05-23. Result: `violation_count=0` against the current five-rule set.

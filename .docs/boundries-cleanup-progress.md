@@ -88,6 +88,9 @@
 - Step 4 documentation-only command/result: completed after pre-step summary
   at commit `eb7c2f0aa4737f437cf7e94cfa27be831580755c`, change
   `nkyplvkotxlpnrszkkqnsumlukxmxqvy`.
+- Step 5 dependency direction: completed after pre-step summary at commit
+  `a5f20835a668708b6d04b426b4806e55ded0cd97`, change
+  `zmxqmmqluqpkxvroqtnymtrusxlpmxrt`.
 
 ### MCP Evidence
 
@@ -116,4 +119,4 @@
 
 ### Remaining Follow-Up
 
-- Record the exact dependency direction.
+- Re-run the forbidden dependency check after documentation updates.

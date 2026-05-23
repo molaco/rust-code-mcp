@@ -548,7 +548,14 @@ For every phase, record:
   `nkyplvkotxlpnrszkkqnsumlukxmxqvy`. Updated
   `.docs/architectural-rules.md` with the exact `build_hypergraph` and
   `forbidden_dependency_check` calls and the expected zero-violation result.
-- Step 5 record dependency direction: pending.
+- Step 5 record dependency direction: completed. Pre-step `jj show --summary`
+  reported working-copy commit `a5f20835a668708b6d04b426b4806e55ded0cd97`
+  on change `zmxqmmqluqpkxvroqtnymtrusxlpmxrt`. Replaced stale Phase C
+  hierarchy text in `.docs/architectural-rules.md` with the current dependency
+  direction:
+  `rmc_server -> rmc_graph, rmc_indexing, rmc_engine, rmc_config`;
+  `rmc_graph -> rmc_engine`; `rmc_indexing -> rmc_engine, rmc_config`;
+  `rmc_config -> rmc_engine`; `rmc_engine -> no rmc_* dependencies`.
 - Step 6 verify forbidden dependency check: pending.
 - Step 7 focused nix check if a Rust test/check is added: pending.
 - Step 8 update ledger and commit: pending.
