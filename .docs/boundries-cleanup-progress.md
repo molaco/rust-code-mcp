@@ -169,6 +169,9 @@
 - Step 5 server codemap migration: completed after pre-step summary at commit
   `af97b059f19b35161ab72ff31e03f9ca2ea11bbd`, change
   `xqyxwtslpwrvqyykyumqswzzqmwsrwql`.
+- Step 6 compatibility export check: completed after pre-step summary at
+  commit `71cbda4fd1d6e709c24b4702942295dc688a7dcb`, change
+  `nnoruxukxwskzmzwotszmzronrklnkvl`.
 
 ### MCP Evidence
 
@@ -191,4 +194,4 @@
 
 ### Remaining Follow-Up
 
-- Keep `TantivyAdapter` public for compatibility.
+- Verify server production modules no longer depend on `tantivy_adapter`.

@@ -614,7 +614,12 @@ For every phase, record:
   `rmc_server::tools::graph::codemap` to call
   `rmc_indexing::indexing::open_bm25_search` instead of constructing
   `TantivyConfig` and `TantivyAdapter` directly.
-- Step 6 leave `TantivyAdapter` public for compatibility: pending.
+- Step 6 leave `TantivyAdapter` public for compatibility: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `71cbda4fd1d6e709c24b4702942295dc688a7dcb` on change
+  `nnoruxukxwskzmzwotszmzronrklnkvl`. Verified
+  `rmc_indexing::indexing::tantivy_adapter` remains `pub mod` and
+  `TantivyAdapter` remains a public reexport.
 - Step 7 verify server production modules no longer depend on
   `tantivy_adapter`: pending.
 - Step 8 run focused nix checks if code changed: pending.
