@@ -607,7 +607,13 @@ For every phase, record:
   `rmc_server::tools::endpoints::query::try_open_bm25` to call
   `rmc_indexing::indexing::open_bm25_search` instead of constructing
   `TantivyConfig` and `TantivyAdapter` directly.
-- Step 5 migrate graph codemap server code: pending.
+- Step 5 migrate graph codemap server code: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `af97b059f19b35161ab72ff31e03f9ca2ea11bbd` on change
+  `xqyxwtslpwrvqyykyumqswzzqmwsrwql`. Updated
+  `rmc_server::tools::graph::codemap` to call
+  `rmc_indexing::indexing::open_bm25_search` instead of constructing
+  `TantivyConfig` and `TantivyAdapter` directly.
 - Step 6 leave `TantivyAdapter` public for compatibility: pending.
 - Step 7 verify server production modules no longer depend on
   `tantivy_adapter`: pending.

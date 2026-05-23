@@ -166,6 +166,9 @@
 - Step 4 server query migration: completed after pre-step summary at commit
   `21f9c6e315ce37e8daf902f72316778732fb576e`, change
   `quoqqmqpumlzytqmpkwxsnluuutxltxl`.
+- Step 5 server codemap migration: completed after pre-step summary at commit
+  `af97b059f19b35161ab72ff31e03f9ca2ea11bbd`, change
+  `xqyxwtslpwrvqyykyumqswzzqmwsrwql`.
 
 ### MCP Evidence
 
@@ -182,9 +185,10 @@
 - `crates/rmc-indexing/src/indexing/search.rs`
 - `crates/rmc-indexing/src/indexing/mod.rs`
 - `crates/rmc-server/src/tools/endpoints/query.rs`
+- `crates/rmc-server/src/tools/graph/codemap.rs`
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
 
 ### Remaining Follow-Up
 
-- Migrate server codemap code to `open_bm25_search`.
+- Keep `TantivyAdapter` public for compatibility.

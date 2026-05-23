@@ -11,6 +11,7 @@ use rmcp::{
     ErrorData as McpError,
     model::{CallToolResult, Content},
 };
+use rmc_indexing::indexing::open_bm25_search;
 
 use crate::tools::graph::response::*;
 
@@ -126,14 +127,7 @@ pub(crate) async fn handle_build_codemap(
         );
         // Best-effort BM25 open. If absent we get vector-only hits; that is
         // still a valid seed source.
-        let bm25 = {
-            use rmc_config::config::indexer::TantivyConfig;
-            use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
-            let config = TantivyConfig::default(&paths.tantivy_path);
-            TantivyAdapter::new(config)
-                .and_then(|adapter| adapter.create_bm25_search())
-                .ok()
-        };
+        let bm25 = open_bm25_search(&paths.tantivy_path).ok();
         let hybrid = crate::tools::endpoints::query::create_hybrid_search(
             &paths,
             bm25,
