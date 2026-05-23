@@ -621,7 +621,14 @@ For every phase, record:
   `rmc_indexing::indexing::tantivy_adapter` remains `pub mod` and
   `TantivyAdapter` remains a public reexport.
 - Step 7 verify server production modules no longer depend on
-  `tantivy_adapter`: pending.
+  `tantivy_adapter`: completed. Pre-step `jj show --summary` reported
+  working-copy commit `5b923b94b5bf4227102442c81d7766111c23d9a9` on change
+  `rpuomsqkxvovryzpmpslxlnwlkxomsss`. Rebuilt the hypergraph with
+  `force_rebuild=true`, producing graph `06c80cff231427cb53c75e7c071397fd`.
+  Refreshed `module_dependencies` and `get_imports` for server `query` and
+  `codemap`; both now depend on `rmc_indexing::indexing::search` for
+  `open_bm25_search`, and neither reports
+  `rmc_indexing::indexing::tantivy_adapter`.
 - Step 8 run focused nix checks if code changed: pending.
 - Step 9 update ledger and commit: pending.
 - Phase completion report: pending.

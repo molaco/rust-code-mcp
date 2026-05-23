@@ -172,6 +172,9 @@
 - Step 6 compatibility export check: completed after pre-step summary at
   commit `71cbda4fd1d6e709c24b4702942295dc688a7dcb`, change
   `nnoruxukxwskzmzwotszmzronrklnkvl`.
+- Step 7 server dependency verification: completed after pre-step summary at
+  commit `5b923b94b5bf4227102442c81d7766111c23d9a9`, change
+  `rpuomsqkxvovryzpmpslxlnwlkxomsss`.
 
 ### MCP Evidence
 
@@ -182,6 +185,11 @@
   `rmc_indexing::indexing::tantivy_adapter` through inline references.
 - `get_exports(module="rmc_indexing::indexing", consumer="rmc_server")`
   confirmed `TantivyAdapter` and the implementation module are still public.
+- After the code migration, `build_hypergraph(force_rebuild=true)` produced
+  graph `06c80cff231427cb53c75e7c071397fd`.
+- Refreshed `module_dependencies` for server `query` and `codemap` no longer
+  listed `rmc_indexing::indexing::tantivy_adapter`; both now depend on
+  `rmc_indexing::indexing::search`.
 
 ### Files Changed
 
@@ -194,4 +202,4 @@
 
 ### Remaining Follow-Up
 
-- Verify server production modules no longer depend on `tantivy_adapter`.
+- Run focused nix checks for the code changes.
