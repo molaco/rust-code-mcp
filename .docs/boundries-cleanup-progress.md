@@ -292,6 +292,9 @@
 - Step 8 focused nix check: completed after pre-step summary at commit
   `15406891d014fe215287d928780808286fb44c87`, change
   `xvmqvywzlmwrwmurvnquzuvtolwxqpxy`.
+- Step 9 ledger update: completed after pre-step summary at commit
+  `93f05ca7ba0647954f8055ed3f2d1290a6abbc56`, change
+  `ymyrwrtuxnrnoskvtwxmkuqntpmvknnl`.
 
 ### MCP Evidence
 
@@ -353,8 +356,15 @@
 
 ### Commits
 
-- Pending.
+- Step 1 documentation: `dadd4305` (`docs: record phase 3 step 1`).
+- Incremental service facade: `cfbfd981` (`refactor: add incremental indexing service facade`).
+- Facade shape docs: `7d0b595c` (`docs: record phase 3 facade shape`).
+- Index endpoint migration: `faaa16a6` (`refactor: use incremental service in index endpoint`).
+- Sync manager migration: `5c88f5e7` (`refactor: use incremental service in sync manager`).
+- Compatibility export docs: `78f38279` (`docs: record phase 3 compatibility export`).
+- Dependency verification docs: `60fb890b` (`docs: verify phase 3 dependencies`).
+- Check-result docs: `0e28bf4e` (`docs: record phase 3 check result`).
 
 ### Remaining Follow-Up
 
-- Update the Phase 3 ledger and commit list.
+- Write the Phase 3 completion report.

@@ -731,6 +731,11 @@ For every phase, record:
   `15406891d014fe215287d928780808286fb44c87` on change
   `xvmqvywzlmwrwmurvnquzuvtolwxqpxy`. Verification passed with
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
+- Step 9 update ledger and commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `93f05ca7ba0647954f8055ed3f2d1290a6abbc56`
+  on change `ymyrwrtuxnrnoskvtwxmkuqntpmvknnl`. Updated
+  `.docs/boundries-cleanup-progress.md` with Phase 3 evidence, verification,
+  changed files, remaining follow-up, and commit ledger.
 
 ## Phase 0: Baseline And Safety Checks
 
