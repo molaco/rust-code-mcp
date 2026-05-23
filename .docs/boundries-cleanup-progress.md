@@ -255,3 +255,38 @@
 ### Remaining Follow-Up
 
 - Start Phase 3.
+
+## Phase 3: `rmc-indexing` Incremental Indexing Facade
+
+- Status: in progress.
+- Purpose: stop server index/sync production code from constructing
+  `IncrementalIndexer` directly while keeping `IncrementalIndexer` public for
+  compatibility.
+
+### Step Evidence
+
+- Step 1 `jj show --summary`: completed at working-copy commit
+  `1246ed40d952f65679ea505e67194973d857de67`, change
+  `zqwzqttxromrslzpsupuympxunyyqvrq`.
+
+### MCP Evidence
+
+- Pending refresh for Phase 3 Step 2.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+
+### Verification
+
+- Pending.
+
+### Commits
+
+- Pending.
+
+### Remaining Follow-Up
+
+- Refresh Phase 3 MCP evidence for `IncrementalIndexer` server construction
+  dependencies.

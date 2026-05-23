@@ -662,6 +662,12 @@ For every phase, record:
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo test -p rmc-indexing open_bm25_search --jobs 1`.
   Commit: `2ae2e365` (`fix: open bm25 search read-only`).
 
+### Phase 3: `rmc-indexing` Incremental Indexing Facade
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `1246ed40d952f65679ea505e67194973d857de67` on change
+  `zqwzqttxromrslzpsupuympxunyyqvrq`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
