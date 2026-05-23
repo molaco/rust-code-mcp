@@ -97,6 +97,9 @@
 - Step 7 focused nix check: completed as not required after pre-step summary
   at commit `5886379b36dec1c556d5b35f0331a153b60d3e96`, change
   `kulsqlwqynuwtnnrlypvklnrmnvoozpn`.
+- Step 8 ledger update: completed after pre-step summary at commit
+  `cad14ff665f1b64cd1a18395970a6242365130ae`, change
+  `lvwtntvqmtozyvpoolxyqzzuupnlqknl`.
 
 ### MCP Evidence
 
@@ -129,6 +132,16 @@
   `rule_count=5`, `violation_count=0`, `total_match_count=0`,
   `returned_match_count=0`.
 
+### Commits
+
+- Step 1 documentation: `aa3264b7` (`docs: record phase 1 step 1`).
+- Step 2 documentation: `43e54fff` (`docs: record phase 1 step 2`).
+- Boundary rule set: `b9eb418c` (`docs: update boundary rule set`).
+- Boundary rule check docs: `26631423` (`docs: document boundary rule check`).
+- Dependency direction docs: `77af592d` (`docs: record boundary dependency direction`).
+- Verification docs: `cd53e088` (`docs: verify boundary rule check`).
+- Check-status docs: `60b4789a` (`docs: record phase 1 check status`).
+
 ### Remaining Follow-Up
 
-- Record the Phase 1 ledger commit.
+- Write and commit the Phase 1 report.

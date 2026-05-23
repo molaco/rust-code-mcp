@@ -569,7 +569,11 @@ For every phase, record:
   `kulsqlwqynuwtnnrlypvklnrmnvoozpn`. Phase 1 added documentation-only
   boundary rules and did not add or change a Rust test/check, so no nix build or
   check command was required.
-- Step 8 update ledger and commit: pending.
+- Step 8 update ledger and commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `cad14ff665f1b64cd1a18395970a6242365130ae`
+  on change `lvwtntvqmtozyvpoolxyqzzuupnlqknl`. Updated
+  `.docs/boundries-cleanup-progress.md` with the Phase 1 step evidence,
+  verification, changed files, remaining follow-up, and commit ledger.
 - Phase completion report: pending.
 
 ## Phase 0: Baseline And Safety Checks
