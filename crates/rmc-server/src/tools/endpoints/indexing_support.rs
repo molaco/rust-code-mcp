@@ -17,18 +17,13 @@
 //!
 //! ## Core Functions
 //!
-//! - [`data_dir`]: Get the XDG-compliant data directory for persistent storage
 //! - [`open_or_create_index`]: Open or create a persistent Tantivy BM25 index
 //! - [`open_cache`]: Open or create a sled-based metadata cache
 //!
 //! ## Examples
 //!
 //! ```rust,no_run
-//! use rmc_server::tools::endpoints::indexing_support::{data_dir, open_cache};
-//!
-//! // Get data directory (cross-platform)
-//! let data = data_dir();
-//! println!("Data stored at: {}", data.display());
+//! use rmc_server::tools::endpoints::indexing_support::open_cache;
 //!
 //! // Open metadata cache
 //! let cache = open_cache().expect("Failed to open cache");
@@ -45,17 +40,11 @@ use tracing;
 
 use rmc_indexing::metadata_cache::MetadataCache;
 use rmc_engine::schema::FileSchema;
-use std::path::PathBuf;
-
-/// Get the path for storing persistent index and cache.
-pub(crate) fn data_dir() -> PathBuf {
-    crate::mcp::project_paths::data_dir()
-}
 
 /// Open or create a persistent Tantivy index
 pub(crate) fn open_or_create_index() -> Result<(Index, FileSchema), String> {
     let schema = FileSchema::new();
-    let index_path = data_dir().join("index");
+    let index_path = crate::mcp::project_paths::data_dir().join("index");
 
     // Ensure directory exists
     std::fs::create_dir_all(&index_path)
@@ -77,19 +66,13 @@ pub(crate) fn open_or_create_index() -> Result<(Index, FileSchema), String> {
 
 /// Open or create metadata cache
 pub(crate) fn open_cache() -> Result<MetadataCache, String> {
-    let cache_path = data_dir().join("cache");
+    let cache_path = crate::mcp::project_paths::data_dir().join("cache");
     MetadataCache::new(&cache_path).map_err(|e| format!("Failed to open metadata cache: {}", e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_data_dir_exists() {
-        let dir = data_dir();
-        assert!(!dir.to_string_lossy().is_empty());
-    }
 
     #[test]
     fn test_open_or_create_index() {

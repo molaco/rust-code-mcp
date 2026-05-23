@@ -397,6 +397,9 @@
 - Step 4 compatibility wrapper evidence: completed after pre-step summary at
   commit `05c745e3e40b51d4440229c2d32aadea4226d6c0`, change
   `rwtpxuxtslyrnpsrqmxnpmvyvwyypoqq`.
+- Step 5 duplicate `data_dir` helper consolidation: completed after pre-step
+  summary at commit `69e7b3d7daf2059e70c1e0bf4766dfa0a8afc309`, change
+  `kkpottulqvowxsykxzsokrmwvsnyrmtt`.
 
 ### MCP Evidence
 
@@ -453,13 +456,30 @@
   still returns eight bindings: production users in query, health, and index;
   compatibility export in `rmc_server::tools::project_paths`; tests; and the
   integration compatibility importer.
-- Step 4 `functions_with_filter(krate="rmc_server",
-  has_param_type="ProjectPaths")` still returns the six query helper users:
+- Step 4 function filtering for `ProjectPaths` parameters still returns the
+  six query helper users:
   `clean_stale_index`, `create_hybrid_search`, `ensure_indexed`,
   `resolve_query_backend`, `try_open_bm25`, and `vector_metadata_exists`.
 - Step 4 `module_dependencies(module="rmc_server::tools::project_paths")`
   shows that the tools module only reexports
   `rmc_server::mcp::project_paths` symbols.
+- After Step 5, `build_hypergraph(directory, force_rebuild=true)` produced
+  graph `5f91461896d45246c51e9fa601cd5d90` with fingerprint
+  `d856a1f930500d5630add0af711efda87321d1409341278e47f14d2e5d4bb5c1`.
+- Step 5
+  `functions_with_filter(krate="rmc_server", returns_type_pattern="PathBuf")`
+  returned `ProjectPaths::vectors_root`, `project_paths::data_dir`, and
+  `SyncManager::get_tracked_directories`; the previous
+  `indexing_support::data_dir` wrapper is gone.
+- Step 5
+  `module_dependencies(module="rmc_server::tools::endpoints::indexing_support")`
+  shows direct usage of `rmc_server::mcp::project_paths::data_dir`.
+- Step 5 `who_imports(target="rmc_server::mcp::project_paths::data_dir")`
+  returned cache, health, the `tools::project_paths` compatibility export, and
+  tests as importers.
+- Step 5 `semantic_overlaps(crate_name="rmc_server", item_kind="Function")`
+  no longer reports the old `data_dir` duplicate cluster. The backend
+  resolver cluster remains for Step 6.
 
 ### Responsibility Split
 
@@ -491,6 +511,7 @@
 - `crates/rmc-indexing/src/indexing/project_paths.rs`
 - `crates/rmc-server/Cargo.toml`
 - `crates/rmc-server/src/mcp/project_paths.rs`
+- `crates/rmc-server/src/tools/endpoints/indexing_support.rs`
 
 ### Verification
 
@@ -498,6 +519,8 @@
   Step 2.
 - Step 4 compatibility-wrapper verification was MCP/source-read only; no build
   command required because no code changed.
+- Step 5 focused server check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 - Step 3 focused check passed before commit with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
 - Step 3 regular focused test passed with existing warnings:
@@ -510,8 +533,8 @@
 - Responsibility split docs: `838381d3` (`docs: record phase 4 responsibility split`).
 - Indexing project paths: `8755d084` (`refactor: move indexing project paths`).
 - Project path move docs: `7a54b668` (`docs: record phase 4 project path move`).
+- Compatibility wrapper docs: `31d872eb` (`docs: record phase 4 compatibility wrapper`).
 
 ### Remaining Follow-Up
 
-- Consolidate duplicate `data_dir` helpers.
 - Consolidate backend-resolution variants.

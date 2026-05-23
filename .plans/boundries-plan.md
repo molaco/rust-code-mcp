@@ -792,6 +792,19 @@ For every phase, record:
   returns eight bindings across production endpoints, tests, and the
   compatibility module; `functions_with_filter(has_param_type="ProjectPaths")`
   still returns the six query helper users. No code change was required.
+- Step 5 consolidate duplicate `data_dir` helpers: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `69e7b3d7daf2059e70c1e0bf4766dfa0a8afc309` on change
+  `kkpottulqvowxsykxzsokrmwvsnyrmtt`. Removed the
+  `rmc_server::tools::endpoints::indexing_support::data_dir` wrapper and had
+  `open_or_create_index` / `open_cache` call the canonical
+  `crate::mcp::project_paths::data_dir()` helper directly. Refreshed
+  hypergraph graph `5f91461896d45246c51e9fa601cd5d90` shows only
+  `rmc_server::mcp::project_paths::data_dir` among server PathBuf-returning
+  data-root helpers, and `semantic_overlaps` no longer reports the old
+  `data_dir` duplicate cluster. The focused server check passed with existing
+  warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 
 ## Phase 0: Baseline And Safety Checks
 
