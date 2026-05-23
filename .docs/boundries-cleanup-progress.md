@@ -774,24 +774,69 @@
 - Step 1 `jj show --summary`: completed at working-copy commit
   `aba7ca27e917ab5b3dd8633befc7f65e6a1b3584`, change
   `ulzuvpoonzuyywyvqlrxrlrwsuvuwsuw`.
+- Step 2 graph-owned audit entry points: completed after pre-step summary at
+  working-copy commit `c4258945e608ce3aea72681b42390440dccb7aeb`, change
+  `rzwtmmytrvlpqpmoyznrtqolszssmsxv`.
 
 ### MCP Evidence
 
-- Pending Step 2 evidence refresh.
+- `build_hypergraph(force_rebuild=false)` reused graph
+  `085eaff90b1189f8e7a4dc3374610742`, fingerprint
+  `349e4a62bdb66681623fdc7432c538e80f98e667ffd92cac4a9400383a022759`.
+- `who_imports(target="rmc_graph::graph::loader::load")` returned direct
+  import bindings in a debug binary, the graph facade reexport, and graph
+  loader tests. This missed server inline fully qualified usage, so
+  `module_dependencies` is the authoritative boundary check for this phase.
+- `module_dependencies(module="rmc_server::tools::graph::audits")` shows direct
+  server audit dependencies on:
+  - `rmc_graph::graph::loader::load`
+  - `rmc_graph::graph::channel_audit::{ChannelAuditOpts, ChannelFinding,
+    channel_capacity_audit}`
+  - `rmc_graph::graph::fn_body_audit::{FnBodyAuditOpts, FnBodyFinding,
+    fn_body_audit, parse_pattern_filter}`
+  - `rmc_graph::graph::recursion_check::{RecursionOpts,
+    clamp_cycle_length, enclosing_fn_qualified_names, recursion_check}`
+  - `OpenedSnapshot::{lookup_by_qualified_name, mut_static_audit,
+    unsafe_audit}`
+- `get_exports(module="rmc_graph::graph", consumer="rmc_server")` still shows
+  compatibility exports available before the audit facade migration.
+
+### Source-Read Result
+
+- Server `graph::audits` owns MCP response wrapping, pagination, summary
+  location stripping, and `spawn_blocking`.
+- The graph-owned facade added in Step 2 now owns canonicalizing the directory,
+  opening the persisted snapshot, resolving optional crate filters, loading RA
+  workspace data for AST-backed audits, dispatching audit internals, and
+  rendering graph IDs to external DTO strings.
+- Newly exported graph facade functions:
+  `run_unsafe_audit`, `run_mut_static_audit`, `run_recursion_check`,
+  `run_channel_capacity_audit`, and `run_fn_body_audit`.
+- Newly exported option/result DTOs include
+  `RecursionCheckOptions`, `ChannelCapacityAuditOptions`,
+  `FnBodyAuditOptions`, `UnsafeAuditFinding`, `MutStaticAuditFinding`,
+  `RecursionCheckOutput`, `RecursionCycle`, `ChannelCapacityFinding`,
+  `FnBodyAuditFinding`, and `FnBodyAuditOutput`.
 
 ### Files Changed
 
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-graph/src/graph/query/audits.rs`
+- `crates/rmc-graph/src/graph/query/model.rs`
+- `crates/rmc-graph/src/graph/mod.rs`
 
 ### Verification
 
 - Step 1 was VCS-only; no build command required.
+- Step 2 graph-only check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
 
 ### Commits
 
-- Pending.
+- Step 1 documentation: `f6989e95` (`docs: start phase 6 audit facade`).
+- Step 2 implementation: pending.
 
 ### Remaining Follow-Up
 
-- Refresh MCP evidence for server graph audit dependencies.
+- Migrate server audit tools to call the graph-owned audit facade.

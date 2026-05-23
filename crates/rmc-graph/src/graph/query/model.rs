@@ -87,6 +87,84 @@ pub struct EnrichedCrateDeadPub {
     pub findings: Vec<EnrichedDeadPub>,
 }
 
+/// Unsafe-block audit finding rendered for external callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnsafeAuditFinding {
+    pub file: String,
+    pub span: (u32, u32),
+    pub line_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing_function: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing_function_name: Option<String>,
+    pub has_safety_comment: bool,
+}
+
+/// Mutable-static audit finding rendered for external callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MutStaticAuditFinding {
+    pub item: String,
+    pub qualified_name: String,
+    pub matched_pattern: String,
+    pub type_string: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(u32, u32)>,
+}
+
+/// Recursion cycle rendered with qualified function names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecursionCycle {
+    pub fns: Vec<String>,
+    pub cycle_length: usize,
+    pub direct_recursion: bool,
+    pub starting_node_id: String,
+}
+
+/// Recursion-check output with the clamped cycle limit used by the graph query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecursionCheckOutput {
+    pub max_cycle_length: usize,
+    pub cycles: Vec<RecursionCycle>,
+}
+
+/// Channel-capacity audit finding rendered for external callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelCapacityFinding {
+    pub crate_name: String,
+    pub kind: String,
+    pub bounded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<u64>,
+    pub file: String,
+    pub span: (u32, u32),
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing_function: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosing_function_name: Option<String>,
+}
+
+/// Function-body audit finding rendered for external callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FnBodyAuditFinding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualified_name: Option<String>,
+    pub pattern: String,
+    pub file: String,
+    pub span: (u32, u32),
+    pub context: String,
+}
+
+/// Function-body audit output with the effective pattern set used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FnBodyAuditOutput {
+    pub patterns_used: Vec<String>,
+    pub findings: Vec<FnBodyAuditFinding>,
+}
+
 /// One target module (or external symbol when no local module can be resolved)
 /// referenced by a source module. Import counts come from `use` / `extern crate`
 /// bindings; usage counts come from non-import references, including fully

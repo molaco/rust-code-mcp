@@ -40,13 +40,19 @@ pub use model::{
     Binding, BindingVisibility, FunctionSignature, ItemKind, Namespace, Node, NodeKind, Usage,
 };
 pub(crate) use model::EmbeddingRecord;
+pub use query::audits::{
+    ChannelCapacityAuditOptions, FnBodyAuditOptions, RecursionCheckOptions,
+    run_channel_capacity_audit, run_fn_body_audit, run_mut_static_audit, run_recursion_check,
+    run_unsafe_audit,
+};
 pub use query::model::{
-    CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EnrichedBinding,
-    EnrichedCallSite, EnrichedCrateDeadPub, EnrichedDeadPub, EnrichedUsage,
-    ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter, FunctionWithSignature,
-    ItemWithAttribute, ModuleDependency, ModuleDependencySymbol, ModuleTreeNode, OverlapScope,
-    OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursiveCallersCount,
-    SelfKindFilter, UsageSummaryRow, WorkspaceStats,
+    CallGraphNode, ChannelCapacityFinding, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding,
+    EnrichedBinding, EnrichedCallSite, EnrichedCrateDeadPub, EnrichedDeadPub, EnrichedUsage,
+    FnBodyAuditFinding, FnBodyAuditOutput, ForbiddenDependencyRule, ForbiddenDependencyViolation,
+    FunctionFilter, FunctionWithSignature, ItemWithAttribute, ModuleDependency,
+    ModuleDependencySymbol, ModuleTreeNode, MutStaticAuditFinding, OverlapScope, OverlapsReport,
+    PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursionCheckOutput, RecursionCycle,
+    RecursiveCallersCount, SelfKindFilter, UnsafeAuditFinding, UsageSummaryRow, WorkspaceStats,
 };
 pub use snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
 pub use storage::{GraphEnvOptions, GraphPaths};

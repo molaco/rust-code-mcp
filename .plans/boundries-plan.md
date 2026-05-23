@@ -958,6 +958,20 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `aba7ca27e917ab5b3dd8633befc7f65e6a1b3584` on change
   `ulzuvpoonzuyywyvqlrxrlrwsuvuwsuw`, with no description set.
+- Step 2 add graph-owned audit entry points: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `c4258945e608ce3aea72681b42390440dccb7aeb` on change
+  `rzwtmmytrvlpqpmoyznrtqolszssmsxv`, with no description set.
+  MCP evidence reused graph `085eaff90b1189f8e7a4dc3374610742`, fingerprint
+  `349e4a62bdb66681623fdc7432c538e80f98e667ffd92cac4a9400383a022759`.
+  `module_dependencies(rmc_server::tools::graph::audits)` showed direct
+  server usage of `loader::load`, `channel_audit`, `fn_body_audit`,
+  `recursion_check`, and snapshot audit methods. Added graph-owned audit
+  facade functions `run_unsafe_audit`, `run_mut_static_audit`,
+  `run_recursion_check`, `run_channel_capacity_audit`, and
+  `run_fn_body_audit`, plus graph-owned options/result DTOs. Verification:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`
+  passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 

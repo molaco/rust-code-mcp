@@ -5,12 +5,213 @@
 //! `MUT_STATIC_PATTERNS` const used by `mut_static_audit`. Moved here
 //! from `graph::queries` in PR 10.
 
-use anyhow::Result;
+use std::path::Path;
 
+use anyhow::{Context, Result, bail};
+
+use super::super::channel_audit;
+use super::super::fn_body_audit;
 use super::super::ids::NodeId;
+use super::super::loader;
 use super::super::model::{ItemKind, Node, NodeKind, StaticMetadata};
+use super::super::recursion_check;
 use super::super::snapshot::OpenedSnapshot;
-use super::model::MutStaticFinding;
+use super::super::storage::{GraphEnvOptions, GraphPaths};
+use super::model::{
+    ChannelCapacityFinding, FnBodyAuditFinding, FnBodyAuditOutput, MutStaticAuditFinding,
+    MutStaticFinding, RecursionCheckOutput, RecursionCycle, UnsafeAuditFinding,
+};
+
+#[derive(Debug, Clone, Default)]
+pub struct RecursionCheckOptions {
+    pub crate_name: Option<String>,
+    pub max_cycle_length: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChannelCapacityAuditOptions {
+    pub crate_name: Option<String>,
+    pub skip_test_fns: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct FnBodyAuditOptions {
+    pub crate_name: Option<String>,
+    pub patterns: Option<Vec<String>>,
+    pub skip_test_fns: bool,
+}
+
+pub fn run_unsafe_audit(directory: &Path) -> Result<Vec<UnsafeAuditFinding>> {
+    let canonical = canonicalize_directory(directory)?;
+    let snap = open_directory_snapshot(&canonical)?;
+    let loaded = loader::load(&canonical)?;
+    let findings = snap.unsafe_audit(&loaded)?;
+    Ok(findings
+        .into_iter()
+        .map(|finding| UnsafeAuditFinding {
+            file: finding.file,
+            span: finding.span,
+            line_count: finding.line_count,
+            enclosing_function: finding.enclosing_function.map(|id| id.to_hex()),
+            enclosing_function_name: finding.enclosing_function_name,
+            has_safety_comment: finding.has_safety_comment,
+        })
+        .collect())
+}
+
+pub fn run_mut_static_audit(directory: &Path) -> Result<Vec<MutStaticAuditFinding>> {
+    let canonical = canonicalize_directory(directory)?;
+    let snap = open_directory_snapshot(&canonical)?;
+    let findings = snap.mut_static_audit()?;
+    Ok(findings
+        .into_iter()
+        .map(|finding| MutStaticAuditFinding {
+            item: finding.item.to_hex(),
+            qualified_name: finding.qualified_name,
+            matched_pattern: finding.matched_pattern,
+            type_string: finding.type_string,
+            file: finding.file,
+            span: finding.span,
+        })
+        .collect())
+}
+
+pub fn run_recursion_check(
+    directory: &Path,
+    options: RecursionCheckOptions,
+) -> Result<RecursionCheckOutput> {
+    let canonical = canonicalize_directory(directory)?;
+    let snap = open_directory_snapshot(&canonical)?;
+    let crate_id_filter = resolve_crate_filter(&snap, options.crate_name.as_deref())?;
+    let max_cycle_length = recursion_check::clamp_cycle_length(options.max_cycle_length);
+    let cycles = recursion_check::recursion_check(
+        &snap,
+        recursion_check::RecursionOpts {
+            crate_id_filter,
+            max_cycle_length,
+        },
+    )?;
+    let mut rendered = Vec::with_capacity(cycles.len());
+    for cycle in cycles {
+        let fns = recursion_check::enclosing_fn_qualified_names(&snap, &cycle.fns)?;
+        let starting_node_id = cycle
+            .fns
+            .first()
+            .map(|id| id.to_hex())
+            .unwrap_or_default();
+        rendered.push(RecursionCycle {
+            fns,
+            cycle_length: cycle.cycle_length,
+            direct_recursion: cycle.direct_recursion,
+            starting_node_id,
+        });
+    }
+    Ok(RecursionCheckOutput {
+        max_cycle_length,
+        cycles: rendered,
+    })
+}
+
+pub fn run_channel_capacity_audit(
+    directory: &Path,
+    options: ChannelCapacityAuditOptions,
+) -> Result<Vec<ChannelCapacityFinding>> {
+    let canonical = canonicalize_directory(directory)?;
+    let snap = open_directory_snapshot(&canonical)?;
+    let crate_id_filter = resolve_crate_filter(&snap, options.crate_name.as_deref())?;
+    let loaded = loader::load(&canonical)?;
+    let findings = channel_audit::channel_capacity_audit(
+        &loaded,
+        &snap,
+        channel_audit::ChannelAuditOpts {
+            crate_id_filter,
+            skip_test_fns: options.skip_test_fns,
+        },
+    )?;
+    Ok(findings
+        .into_iter()
+        .map(|finding| ChannelCapacityFinding {
+            crate_name: finding.crate_name,
+            kind: finding.kind,
+            bounded: finding.bounded,
+            capacity: finding.capacity,
+            file: finding.file,
+            span: finding.span,
+            enclosing_function: finding.enclosing_function.map(|id| id.to_hex()),
+            enclosing_function_name: finding.enclosing_function_name,
+        })
+        .collect())
+}
+
+pub fn run_fn_body_audit(
+    directory: &Path,
+    options: FnBodyAuditOptions,
+) -> Result<FnBodyAuditOutput> {
+    let patterns = fn_body_audit::parse_pattern_filter(options.patterns.as_deref())
+        .map_err(anyhow::Error::msg)?;
+    let mut patterns_used: Vec<String> = patterns.iter().map(|pattern| pattern.to_string()).collect();
+    patterns_used.sort();
+
+    let canonical = canonicalize_directory(directory)?;
+    let snap = open_directory_snapshot(&canonical)?;
+    let crate_id_filter = resolve_crate_filter(&snap, options.crate_name.as_deref())?;
+    let loaded = loader::load(&canonical)?;
+    let findings = fn_body_audit::fn_body_audit(
+        &loaded,
+        &snap,
+        fn_body_audit::FnBodyAuditOpts {
+            crate_id_filter,
+            patterns,
+            skip_test_fns: options.skip_test_fns,
+        },
+    )?;
+    Ok(FnBodyAuditOutput {
+        patterns_used,
+        findings: findings
+            .into_iter()
+            .map(|finding| FnBodyAuditFinding {
+                target: finding.target.map(|id| id.to_hex()),
+                qualified_name: finding.qualified_name,
+                pattern: finding.pattern,
+                file: finding.file,
+                span: finding.span,
+                context: finding.context,
+            })
+            .collect(),
+    })
+}
+
+fn canonicalize_directory(directory: &Path) -> Result<std::path::PathBuf> {
+    directory
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", directory.display()))
+}
+
+fn open_directory_snapshot(directory: &Path) -> Result<OpenedSnapshot> {
+    let paths = GraphPaths::for_workspace(directory);
+    super::super::snapshot::open_current(&paths, GraphEnvOptions::default())?
+        .with_context(|| format!("no snapshot at {}", directory.display()))
+}
+
+fn resolve_crate_filter(snap: &OpenedSnapshot, crate_name: Option<&str>) -> Result<Option<NodeId>> {
+    let Some(qn) = crate_name else {
+        return Ok(None);
+    };
+    let (id, node) = snap
+        .lookup_by_qualified_name(qn)?
+        .with_context(|| format!("no node found for qualified name `{qn}`"))?;
+    let crate_id = match node.kind {
+        NodeKind::Crate => id,
+        NodeKind::Module => node
+            .crate_id
+            .or(node.parent_id)
+            .with_context(|| format!("`{qn}` resolves to a Module with no crate_id"))?,
+        other => {
+            bail!("`{qn}` is a {other:?}, expected a Crate or its root Module");
+        }
+    };
+    Ok(Some(crate_id))
+}
 
 /// Pattern classification table for `mut_static_audit`.
 ///
