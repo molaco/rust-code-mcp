@@ -628,6 +628,9 @@
 - Step 3 graph-owned enrichment facade: completed after pre-step summary at
   working-copy commit `7f998139160dc1b189254ff967624d9de7fc7784`, change
   `nxmnrtrpuvqmnowsxqzywykvwqvuzyno`.
+- Step 4 DTO shape-stability check: completed after pre-step summary at
+  working-copy commit `a1fefcb699275b61cf7645b3b00e205b112da2c9`, change
+  `pzwkkmyoltqmtxossowuttulpnpzqqzs`.
 
 ### MCP Evidence
 
@@ -662,6 +665,20 @@
 - `response::resolve_chunk_to_item` also translates graph internals but has no
   production caller, so it is not the first facade target.
 
+### DTO Shape Check
+
+- Graph-owned `EnrichedBinding` preserves the existing JSON fields:
+  `visible_name`, `namespace`, `kind`, `visibility`, `from_module`, `target`,
+  and `target_kind`.
+- Graph-owned `EnrichedUsage` preserves `file`, `start`, `end`, `category`,
+  `consumer_module`, and `consumer_function`.
+- Graph-owned `EnrichedDeadPub` preserves `qualified_name`, `item_kind`,
+  `declared_visibility`, `file`, and `span`.
+- Graph-owned `EnrichedCrateDeadPub` preserves the `crate` rename for `krate`
+  and the nested `findings` array.
+- Label fields are `String` in graph-owned DTOs instead of `&'static str` in
+  the previous server-local DTOs; serialized MCP JSON remains the same.
+
 ### Files Changed
 
 - `.plans/boundries-plan.md`
@@ -677,15 +694,16 @@
 - Step 2 was evidence/docs-only; no build command required.
 - Step 3 graph-only check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
+- Step 4 was source/serde-shape verification only; no build command required.
 
 ### Commits
 
 - Step 1 documentation: `ecd3f445` (`docs: record phase 5 step 1`).
 - Step 2 documentation: `5c12e38e`
   (`docs: record phase 5 response boundary evidence`).
-- Step 3 implementation: pending.
+- Step 3 implementation: `558106bc` (`refactor: add graph enrichment facade`).
+- Step 4 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Confirm server-visible DTO shapes stay stable, then migrate server call sites
-  to the graph-owned enrichment facade.
+- Migrate server call sites to the graph-owned enrichment facade.

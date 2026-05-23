@@ -888,6 +888,15 @@ For every phase, record:
   `EnrichedDeadPub`, and `EnrichedCrateDeadPub` DTOs. Verification:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`
   passed with existing warnings.
+- Step 4 keep server DTO shapes stable: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `a1fefcb699275b61cf7645b3b00e205b112da2c9` on change
+  `pzwkkmyoltqmtxossowuttulpnpzqqzs`, with no description set. Compared the
+  graph-owned enrichment DTOs against the existing server response DTOs: JSON
+  field names, `skip_serializing_if = "Option::is_none"`, and the
+  `EnrichedCrateDeadPub` `crate` rename are preserved. Label fields moved from
+  `&'static str` to `String`, which keeps serialized output unchanged. No
+  output-shape change is planned for Phase 5.
 
 ## Phase 0: Baseline And Safety Checks
 
