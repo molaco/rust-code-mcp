@@ -32,6 +32,91 @@ implementation-module exposure where it is safe.
 nix develop ../nix-devshells#cuda-code --command {command}
 ```
 
+## Cross-Validated Decisions
+
+These decisions were validated against the current hypergraph, targeted MCP
+queries, and source reads before this plan was updated.
+
+### Compatibility Policy
+
+Use a compatibility-first migration.
+
+1. Add narrow facades.
+2. Migrate production server callers.
+3. Keep old public exports while tests, benches, debug tools, and integration
+   callers are still using them.
+4. Tighten visibility only after MCP evidence shows production callers have
+   moved and remaining callers are intentionally supported.
+
+This is especially important for `rmc_graph::graph`,
+`rmc_indexing::indexing`, and `IncrementalIndexer`, which have non-server
+test/bench/tool consumers.
+
+### Crate Layering
+
+Keep the existing crate direction. The current forbidden-dependency rule check
+has no violations, so this plan is about narrowing API boundaries rather than
+fixing dependency cycles.
+
+```text
+rmc_server   -> rmc_graph, rmc_indexing, rmc_engine, rmc_config
+rmc_graph    -> rmc_engine
+rmc_indexing -> rmc_engine, rmc_config
+rmc_engine   -> no rmc_* dependencies
+```
+
+### Indexing Decisions
+
+- Add a small indexing-owned search facade so server query/codemap code no
+  longer constructs `TantivyAdapter` directly.
+- Keep `TantivyAdapter` public for compatibility during the migration.
+- Do not make `IncrementalIndexer` private in the near term. It is currently
+  used by server production code plus tests, benches, and standalone tools.
+- Add a wrapper/service API for server sync/index flows so server stops owning
+  incremental indexing construction details.
+- After server migration, review implementation modules such as `identity`,
+  `merkle`, `retry`, `consistency`, `indexer_core`, and `tantivy_adapter` for
+  visibility tightening.
+
+### Project Path And Identity Decisions
+
+- Move indexing identity/path policy toward `rmc_indexing`.
+- Keep server responsible for MCP-facing path orchestration and data-root
+  discovery.
+- Keep `rmc_server::mcp::project_paths::ProjectPaths` as a compatibility
+  wrapper during migration.
+- Consolidate duplicate `data_dir` and embedding-backend resolver helpers.
+
+### Graph Decisions
+
+- Keep `rmc_graph::graph` as a compatibility facade while adding narrower
+  graph-owned APIs.
+- Graph facades should return graph-owned DTOs/query results, not MCP
+  `CallToolResult` or server-specific response types.
+- Move graph audit loading/dispatch behind graph-owned audit entry points.
+- Move graph semantic similarity mechanics behind a graph-owned similarity
+  operation; server should not coordinate `ensure_embeddings_for` and `cosine`.
+- Move graph storage cleanup behind a graph-owned cleanup/path API; server
+  should not own `GraphPaths` layout policy.
+
+### Server Decisions
+
+- Keep `SearchToolRouter` / `SearchTool` as the primary public server facade.
+- Keep router methods thin.
+- Treat `rmc_server::semantic` privacy as a later low-risk cleanup. Its
+  meaningful exports are already `pub(crate)`, but graph tests and symbol-level
+  expectations mention the qualified path, so do not make it an early change.
+- Remove `tools::project_paths` only after the remaining compatibility import
+  is migrated to the canonical path.
+
+### Engine Decisions
+
+- Keep `EmbeddingProfile` in `rmc_engine` for now and document it as a
+  deliberate engine-owned embedding config model.
+- Treat `EmbeddingBackend` as a formal cross-crate boundary type.
+- Tighten `search`, `vector_store`, and parser helper module visibility only
+  after consumers are migrated to facade reexports.
+
 ## Execution Ledger
 
 Create or update this file while executing the plan:
@@ -151,6 +236,9 @@ jj commit -m "docs: document crate boundary guardrails"
 Remove the need for server query/codemap code to open `TantivyAdapter`
 directly.
 
+Decision: add an indexing-owned search facade and keep `TantivyAdapter` public
+for compatibility during the migration.
+
 ### Boundary Problem
 
 `rmc_server::tools::endpoints::query` and
@@ -197,8 +285,13 @@ jj commit -m "refactor: add indexing search facade"
 
 ### Goal
 
-Clarify whether `IncrementalIndexer` is a supported public API or an internal
-implementation detail.
+Add a server-facing indexing service API while keeping `IncrementalIndexer`
+public for compatibility.
+
+Decision: do not make `IncrementalIndexer` private in the near term. It is used
+by server production code, tests, benches, and standalone tools. The cleanup is
+to stop server from constructing it directly, not to remove it as a public
+symbol immediately.
 
 ### Boundary Problem
 
@@ -217,16 +310,12 @@ functions_with_filter(directory, krate="rmc_indexing", has_param_type="Increment
 ### Steps
 
 1. Run `jj show --summary`.
-2. Decide by local code shape:
-   - If `IncrementalIndexer` is a real public service, document it as official
-     public API.
-   - If it is mostly construction plumbing, add a smaller indexing-owned
-     service function for server sync/index flows.
-3. Prefer an indexing facade that accepts directory/backend/options and owns
+2. Add a smaller indexing-owned service function for server sync/index flows.
+3. Prefer a facade that accepts directory/backend/options and owns
    Merkle/change detection internally.
 4. Migrate server index endpoint to the facade.
 5. Migrate `SyncManager` to the facade.
-6. Keep compatibility exports until all callers are migrated.
+6. Keep `IncrementalIndexer` and its current reexport for compatibility.
 7. Verify direct production server imports of `incremental` are gone or
    intentionally documented.
 8. Run focused checks through the nix dev shell.
@@ -239,7 +328,8 @@ jj commit -m "refactor: clarify incremental indexing boundary"
 ### Success Criteria
 
 - Server does not need to know incremental indexing construction details.
-- The official status of `IncrementalIndexer` is explicit.
+- `IncrementalIndexer` remains public compatibility API while server uses a
+  narrower indexing-owned service API.
 - Indexing still owns Merkle/incremental state.
 
 ## Phase 4: Project Path And Identity Boundary
@@ -274,8 +364,9 @@ get_imports(directory, module="rmc_indexing::indexing::identity", summary=false,
    - indexing identity
    - snapshot path derivation
    - vector collection naming
-3. Move indexing-owned identity/path helpers down into `rmc_indexing`, or add a
-   small shared support API if indexing is not the right owner.
+3. Move indexing-owned identity/path helpers down into `rmc_indexing`.
+   Escalate to a small shared support API only if implementation evidence shows
+   indexing is not the right owner.
 4. Keep `rmc_server::mcp::project_paths::ProjectPaths` as a compatibility
    wrapper initially.
 5. Consolidate duplicate `data_dir` helpers.
@@ -302,6 +393,10 @@ jj commit -m "refactor: centralize project indexing identity"
 
 Give server graph tools a narrower API so response code does not depend on raw
 graph model/storage/snapshot internals.
+
+Decision: graph should expose graph-owned DTOs/query results, not MCP
+`CallToolResult` or server-specific response types. Server remains responsible
+for wrapping graph DTOs into MCP responses.
 
 ### Boundary Problem
 
@@ -351,6 +446,9 @@ jj commit -m "refactor: add graph server query facade"
 
 Move graph audit orchestration behind graph-owned functions.
 
+Decision: graph owns audit loading, snapshot access, audit dispatch, and graph
+DTO construction. Server only parses MCP parameters and wraps the result.
+
 ### Boundary Problem
 
 Server audit tools call `loader::load` and individual graph audit modules
@@ -396,6 +494,10 @@ jj commit -m "refactor: add graph audit facade"
 Hide graph semantic-overlap implementation helpers behind a graph-level
 similarity API.
 
+Decision: graph owns embedding-cache and cosine mechanics. Server asks graph
+for similarity results rather than coordinating `ensure_embeddings_for` and
+`cosine` directly.
+
 ### Boundary Problem
 
 Server similarity code coordinates helpers such as embedding cache maintenance
@@ -437,6 +539,10 @@ jj commit -m "refactor: add graph similarity facade"
 ### Goal
 
 Stop server cache endpoints from depending on graph storage layout.
+
+Decision: graph owns graph storage layout and cache/snapshot cleanup. Server
+should not construct or interpret `GraphPaths` except through compatibility
+paths during migration.
 
 ### Boundary Problem
 
@@ -496,9 +602,10 @@ get_declared_reexports(directory, module="rmc_server", summary=false, limit=500)
 2. Keep `tools::router` thin. Do not move business logic into router methods.
 3. Remove server-side helper duplication left after phases 2-8.
 4. Keep `tools::params` as an internal `pub(crate)` parameter facade.
-5. Make `semantic` private if no external consumer needs the public module.
-6. Keep `tools::project_paths` only as compatibility reexport if needed; remove
-   it if all callers use the canonical path.
+5. Treat `semantic` privacy as a late cleanup. Before changing it, verify graph
+   tests and symbol-level expectations that mention `rmc_server::semantic`.
+6. Migrate the remaining `tools::project_paths` compatibility import to the
+   canonical path, then remove the compatibility reexport if no callers remain.
 7. Verify server public exports still include the intended facade:
    - `SearchToolRouter`
    - `SearchTool`
@@ -517,6 +624,8 @@ jj commit -m "refactor: tighten server internal boundaries"
 - Router remains thin.
 - Server public surface is intentional.
 - Server helper duplication is reduced.
+- `semantic` remains public unless all source/test expectations are migrated.
+- `tools::project_paths` is removed only after compatibility callers move.
 - No lower crate depends on server.
 
 ## Phase 10: `rmc-engine` Public Surface Tightening
@@ -556,10 +665,12 @@ get_exports(directory, module="rmc_engine::embeddings", consumer="rmc_server", s
 3. If production consumers can use facade reexports, migrate those imports.
 4. Only after consumers are migrated, consider making implementation modules
    private or `pub(crate)`.
-5. Do not change embedding profile/backend semantics in this phase.
-6. Document `EmbeddingBackend` as a formal cross-crate boundary type.
-7. Run focused checks through the nix dev shell.
-8. Update the ledger and commit:
+5. Do not move `EmbeddingProfile`; leave it in engine and document it as a
+   deliberate engine-owned embedding config model.
+6. Do not change embedding backend semantics in this phase.
+7. Document `EmbeddingBackend` as a formal cross-crate boundary type.
+8. Run focused checks through the nix dev shell.
+9. Update the ledger and commit:
 
 ```text
 jj commit -m "refactor: tighten engine public modules"
@@ -610,11 +721,15 @@ who_imports(directory, item="rmc_indexing::indexing::indexer_core", limit=300)
    - `UnifiedIndexer`
    - `IndexStats`
    - `IndexFileResult`
-   - documented incremental facade, if retained
+   - `IncrementalIndexer` compatibility reexport
+   - server-facing incremental service facade added in Phase 3
 5. Review `metadata_cache`, `metrics`, `monitoring`, and `security` for
    intentional public API status.
-6. Run focused checks through the nix dev shell.
-7. Update the ledger and commit:
+6. Do not make `IncrementalIndexer` private in this phase unless a separate
+   evidence pass proves tests, benches, standalone tools, and server callers
+   have all moved to replacement APIs.
+7. Run focused checks through the nix dev shell.
+8. Update the ledger and commit:
 
 ```text
 jj commit -m "refactor: tighten indexing public modules"
@@ -624,6 +739,8 @@ jj commit -m "refactor: tighten indexing public modules"
 
 - Public indexing API is facade-oriented.
 - Implementation modules are not public only because server used to reach them.
+- `IncrementalIndexer` remains compatible unless deliberately retired in a
+  later plan.
 
 ## Phase 12: `rmc-graph` Visibility Tightening
 
@@ -661,8 +778,10 @@ who_imports(directory, item="rmc_graph::graph::usages", limit=300)
    shows external production callers no longer depend on them.
 5. Keep debug binaries/examples/tests working either through dev-only paths or
    the new facades.
-6. Run focused checks through the nix dev shell.
-7. Update the ledger and commit:
+6. Keep compatibility reexports where tests, debug binaries, standalone tools,
+   or documented external workflows still rely on them.
+7. Run focused checks through the nix dev shell.
+8. Update the ledger and commit:
 
 ```text
 jj commit -m "refactor: tighten graph public modules"
@@ -673,6 +792,7 @@ jj commit -m "refactor: tighten graph public modules"
 - `rmc_graph::graph` no longer exposes avoidable implementation modules to
   production consumers.
 - Server uses graph-owned facades.
+- Remaining broad graph exports are explicitly compatibility exports.
 - Graph still has no dependency on server or indexing.
 
 ## Phase 13: Final Architecture Verification
