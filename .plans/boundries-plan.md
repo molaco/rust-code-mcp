@@ -897,6 +897,18 @@ For every phase, record:
   `EnrichedCrateDeadPub` `crate` rename are preserved. Label fields moved from
   `&'static str` to `String`, which keeps serialized output unchanged. No
   output-shape change is planned for Phase 5.
+- Step 5 migrate server graph call sites incrementally: completed for the
+  repeated enrichment path. Pre-step `jj show --summary` reported working-copy
+  commit `4921f7af669a97f6121d01dc59f2f65c3a5e5657` on change
+  `mpturlnmpmxxypolrmpqkmuvyoorttso`, with no description set. Updated
+  `graph::core` to call `snap.enrich_bindings(...)` and
+  `snap.enrich_usages(...)`, and updated `graph::surface` to call
+  `snap.enrich_dead_pub(...)` and `snap.enrich_crate_dead_pub(...)`.
+  Removed the server-local `enrich_bindings`, `enrich_usages`,
+  `enrich_dead_pub`, `enrich_crate_dead_pub`, and now-unused
+  `response::visibility_label` helpers. Verification:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`
+  passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 

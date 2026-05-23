@@ -631,6 +631,10 @@
 - Step 4 DTO shape-stability check: completed after pre-step summary at
   working-copy commit `a1fefcb699275b61cf7645b3b00e205b112da2c9`, change
   `pzwkkmyoltqmtxossowuttulpnpzqqzs`.
+- Step 5 server call-site migration: completed for the repeated enrichment
+  path after pre-step summary at working-copy commit
+  `4921f7af669a97f6121d01dc59f2f65c3a5e5657`, change
+  `mpturlnmpmxxypolrmpqkmuvyoorttso`.
 
 ### MCP Evidence
 
@@ -687,6 +691,9 @@
 - `crates/rmc-graph/src/graph/query/model.rs`
 - `crates/rmc-graph/src/graph/query/mod.rs`
 - `crates/rmc-graph/src/graph/mod.rs`
+- `crates/rmc-server/src/tools/graph/core.rs`
+- `crates/rmc-server/src/tools/graph/surface.rs`
+- `crates/rmc-server/src/tools/graph/response.rs`
 
 ### Verification
 
@@ -695,6 +702,8 @@
 - Step 3 graph-only check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
 - Step 4 was source/serde-shape verification only; no build command required.
+- Step 5 server check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 
 ### Commits
 
@@ -702,8 +711,11 @@
 - Step 2 documentation: `5c12e38e`
   (`docs: record phase 5 response boundary evidence`).
 - Step 3 implementation: `558106bc` (`refactor: add graph enrichment facade`).
-- Step 4 documentation: pending.
+- Step 4 documentation: `03e73ec4` (`docs: record phase 5 dto shape check`).
+- Step 5 implementation: pending.
 
 ### Remaining Follow-Up
 
-- Migrate server call sites to the graph-owned enrichment facade.
+- Verify with MCP that fewer server functions accept `OpenedSnapshot` directly
+  and that server graph dependencies on graph internals are reduced where
+  practical.

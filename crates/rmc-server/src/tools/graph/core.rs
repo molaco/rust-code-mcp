@@ -10,15 +10,11 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use rmc_graph::graph::labels::{
-    binding_kind_label, item_kind_short_label as short_item_kind_label, node_kind_label,
-    usage_category_label,
-};
 use rmc_graph::graph::snapshot::BuildOptions;
 use rmc_graph::graph::{
-    Binding, CallGraphNode, EnrichedCallSite, ModuleDependency, ModuleDependencySymbol,
-    ModuleTreeNode, Namespace, NodeKind, OpenedSnapshot, RecursiveCallersCount, Usage,
-    UsageSummaryRow, WorkspaceStats, build_and_persist,
+    CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage, ModuleDependency,
+    ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount, UsageSummaryRow,
+    WorkspaceStats, build_and_persist,
 };
 use crate::tools::graph::response::*;
 use crate::tools::params::{
@@ -89,7 +85,7 @@ pub(crate) async fn get_imports(params: GraphImportsParams) -> Result<CallToolRe
         .map(|(_, n)| n.qualified_name)
         .unwrap_or(params.module.clone());
 
-    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
+    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(module_name),
@@ -135,7 +131,7 @@ pub(crate) async fn get_exports(params: GraphExportsParams) -> Result<CallToolRe
         .exports_of(module_id, consumer_id)
         .map_err(internal_error("exports_of"))?;
 
-    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
+    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(params.module),
@@ -153,7 +149,7 @@ pub(crate) async fn get_reexports(params: GraphReexportsParams) -> Result<CallTo
         .reexports_of(module_id, consumer_id)
         .map_err(internal_error("reexports_of"))?;
 
-    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
+    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(params.module),
@@ -172,7 +168,7 @@ pub(crate) async fn get_declared_reexports(
         .declared_reexports_of(module_id)
         .map_err(internal_error("declared_reexports_of"))?;
 
-    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
+    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(params.module),
@@ -198,7 +194,7 @@ pub(crate) async fn who_imports(params: WhoImportsParams) -> Result<CallToolResu
         .who_imports(target_id)
         .map_err(internal_error("who_imports"))?;
 
-    let (page, bindings) = page_list(enrich_bindings(&snap, bindings), list_page(&params.pagination));
+    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: None,
@@ -224,7 +220,7 @@ pub(crate) async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, Mc
         .map_err(internal_error("usages_of"))?;
 
     let page_req = list_page(&params.pagination);
-    let (page, usages) = page_list(enrich_usages(&snap, usages, page_req.summary), page_req);
+    let (page, usages) = page_list(snap.enrich_usages(usages, page_req.summary), page_req);
     json_result(&UsagesListResponse {
         target: target_node.qualified_name,
         page,
@@ -399,69 +395,6 @@ pub(crate) async fn workspace_stats(params: WorkspaceStatsParams) -> Result<Call
     json_result(&stats)
 }
 
-// ----- core-family enrichment helpers -----
-
-pub(crate) fn enrich_bindings(
-    snap: &OpenedSnapshot,
-    bindings: Vec<Binding>,
-) -> Vec<EnrichedBinding> {
-    let rtxn = match snap.read_txn() {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
-    };
-    bindings
-        .into_iter()
-        .map(|b| {
-            let target_node = snap.node_by_id(&rtxn, b.target).ok().flatten();
-            let from_module_node = snap.node_by_id(&rtxn, b.from_module).ok().flatten();
-            EnrichedBinding {
-                visible_name: b.visible_name,
-                namespace: namespace_label(b.namespace),
-                kind: binding_kind_label(b.kind),
-                visibility: visibility_label(snap, &rtxn, &b.visibility),
-                from_module: from_module_node
-                    .as_ref()
-                    .map(|n| n.qualified_name.clone()),
-                target: target_node.as_ref().map(|n| n.qualified_name.clone()),
-                target_kind: target_node
-                    .as_ref()
-                    .map(|n| node_kind_label(n, short_item_kind_label)),
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn enrich_usages(
-    snap: &OpenedSnapshot,
-    usages: Vec<Usage>,
-    summary: bool,
-) -> Vec<EnrichedUsage> {
-    let rtxn = match snap.read_txn() {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
-    };
-    usages
-        .into_iter()
-        .map(|u| {
-            let consumer_node = snap.node_by_id(&rtxn, u.consumer_module).ok().flatten();
-            let consumer_function_name = u.consumer_function.and_then(|fn_id| {
-                snap.node_by_id(&rtxn, fn_id)
-                    .ok()
-                    .flatten()
-                    .map(|n| n.qualified_name)
-            });
-            EnrichedUsage {
-                file: if summary { None } else { Some(u.file) },
-                start: if summary { None } else { Some(u.start) },
-                end: if summary { None } else { Some(u.end) },
-                category: usage_category_label(u.category),
-                consumer_module: consumer_node.as_ref().map(|n| n.qualified_name.clone()),
-                consumer_function: consumer_function_name,
-            }
-        })
-        .collect()
-}
-
 pub(crate) fn call_site_views(
     sites: Vec<EnrichedCallSite>,
     summary: bool,
@@ -477,13 +410,6 @@ pub(crate) fn call_site_views(
             category: site.category,
         })
         .collect()
-}
-
-fn namespace_label(ns: Namespace) -> &'static str {
-    match ns {
-        Namespace::Type => "Type",
-        Namespace::Value => "Value",
-    }
 }
 
 fn module_dependency_view(
@@ -536,40 +462,11 @@ pub(crate) struct ModuleDependencyView {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct EnrichedBinding {
-    pub(crate) visible_name: String,
-    pub(crate) namespace: &'static str,
-    pub(crate) kind: &'static str,
-    pub(crate) visibility: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) from_module: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) target_kind: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
 pub(crate) struct UsagesListResponse {
     pub(crate) target: String,
     #[serde(flatten)]
     pub(crate) page: ListMeta,
     pub(crate) usages: Vec<EnrichedUsage>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct EnrichedUsage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) start: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) end: Option<u32>,
-    pub(crate) category: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) consumer_module: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) consumer_function: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -623,4 +520,3 @@ pub(crate) struct CallGraphResponse {
 pub(crate) struct ModuleTreeResponse {
     pub(crate) tree: ModuleTreeNode,
 }
-

@@ -12,8 +12,8 @@ use serde::Serialize;
 use rmc_graph::graph::labels::item_kind_display_label as item_kind_label;
 use rmc_graph::graph::ItemWithAttribute;
 use rmc_graph::graph::{
-    CrateDeadPub, DeadPubFinding, FunctionFilter, FunctionSignature, FunctionWithSignature,
-    ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapsReport,
+    EnrichedCrateDeadPub, EnrichedDeadPub, FunctionFilter, FunctionSignature,
+    FunctionWithSignature, ItemKind, Node, NodeId, NodeKind, OverlapsReport,
     PubTypeAliasMasqueradingAsReexport, ReExportChain, SelfKindFilter,
 };
 use crate::tools::graph::response::*;
@@ -69,7 +69,7 @@ pub(crate) async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolR
     let page_req = list_page(&params.pagination);
     let mut enriched: Vec<EnrichedDeadPub> = findings
         .into_iter()
-        .map(|f| enrich_dead_pub(&snap, f))
+        .map(|finding| snap.enrich_dead_pub(finding))
         .collect();
     clear_locations_for_summary(&mut enriched, page_req.summary, |finding| {
         finding.file = None;
@@ -91,7 +91,7 @@ pub(crate) async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallT
 
     let crates: Vec<EnrichedCrateDeadPub> = report
         .into_iter()
-        .map(|c| enrich_crate_dead_pub(&snap, c))
+        .map(|crate_report| snap.enrich_crate_dead_pub(crate_report))
         .collect();
     let total: usize = crates.iter().map(|c| c.findings.len()).sum();
     let page_req = list_page(&params.pagination);
@@ -757,42 +757,6 @@ pub(crate) async fn derive_audit(
     })
 }
 
-// ----- helpers -----
-
-fn enrich_dead_pub(snap: &OpenedSnapshot, f: DeadPubFinding) -> EnrichedDeadPub {
-    let rtxn = snap.read_txn().ok();
-    let visibility = match &rtxn {
-        Some(t) => visibility_label(snap, t, &f.declared_visibility),
-        None => "?".to_string(),
-    };
-    // Look up file/span for navigability — these live on the Item Node.
-    let (file, span) = match &rtxn {
-        Some(t) => match snap.node_by_id(t, f.target).ok().flatten() {
-            Some(node) => (node.file, node.span),
-            None => (None, None),
-        },
-        None => (None, None),
-    };
-    EnrichedDeadPub {
-        qualified_name: f.qualified_name,
-        item_kind: item_kind_label(f.item_kind),
-        declared_visibility: visibility,
-        file,
-        span,
-    }
-}
-
-fn enrich_crate_dead_pub(snap: &OpenedSnapshot, c: CrateDeadPub) -> EnrichedCrateDeadPub {
-    EnrichedCrateDeadPub {
-        krate: c.crate_qualified_name,
-        findings: c
-            .findings
-            .into_iter()
-            .map(|f| enrich_dead_pub(snap, f))
-            .collect(),
-    }
-}
-
 // ----- response shapes -----
 
 #[derive(Debug, Serialize)]
@@ -805,30 +769,12 @@ pub(crate) struct DeadPubResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct EnrichedDeadPub {
-    pub(crate) qualified_name: String,
-    pub(crate) item_kind: &'static str,
-    pub(crate) declared_visibility: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) span: Option<(u32, u32)>,
-}
-
-#[derive(Debug, Serialize)]
 pub(crate) struct DeadPubReportResponse {
     pub(crate) workspace: String,
     pub(crate) total_findings: usize,
     #[serde(flatten)]
     pub(crate) page: ListMeta,
     pub(crate) crates: Vec<EnrichedCrateDeadPub>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct EnrichedCrateDeadPub {
-    #[serde(rename = "crate")]
-    pub(crate) krate: String,
-    pub(crate) findings: Vec<EnrichedDeadPub>,
 }
 
 #[derive(Debug, Serialize)]

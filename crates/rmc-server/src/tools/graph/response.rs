@@ -18,8 +18,8 @@ use serde::Serialize;
 
 use rmc_graph::graph::labels::item_kind_short_label as short_item_kind_label;
 use rmc_graph::graph::{
-    BindingVisibility, GraphEnvOptions, GraphPaths, ItemKind, Node, NodeId, NodeKind,
-    OpenedSnapshot, OverlapScope, open_current,
+    GraphEnvOptions, GraphPaths, ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapScope,
+    open_current,
 };
 use crate::tools::params::ListPaginationParams;
 
@@ -130,25 +130,6 @@ pub(crate) fn resolve_required_node(
         ),
         None,
     ))
-}
-
-pub(crate) fn visibility_label(
-    snap: &OpenedSnapshot,
-    rtxn: &heed::RoTxn<'_, heed::WithoutTls>,
-    vis: &BindingVisibility,
-) -> String {
-    match vis {
-        BindingVisibility::Public => "pub".to_string(),
-        BindingVisibility::Private => "private".to_string(),
-        BindingVisibility::Crate(id) => match snap.node_by_id(rtxn, *id).ok().flatten() {
-            Some(node) => format!("pub(crate={})", node.qualified_name),
-            None => "pub(crate)".to_string(),
-        },
-        BindingVisibility::RestrictedTo(id) => match snap.node_by_id(rtxn, *id).ok().flatten() {
-            Some(node) => format!("pub(in {})", node.qualified_name),
-            None => "pub(in ?)".to_string(),
-        },
-    }
 }
 
 pub(crate) fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
