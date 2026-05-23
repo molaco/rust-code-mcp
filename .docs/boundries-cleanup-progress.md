@@ -780,6 +780,9 @@
 - Step 3 server audit migration: completed after pre-step summary at
   working-copy commit `87635fe52b0bd23abe2fdfe0fca66bc73faf9888`, change
   `ulwzstolouqvzutxpyurqulxlrltxzxy`.
+- Step 4 server responsibility split: completed after pre-step summary at
+  working-copy commit `54f0a84a61c9f2c8ad24c9bfab56568a61b435c2`, change
+  `wzorvywrvosrvoptsrylxvtwylxtrutx`.
 
 ### MCP Evidence
 
@@ -820,6 +823,11 @@
   `FnBodyAuditOptions`, `UnsafeAuditFinding`, `MutStaticAuditFinding`,
   `RecursionCheckOutput`, `RecursionCycle`, `ChannelCapacityFinding`,
   `FnBodyAuditFinding`, and `FnBodyAuditOutput`.
+- After Step 3, source search in `rmc_server::tools::graph::audits` found no
+  remaining direct references to graph `loader`, individual audit modules,
+  `NodeId`, `NodeKind`, snapshot lookup, or `to_hex`. The server audit module
+  retains MCP response envelopes, pagination, summary location stripping,
+  parameter defaults, error mapping, and `spawn_blocking` orchestration.
 
 ### Files Changed
 
@@ -842,9 +850,11 @@
 
 - Step 1 documentation: `f6989e95` (`docs: start phase 6 audit facade`).
 - Step 2 implementation: `c045a04f` (`refactor: add graph audit facade`).
-- Step 3 implementation: pending.
+- Step 3 implementation: `dcc6665e`
+  (`refactor: use graph audit facade in server`).
+- Step 4 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Confirm server remains responsible only for MCP parameter parsing and result
-  wrapping.
+- Verify with MCP that production server dependencies on `loader::load` and
+  individual audit internals are reduced or removed.

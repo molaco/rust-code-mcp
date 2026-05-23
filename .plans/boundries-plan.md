@@ -984,6 +984,15 @@ For every phase, record:
   Verification:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`
   passed with existing warnings.
+- Step 4 keep server responsible only for MCP parameter parsing/result
+  wrapping: completed. Pre-step `jj show --summary` reported working-copy
+  commit `54f0a84a61c9f2c8ad24c9bfab56568a61b435c2` on change
+  `wzorvywrvosrvoptsrylxvtwylxtrutx`, with no description set. Source search
+  in `rmc_server::tools::graph::audits` found no remaining direct references
+  to graph `loader`, individual audit modules, `NodeId`, `NodeKind`, snapshot
+  lookup, or `to_hex`. The server audit module now keeps MCP response
+  envelopes, pagination, summary stripping, parameter defaults, error mapping,
+  and async blocking orchestration.
 
 ## Phase 0: Baseline And Safety Checks
 
