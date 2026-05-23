@@ -1018,6 +1018,11 @@ For every phase, record:
   `pqkwwxvqumuxlvovltqznxzlrmkpuomz`, with no description set. Phase 6
   implementation work is complete; the separate phase report remains to be
   written and committed.
+- Phase 6 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `3aee1e3216e40021532f9eda618c691f31879fa7` on change
+  `kkrkqztmlupqppvsuvunvrsmyyzokwkx`, with no description set. Wrote
+  `.docs/phase-6-boundrie-fix-report.md` and marked the Phase 6 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 
