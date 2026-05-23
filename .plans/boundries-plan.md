@@ -781,6 +781,17 @@ For every phase, record:
   `rmc_indexing::indexing::incremental`, or `sha2`. The regular focused test
   passed with two tests:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server project_paths`.
+- Step 4 keep `rmc_server::mcp::project_paths::ProjectPaths` as a
+  compatibility wrapper initially: completed. Pre-step `jj show --summary`
+  reported working-copy commit `05c745e3e40b51d4440229c2d32aadea4226d6c0`
+  on change `rwtpxuxtslyrnpsrqmxnpmvyvwyypoqq`. Source reads confirmed
+  `ProjectPaths` and `IndexedProfilePaths` still expose the server-facing
+  fields while converting from indexing-owned path DTOs, and
+  `rmc_server::tools::project_paths` remains a compatibility reexport of
+  `crate::mcp::project_paths::*`. MCP `who_imports(ProjectPaths)` still
+  returns eight bindings across production endpoints, tests, and the
+  compatibility module; `functions_with_filter(has_param_type="ProjectPaths")`
+  still returns the six query helper users. No code change was required.
 
 ## Phase 0: Baseline And Safety Checks
 

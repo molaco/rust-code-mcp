@@ -394,6 +394,9 @@
 - Step 3 documentation catch-up: completed after pre-step summary at commit
   `658a8667da56fcb73411eb895f0c0e8c33a8787c`, change
   `yvnultyorsvxxzzzzvmpxvomxnsytvxo`.
+- Step 4 compatibility wrapper evidence: completed after pre-step summary at
+  commit `05c745e3e40b51d4440229c2d32aadea4226d6c0`, change
+  `rwtpxuxtslyrnpsrqmxnpmvyvwyypoqq`.
 
 ### MCP Evidence
 
@@ -446,6 +449,17 @@
   remaining importers.
 - `who_imports(target="sha2::Sha256")` shows no server importers after the
   direct server `sha2` dependency was removed.
+- Step 4 `who_imports(target="rmc_server::mcp::project_paths::ProjectPaths")`
+  still returns eight bindings: production users in query, health, and index;
+  compatibility export in `rmc_server::tools::project_paths`; tests; and the
+  integration compatibility importer.
+- Step 4 `functions_with_filter(krate="rmc_server",
+  has_param_type="ProjectPaths")` still returns the six query helper users:
+  `clean_stale_index`, `create_hybrid_search`, `ensure_indexed`,
+  `resolve_query_backend`, `try_open_bm25`, and `vector_metadata_exists`.
+- Step 4 `module_dependencies(module="rmc_server::tools::project_paths")`
+  shows that the tools module only reexports
+  `rmc_server::mcp::project_paths` symbols.
 
 ### Responsibility Split
 
@@ -460,6 +474,13 @@
 - Compatibility path: keep `rmc_server::mcp::project_paths::ProjectPaths` as a
   wrapper during Phase 4 while moving the indexing-owned path/identity bundle
   into `rmc_indexing`.
+- Step 4 source reads confirmed the compatibility wrapper shape:
+  `ProjectPaths` and `IndexedProfilePaths` preserve the server-facing fields,
+  convert from indexing-owned DTOs with `From` impls, and delegate path
+  construction/discovery to `IndexingProjectPaths`.
+- Step 4 source reads confirmed
+  `crates/rmc-server/src/tools/project_paths.rs` remains a compatibility
+  reexport of `crate::mcp::project_paths::*`.
 
 ### Files Changed
 
@@ -475,6 +496,8 @@
 
 - Documentation-only responsibility split; no build command required for
   Step 2.
+- Step 4 compatibility-wrapper verification was MCP/source-read only; no build
+  command required because no code changed.
 - Step 3 focused check passed before commit with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
 - Step 3 regular focused test passed with existing warnings:
@@ -486,10 +509,9 @@
 - Step 1 documentation: `e14043cb` (`docs: record phase 4 step 1`).
 - Responsibility split docs: `838381d3` (`docs: record phase 4 responsibility split`).
 - Indexing project paths: `8755d084` (`refactor: move indexing project paths`).
+- Project path move docs: `7a54b668` (`docs: record phase 4 project path move`).
 
 ### Remaining Follow-Up
 
-- Keep `rmc_server::mcp::project_paths::ProjectPaths` as the compatibility
-  wrapper and record the evidence.
 - Consolidate duplicate `data_dir` helpers.
 - Consolidate backend-resolution variants.
