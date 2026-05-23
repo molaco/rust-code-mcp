@@ -507,7 +507,11 @@ For every phase, record:
   `tkswovouxtwnrkspxutmpumotmlkqmnz`. Created the progress ledger with the
   Phase 0 VCS, hypergraph, workspace stats, crate edge, dependency metric, and
   forbidden-dependency baseline.
-- Step 6 phase ledger commit: pending.
+- Step 6 phase ledger commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `a9651239cb0298e4001d4d04e97f3df30b2f2c1f`
+  on change `sxrtnnxswovmzktvvwoxzupyzlwuwuly`. The Phase 0 baseline ledger
+  commit is `e4aeefdeac6b3e4dce3041158fdc681d564dc1ce`
+  (`docs: record phase 0 baseline`).
 
 ## Phase 0: Baseline And Safety Checks
 

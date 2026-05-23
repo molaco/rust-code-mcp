@@ -23,6 +23,10 @@
 - Step 5 baseline ledger update: completed after pre-step summary at commit
   `2abedcedcc47cde3f99bf21a6febde4f88373b7b`, change
   `tkswovouxtwnrkspxutmpumotmlkqmnz`.
+- Step 6 phase ledger commit: completed after pre-step summary at commit
+  `a9651239cb0298e4001d4d04e97f3df30b2f2c1f`, change
+  `sxrtnnxswovmzktvvwoxzupyzlwuwuly`. The Phase 0 baseline ledger commit is
+  `e4aeefdeac6b3e4dce3041158fdc681d564dc1ce`.
 
 ### MCP Evidence
 
@@ -51,6 +55,14 @@
 - Verification command: MCP `forbidden_dependency_check` with the planned
   five-rule crate layering set.
 - Verification result: `violation_count=0`, `total_match_count=0`.
+
+### Commits
+
+- Step 1 documentation: `4b4a7775` (`docs: record phase 0 step 1`).
+- Step 2 documentation: `4cec359e` (`docs: record phase 0 step 2`).
+- Step 3 documentation: `46ed31f8` (`docs: record phase 0 step 3`).
+- Step 4 documentation: `34ca82b8` (`docs: record phase 0 step 4`).
+- Baseline ledger: `e4aeefde` (`docs: record phase 0 baseline`).
 
 ### Remaining Follow-Up
 
