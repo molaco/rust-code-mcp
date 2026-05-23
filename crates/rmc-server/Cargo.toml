@@ -30,9 +30,6 @@ anyhow = { workspace = true }
 # Cross-platform config/data directories
 directories = { workspace = true }
 
-# SHA-256 hashing
-sha2 = { workspace = true }
-
 # CPU count detection
 num_cpus = { workspace = true }
 

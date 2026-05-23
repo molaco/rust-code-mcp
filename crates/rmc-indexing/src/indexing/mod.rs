@@ -11,6 +11,7 @@ pub mod incremental;
 pub mod incremental_service;
 pub mod indexer_core;
 pub mod merkle;
+pub mod project_paths;
 pub mod retry;
 pub mod search;
 pub mod tantivy_adapter;
@@ -21,6 +22,10 @@ pub(crate) use error::IndexingError;
 pub use incremental::{get_snapshot_path, IncrementalIndexer};
 pub use incremental_service::{
     index_project_incrementally, IncrementalIndexOutcome, IncrementalIndexRequest,
+};
+pub use project_paths::{
+    collection_prefix, dir_hash, read_embedder_identity, IndexedProfilePaths,
+    IndexingProjectPaths,
 };
 pub use search::open_bm25_search;
 pub use tantivy_adapter::TantivyAdapter;
