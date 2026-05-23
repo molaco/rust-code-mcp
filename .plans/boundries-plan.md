@@ -650,6 +650,17 @@ For every phase, record:
   `zkkswxqloywvsptlrwzplxtkqxpvouxr`. Wrote
   `.docs/phase-2-boundrie-fix-report.md` and marked the Phase 2 progress
   ledger complete.
+- Post-review correction: completed. Pre-step `jj show --summary` reported
+  working-copy commit `b794b50a483091a2f1f0536196c4c04c0dabbad8` on change
+  `qzznxxrwznurrnsmxwkzuroxwzrznrpw`. Updated
+  `rmc_indexing::indexing::search::open_bm25_search` to open existing Tantivy
+  indexes read-only instead of constructing `TantivyAdapter`; migrated the
+  health probe to the same facade; added four focused facade tests. Verification
+  passed with
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`
+  and
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo test -p rmc-indexing open_bm25_search --jobs 1`.
+  Commit: `2ae2e365` (`fix: open bm25 search read-only`).
 
 ## Phase 0: Baseline And Safety Checks
 
@@ -800,8 +811,10 @@ jj commit -m "refactor: add indexing search facade"
 
 - Server no longer opens `TantivyAdapter` directly in production query/codemap
   paths.
-- Indexing owns concrete Tantivy adapter construction.
-- Existing behavior remains unchanged.
+- Indexing owns concrete Tantivy search opening.
+- Server behavior remains compatible, with the post-review correction that
+  search/health probes no longer create missing Tantivy indexes as a side
+  effect.
 
 ## Phase 3: `rmc-indexing` Incremental Indexing Facade
 

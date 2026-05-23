@@ -4,7 +4,9 @@
 
 Phase 2 added an indexing-owned BM25 search facade and migrated server
 query/codemap production paths away from direct `TantivyAdapter` construction.
-`TantivyAdapter` remains public as a compatibility export.
+`TantivyAdapter` remains public as a compatibility export. A post-review
+correction made the facade read-only so search and health probes no longer
+create missing Tantivy indexes as a side effect.
 
 ## Steps Completed
 
@@ -22,6 +24,10 @@ query/codemap production paths away from direct `TantivyAdapter` construction.
 9. Ran the focused nix check command and retry; both were blocked by an
    external CUDA/GCC compiler failure in `candle-kernels`.
 10. Recorded the Phase 2 ledger.
+11. Applied the post-review read-only BM25 opener correction.
+12. Migrated the health probe from `Bm25Search::new` to the indexing facade.
+13. Added four focused tests for missing paths, existing empty directories, and
+    valid Tantivy indexes.
 
 ## Evidence
 
@@ -38,12 +44,17 @@ query/codemap production paths away from direct `TantivyAdapter` construction.
   `codemap` showed both now depend on `rmc_indexing::indexing::search` for
   `open_bm25_search`, and neither reports
   `rmc_indexing::indexing::tantivy_adapter`.
+- Post-review source reads showed `TantivyAdapter::new` and
+  `Bm25Search::new` both open or create a missing Tantivy index. The facade now
+  checks for `meta.json`, opens with `tantivy::Index::open_in_dir`, and returns
+  an error without touching missing or partial index directories.
 
 ## Files Changed
 
 - `crates/rmc-indexing/src/indexing/search.rs`
 - `crates/rmc-indexing/src/indexing/mod.rs`
 - `crates/rmc-server/src/tools/endpoints/query.rs`
+- `crates/rmc-server/src/tools/endpoints/health.rs`
 - `crates/rmc-server/src/tools/graph/codemap.rs`
 - `.docs/boundries-cleanup-progress.md`
 - `.docs/phase-2-boundrie-fix-report.md`
@@ -63,6 +74,11 @@ query/codemap production paths away from direct `TantivyAdapter` construction.
 - Focused nix check retry attempted:
   `nix develop ../nix-devshells#cuda-code --command env CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
   Result: same `candle-kernels` CUDA/GCC internal compiler error.
+- Post-review focused nix check passed with CUDA thread caps:
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
+- Post-review focused tests passed with CUDA thread caps:
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo test -p rmc-indexing open_bm25_search --jobs 1`.
+  Result: `4 passed; 0 failed`.
 - No formatting command was run.
 
 ## Commits
@@ -76,12 +92,12 @@ query/codemap production paths away from direct `TantivyAdapter` construction.
 - `f30e7981`: `docs: verify phase 2 dependencies`
 - `c56b74ee`: `docs: record phase 2 check result`
 - `c2ae6cf0`: `docs: record phase 2 ledger`
+- `2ae2e365`: `fix: open bm25 search read-only`
 
 ## Outcome
 
 Phase 2 success criteria are met by MCP evidence: server production query and
 codemap paths no longer open `TantivyAdapter` directly, indexing owns concrete
-Tantivy adapter construction through `open_bm25_search`, and the compatibility
-export remains available. The focused build check remains unproven because the
-current CUDA toolchain fails in the external `candle-kernels` dependency before
-the touched crates are checked.
+Tantivy search opening through `open_bm25_search`, and the compatibility export
+remains available. The post-review capped nix check and the focused
+`open_bm25_search` tests passed.

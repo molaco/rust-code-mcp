@@ -184,6 +184,9 @@
 - Phase completion report: completed after pre-step summary at commit
   `85ef0c5adf1561983d1de656796d3e956adeb496`, change
   `zkkswxqloywvsptlrwzplxtkqxpvouxr`.
+- Post-review read-only BM25 correction: completed after pre-step summary at
+  commit `b794b50a483091a2f1f0536196c4c04c0dabbad8`, change
+  `qzznxxrwznurrnsmxwkzuroxwzrznrpw`.
 
 ### MCP Evidence
 
@@ -199,6 +202,11 @@
 - Refreshed `module_dependencies` for server `query` and `codemap` no longer
   listed `rmc_indexing::indexing::tantivy_adapter`; both now depend on
   `rmc_indexing::indexing::search`.
+- Post-review source evidence showed `TantivyAdapter::new` and
+  `Bm25Search::new` both open or create a missing Tantivy index. The search
+  facade now opens an existing Tantivy index directly with
+  `tantivy::Index::open_in_dir`, and the server health probe uses the same
+  facade.
 
 ### Files Changed
 
@@ -206,6 +214,7 @@
 - `crates/rmc-indexing/src/indexing/mod.rs`
 - `crates/rmc-server/src/tools/endpoints/query.rs`
 - `crates/rmc-server/src/tools/graph/codemap.rs`
+- `crates/rmc-server/src/tools/endpoints/health.rs`
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
 - `.docs/phase-2-boundrie-fix-report.md`
@@ -224,6 +233,11 @@
 - Focused nix check retry attempted:
   `nix develop ../nix-devshells#cuda-code --command env CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
   Result: same `candle-kernels` CUDA/GCC internal compiler error.
+- Post-review focused nix check passed with CUDA thread caps:
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
+- Post-review focused tests passed with CUDA thread caps:
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo test -p rmc-indexing open_bm25_search --jobs 1`.
+  Result: four `open_bm25_search` tests passed.
 
 ### Commits
 
@@ -236,6 +250,7 @@
 - Dependency verification docs: `f30e7981` (`docs: verify phase 2 dependencies`).
 - Check-result docs: `c56b74ee` (`docs: record phase 2 check result`).
 - Ledger docs: `c2ae6cf0` (`docs: record phase 2 ledger`).
+- Read-only BM25 correction: `2ae2e365` (`fix: open bm25 search read-only`).
 
 ### Remaining Follow-Up
 
