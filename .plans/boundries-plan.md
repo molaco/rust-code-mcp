@@ -820,6 +820,19 @@ For every phase, record:
   cluster reduced from four endpoint-specific helpers to those two functions.
   The focused resolver tests passed with three tests:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server resolve_backend`.
+- Step 7 verify with semantic overlap and import checks that duplicate helper
+  clusters shrink: completed. Pre-step `jj show --summary` reported
+  working-copy commit `3144906691a9fa8896a4f4af7d8bffe665ba5474` on change
+  `qzmtzqumnzsrlrkxnnyumrprqpvkxwyv`. Reused graph
+  `2c6dfe88c8bad3b7db1838a94b00287b`.
+  `module_dependencies` for `rmc_server::mcp::project_paths` shows indexing
+  path policy flows through `rmc_indexing::indexing::project_paths`, with
+  server still owning `ProjectDirs` and MCP error mapping.
+  `module_dependencies` for query and graph similarity both route profile
+  resolution through `rmc_server::mcp::project_paths`.
+  `semantic_overlaps` reports no `data_dir` cluster and only a two-function
+  backend resolver cluster: the shared MCP helper plus the index legacy-model
+  wrapper.
 
 ## Phase 0: Baseline And Safety Checks
 

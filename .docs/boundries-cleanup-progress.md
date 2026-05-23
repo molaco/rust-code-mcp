@@ -403,6 +403,9 @@
 - Step 6 backend resolver consolidation: completed after pre-step summary at
   commit `54bcf32df81709850cc9f7941a72ecb57bf1bb7c`, change
   `mvqwqpkyuoxumrkotrmvqurkxuuqpqps`.
+- Step 7 semantic/import verification: completed after pre-step summary at
+  commit `3144906691a9fa8896a4f4af7d8bffe665ba5474`, change
+  `qzmtzqumnzsrlrkxnnyumrprqpvkxwyv`.
 
 ### MCP Evidence
 
@@ -508,6 +511,21 @@
   shows the backend resolver cluster reduced to
   `resolve_embedding_backend_for_mcp` and the index endpoint's
   `resolve_backend`, which remains for the legacy `model` parameter.
+- Step 7 `build_hypergraph(directory, force_rebuild=false)` reused graph
+  `2c6dfe88c8bad3b7db1838a94b00287b` with fingerprint
+  `680958b42dd9eaa0c1d72a5958fc985c38673f053fd17072d09aeda0eaa58b6d`.
+- Step 7 `module_dependencies(module="rmc_server::mcp::project_paths")`
+  confirms server project paths now depend on
+  `rmc_indexing::indexing::project_paths` for indexing path policy, while
+  server-owned dependencies remain `ProjectDirs`, `EmbeddingBackend` /
+  profile registry, and MCP error mapping.
+- Step 7 `module_dependencies(module="rmc_server::tools::endpoints::query")`
+  and
+  `module_dependencies(module="rmc_server::tools::graph::similarity")` both
+  route profile resolution through `rmc_server::mcp::project_paths`.
+- Step 7 `semantic_overlaps(crate_name="rmc_server", item_kind="Function")`
+  reports no `data_dir` cluster and the backend resolver cluster remains
+  reduced to the shared MCP helper plus the index legacy-model wrapper.
 
 ### Responsibility Split
 
@@ -550,6 +568,8 @@
   Step 2.
 - Step 4 compatibility-wrapper verification was MCP/source-read only; no build
   command required because no code changed.
+- Step 7 verification was MCP/source-read only; no build command required
+  because no code changed.
 - Step 5 focused server check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 - Step 6 focused resolver tests passed with existing warnings:
@@ -569,7 +589,8 @@
 - Project path move docs: `7a54b668` (`docs: record phase 4 project path move`).
 - Compatibility wrapper docs: `31d872eb` (`docs: record phase 4 compatibility wrapper`).
 - Data dir helper consolidation: `9c666fdd` (`refactor: consolidate server data dir helper`).
+- Backend resolver consolidation: `bdc2d9f4` (`refactor: consolidate backend resolver helpers`).
 
 ### Remaining Follow-Up
 
-- Verify Phase 4 with semantic overlap and import checks.
+- Run focused Phase 4 checks through the nix dev shell.
