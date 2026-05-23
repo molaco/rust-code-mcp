@@ -765,7 +765,7 @@
 
 ## Phase 6: `rmc-graph` Audit Facade
 
-- Status: in progress.
+- Status: implementation complete; phase report pending.
 - Purpose: move graph audit orchestration behind graph-owned entry points so
   server audit tools only parse MCP params and wrap graph-owned results.
 
@@ -789,6 +789,9 @@
 - Step 6 focused checks: completed after pre-step summary at working-copy
   commit `d2632d8bb7318e88322e234a0d6dededcb8eae53`, change
   `qszylstrynwtssmtkvukptpnmttornwp`.
+- Step 7 ledger update: completed after pre-step summary at working-copy
+  commit `0285ccff1860dd0910983e9caa69aee9e75b8b58`, change
+  `pqkwwxvqumuxlvovltqznxzlrmkpuomz`.
 
 ### MCP Evidence
 
@@ -877,8 +880,9 @@
   (`docs: verify phase 6 server audit split`).
 - Step 5 documentation: `1c6d886b`
   (`docs: verify phase 6 audit dependencies`).
-- Step 6 documentation: pending.
+- Step 6 documentation: `550a943e` (`docs: record phase 6 check result`).
+- Step 7 ledger update: pending.
 
 ### Remaining Follow-Up
 
-- Update the ledger and write the Phase 6 report.
+- Write the Phase 6 report.
