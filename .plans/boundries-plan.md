@@ -714,6 +714,18 @@ For every phase, record:
   `rmc_indexing::indexing::incremental` remains `pub mod`,
   `IncrementalIndexer` remains a public struct, and
   `rmc_indexing::indexing` still reexports `IncrementalIndexer`.
+- Step 7 verify production server dependency on `incremental`: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `5d5ca5eb3e431d1b093b24d4b2c088ddc7dea252` on change
+  `uyvppnvykoqwuvquzxtmtpllusxxrtnt`. Rebuilt the hypergraph with
+  `force_rebuild=true`, producing graph `b2f982db0f3dcfb48cf162255b8d6696`.
+  `module_dependencies` for `rmc_server::tools::endpoints::index` and
+  `rmc_server::mcp::sync` now list
+  `rmc_indexing::indexing::incremental_service`, not
+  `rmc_indexing::indexing::incremental`. `who_imports` for
+  `IncrementalIndexer` dropped from 14 to 11 bindings; remaining direct
+  importers are compatibility consumers, tests, benches, tools, the public
+  reexport, and the indexing-owned service.
 
 ## Phase 0: Baseline And Safety Checks
 

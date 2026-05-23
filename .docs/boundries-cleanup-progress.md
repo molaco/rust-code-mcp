@@ -286,6 +286,9 @@
 - Step 6 compatibility export check: completed after pre-step summary at
   commit `ae3f14da1e4348b5fb46115b610861532c401ad3`, change
   `pqltzkurvwyynrwnpxnkmnlrlmlmxuqn`.
+- Step 7 production dependency verification: completed after pre-step summary
+  at commit `5d5ca5eb3e431d1b093b24d4b2c088ddc7dea252`, change
+  `uyvppnvykoqwuvquzxtmtpllusxxrtnt`.
 
 ### MCP Evidence
 
@@ -313,6 +316,17 @@
 - Compatibility source check confirmed `rmc_indexing::indexing::incremental`
   remains `pub mod`, `IncrementalIndexer` remains a public struct, and
   `rmc_indexing::indexing` still reexports `IncrementalIndexer`.
+- After migration, `build_hypergraph(directory, force_rebuild=true)` produced
+  graph `b2f982db0f3dcfb48cf162255b8d6696` with fingerprint
+  `052f58122ab03d6f58ef20e1a01491d24c9db336182d78ffb39be166f8dc8792`.
+- Refreshed `module_dependencies` for `rmc_server::tools::endpoints::index`
+  and `rmc_server::mcp::sync` no longer listed
+  `rmc_indexing::indexing::incremental`; both now depend on
+  `rmc_indexing::indexing::incremental_service`.
+- Refreshed `who_imports(target="rmc_indexing::indexing::incremental::IncrementalIndexer")`
+  returned 11 bindings, down from 14. Remaining direct importers are
+  compatibility consumers, tests, benches, tools, the public reexport, and
+  `rmc_indexing::indexing::incremental_service`.
 
 ### Files Changed
 
@@ -338,5 +352,4 @@
 
 ### Remaining Follow-Up
 
-- Verify with `module_dependencies` that direct production server dependency
-  on `rmc_indexing::indexing::incremental` is gone or intentionally documented.
+- Run the focused Phase 3 checks through the nix dev shell.
