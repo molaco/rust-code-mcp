@@ -148,7 +148,7 @@
 
 ## Phase 2: `rmc-indexing` Search Facade
 
-- Status: in progress.
+- Status: complete.
 - Purpose: stop server query/codemap production code from opening
   `TantivyAdapter` directly.
 
@@ -181,6 +181,9 @@
 - Step 9 ledger update: completed after pre-step summary at commit
   `d2f9b7f18ace12b089248775d918b27097b86ac1`, change
   `nrpymunwwkmwmkzsxourumvqlnzrmoup`.
+- Phase completion report: completed after pre-step summary at commit
+  `85ef0c5adf1561983d1de656796d3e956adeb496`, change
+  `zkkswxqloywvsptlrwzplxtkqxpvouxr`.
 
 ### MCP Evidence
 
@@ -205,6 +208,7 @@
 - `crates/rmc-server/src/tools/graph/codemap.rs`
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
+- `.docs/phase-2-boundrie-fix-report.md`
 
 ### Verification
 
@@ -231,7 +235,8 @@
 - Compatibility export docs: `1cb8e884` (`docs: record phase 2 compatibility export`).
 - Dependency verification docs: `f30e7981` (`docs: verify phase 2 dependencies`).
 - Check-result docs: `c56b74ee` (`docs: record phase 2 check result`).
+- Ledger docs: `c2ae6cf0` (`docs: record phase 2 ledger`).
 
 ### Remaining Follow-Up
 
-- Write and commit the Phase 2 implementation report.
+- Start Phase 3.
