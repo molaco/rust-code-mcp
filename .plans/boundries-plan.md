@@ -501,7 +501,12 @@ For every phase, record:
   `forbidden_dependency_check` ran the five planned rules with
   `summary=false` and `limit=300`; result was `violation_count=0` and
   `total_match_count=0`.
-- Step 5 record baseline in `.docs/boundries-cleanup-progress.md`: pending.
+- Step 5 record baseline in `.docs/boundries-cleanup-progress.md`: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `2abedcedcc47cde3f99bf21a6febde4f88373b7b` on change
+  `tkswovouxtwnrkspxutmpumotmlkqmnz`. Created the progress ledger with the
+  Phase 0 VCS, hypergraph, workspace stats, crate edge, dependency metric, and
+  forbidden-dependency baseline.
 - Step 6 phase ledger commit: pending.
 
 ## Phase 0: Baseline And Safety Checks
