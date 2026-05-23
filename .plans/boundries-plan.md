@@ -762,6 +762,25 @@ For every phase, record:
   indexing identity, chunking identity, snapshot derivation, artifact path
   bundles, vector collection naming, and indexed-profile discovery; engine
   keeps embedding profile/backend models.
+- Step 3 move indexing-owned identity/path helpers down into `rmc_indexing`:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `8d26a4cd8a5bb97bba499da09a2efae75a54c6fa` on change
+  `xluswuuvtvolvqxmwkwzlwquqpxlyuqs`. Added
+  `rmc_indexing::indexing::project_paths::{IndexingProjectPaths,
+  IndexedProfilePaths}` plus indexing-owned `dir_hash`, `collection_prefix`,
+  and vector metadata identity reads. Updated
+  `rmc_server::mcp::project_paths::ProjectPaths` to delegate path and
+  identity derivation to the indexing facade while preserving the server
+  compatibility type and server-owned `data_dir`. Removed the server crate's
+  direct `sha2` dependency. After the code commit, rebuilt the hypergraph with
+  `force_rebuild=true`, producing graph
+  `ce626950ad825420375344f20d145a95`. Refreshed
+  `module_dependencies` now shows `rmc_server::mcp::project_paths` depends on
+  `rmc_indexing::indexing::project_paths`, not
+  `rmc_indexing::indexing::identity`,
+  `rmc_indexing::indexing::incremental`, or `sha2`. The regular focused test
+  passed with two tests:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server project_paths`.
 
 ## Phase 0: Baseline And Safety Checks
 

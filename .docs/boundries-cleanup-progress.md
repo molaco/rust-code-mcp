@@ -388,6 +388,12 @@
 - Step 2 responsibility split: completed after pre-step summary at commit
   `f8e17fd39098744e20a0b3d3a81d4e45a73db846`, change
   `vxylvrnxzysozqmnrxplqmllwlyuomll`.
+- Step 3 indexing-owned path helpers: completed after pre-step summary at
+  commit `8d26a4cd8a5bb97bba499da09a2efae75a54c6fa`, change
+  `xluswuuvtvolvqxmwkwzlwquqpxlyuqs`.
+- Step 3 documentation catch-up: completed after pre-step summary at commit
+  `658a8667da56fcb73411eb895f0c0e8c33a8787c`, change
+  `yvnultyorsvxxzzzzvmpxvomxnsytvxo`.
 
 ### MCP Evidence
 
@@ -413,6 +419,33 @@
   `rmc_server::tools::endpoints::indexing_support::data_dir`, and
   backend-resolution helpers in project paths, query, graph similarity, and
   index.
+- After Step 3, `build_hypergraph(directory, force_rebuild=true)` produced
+  graph `ce626950ad825420375344f20d145a95` with fingerprint
+  `14b1c6e11aa003aff90494fcd4cfbc98dc57aaff04722176bd7258e4b379476f`.
+- Refreshed
+  `module_dependencies(module="rmc_server::mcp::project_paths")` now lists
+  `rmc_indexing::indexing::project_paths` for indexing path policy, while
+  `rmc_indexing::indexing::identity`,
+  `rmc_indexing::indexing::incremental`, and `sha2` are no longer direct
+  server project-path dependencies.
+- Refreshed
+  `module_dependencies(module="rmc_indexing::indexing::project_paths")` shows
+  the indexing-owned module depends on `rmc_indexing::indexing::identity`,
+  `rmc_indexing::indexing::incremental::get_snapshot_path_for_identity`,
+  `EmbeddingBackend`, and `sha2`.
+- `who_imports(target="rmc_indexing::indexing::project_paths::IndexingProjectPaths")`
+  returned three bindings: the public indexing reexport, the server
+  compatibility wrapper, and server wrapper tests.
+- `who_imports(target="rmc_indexing::indexing::identity::indexing_identity")`
+  and
+  `who_imports(target="rmc_indexing::indexing::identity::active_chunking_identity_for_backend")`
+  no longer show server production importers; remaining importers are indexing
+  modules/tests.
+- `who_imports(target="rmc_indexing::indexing::incremental::get_snapshot_path_for_identity")`
+  shows the new indexing project-path module and indexing tests as the
+  remaining importers.
+- `who_imports(target="sha2::Sha256")` shows no server importers after the
+  direct server `sha2` dependency was removed.
 
 ### Responsibility Split
 
@@ -432,15 +465,31 @@
 
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
+- `Cargo.lock`
+- `crates/rmc-indexing/src/indexing/mod.rs`
+- `crates/rmc-indexing/src/indexing/project_paths.rs`
+- `crates/rmc-server/Cargo.toml`
+- `crates/rmc-server/src/mcp/project_paths.rs`
 
 ### Verification
 
-- Documentation-only responsibility split; no build command required.
+- Documentation-only responsibility split; no build command required for
+  Step 2.
+- Step 3 focused check passed before commit with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
+- Step 3 regular focused test passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server project_paths`.
+  Result: two project-path tests passed.
 
 ### Commits
 
-- Pending.
+- Step 1 documentation: `e14043cb` (`docs: record phase 4 step 1`).
+- Responsibility split docs: `838381d3` (`docs: record phase 4 responsibility split`).
+- Indexing project paths: `8755d084` (`refactor: move indexing project paths`).
 
 ### Remaining Follow-Up
 
-- Move indexing-owned identity/path helpers into `rmc_indexing`.
+- Keep `rmc_server::mcp::project_paths::ProjectPaths` as the compatibility
+  wrapper and record the evidence.
+- Consolidate duplicate `data_dir` helpers.
+- Consolidate backend-resolution variants.
