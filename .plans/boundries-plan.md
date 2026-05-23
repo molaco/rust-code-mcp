@@ -482,7 +482,19 @@ For every phase, record:
 - Step 2 `jj status`: completed. Pre-step `jj show --summary` reported
   working-copy commit `da52dacd54fb343c6d6a3aaa8ddeeddd7438f225` on change
   `qkxqzrmnqstknxpkpzuzqqprsntqtunx`. `jj status` reported no changes.
-- Step 3 refresh/reuse hypergraph: pending.
+- Step 3 refresh/reuse hypergraph: completed. Pre-step `jj show --summary`
+  reported working-copy commit `b86e39145d78da9ab0b35d5d0efea457a4acf92c`
+  on change `lvsvwnwlkutqnuvmkponnkpprvvsomsn`. MCP
+  `build_hypergraph(force_rebuild=false)` reused graph
+  `4fc200b6ab2a6d0ef4162f4fec31da5f` with fingerprint
+  `a2800cb435de19d32f27bf58901fd5efb037e85565033279dd50611589501073`,
+  3040 nodes, 5371 bindings, and 7963 usages. `workspace_stats` reported
+  45 crates, 296 modules, 2448 items, 250 external symbols, and
+  `pub_crate_share=0.46781789638932497`. `crate_edges` returned 49 edges.
+  `crate_dependency_metric(sort_by="instability")` returned 45 crate metrics;
+  core crate instability values were `rmc_server=0.4`, `rmc_config=0.25`,
+  `rmc_indexing=0.125`, `rmc_graph=0.08333333333333333`, and
+  `rmc_engine=0.06666666666666667`.
 - Step 4 layering rule check: pending.
 - Step 5 record baseline in `.docs/boundries-cleanup-progress.md`: pending.
 - Step 6 phase ledger commit: pending.
