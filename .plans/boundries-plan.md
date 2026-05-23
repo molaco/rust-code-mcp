@@ -993,6 +993,19 @@ For every phase, record:
   lookup, or `to_hex`. The server audit module now keeps MCP response
   envelopes, pagination, summary stripping, parameter defaults, error mapping,
   and async blocking orchestration.
+- Step 5 verify production server dependencies on audit internals are reduced:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `a0754394bde35ae2c361e2740f99f87eedc72902` on change
+  `ysmstvvnqltlrnsutlvzotpvpuruprvq`, with no description set.
+  `build_hypergraph(force_rebuild=false)` built graph
+  `350719e344857be9514c69be176c11a7`, fingerprint
+  `59335f0aaf01780beb5032be2ff2022bbe20c2903f067ec4c6c8cd60e802adaf`.
+  `module_dependencies(rmc_server::tools::graph::audits)` now reports
+  dependencies on `rmc_graph::graph::query::audits` facade functions/options
+  and `rmc_graph::graph::query::model` DTOs, with no production dependency on
+  `loader`, `channel_audit`, `fn_body_audit`, `recursion_check`,
+  `unsafe_audit`, or snapshot audit methods. `get_exports` reports 83 graph
+  exports visible to server, including the new audit facade exports.
 
 ## Phase 0: Baseline And Safety Checks
 

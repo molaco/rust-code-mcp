@@ -783,6 +783,9 @@
 - Step 4 server responsibility split: completed after pre-step summary at
   working-copy commit `54f0a84a61c9f2c8ad24c9bfab56568a61b435c2`, change
   `wzorvywrvosrvoptsrylxvtwylxtrutx`.
+- Step 5 MCP dependency verification: completed after pre-step summary at
+  working-copy commit `a0754394bde35ae2c361e2740f99f87eedc72902`, change
+  `ysmstvvnqltlrnsutlvzotpvpuruprvq`.
 
 ### MCP Evidence
 
@@ -828,6 +831,19 @@
   `NodeId`, `NodeKind`, snapshot lookup, or `to_hex`. The server audit module
   retains MCP response envelopes, pagination, summary location stripping,
   parameter defaults, error mapping, and `spawn_blocking` orchestration.
+- After Step 3, `build_hypergraph(force_rebuild=false)` built graph
+  `350719e344857be9514c69be176c11a7`, fingerprint
+  `59335f0aaf01780beb5032be2ff2022bbe20c2903f067ec4c6c8cd60e802adaf`.
+- After Step 3, `module_dependencies(module="rmc_server::tools::graph::audits")`
+  reports server dependencies on graph audit facade functions/options and
+  graph audit DTOs only:
+  - `rmc_graph::graph::query::audits`
+  - `rmc_graph::graph::query::model`
+- The same MCP dependency result no longer reports production server
+  dependencies on `loader`, `channel_audit`, `fn_body_audit`,
+  `recursion_check`, `unsafe_audit`, or snapshot audit methods.
+- `get_exports(module="rmc_graph::graph", consumer="rmc_server")` reports 83
+  visible exports, including the new audit facade functions/options and DTOs.
 
 ### Files Changed
 
@@ -852,9 +868,10 @@
 - Step 2 implementation: `c045a04f` (`refactor: add graph audit facade`).
 - Step 3 implementation: `dcc6665e`
   (`refactor: use graph audit facade in server`).
-- Step 4 documentation: pending.
+- Step 4 documentation: `e37adafd`
+  (`docs: verify phase 6 server audit split`).
+- Step 5 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Verify with MCP that production server dependencies on `loader::load` and
-  individual audit internals are reduced or removed.
+- Run focused checks through the nix dev shell.
