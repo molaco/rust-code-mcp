@@ -178,6 +178,9 @@
 - Step 8 focused nix checks: attempted after pre-step summary at commit
   `a30f01c4c2f463ca12c0ef66f165c5fc8436538f`, change
   `ymxovsnvyuzuoolovssznxttulpkqkly`.
+- Step 9 ledger update: completed after pre-step summary at commit
+  `d2f9b7f18ace12b089248775d918b27097b86ac1`, change
+  `nrpymunwwkmwmkzsxourumvqlnzrmoup`.
 
 ### MCP Evidence
 
@@ -218,6 +221,17 @@
   `nix develop ../nix-devshells#cuda-code --command env CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
   Result: same `candle-kernels` CUDA/GCC internal compiler error.
 
+### Commits
+
+- Step 1 documentation: `93e2b5b7` (`docs: record phase 2 step 1`).
+- Search facade: `18e8e7c8` (`refactor: add indexing search facade`).
+- Adapter ownership docs: `29b87d19` (`docs: record phase 2 adapter ownership`).
+- Query migration: `dee9f48e` (`refactor: use indexing search facade in query`).
+- Codemap migration: `6d6f4a21` (`refactor: use indexing search facade in codemap`).
+- Compatibility export docs: `1cb8e884` (`docs: record phase 2 compatibility export`).
+- Dependency verification docs: `f30e7981` (`docs: verify phase 2 dependencies`).
+- Check-result docs: `c56b74ee` (`docs: record phase 2 check result`).
+
 ### Remaining Follow-Up
 
-- Record the Phase 2 ledger commit.
+- Write and commit the Phase 2 implementation report.

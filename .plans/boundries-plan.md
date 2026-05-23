@@ -640,7 +640,11 @@ For every phase, record:
   process was terminated. Retried with
   `nix develop ../nix-devshells#cuda-code --command env CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`;
   it exited with the same `candle-kernels` CUDA/GCC ICE.
-- Step 9 update ledger and commit: pending.
+- Step 9 update ledger and commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `d2f9b7f18ace12b089248775d918b27097b86ac1`
+  on change `nrpymunwwkmwmkzsxourumvqlnzrmoup`. Updated
+  `.docs/boundries-cleanup-progress.md` with Phase 2 evidence, verification,
+  check result, remaining follow-up, and commit ledger.
 - Phase completion report: pending.
 
 ## Phase 0: Baseline And Safety Checks
