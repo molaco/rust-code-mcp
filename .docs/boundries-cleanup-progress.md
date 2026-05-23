@@ -638,6 +638,9 @@
 - Step 6 MCP verification: completed after pre-step summary at working-copy
   commit `de6bccdac20a01f7ad783bfbd2aebc13a465e680`, change
   `rsuvtstwwrvpurzwpsxzwysqvxtzuxnu`.
+- Step 7 graph export compatibility: completed after pre-step summary at
+  working-copy commit `7e351bd2886522f405b4e8dae5c7a03398372960`, change
+  `ywoymvywpomsortlzsrsysswkolussyz`.
 
 ### MCP Evidence
 
@@ -670,6 +673,14 @@
     endpoint calls.
   - `response` still depends on `snapshot` and `storage` because
     `open_workspace_snapshot` remains server-owned in this phase.
+- `get_exports(module="rmc_graph::graph", consumer="rmc_server",
+  summary=true, limit=120)` reported 68 visible exports. Existing
+  compatibility exports remain visible, including `snapshot`, `storage`,
+  `model`, `ids`, `OpenedSnapshot`, `GraphPaths`, `GraphEnvOptions`, `Node`,
+  `NodeKind`, `Binding`, `Usage`, `DeadPubFinding`, and `CrateDeadPub`.
+  New graph-owned enrichment DTO exports are also visible:
+  `EnrichedBinding`, `EnrichedUsage`, `EnrichedDeadPub`, and
+  `EnrichedCrateDeadPub`.
 
 ### Source-Read Result
 
@@ -721,6 +732,7 @@
 - Step 5 server check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 - Step 6 used MCP verification only; no build command required.
+- Step 7 used MCP export verification only; no build command required.
 
 ### Commits
 
@@ -731,9 +743,11 @@
 - Step 4 documentation: `03e73ec4` (`docs: record phase 5 dto shape check`).
 - Step 5 implementation: `d35b211d`
   (`refactor: use graph enrichment facade in server`).
-- Step 6 documentation: pending.
+- Step 6 documentation: `0420a460`
+  (`docs: verify phase 5 snapshot boundary`).
+- Step 7 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Keep existing graph exports for compatibility, run the final focused checks,
-  update the ledger, and write the Phase 5 report.
+- Run the final focused checks, update the ledger, and write the Phase 5
+  report.

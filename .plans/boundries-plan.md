@@ -924,6 +924,17 @@ For every phase, record:
   `rmc_graph::graph::snapshot`; remaining raw graph dependencies are tied to
   still-server-owned response/opening/resolution logic and non-enrichment
   surface endpoints.
+- Step 7 keep existing graph exports for compatibility: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `7e351bd2886522f405b4e8dae5c7a03398372960` on change
+  `ywoymvywpomsortlzsrsysswkolussyz`, with no description set.
+  `get_exports(module="rmc_graph::graph", consumer="rmc_server", summary=true,
+  limit=120)` reported 68 visible exports. Existing compatibility exports
+  such as `snapshot`, `storage`, `model`, `ids`, `OpenedSnapshot`,
+  `GraphPaths`, `GraphEnvOptions`, `Node`, `NodeKind`, `Binding`, `Usage`,
+  `DeadPubFinding`, and `CrateDeadPub` remain visible. New graph-owned
+  enrichment DTOs `EnrichedBinding`, `EnrichedUsage`, `EnrichedDeadPub`, and
+  `EnrichedCrateDeadPub` are also visible.
 
 ## Phase 0: Baseline And Safety Checks
 
