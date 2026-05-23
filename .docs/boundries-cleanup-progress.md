@@ -91,6 +91,9 @@
 - Step 5 dependency direction: completed after pre-step summary at commit
   `a5f20835a668708b6d04b426b4806e55ded0cd97`, change
   `zmxqmmqluqpkxvroqtnymtrusxlpmxrt`.
+- Step 6 forbidden dependency verification: completed after pre-step summary
+  at commit `f587295397281439ef951c0286b01a9d16033ff1`, change
+  `qpquqlooskzunwwvvxukkkntlxvquvnr`.
 
 ### MCP Evidence
 
@@ -117,6 +120,13 @@
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
 
+### Verification
+
+- MCP `forbidden_dependency_check` with the documented five-rule set:
+  `rule_count=5`, `violation_count=0`, `total_match_count=0`,
+  `returned_match_count=0`.
+
 ### Remaining Follow-Up
 
-- Re-run the forbidden dependency check after documentation updates.
+- Record that no focused nix check was needed because Phase 1 has only
+  documentation changes.

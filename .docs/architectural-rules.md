@@ -124,5 +124,12 @@ narrows those APIs rather than inverting the dependency direction.
 
 ## Status
 
-Last verified during Phase 0 of `.plans/boundries-plan.md` execution on
-2026-05-23. Result: `violation_count=0` against the current five-rule set.
+Last verified during Phase 1 Step 6 of `.plans/boundries-plan.md` execution on
+2026-05-23. Result against the current five-rule set:
+
+```text
+rule_count=5
+violation_count=0
+total_match_count=0
+returned_match_count=0
+```

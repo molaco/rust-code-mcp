@@ -556,7 +556,13 @@ For every phase, record:
   `rmc_server -> rmc_graph, rmc_indexing, rmc_engine, rmc_config`;
   `rmc_graph -> rmc_engine`; `rmc_indexing -> rmc_engine, rmc_config`;
   `rmc_config -> rmc_engine`; `rmc_engine -> no rmc_* dependencies`.
-- Step 6 verify forbidden dependency check: pending.
+- Step 6 verify forbidden dependency check: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `f587295397281439ef951c0286b01a9d16033ff1` on change
+  `qpquqlooskzunwwvvxukkkntlxvquvnr`. MCP
+  `forbidden_dependency_check` ran the documented five-rule set with
+  `summary=false` and `limit=300`; result was `rule_count=5`,
+  `violation_count=0`, `total_match_count=0`, and `returned_match_count=0`.
 - Step 7 focused nix check if a Rust test/check is added: pending.
 - Step 8 update ledger and commit: pending.
 - Phase completion report: pending.
