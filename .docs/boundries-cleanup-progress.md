@@ -79,9 +79,30 @@
 - Step 1 `jj show --summary`: completed at working-copy commit
   `ce5e84a39da64908d800cff4cf51aaa79fa7fb8c`, change
   `pskqvuyvmmnpltszoqrwtupkvkkowuwo`.
+- Step 2 source-read architecture/audit locations: completed after pre-step
+  summary at commit `e9e69ce0e33c85c99debb1341b939344a8728455`, change
+  `nnowvmrvvvmunoktxvowswutmqlruokx`.
+
+### MCP Evidence
+
+- `get_imports(directory, module="rmc_server", summary=true, limit=300)`:
+  zero root-module imports.
+- `module_dependencies(directory, module="rmc_server", summary=true,
+  limit=300)`: zero root-module dependencies.
+- `forbidden_dependency_check(directory, rules=[...], summary=true,
+  limit=300)`: five rules, zero violations.
+
+### Source Reads
+
+- `.docs/architectural-rules.md`: existing machine-enforceable rules document,
+  currently written for older Phase B/Phase C state.
+- `crates/rmc-graph/src/graph/query/tests.rs`: generic
+  `forbidden_dependency_check` behavior tests.
+- `crates/rmc-graph/src/graph/query/model.rs`: `ForbiddenDependencyRule`
+  public shape.
+- `crates/rmc-graph/src/graph/query/crates.rs`: rule matching semantics.
 
 ### Remaining Follow-Up
 
-- Source-read architecture/audit locations from MCP evidence.
 - Add repeatable boundary rules or document the MCP rule set with expected
   zero-violation output.

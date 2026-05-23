@@ -523,7 +523,18 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `ce5e84a39da64908d800cff4cf51aaa79fa7fb8c` on change
   `pskqvuyvmmnpltszoqrwtupkvkkowuwo`, with no description set.
-- Step 2 source-read architecture/audit locations from MCP evidence: pending.
+- Step 2 source-read architecture/audit locations from MCP evidence:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `e9e69ce0e33c85c99debb1341b939344a8728455` on change
+  `nnowvmrvvvmunoktxvowswutmqlruokx`. MCP `get_imports` and
+  `module_dependencies` for `rmc_server` returned zero root-module matches;
+  `forbidden_dependency_check` returned zero violations. Source reads covered
+  `.docs/architectural-rules.md`, `crates/rmc-graph/src/graph/query/tests.rs`
+  around the generic forbidden-dependency tests,
+  `crates/rmc-graph/src/graph/query/model.rs` for rule shape, and
+  `crates/rmc-graph/src/graph/query/crates.rs` for rule semantics. Existing
+  docs are stale Phase B/Phase C wording; existing tests validate the generic
+  check engine, not the current workspace rule set.
 - Step 3 add repeatable or documented boundary rule set: pending.
 - Step 4 document MCP command/expected result if documentation-only: pending.
 - Step 5 record dependency direction: pending.
