@@ -1,30 +1,43 @@
-# Architectural Rules (machine-enforceable)
+# Architectural Rules
 
-This document codifies the crate-boundary rules for the `rust-code-mcp` workspace. They are checked by `mcp__rust-code-mcp__forbidden_dependency_check`, which runs as a filter over real cross-crate edges from the persisted hypergraph (`build_hypergraph` must be run first).
+This document codifies the crate-boundary rules for the `rust-code-mcp`
+workspace. These rules are currently documentation-only: they are repeatable via
+the MCP `forbidden_dependency_check` tool, but they are not yet wired into CI or
+a repo-local test harness.
 
-The rules below reflect the workspace state after Phase 7 B.7 (rmc-engine + rmc-graph lifted). When Phase C lands, the rule set extends to cover `rmc-config`, `rmc-indexing`, `rmc-server`.
-
-## Rule set — Phase B end-state
+## Current Boundary Rule Set
 
 ```json
 [
   {
-    "consumer": "rmc-engine",
-    "producer": "rmc-graph",
+    "consumer": "rmc_engine",
+    "producer": "rmc_*",
     "severity": "error",
-    "message": "rmc-engine must not depend on rmc-graph (engine is foundation)"
+    "message": "rmc_engine is the foundation crate and must not depend on other rmc_* crates"
   },
   {
-    "consumer": "rmc-engine",
-    "producer": "rust-code-mcp",
+    "consumer": "rmc_graph",
+    "producer": "rmc_server",
     "severity": "error",
-    "message": "rmc-engine must not depend on the main crate"
+    "message": "rmc_graph must not depend on the MCP server layer"
   },
   {
-    "consumer": "rmc-graph",
-    "producer": "rust-code-mcp",
+    "consumer": "rmc_graph",
+    "producer": "rmc_indexing",
+    "severity": "warn",
+    "message": "rmc_graph should remain independent from indexing"
+  },
+  {
+    "consumer": "rmc_indexing",
+    "producer": "rmc_server",
     "severity": "error",
-    "message": "rmc-graph must not depend on the main crate"
+    "message": "rmc_indexing must not depend on the MCP server layer"
+  },
+  {
+    "consumer": "rmc_indexing",
+    "producer": "rmc_graph",
+    "severity": "warn",
+    "message": "rmc_indexing should remain independent from graph"
   }
 ]
 ```

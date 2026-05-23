@@ -535,7 +535,13 @@ For every phase, record:
   `crates/rmc-graph/src/graph/query/crates.rs` for rule semantics. Existing
   docs are stale Phase B/Phase C wording; existing tests validate the generic
   check engine, not the current workspace rule set.
-- Step 3 add repeatable or documented boundary rule set: pending.
+- Step 3 add repeatable or documented boundary rule set: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `de436c0ef016f208ae059a2e512b9ea34987bdcd` on change
+  `xywskktvkkwvkywrnyxzsuwxwqnxnpqu`. Updated
+  `.docs/architectural-rules.md` from stale Phase B/Phase C wording to the
+  current five-rule crate boundary set, marked documentation-only until CI or a
+  repo-local harness exists.
 - Step 4 document MCP command/expected result if documentation-only: pending.
 - Step 5 record dependency direction: pending.
 - Step 6 verify forbidden dependency check: pending.

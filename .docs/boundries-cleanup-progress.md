@@ -82,6 +82,9 @@
 - Step 2 source-read architecture/audit locations: completed after pre-step
   summary at commit `e9e69ce0e33c85c99debb1341b939344a8728455`, change
   `nnowvmrvvvmunoktxvowswutmqlruokx`.
+- Step 3 boundary rule set: completed after pre-step summary at commit
+  `de436c0ef016f208ae059a2e512b9ea34987bdcd`, change
+  `xywskktvkkwvkywrnyxzsuwxwqnxnpqu`.
 
 ### MCP Evidence
 
@@ -102,7 +105,12 @@
   public shape.
 - `crates/rmc-graph/src/graph/query/crates.rs`: rule matching semantics.
 
+### Files Changed
+
+- `.docs/architectural-rules.md`
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+
 ### Remaining Follow-Up
 
-- Add repeatable boundary rules or document the MCP rule set with expected
-  zero-violation output.
+- Document the exact MCP command with expected zero-violation output.
