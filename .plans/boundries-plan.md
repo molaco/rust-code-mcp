@@ -479,7 +479,9 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `bf2bb57e4a7066f9e2e70b68ac79ee6ac3d637bf` on change
   `uozpxtlmwxvypwqszkrprvsswspumypx`, with no description set.
-- Step 2 `jj status`: pending.
+- Step 2 `jj status`: completed. Pre-step `jj show --summary` reported
+  working-copy commit `da52dacd54fb343c6d6a3aaa8ddeeddd7438f225` on change
+  `qkxqzrmnqstknxpkpzuzqqprsntqtunx`. `jj status` reported no changes.
 - Step 3 refresh/reuse hypergraph: pending.
 - Step 4 layering rule check: pending.
 - Step 5 record baseline in `.docs/boundries-cleanup-progress.md`: pending.
