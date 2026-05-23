@@ -472,6 +472,19 @@ For every phase, record:
 - commit id
 - remaining follow-up
 
+## Execution Status
+
+### Phase 0: Baseline And Safety Checks
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `bf2bb57e4a7066f9e2e70b68ac79ee6ac3d637bf` on change
+  `uozpxtlmwxvypwqszkrprvsswspumypx`, with no description set.
+- Step 2 `jj status`: pending.
+- Step 3 refresh/reuse hypergraph: pending.
+- Step 4 layering rule check: pending.
+- Step 5 record baseline in `.docs/boundries-cleanup-progress.md`: pending.
+- Step 6 phase ledger commit: pending.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
