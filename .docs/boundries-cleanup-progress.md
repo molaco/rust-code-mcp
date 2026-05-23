@@ -283,6 +283,9 @@
 - Step 5 `SyncManager` migration: completed after pre-step summary at commit
   `dda24e869997d055f9695b08ca0d8e35ac39a2f4`, change
   `zuqzzsspslnonryqzuktruxpxtkqwxlm`.
+- Step 6 compatibility export check: completed after pre-step summary at
+  commit `ae3f14da1e4348b5fb46115b610861532c401ad3`, change
+  `pqltzkurvwyynrwnpxnkmnlrlmlmxuqn`.
 
 ### MCP Evidence
 
@@ -307,6 +310,9 @@
   `IncrementalIndexer::index_with_change_detection`.
 - `functions_with_filter(krate="rmc_indexing", has_param_type="IncrementalIndexer")`
   returned zero matches.
+- Compatibility source check confirmed `rmc_indexing::indexing::incremental`
+  remains `pub mod`, `IncrementalIndexer` remains a public struct, and
+  `rmc_indexing::indexing` still reexports `IncrementalIndexer`.
 
 ### Files Changed
 
@@ -332,4 +338,5 @@
 
 ### Remaining Follow-Up
 
-- Keep `IncrementalIndexer` and its reexport public for compatibility.
+- Verify with `module_dependencies` that direct production server dependency
+  on `rmc_indexing::indexing::incremental` is gone or intentionally documented.

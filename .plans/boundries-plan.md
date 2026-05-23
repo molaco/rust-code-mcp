@@ -707,6 +707,13 @@ For every phase, record:
   stored embedder identity from `metadata.json` is still passed through for
   legacy index compatibility. Verification passed with
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`.
+- Step 6 keep `IncrementalIndexer` public for compatibility: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `ae3f14da1e4348b5fb46115b610861532c401ad3` on change
+  `pqltzkurvwyynrwnpxnkmnlrlmlmxuqn`. Verified
+  `rmc_indexing::indexing::incremental` remains `pub mod`,
+  `IncrementalIndexer` remains a public struct, and
+  `rmc_indexing::indexing` still reexports `IncrementalIndexer`.
 
 ## Phase 0: Baseline And Safety Checks
 
