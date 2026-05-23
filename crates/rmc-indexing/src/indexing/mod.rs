@@ -8,6 +8,7 @@ pub mod error_collection;
 pub(crate) mod file_processor;
 pub mod identity;
 pub mod incremental;
+pub mod incremental_service;
 pub mod indexer_core;
 pub mod merkle;
 pub mod retry;
@@ -18,6 +19,9 @@ mod unified_parallel;
 
 pub(crate) use error::IndexingError;
 pub use incremental::{get_snapshot_path, IncrementalIndexer};
+pub use incremental_service::{
+    index_project_incrementally, IncrementalIndexOutcome, IncrementalIndexRequest,
+};
 pub use search::open_bm25_search;
 pub use tantivy_adapter::TantivyAdapter;
 pub use unified::{IndexFileResult, IndexStats, UnifiedIndexer};

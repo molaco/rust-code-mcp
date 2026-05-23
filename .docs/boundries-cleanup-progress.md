@@ -268,19 +268,45 @@
 - Step 1 `jj show --summary`: completed at working-copy commit
   `1246ed40d952f65679ea505e67194973d857de67`, change
   `zqwzqttxromrslzpsupuympxunyyqvrq`.
+- Step 2 incremental service facade: completed after pre-step summary at
+  commit `cc2120bcf258f176c0a0699a87b8dc1d8ecf94d6`, change
+  `nqxrrlqkuzrnvlspsoyxxrqsmsvomroq`.
 
 ### MCP Evidence
 
-- Pending refresh for Phase 3 Step 2.
+- `build_hypergraph(directory, force_rebuild=true)` produced graph
+  `73fff61394cb3013da54fdacb4324029` with fingerprint
+  `8847750a44d5137b0523263cd98697d2e8406fd96d7716d9e51530b9d32c2e24`.
+- `who_imports(target="rmc_indexing::indexing::incremental::IncrementalIndexer")`
+  returned 14 bindings. Production server imports were
+  `rmc_server::tools::endpoints::index` and `rmc_server::mcp::sync`; remaining
+  bindings included indexing tests, server tests, benches, tools, and the
+  compatibility reexport.
+- `get_imports` for `rmc_server::tools::endpoints::index` and
+  `rmc_server::mcp::sync` both showed named imports of `IncrementalIndexer`.
+- `module_dependencies` for `rmc_server::tools::endpoints::index` showed a
+  direct dependency on `rmc_indexing::indexing::incremental` through
+  `IncrementalIndexer`, `IncrementalIndexer::with_backend`,
+  `IncrementalIndexer::clear_all_data`, and
+  `IncrementalIndexer::index_with_change_detection`.
+- `module_dependencies` for `rmc_server::mcp::sync` showed a direct dependency
+  on `rmc_indexing::indexing::incremental` through `IncrementalIndexer`,
+  `IncrementalIndexer::with_backend`, and
+  `IncrementalIndexer::index_with_change_detection`.
+- `functions_with_filter(krate="rmc_indexing", has_param_type="IncrementalIndexer")`
+  returned zero matches.
 
 ### Files Changed
 
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-indexing/src/indexing/incremental_service.rs`
+- `crates/rmc-indexing/src/indexing/mod.rs`
 
 ### Verification
 
-- Pending.
+- `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing --jobs 1`
+  passed with existing warnings.
 
 ### Commits
 
@@ -288,5 +314,5 @@
 
 ### Remaining Follow-Up
 
-- Refresh Phase 3 MCP evidence for `IncrementalIndexer` server construction
-  dependencies.
+- Confirm the facade shape owns incremental construction and Merkle/change
+  detection policy before migrating server callers.

@@ -667,6 +667,19 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `1246ed40d952f65679ea505e67194973d857de67` on change
   `zqwzqttxromrslzpsupuympxunyyqvrq`, with no description set.
+- Step 2 add a smaller indexing-owned service function for server sync/index
+  flows: completed. Pre-step `jj show --summary` reported working-copy commit
+  `cc2120bcf258f176c0a0699a87b8dc1d8ecf94d6` on change
+  `nqxrrlqkuzrnvlspsoyxxrqsmsvomroq`. Rebuilt the hypergraph with
+  `force_rebuild=true`, producing graph `73fff61394cb3013da54fdacb4324029`.
+  MCP evidence confirmed direct production server dependencies on
+  `rmc_indexing::indexing::incremental` from `rmc_server::tools::endpoints::index`
+  and `rmc_server::mcp::sync`. Added
+  `rmc_indexing::indexing::incremental_service` with
+  `IncrementalIndexRequest`, `IncrementalIndexOutcome`, and
+  `index_project_incrementally`, then reexported the facade from
+  `rmc_indexing::indexing`. Verification passed with
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing --jobs 1`.
 
 ## Phase 0: Baseline And Safety Checks
 
