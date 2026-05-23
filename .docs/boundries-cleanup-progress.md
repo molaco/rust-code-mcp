@@ -70,7 +70,7 @@
 
 ## Phase 1: Workspace Boundary Rules
 
-- Status: in progress.
+- Status: complete.
 - Purpose: make the intended crate layering explicit before implementation
   boundary refactors.
 
@@ -144,4 +144,4 @@
 
 ### Remaining Follow-Up
 
-- Write and commit the Phase 1 report.
+- Start Phase 2.
