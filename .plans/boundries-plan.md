@@ -518,6 +518,20 @@ For every phase, record:
   `.docs/phase-0-boundrie-fix-report.md` and marked the Phase 0 progress
   ledger complete.
 
+### Phase 1: Workspace Boundary Rules
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `ce5e84a39da64908d800cff4cf51aaa79fa7fb8c` on change
+  `pskqvuyvmmnpltszoqrwtupkvkkowuwo`, with no description set.
+- Step 2 source-read architecture/audit locations from MCP evidence: pending.
+- Step 3 add repeatable or documented boundary rule set: pending.
+- Step 4 document MCP command/expected result if documentation-only: pending.
+- Step 5 record dependency direction: pending.
+- Step 6 verify forbidden dependency check: pending.
+- Step 7 focused nix check if a Rust test/check is added: pending.
+- Step 8 update ledger and commit: pending.
+- Phase completion report: pending.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal

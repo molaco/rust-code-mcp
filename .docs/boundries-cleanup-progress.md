@@ -67,3 +67,21 @@
 ### Remaining Follow-Up
 
 - Start Phase 1.
+
+## Phase 1: Workspace Boundary Rules
+
+- Status: in progress.
+- Purpose: make the intended crate layering explicit before implementation
+  boundary refactors.
+
+### Step Evidence
+
+- Step 1 `jj show --summary`: completed at working-copy commit
+  `ce5e84a39da64908d800cff4cf51aaa79fa7fb8c`, change
+  `pskqvuyvmmnpltszoqrwtupkvkkowuwo`.
+
+### Remaining Follow-Up
+
+- Source-read architecture/audit locations from MCP evidence.
+- Add repeatable boundary rules or document the MCP rule set with expected
+  zero-violation output.
