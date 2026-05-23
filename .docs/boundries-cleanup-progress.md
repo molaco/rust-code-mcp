@@ -373,3 +373,36 @@
 ### Remaining Follow-Up
 
 - Start Phase 4.
+
+## Phase 4: Project Path And Identity Boundary
+
+- Status: in progress.
+- Purpose: move or centralize project/index identity logic so server does not
+  own mixed engine/indexing path policy.
+
+### Step Evidence
+
+- Step 1 `jj show --summary`: completed at working-copy commit
+  `6310c735f1fa7e5662a932a85bb1b0bcfff08ac2`, change
+  `quywnkvozwmxoypwwmorprwvnzkmxqvk`.
+
+### MCP Evidence
+
+- Pending refresh for Phase 4 Step 2.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+
+### Verification
+
+- Pending.
+
+### Commits
+
+- Pending.
+
+### Remaining Follow-Up
+
+- Split the Phase 4 responsibilities on paper before editing code.

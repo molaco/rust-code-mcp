@@ -742,6 +742,12 @@ For every phase, record:
   `.docs/phase-3-boundrie-fix-report.md` and marked the Phase 3 progress
   ledger complete.
 
+### Phase 4: Project Path And Identity Boundary
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `6310c735f1fa7e5662a932a85bb1b0bcfff08ac2` on change
+  `quywnkvozwmxoypwwmorprwvnzkmxqvk`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
