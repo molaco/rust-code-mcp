@@ -4,8 +4,9 @@
 //! incremental indexing with optional force reindex.
 
 use rmc_engine::embeddings::{EmbeddingBackend, Qwen3Variant};
-use rmc_indexing::indexing::incremental::IncrementalIndexer;
-use rmc_indexing::indexing::unified::IndexStats;
+use rmc_indexing::indexing::{
+    index_project_incrementally, IncrementalIndexRequest, IndexStats,
+};
 use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend};
 use rmc_engine::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
@@ -147,6 +148,26 @@ fn format_index_codebase_result(
     )
 }
 
+fn indexing_error_to_mcp(error: anyhow::Error, dir: &std::path::Path) -> McpError {
+    // Keep the existing actionable version-mismatch message at the MCP
+    // boundary while indexing owns the concrete indexer construction.
+    if let Some(vs_err) = error.downcast_ref::<VectorStoreError>() {
+        if let VectorStoreError::VersionMismatch { stored, configured } = vs_err {
+            return McpError::invalid_params(
+                format!(
+                    "Cannot index with embedder `{configured}`: existing index was built with `{stored}`. \
+                     Run `clear_cache` against directory `{}` (or include_hypergraph=true) to discard \
+                     the old vectors and rebuild.",
+                    dir.display()
+                ),
+                None,
+            );
+        }
+    }
+
+    McpError::invalid_params(format!("Indexing failed: {}", error), None)
+}
+
 /// Index a codebase directory with automatic change detection
 ///
 /// This is the main entry point for the `index_codebase` MCP tool.
@@ -194,72 +215,20 @@ pub async fn index_codebase(
         embedder_identity,
     );
 
-    // Handle force reindex by deleting snapshot
-    if force {
-        let snapshot_path = &paths.snapshot_path;
-        if snapshot_path.exists() {
-            tracing::info!("Force reindex: deleting snapshot at {}", snapshot_path.display());
-            std::fs::remove_file(snapshot_path).map_err(|e| {
-                McpError::invalid_params(format!("Failed to delete snapshot: {}", e), None)
-            })?;
-        }
-    }
-
-    // Create incremental indexer with embedded LanceDB backend. If the
-    // on-disk vector store was built with a different embedder, surface
-    // the version mismatch as a clear MCP error pointing at clear_cache
-    // (do NOT auto-wipe).
-    let mut indexer = match IncrementalIndexer::with_backend(
-        &paths.cache_path,
-        &paths.tantivy_path,
-        &paths.collection_name,
-        backend.dim(),
-        &embedder_identity,
-        None,
-        backend.clone(),
-    )
+    let outcome = index_project_incrementally(IncrementalIndexRequest {
+        codebase_path: &dir,
+        cache_path: &paths.cache_path,
+        tantivy_path: &paths.tantivy_path,
+        collection_name: &paths.collection_name,
+        backend: backend.clone(),
+        embedder_identity: &embedder_identity,
+        snapshot_path: Some(&paths.snapshot_path),
+        codebase_loc: None,
+        force_reindex: force,
+    })
     .await
-    {
-        Ok(idx) => idx,
-        Err(e) => {
-            // The vector store layer surfaces VersionMismatch as a
-            // boxed error; unwrap it back to a structured error if we
-            // can so the user gets the actionable message.
-            if let Some(vs_err) = e.downcast_ref::<VectorStoreError>() {
-                if let VectorStoreError::VersionMismatch { stored, configured } = vs_err {
-                    return Err(McpError::invalid_params(
-                        format!(
-                            "Cannot index with embedder `{configured}`: existing index was built with `{stored}`. \
-                             Run `clear_cache` against directory `{}` (or include_hypergraph=true) to discard \
-                             the old vectors and rebuild.",
-                            dir.display()
-                        ),
-                        None,
-                    ));
-                }
-            }
-            return Err(McpError::invalid_params(
-                format!("Failed to initialize indexer: {}", e),
-                None,
-            ));
-        }
-    };
-
-    // Clear all indexed data if force reindex
-    if force {
-        tracing::info!("Force reindex: clearing all indexed data (metadata cache, Tantivy, vector store)");
-        indexer.clear_all_data().await.map_err(|e| {
-            McpError::invalid_params(format!("Failed to clear indexed data: {}", e), None)
-        })?;
-    }
-
-    // Run incremental indexing
-    let start = std::time::Instant::now();
-    let stats = indexer
-        .index_with_change_detection(&dir)
-        .await
-        .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
-    let elapsed = start.elapsed();
+    .map_err(|error| indexing_error_to_mcp(error, &dir))?;
+    let stats = &outcome.stats;
 
     // Track directory for background sync if indexing was successful
     if let Some(sync_mgr) = sync_manager {
@@ -276,7 +245,7 @@ pub async fn index_codebase(
     // so a user who passed `model` (or relied on the default) can
     // confirm exactly which variant the index is bound to.
     let result_text = format_index_codebase_result(
-        &stats,
+        stats,
         &params.directory,
         backend.profile.name(),
         &embedder_identity,
@@ -287,7 +256,7 @@ pub async fn index_codebase(
             "disabled"
         },
         force,
-        elapsed,
+        outcome.elapsed,
     );
 
     Ok(CallToolResult::success(vec![Content::text(result_text)]))

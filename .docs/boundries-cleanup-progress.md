@@ -277,6 +277,9 @@
   backend, path, identity, snapshot, codebase-size, and force options while
   keeping `IncrementalIndexer` construction and change detection inside
   `rmc_indexing`.
+- Step 4 server index endpoint migration: completed after pre-step summary at
+  commit `479b445fcd47137579d8163c82a1c708da2e0d11`, change
+  `vzrzzmwnoowxuqryywumzotpoqzyntxz`.
 
 ### MCP Evidence
 
@@ -308,10 +311,13 @@
 - `.docs/boundries-cleanup-progress.md`
 - `crates/rmc-indexing/src/indexing/incremental_service.rs`
 - `crates/rmc-indexing/src/indexing/mod.rs`
+- `crates/rmc-server/src/tools/endpoints/index.rs`
 
 ### Verification
 
 - `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing --jobs 1`
+  passed with existing warnings.
+- `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`
   passed with existing warnings.
 
 ### Commits
@@ -320,4 +326,4 @@
 
 ### Remaining Follow-Up
 
-- Migrate the server index endpoint to `index_project_incrementally`.
+- Migrate `SyncManager` to `index_project_incrementally`.

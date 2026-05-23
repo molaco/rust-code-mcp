@@ -688,6 +688,16 @@ For every phase, record:
   optional snapshot path, and force option, while indexing owns
   `IncrementalIndexer::with_backend`, force-clear execution, and
   `index_with_change_detection`.
+- Step 4 migrate server index endpoint to the facade: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `479b445fcd47137579d8163c82a1c708da2e0d11` on change
+  `vzrzzmwnoowxuqryywumzotpoqzyntxz`. Updated
+  `rmc_server::tools::endpoints::index::index_codebase` to call
+  `index_project_incrementally` through `IncrementalIndexRequest` instead of
+  constructing `IncrementalIndexer` directly. The server still maps
+  `VectorStoreError::VersionMismatch` to the existing actionable MCP error.
+  Verification passed with
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`.
 
 ## Phase 0: Baseline And Safety Checks
 
