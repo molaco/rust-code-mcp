@@ -1006,6 +1006,12 @@ For every phase, record:
   `loader`, `channel_audit`, `fn_body_audit`, `recursion_check`,
   `unsafe_audit`, or snapshot audit methods. `get_exports` reports 83 graph
   exports visible to server, including the new audit facade exports.
+- Step 6 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `d2632d8bb7318e88322e234a0d6dededcb8eae53` on change
+  `qszylstrynwtssmtkvukptpnmttornwp`, with no description set.
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server` passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 

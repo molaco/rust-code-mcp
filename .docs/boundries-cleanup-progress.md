@@ -786,6 +786,9 @@
 - Step 5 MCP dependency verification: completed after pre-step summary at
   working-copy commit `a0754394bde35ae2c361e2740f99f87eedc72902`, change
   `ysmstvvnqltlrnsutlvzotpvpuruprvq`.
+- Step 6 focused checks: completed after pre-step summary at working-copy
+  commit `d2632d8bb7318e88322e234a0d6dededcb8eae53`, change
+  `qszylstrynwtssmtkvukptpnmttornwp`.
 
 ### MCP Evidence
 
@@ -861,6 +864,8 @@
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
 - Step 3 server check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
+- Step 6 combined focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph -p rmc-server`.
 
 ### Commits
 
@@ -870,8 +875,10 @@
   (`refactor: use graph audit facade in server`).
 - Step 4 documentation: `e37adafd`
   (`docs: verify phase 6 server audit split`).
-- Step 5 documentation: pending.
+- Step 5 documentation: `1c6d886b`
+  (`docs: verify phase 6 audit dependencies`).
+- Step 6 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Run focused checks through the nix dev shell.
+- Update the ledger and write the Phase 6 report.
