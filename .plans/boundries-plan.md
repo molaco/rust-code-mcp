@@ -512,6 +512,11 @@ For every phase, record:
   on change `sxrtnnxswovmzktvvwoxzupyzlwuwuly`. The Phase 0 baseline ledger
   commit is `e4aeefdeac6b3e4dce3041158fdc681d564dc1ce`
   (`docs: record phase 0 baseline`).
+- Phase completion report: completed. Pre-step `jj show --summary` reported
+  working-copy commit `c7ce5feb04db0e8b05d824e61b6a078c3bdf6d7e` on change
+  `nrvkrlonwkmkyqpqvqttwzmtpulyptqr`. Wrote
+  `.docs/phase-0-boundrie-fix-report.md` and marked the Phase 0 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 

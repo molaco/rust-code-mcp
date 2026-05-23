@@ -2,7 +2,7 @@
 
 ## Phase 0: Baseline And Safety Checks
 
-- Status: in progress.
+- Status: complete.
 - Purpose: record the initial VCS, hypergraph, dependency, and layering
   baseline before implementation boundary changes.
 
@@ -66,5 +66,4 @@
 
 ### Remaining Follow-Up
 
-- Finish Phase 0 commit/report steps.
-- Start Phase 1 only after Phase 0 report is written and committed.
+- Start Phase 1.
