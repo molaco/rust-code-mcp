@@ -117,6 +117,333 @@ rmc_engine   -> no rmc_* dependencies
 - Tighten `search`, `vector_store`, and parser helper module visibility only
   after consumers are migrated to facade reexports.
 
+## Planned Change Inventory By Phase
+
+This section is a planning estimate, not a mechanical requirement to create
+files. If source reads or compiler feedback show a change belongs in an
+existing module, prefer the existing module and record the deviation in the
+execution ledger.
+
+LOC estimates are rough changed-line ranges. Replace them with actual `jj diff
+--stat` numbers in `.docs/boundries-cleanup-progress.md` during execution.
+
+### Phase 0 Inventory
+
+- New dirs: none.
+- New files: `.docs/boundries-cleanup-progress.md`.
+- Modified files: `.docs/boundries-cleanup-progress.md`.
+- Deleted files/modules: none.
+- New modules/types/methods/functions: none.
+- Modified modules/types/methods/functions: none.
+- Deleted modules/types/methods/functions: none.
+- Production LOC change: `0`.
+- Test/docs LOC change: `+80..150`.
+
+### Phase 1 Inventory
+
+- New dirs: none expected.
+- New files: optional architecture/boundary docs if no suitable existing
+  location exists.
+- Modified files: existing architecture/audit docs or focused architecture
+  test location discovered by MCP evidence.
+- Deleted files/modules: none.
+- New modules/types/methods/functions: optional focused architecture test
+  helper only if a local test pattern already exists.
+- Modified modules/types/methods/functions: none in production code.
+- Deleted modules/types/methods/functions: none.
+- Production LOC change: `0`.
+- Test/docs LOC change: `+40..120`.
+
+### Phase 2 Inventory
+
+- New dirs: none.
+- New files/modules: prefer `crates/rmc-indexing/src/indexing/search.rs` for
+  the search facade. If source reads show `unified.rs` is the better local
+  home, add the facade there instead and do not create `search.rs`.
+- Modified files/modules:
+  - `crates/rmc-indexing/src/indexing/mod.rs`
+  - `crates/rmc-indexing/src/indexing/unified.rs` or new `search.rs`
+  - `crates/rmc-server/src/tools/endpoints/query.rs`
+  - `crates/rmc-server/src/tools/graph/codemap.rs`
+- Deleted files/modules: none.
+- New types: optional small request/config wrapper only if it removes repeated
+  parameters.
+- New functions/methods:
+  - `open_bm25_search(...)` or equivalent indexing-owned facade
+  - optional `open_bm25_search_with_config(...)` if config construction cannot
+    stay hidden
+- Modified functions/methods:
+  - `rmc_server::tools::endpoints::query::try_open_bm25`
+  - codemap BM25/hybrid-search setup path
+- Deleted functions/methods: no production deletion expected.
+- Production LOC change: `+80..180`, with `-20..80` server simplification.
+- Test/docs LOC change: `+40..120`.
+
+### Phase 3 Inventory
+
+- New dirs: none.
+- New files/modules: prefer
+  `crates/rmc-indexing/src/indexing/incremental_service.rs` for the
+  server-facing incremental facade.
+- Modified files/modules:
+  - `crates/rmc-indexing/src/indexing/mod.rs`
+  - `crates/rmc-indexing/src/indexing/incremental.rs`
+  - `crates/rmc-server/src/tools/endpoints/index.rs`
+  - `crates/rmc-server/src/mcp/sync.rs`
+- Deleted files/modules: none.
+- New types:
+  - `IncrementalIndexRequest` or equivalent options struct
+  - `IncrementalIndexOutcome` or equivalent result struct
+- New functions/methods:
+  - `index_project_incrementally(...)`
+  - optional `clear_project_index_data(...)` if server clear behavior still
+    constructs `IncrementalIndexer`
+- Modified functions/methods:
+  - `index_codebase`
+  - `SyncManager::sync_directory_now`
+  - `SyncManager::sync_now`
+- Deleted functions/methods: none; keep `IncrementalIndexer` public.
+- Production LOC change: `+150..320`, with `-40..120` server simplification.
+- Test/docs LOC change: `+80..220`.
+
+### Phase 4 Inventory
+
+- New dirs: none.
+- New files/modules: prefer
+  `crates/rmc-indexing/src/indexing/project_paths.rs` or a smaller addition to
+  `crates/rmc-indexing/src/indexing/identity.rs` if the implementation remains
+  identity-only.
+- Modified files/modules:
+  - `crates/rmc-indexing/src/indexing/mod.rs`
+  - `crates/rmc-indexing/src/indexing/identity.rs`
+  - `crates/rmc-server/src/mcp/project_paths.rs`
+  - `crates/rmc-server/src/tools/endpoints/query.rs`
+  - `crates/rmc-server/src/tools/endpoints/index.rs`
+  - `crates/rmc-server/src/tools/endpoints/health.rs`
+  - `crates/rmc-server/src/tools/endpoints/indexing_support.rs`
+  - `crates/rmc-server/src/tools/graph/similarity.rs`
+- Deleted files/modules: none in this phase.
+- New types:
+  - `IndexingProjectPaths` or equivalent indexing-owned path bundle
+  - `IndexedProfilePaths` moved or mirrored behind indexing ownership
+- New functions/methods:
+  - indexing-owned project/index path constructor
+  - indexing-owned indexed-profile discovery
+  - single backend-resolution helper or path-aware wrapper
+- Modified functions/methods:
+  - `ProjectPaths::from_directory`
+  - `ProjectPaths::indexed_profiles`
+  - server `data_dir` wrappers
+  - backend resolver functions in index/query/similarity paths
+- Deleted functions/methods: duplicate server helper functions only after all
+  call sites move.
+- Production LOC change: `+220..480`, with `-100..260` server simplification.
+- Test/docs LOC change: `+120..280`.
+
+### Phase 5 Inventory
+
+- New dirs: none.
+- New files/modules: prefer
+  `crates/rmc-graph/src/graph/query/enrichment.rs` for graph-owned query/DTO
+  enrichment.
+- Modified files/modules:
+  - `crates/rmc-graph/src/graph/query/mod.rs`
+  - `crates/rmc-graph/src/graph/query/model.rs`
+  - `crates/rmc-graph/src/graph/mod.rs`
+  - `crates/rmc-server/src/tools/graph/response.rs`
+  - `crates/rmc-server/src/tools/graph/core.rs`
+  - `crates/rmc-server/src/tools/graph/surface.rs`
+- Deleted files/modules: none.
+- New types:
+  - graph-owned item/node reference DTOs if existing query DTOs are too raw
+  - graph-owned binding/usage/dead-pub enrichment DTOs as needed
+- New functions/methods:
+  - graph-owned node resolution helper
+  - graph-owned item-ref conversion helper
+  - graph-owned binding/usage enrichment helpers
+- Modified functions/methods:
+  - server helpers that currently take `OpenedSnapshot`
+  - graph query methods if DTOs move closer to graph
+- Deleted functions/methods: server-only graph enrichment helpers after
+  migration, if no longer needed.
+- Production LOC change: `+250..550`, with `-120..320` server simplification.
+- Test/docs LOC change: `+120..320`.
+
+### Phase 6 Inventory
+
+- New dirs: none.
+- New files/modules: prefer additions to
+  `crates/rmc-graph/src/graph/query/audits.rs`; create
+  `crates/rmc-graph/src/graph/audits.rs` only if the facade should sit outside
+  query.
+- Modified files/modules:
+  - `crates/rmc-graph/src/graph/query/audits.rs`
+  - graph audit modules used by the facade
+  - `crates/rmc-graph/src/graph/mod.rs`
+  - `crates/rmc-server/src/tools/graph/audits.rs`
+- Deleted files/modules: none.
+- New types:
+  - graph-owned audit request/options wrappers where server params are too MCP
+    specific
+  - graph-owned audit result DTOs if current findings need enrichment
+- New functions/methods:
+  - `run_channel_capacity_audit(...)`
+  - `run_fn_body_audit(...)`
+  - `run_recursion_check(...)`
+  - `run_unsafe_audit(...)`
+  - `run_mut_static_audit(...)`
+- Modified functions/methods:
+  - server audit endpoints to call graph facade functions
+  - graph audit helpers if option conversion moves down
+- Deleted functions/methods: no graph audit deletion expected; remove only
+  server loader/dispatch helper code.
+- Production LOC change: `+300..650`, with `-150..360` server simplification.
+- Test/docs LOC change: `+140..320`.
+
+### Phase 7 Inventory
+
+- New dirs: none.
+- New files/modules: prefer
+  `crates/rmc-graph/src/graph/query/similarity.rs`.
+- Modified files/modules:
+  - `crates/rmc-graph/src/graph/query/mod.rs`
+  - `crates/rmc-graph/src/graph/query/model.rs`
+  - `crates/rmc-graph/src/graph/embedding_cache.rs`
+  - `crates/rmc-graph/src/graph/math.rs`
+  - `crates/rmc-graph/src/graph/mod.rs`
+  - `crates/rmc-server/src/tools/graph/similarity.rs`
+- Deleted files/modules: none.
+- New types:
+  - `SimilarityRequest` or equivalent graph-owned options
+  - `SimilarityItem`
+  - `SimilarityPair`
+  - `SimilarityCluster`
+  - optional page/result wrapper
+- New functions/methods:
+  - graph-owned semantic overlap operation
+  - graph-owned similar-to-item operation
+- Modified functions/methods:
+  - server `semantic_overlaps` graph tool implementation
+  - server `similar_to_item` graph tool implementation
+- Deleted functions/methods: server-local pairwise cosine/cache orchestration
+  after migration.
+- Production LOC change: `+250..520`, with `-140..340` server simplification.
+- Test/docs LOC change: `+120..300`.
+
+### Phase 8 Inventory
+
+- New dirs/files: none expected.
+- New modules: none expected.
+- Modified files/modules:
+  - `crates/rmc-graph/src/graph/storage.rs`
+  - `crates/rmc-graph/src/graph/snapshot.rs` if cleanup needs snapshot
+    semantics
+  - `crates/rmc-graph/src/graph/mod.rs`
+  - `crates/rmc-server/src/tools/endpoints/cache.rs`
+- Deleted files/modules: none.
+- New types: optional cleanup result DTO.
+- New functions/methods:
+  - `clear_workspace_snapshots(...)` or equivalent graph-owned cleanup API
+  - optional `workspace_graph_cache_paths(...)` if dry-run/reporting needs path
+    disclosure
+- Modified functions/methods:
+  - server cache endpoint cleanup branch
+- Deleted functions/methods: server graph-path cleanup helper logic.
+- Production LOC change: `+80..200`, with `-40..120` server simplification.
+- Test/docs LOC change: `+60..160`.
+
+### Phase 9 Inventory
+
+- New dirs/files/modules: none expected.
+- Modified files/modules:
+  - `crates/rmc-server/src/lib.rs`
+  - `crates/rmc-server/src/tools/mod.rs`
+  - `crates/rmc-server/src/tools/project_paths.rs`
+  - `crates/rmc-server/src/tools/endpoints/indexing_support.rs`
+  - any server endpoint left with duplicate helper logic after phases 2-8
+  - `crates/rust-code-mcp/tests/test_mcp_stdio_transport.rs` or other
+    compatibility import callers, if present
+- Deleted files/modules:
+  - delete `crates/rmc-server/src/tools/project_paths.rs` only after all callers
+    move to `rmc_server::mcp::project_paths`
+  - do not delete or privatize `semantic` until symbol-level expectations move
+- New types/methods/functions: none expected.
+- Modified functions/methods:
+  - duplicate `data_dir` wrappers
+  - endpoint helpers left after facade migration
+- Deleted functions/methods: duplicate server helpers only.
+- Production LOC change: `-50..220` net.
+- Test/docs LOC change: `-20..120`.
+
+### Phase 10 Inventory
+
+- New dirs/files/modules: none expected.
+- Modified files/modules:
+  - `crates/rmc-engine/src/search/mod.rs`
+  - `crates/rmc-engine/src/vector_store/mod.rs`
+  - `crates/rmc-engine/src/parser/mod.rs`
+  - `crates/rmc-engine/src/embeddings/mod.rs`
+  - production consumers that still use deep engine paths
+  - engine README or module docs for boundary types
+- Deleted files/modules: none; change visibility only after consumer migration.
+- New types/methods/functions: none expected.
+- Modified types/methods/functions:
+  - module visibility/reexport declarations
+  - docs for `EmbeddingBackend` and `EmbeddingProfile`
+- Deleted types/methods/functions: none expected.
+- Production LOC change: `-20..120` net.
+- Test/docs LOC change: `+40..140`.
+
+### Phase 11 Inventory
+
+- New dirs/files/modules: none expected.
+- Modified files/modules:
+  - `crates/rmc-indexing/src/indexing/mod.rs`
+  - implementation modules whose visibility changes:
+    `tantivy_adapter`, `identity`, `merkle`, `retry`, `consistency`,
+    `indexer_core`
+  - tests/benches/tools still importing implementation modules
+- Deleted files/modules: none expected.
+- New types/methods/functions: none expected.
+- Modified types/methods/functions:
+  - visibility/reexport declarations
+  - docs for official indexing facades
+- Deleted types/methods/functions: none expected; do not delete
+  `IncrementalIndexer`.
+- Production LOC change: `-20..160` net.
+- Test/docs LOC change: `+80..260`.
+
+### Phase 12 Inventory
+
+- New dirs/files/modules: none expected.
+- Modified files/modules:
+  - `crates/rmc-graph/src/graph/mod.rs`
+  - `crates/rmc-graph/src/graph/query/mod.rs`
+  - graph facade modules added in phases 5-8
+  - tests/debug binaries/examples importing graph internals
+- Deleted files/modules: none expected.
+- New types/methods/functions: none expected.
+- Modified types/methods/functions:
+  - visibility/reexport declarations
+  - compatibility docs on remaining broad exports
+- Deleted types/methods/functions: no behavior deletion expected; remove
+  reexports only after MCP evidence allows it.
+- Production LOC change: `-40..180` net.
+- Test/docs LOC change: `+120..320`.
+
+### Phase 13 Inventory
+
+- New dirs/files/modules: none expected.
+- Modified files:
+  - `.docs/boundries-cleanup-progress.md`
+  - boundary reports if final verification needs a short appendix
+- Deleted files/modules: none.
+- New modules/types/methods/functions: none.
+- Modified modules/types/methods/functions: none.
+- Deleted modules/types/methods/functions: none.
+- Production LOC change: `0`.
+- Test/docs LOC change: `+120..300`.
+
 ## Execution Ledger
 
 Create or update this file while executing the plan:
