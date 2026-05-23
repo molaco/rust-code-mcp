@@ -495,7 +495,12 @@ For every phase, record:
   core crate instability values were `rmc_server=0.4`, `rmc_config=0.25`,
   `rmc_indexing=0.125`, `rmc_graph=0.08333333333333333`, and
   `rmc_engine=0.06666666666666667`.
-- Step 4 layering rule check: pending.
+- Step 4 layering rule check: completed. Pre-step `jj show --summary`
+  reported working-copy commit `e7aa57387d7ef146bed8478a8837c866b92493e9`
+  on change `rltttsuqztlllnsluvsyvzmnmswskwss`. MCP
+  `forbidden_dependency_check` ran the five planned rules with
+  `summary=false` and `limit=300`; result was `violation_count=0` and
+  `total_match_count=0`.
 - Step 5 record baseline in `.docs/boundries-cleanup-progress.md`: pending.
 - Step 6 phase ledger commit: pending.
 
