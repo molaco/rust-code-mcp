@@ -385,10 +385,48 @@
 - Step 1 `jj show --summary`: completed at working-copy commit
   `6310c735f1fa7e5662a932a85bb1b0bcfff08ac2`, change
   `quywnkvozwmxoypwwmorprwvnzkmxqvk`.
+- Step 2 responsibility split: completed after pre-step summary at commit
+  `f8e17fd39098744e20a0b3d3a81d4e45a73db846`, change
+  `vxylvrnxzysozqmnrxplqmllwlyuomll`.
 
 ### MCP Evidence
 
-- Pending refresh for Phase 4 Step 2.
+- `build_hypergraph(directory, force_rebuild=false)` reused graph
+  `b2f982db0f3dcfb48cf162255b8d6696` with fingerprint
+  `052f58122ab03d6f58ef20e1a01491d24c9db336182d78ffb39be166f8dc8792`.
+- `who_imports(target="rmc_server::mcp::project_paths::ProjectPaths")`
+  returned eight bindings. Production server importers include query, health,
+  index, and the compatibility `tools::project_paths` module; other importers
+  are tests and integration compatibility.
+- `functions_with_filter(krate="rmc_server", has_param_type="ProjectPaths")`
+  returned six query helpers: `clean_stale_index`, `create_hybrid_search`,
+  `ensure_indexed`, `resolve_query_backend`, `try_open_bm25`, and
+  `vector_metadata_exists`.
+- `module_dependencies(module="rmc_server::mcp::project_paths")` showed mixed
+  ownership dependencies on engine embedding backend/profile APIs,
+  `rmc_indexing::indexing::identity`,
+  `rmc_indexing::indexing::incremental::get_snapshot_path_for_identity`,
+  `directories::ProjectDirs`, and local hashing via `sha2`.
+- `semantic_overlaps(crate_name="rmc_server", item_kind="Function")` found the
+  relevant Phase 4 duplicate clusters:
+  `rmc_server::mcp::project_paths::data_dir` with
+  `rmc_server::tools::endpoints::indexing_support::data_dir`, and
+  backend-resolution helpers in project paths, query, graph similarity, and
+  index.
+
+### Responsibility Split
+
+- Server-owned: MCP-facing data-root discovery, compatibility wrappers,
+  endpoint parameter parsing, MCP error wording, and endpoint-specific fallback
+  behavior.
+- Engine-owned: `EmbeddingBackend`, `EmbeddingProfile`, profile parsing, and
+  profile registry resolution.
+- Indexing-owned: active chunking identity, indexing identity, identity hash,
+  snapshot path derivation, cache/Tantivy/vector artifact path bundle, vector
+  collection naming, and indexed-profile discovery from vector metadata.
+- Compatibility path: keep `rmc_server::mcp::project_paths::ProjectPaths` as a
+  wrapper during Phase 4 while moving the indexing-owned path/identity bundle
+  into `rmc_indexing`.
 
 ### Files Changed
 
@@ -397,7 +435,7 @@
 
 ### Verification
 
-- Pending.
+- Documentation-only responsibility split; no build command required.
 
 ### Commits
 
@@ -405,4 +443,4 @@
 
 ### Remaining Follow-Up
 
-- Split the Phase 4 responsibilities on paper before editing code.
+- Move indexing-owned identity/path helpers into `rmc_indexing`.

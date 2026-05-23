@@ -747,6 +747,21 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `6310c735f1fa7e5662a932a85bb1b0bcfff08ac2` on change
   `quywnkvozwmxoypwwmorprwvnzkmxqvk`, with no description set.
+- Step 2 split responsibilities on paper before editing: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `f8e17fd39098744e20a0b3d3a81d4e45a73db846` on change
+  `vxylvrnxzysozqmnrxplqmllwlyuomll`. Reused graph
+  `b2f982db0f3dcfb48cf162255b8d6696`. MCP evidence showed
+  `ProjectPaths` has eight import bindings, six query helper functions take
+  `ProjectPaths`, and `rmc_server::mcp::project_paths` depends on
+  `rmc_indexing::indexing::identity`, `rmc_indexing::indexing::incremental`,
+  engine embedding profile/backend APIs, `directories`, and `sha2`.
+  `semantic_overlaps` found duplicate server helpers for `data_dir` and
+  embedding-backend resolution. Recorded the Phase 4 ownership split:
+  server keeps data-root discovery and MCP-facing orchestration; indexing owns
+  indexing identity, chunking identity, snapshot derivation, artifact path
+  bundles, vector collection naming, and indexed-profile discovery; engine
+  keeps embedding profile/backend models.
 
 ## Phase 0: Baseline And Safety Checks
 
