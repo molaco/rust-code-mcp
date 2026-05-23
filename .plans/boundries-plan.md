@@ -851,6 +851,12 @@ For every phase, record:
   `.docs/phase-4-boundrie-fix-report.md` and marked the Phase 4 progress
   ledger complete.
 
+### Phase 5: `rmc-graph` Query And Response Facade
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `1244e9892186d5c681827698217f9393db4642aa` on change
+  `vkxwsvmtrwvvuzvrsuuqznxrlwoyrurx`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal

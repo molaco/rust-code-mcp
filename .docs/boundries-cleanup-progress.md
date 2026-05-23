@@ -609,3 +609,38 @@
 ### Remaining Follow-Up
 
 - Start Phase 5.
+
+## Phase 5: `rmc-graph` Query And Response Facade
+
+- Status: in progress.
+- Purpose: give server graph tools a narrower graph-owned query/DTO API so
+  server response code depends less on raw graph model/storage/snapshot
+  internals.
+
+### Step Evidence
+
+- Step 1 `jj show --summary`: completed at working-copy commit
+  `1244e9892186d5c681827698217f9393db4642aa`, change
+  `vkxwsvmtrwvvuzvrsuuqznxrlwoyrurx`.
+
+### MCP Evidence
+
+- Pending Step 2 evidence refresh.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+
+### Verification
+
+- Step 1 was VCS-only; no build command required.
+
+### Commits
+
+- Pending.
+
+### Remaining Follow-Up
+
+- Identify server response helpers that only translate graph internals to MCP
+  DTOs.
