@@ -8,10 +8,9 @@ use rmcp::{
 };
 
 use rmc_engine::embeddings::EmbeddingBackend;
-use rmc_indexing::monitoring::health::HealthMonitor;
-use rmc_engine::search::Bm25Search;
 use crate::mcp::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
 use rmc_engine::vector_store::VectorStore;
+use rmc_indexing::{indexing::open_bm25_search, monitoring::health::HealthMonitor};
 
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -72,7 +71,7 @@ pub(crate) async fn health_check(
     };
 
     // Initialize components (optional)
-    let bm25 = Bm25Search::new(&bm25_path).ok().map(std::sync::Arc::new);
+    let bm25 = open_bm25_search(&bm25_path).ok().map(std::sync::Arc::new);
 
     // Initialize embedded vector store (LanceDB)
     // Path must match unified.rs: cache_path.parent().join("vectors").join(collection_name)
