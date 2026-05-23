@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use rmcp::ErrorData as McpError;
 use rmc_engine::embeddings::{EmbeddingBackend, resolve_profile};
 use rmc_indexing::indexing::{
     IndexedProfilePaths as IndexingIndexedProfilePaths, IndexingProjectPaths,
@@ -66,12 +67,13 @@ pub(crate) fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
 }
 
-pub(crate) fn resolve_embedding_backend(
+pub(crate) fn resolve_embedding_backend_for_mcp(
     embedding_profile: Option<&str>,
     directory: &Path,
-) -> Result<EmbeddingBackend, String> {
+) -> Result<EmbeddingBackend, McpError> {
     if let Some(profile) = embedding_profile {
-        let profile = resolve_profile(profile, directory)?;
+        let profile = resolve_profile(profile, directory)
+            .map_err(|msg| McpError::invalid_params(msg, None))?;
         return Ok(EmbeddingBackend::from_profile(profile));
     }
 

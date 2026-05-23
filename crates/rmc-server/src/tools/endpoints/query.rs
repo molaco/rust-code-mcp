@@ -15,7 +15,7 @@ use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use rmc_engine::search::HybridSearch;
 use rmc_indexing::indexing::open_bm25_search;
 use crate::mcp::project_paths::{
-    ProjectPaths, read_embedder_identity, resolve_embedding_backend,
+    ProjectPaths, read_embedder_identity, resolve_embedding_backend_for_mcp,
 };
 use rmc_engine::vector_store::VectorStore;
 
@@ -280,14 +280,6 @@ pub(crate) async fn create_hybrid_search(
     ))
 }
 
-fn resolve_requested_backend(
-    embedding_profile: Option<&str>,
-    dir_path: &Path,
-) -> Result<EmbeddingBackend, McpError> {
-    resolve_embedding_backend(embedding_profile, dir_path)
-        .map_err(|msg| McpError::invalid_params(msg, None))
-}
-
 /// Format search results into a display string
 fn format_results(
     results: &[rmc_engine::search::SearchResult],
@@ -366,7 +358,7 @@ pub(crate) async fn search(
         ));
     }
 
-    let requested_backend = resolve_requested_backend(embedding_profile, dir_path)?;
+    let requested_backend = resolve_embedding_backend_for_mcp(embedding_profile, dir_path)?;
     let paths = select_index_paths(dir_path, &requested_backend)?;
 
     // Try existing index; if corrupt or missing, rebuild
@@ -435,7 +427,7 @@ pub(crate) async fn get_similar_code(
         ));
     }
 
-    let requested_backend = resolve_requested_backend(embedding_profile, dir_path)?;
+    let requested_backend = resolve_embedding_backend_for_mcp(embedding_profile, dir_path)?;
     let paths = select_index_paths(dir_path, &requested_backend)?;
 
     let hybrid_search = create_hybrid_search(&paths, None, requested_backend).await?;

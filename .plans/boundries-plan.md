@@ -805,6 +805,21 @@ For every phase, record:
   `data_dir` duplicate cluster. The focused server check passed with existing
   warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
+- Step 6 consolidate backend-resolution variants used by index, query, graph
+  similarity, and project paths: completed. Pre-step `jj show --summary`
+  reported working-copy commit `54bcf32df81709850cc9f7941a72ecb57bf1bb7c`
+  on change `mvqwqpkyuoxumrkotrmvqurkxuuqpqps`. Added one MCP-facing
+  `resolve_embedding_backend_for_mcp` helper in
+  `rmc_server::mcp::project_paths`, migrated query and graph similarity to it,
+  and removed `resolve_requested_backend`, `resolve_graph_tool_backend`, and
+  the now-redundant string-returning project-path resolver. The index endpoint
+  keeps its small `resolve_backend` wrapper because it owns the legacy `model`
+  parameter. Refreshed graph `2c6dfe88c8bad3b7db1838a94b00287b` shows
+  server `EmbeddingBackend`-returning helpers reduced to the shared MCP helper
+  plus the index legacy-model wrapper. `semantic_overlaps` shows the resolver
+  cluster reduced from four endpoint-specific helpers to those two functions.
+  The focused resolver tests passed with three tests:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server resolve_backend`.
 
 ## Phase 0: Baseline And Safety Checks
 

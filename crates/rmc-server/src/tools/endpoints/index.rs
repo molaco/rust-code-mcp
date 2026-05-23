@@ -7,7 +7,7 @@ use rmc_engine::embeddings::{EmbeddingBackend, Qwen3Variant};
 use rmc_indexing::indexing::{
     index_project_incrementally, IncrementalIndexRequest, IndexStats,
 };
-use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend};
+use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend_for_mcp};
 use rmc_engine::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
 use std::path::PathBuf;
@@ -51,8 +51,7 @@ fn resolve_backend(
     project_root: &std::path::Path,
 ) -> Result<EmbeddingBackend, McpError> {
     if embedding_profile.is_some() {
-        return resolve_embedding_backend(embedding_profile, project_root)
-            .map_err(|msg| McpError::invalid_params(msg, None));
+        return resolve_embedding_backend_for_mcp(embedding_profile, project_root);
     }
 
     let Some(s) = model else {

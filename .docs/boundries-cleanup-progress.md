@@ -400,6 +400,9 @@
 - Step 5 duplicate `data_dir` helper consolidation: completed after pre-step
   summary at commit `69e7b3d7daf2059e70c1e0bf4766dfa0a8afc309`, change
   `kkpottulqvowxsykxzsokrmwvsnyrmtt`.
+- Step 6 backend resolver consolidation: completed after pre-step summary at
+  commit `54bcf32df81709850cc9f7941a72ecb57bf1bb7c`, change
+  `mvqwqpkyuoxumrkotrmvqurkxuuqpqps`.
 
 ### MCP Evidence
 
@@ -480,6 +483,31 @@
 - Step 5 `semantic_overlaps(crate_name="rmc_server", item_kind="Function")`
   no longer reports the old `data_dir` duplicate cluster. The backend
   resolver cluster remains for Step 6.
+- After Step 6, `build_hypergraph(directory, force_rebuild=true)` produced
+  graph `2c6dfe88c8bad3b7db1838a94b00287b` with fingerprint
+  `680958b42dd9eaa0c1d72a5958fc985c38673f053fd17072d09aeda0eaa58b6d`.
+- Step 6 `rg` evidence found no remaining
+  `resolve_requested_backend`, `resolve_graph_tool_backend`, or
+  `resolve_embedding_backend(` references.
+- Step 6
+  `functions_with_filter(krate="rmc_server", returns_type_pattern="EmbeddingBackend")`
+  now returns two helpers: the shared
+  `rmc_server::mcp::project_paths::resolve_embedding_backend_for_mcp` and
+  the index endpoint's legacy-model wrapper
+  `rmc_server::tools::endpoints::index::resolve_backend`.
+- Step 6 `who_imports(target="rmc_server::mcp::project_paths::resolve_embedding_backend_for_mcp")`
+  shows production importers in index, query, and graph similarity, plus
+  compatibility/test imports.
+- Step 6 `module_dependencies(module="rmc_server::tools::graph::similarity")`
+  now lists `rmc_server::mcp::project_paths`; the local
+  `resolve_graph_tool_backend` function is gone.
+- Step 6 `module_dependencies(module="rmc_server::tools::endpoints::query")`
+  now lists `rmc_server::mcp::project_paths`; the local
+  `resolve_requested_backend` function is gone.
+- Step 6 `semantic_overlaps(crate_name="rmc_server", item_kind="Function")`
+  shows the backend resolver cluster reduced to
+  `resolve_embedding_backend_for_mcp` and the index endpoint's
+  `resolve_backend`, which remains for the legacy `model` parameter.
 
 ### Responsibility Split
 
@@ -511,7 +539,10 @@
 - `crates/rmc-indexing/src/indexing/project_paths.rs`
 - `crates/rmc-server/Cargo.toml`
 - `crates/rmc-server/src/mcp/project_paths.rs`
+- `crates/rmc-server/src/tools/endpoints/index.rs`
 - `crates/rmc-server/src/tools/endpoints/indexing_support.rs`
+- `crates/rmc-server/src/tools/endpoints/query.rs`
+- `crates/rmc-server/src/tools/graph/similarity.rs`
 
 ### Verification
 
@@ -521,6 +552,9 @@
   command required because no code changed.
 - Step 5 focused server check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
+- Step 6 focused resolver tests passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server resolve_backend`.
+  Result: three resolver tests passed.
 - Step 3 focused check passed before commit with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing -p rmc-server --jobs 1`.
 - Step 3 regular focused test passed with existing warnings:
@@ -534,7 +568,8 @@
 - Indexing project paths: `8755d084` (`refactor: move indexing project paths`).
 - Project path move docs: `7a54b668` (`docs: record phase 4 project path move`).
 - Compatibility wrapper docs: `31d872eb` (`docs: record phase 4 compatibility wrapper`).
+- Data dir helper consolidation: `9c666fdd` (`refactor: consolidate server data dir helper`).
 
 ### Remaining Follow-Up
 
-- Consolidate backend-resolution variants.
+- Verify Phase 4 with semantic overlap and import checks.

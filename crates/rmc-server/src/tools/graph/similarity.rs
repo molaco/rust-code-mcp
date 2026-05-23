@@ -5,8 +5,7 @@
 //! pairwise/clustered duplicate-detection audit (`semantic_overlaps`). Both
 //! resolve seed Items by qualified name, embed source bytes via the
 //! configured backend (cached vectors live in LMDB), and run cosine
-//! similarity over the result set. They share `resolve_graph_tool_backend`
-//! for embedding-profile resolution and reach cluster/page helpers + the
+//! similarity over the result set. They reach cluster/page helpers + the
 //! shared `ItemRef` / `SimilarityCluster` shapes via
 //! `crate::tools::graph::response::*`.
 
@@ -18,6 +17,7 @@ use serde::Serialize;
 
 use rmc_graph::graph::labels::item_kind_short_label as short_item_kind_label;
 use rmc_graph::graph::{Node, NodeId, NodeKind};
+use crate::mcp::project_paths::resolve_embedding_backend_for_mcp;
 use crate::tools::graph::response::*;
 use crate::tools::params::{SemanticOverlapsParams, SimilarToItemParams};
 
@@ -87,9 +87,9 @@ pub(crate) async fn similar_to_item(
 
     // 3. Run vector-only search against the index built with the
     //    requested embedding profile (the default profile when unset).
-    let backend = resolve_graph_tool_backend(
+    let backend = resolve_embedding_backend_for_mcp(
         params.embedding_profile.as_deref(),
-        &params.directory,
+        Path::new(&params.directory),
     )?;
     let paths = crate::mcp::project_paths::ProjectPaths::from_directory(
         Path::new(&params.directory),
@@ -205,9 +205,9 @@ pub(crate) async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = params.directory.clone();
-    let backend = resolve_graph_tool_backend(
+    let backend = resolve_embedding_backend_for_mcp(
         params.embedding_profile.as_deref(),
-        &directory,
+        Path::new(&directory),
     )?;
     // Default cutoff is model-derived: cosine-similarity scales differ
     // between embedding models, and `ensure_embeddings_for` embeds with
@@ -494,23 +494,6 @@ pub(crate) async fn semantic_overlaps(
         pairs: None,
         clusters: Some(clusters),
     })
-}
-
-/// Resolve an optional `embedding_profile` argument into an
-/// `EmbeddingBackend`, falling back to the default profile when unset.
-///
-/// Shared by the hypergraph-backed similarity tools (`similar_to_item`,
-/// `semantic_overlaps`). A profile name is resolved against the registry
-/// — built-ins plus any `embedding_profiles.toml` in `directory`.
-fn resolve_graph_tool_backend(
-    embedding_profile: Option<&str>,
-    directory: &str,
-) -> Result<rmc_engine::embeddings::EmbeddingBackend, McpError> {
-    crate::mcp::project_paths::resolve_embedding_backend(
-        embedding_profile,
-        Path::new(directory),
-    )
-    .map_err(|msg| McpError::invalid_params(msg, None))
 }
 
 // ----- response shapes -----
