@@ -680,6 +680,14 @@ For every phase, record:
   `index_project_incrementally`, then reexported the facade from
   `rmc_indexing::indexing`. Verification passed with
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-indexing --jobs 1`.
+- Step 3 confirm facade shape owns incremental construction/change detection:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `0152c6a925058b57321b1492e746cf5aa24dbef5` on change
+  `pklqnpxkpkrmlnokklzvpxyumkkltmvy`. The service facade accepts the
+  codebase path, server-resolved index paths, backend, embedder identity,
+  optional snapshot path, and force option, while indexing owns
+  `IncrementalIndexer::with_backend`, force-clear execution, and
+  `index_with_change_detection`.
 
 ## Phase 0: Baseline And Safety Checks
 

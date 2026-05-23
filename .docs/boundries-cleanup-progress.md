@@ -271,6 +271,12 @@
 - Step 2 incremental service facade: completed after pre-step summary at
   commit `cc2120bcf258f176c0a0699a87b8dc1d8ecf94d6`, change
   `nqxrrlqkuzrnvlspsoyxxrqsmsvomroq`.
+- Step 3 facade shape check: completed after pre-step summary at commit
+  `0152c6a925058b57321b1492e746cf5aa24dbef5`, change
+  `pklqnpxkpkrmlnokklzvpxyumkkltmvy`. The new facade accepts directory,
+  backend, path, identity, snapshot, codebase-size, and force options while
+  keeping `IncrementalIndexer` construction and change detection inside
+  `rmc_indexing`.
 
 ### MCP Evidence
 
@@ -314,5 +320,4 @@
 
 ### Remaining Follow-Up
 
-- Confirm the facade shape owns incremental construction and Merkle/change
-  detection policy before migrating server callers.
+- Migrate the server index endpoint to `index_project_incrementally`.
