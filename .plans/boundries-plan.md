@@ -909,6 +909,21 @@ For every phase, record:
   `response::visibility_label` helpers. Verification:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`
   passed with existing warnings.
+- Step 6 verify fewer server functions accept `OpenedSnapshot` directly:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `de6bccdac20a01f7ad783bfbd2aebc13a465e680` on change
+  `rsuvtstwwrvpurzwpsxzwysqvxtzuxnu`, with no description set.
+  `build_hypergraph(force_rebuild=false)` built graph
+  `085eaff90b1189f8e7a4dc3374610742`, fingerprint
+  `349e4a62bdb66681623fdc7432c538e80f98e667ffd92cac4a9400383a022759`.
+  `functions_with_filter(has_param_type="OpenedSnapshot")` now reports two
+  server graph helpers instead of the Step 2 baseline of seven:
+  `response::resolve_chunk_to_item` and `response::resolve_required_node`.
+  `module_dependencies` also shows `core` no longer depends on
+  `rmc_graph::graph::labels`; `surface` no longer imports
+  `rmc_graph::graph::snapshot`; remaining raw graph dependencies are tied to
+  still-server-owned response/opening/resolution logic and non-enrichment
+  surface endpoints.
 
 ## Phase 0: Baseline And Safety Checks
 

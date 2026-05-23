@@ -635,6 +635,9 @@
   path after pre-step summary at working-copy commit
   `4921f7af669a97f6121d01dc59f2f65c3a5e5657`, change
   `mpturlnmpmxxypolrmpqkmuvyoorttso`.
+- Step 6 MCP verification: completed after pre-step summary at working-copy
+  commit `de6bccdac20a01f7ad783bfbd2aebc13a465e680`, change
+  `rsuvtstwwrvpurzwpsxzwysqvxtzuxnu`.
 
 ### MCP Evidence
 
@@ -654,6 +657,19 @@
   `response::resolve_chunk_to_item`, `response::resolve_required_node`,
   `response::visibility_label`, `surface::enrich_crate_dead_pub`, and
   `surface::enrich_dead_pub`.
+- After Step 5, `build_hypergraph(force_rebuild=false)` built graph
+  `085eaff90b1189f8e7a4dc3374610742`, fingerprint
+  `349e4a62bdb66681623fdc7432c538e80f98e667ffd92cac4a9400383a022759`.
+- After Step 5, `functions_with_filter(has_param_type="OpenedSnapshot")`
+  reported two remaining server helpers: `response::resolve_chunk_to_item`
+  and `response::resolve_required_node`.
+- After Step 5, `module_dependencies` shows:
+  - `core` no longer depends on `rmc_graph::graph::labels`.
+  - `surface` has `rmc_graph::graph::snapshot` import count `0`; remaining
+    snapshot usage is through the opened snapshot value and non-enrichment
+    endpoint calls.
+  - `response` still depends on `snapshot` and `storage` because
+    `open_workspace_snapshot` remains server-owned in this phase.
 
 ### Source-Read Result
 
@@ -704,6 +720,7 @@
 - Step 4 was source/serde-shape verification only; no build command required.
 - Step 5 server check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
+- Step 6 used MCP verification only; no build command required.
 
 ### Commits
 
@@ -712,10 +729,11 @@
   (`docs: record phase 5 response boundary evidence`).
 - Step 3 implementation: `558106bc` (`refactor: add graph enrichment facade`).
 - Step 4 documentation: `03e73ec4` (`docs: record phase 5 dto shape check`).
-- Step 5 implementation: pending.
+- Step 5 implementation: `d35b211d`
+  (`refactor: use graph enrichment facade in server`).
+- Step 6 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Verify with MCP that fewer server functions accept `OpenedSnapshot` directly
-  and that server graph dependencies on graph internals are reduced where
-  practical.
+- Keep existing graph exports for compatibility, run the final focused checks,
+  update the ledger, and write the Phase 5 report.
