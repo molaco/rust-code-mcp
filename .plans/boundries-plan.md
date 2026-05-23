@@ -953,6 +953,12 @@ For every phase, record:
   `.docs/phase-5-boundrie-fix-report.md` and marked the Phase 5 progress
   ledger complete.
 
+### Phase 6: `rmc-graph` Audit Facade
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `aba7ca27e917ab5b3dd8633befc7f65e6a1b3584` on change
+  `ulzuvpoonzuyywyvqlrxrlrwsuvuwsuw`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal

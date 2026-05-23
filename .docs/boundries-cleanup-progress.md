@@ -757,8 +757,41 @@
 - Step 7 documentation: `51ea5085` (`docs: verify phase 5 graph exports`).
 - Step 8 documentation: `af625dd1` (`docs: record phase 5 check result`).
 - Step 9 ledger update: `a9a303a0` (`docs: record phase 5 ledger`).
-- Phase 5 report: pending.
+- Phase 5 report: `72fb3231` (`docs: add phase 5 boundaries report`).
 
 ### Remaining Follow-Up
 
-- Start Phase 6.
+- None.
+
+## Phase 6: `rmc-graph` Audit Facade
+
+- Status: in progress.
+- Purpose: move graph audit orchestration behind graph-owned entry points so
+  server audit tools only parse MCP params and wrap graph-owned results.
+
+### Step Evidence
+
+- Step 1 `jj show --summary`: completed at working-copy commit
+  `aba7ca27e917ab5b3dd8633befc7f65e6a1b3584`, change
+  `ulzuvpoonzuyywyvqlrxrlrwsuvuwsuw`.
+
+### MCP Evidence
+
+- Pending Step 2 evidence refresh.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+
+### Verification
+
+- Step 1 was VCS-only; no build command required.
+
+### Commits
+
+- Pending.
+
+### Remaining Follow-Up
+
+- Refresh MCP evidence for server graph audit dependencies.
