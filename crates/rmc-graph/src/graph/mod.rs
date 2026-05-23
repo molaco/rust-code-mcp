@@ -41,7 +41,8 @@ pub use model::{
 };
 pub(crate) use model::EmbeddingRecord;
 pub use query::model::{
-    CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EnrichedCallSite,
+    CallGraphNode, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding, EnrichedBinding,
+    EnrichedCallSite, EnrichedCrateDeadPub, EnrichedDeadPub, EnrichedUsage,
     ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter, FunctionWithSignature,
     ItemWithAttribute, ModuleDependency, ModuleDependencySymbol, ModuleTreeNode, OverlapScope,
     OverlapsReport, PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursiveCallersCount,

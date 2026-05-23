@@ -36,6 +36,57 @@ pub struct CrateDeadPub {
     pub findings: Vec<DeadPubFinding>,
 }
 
+/// Binding row enriched with display labels and resolved node names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnrichedBinding {
+    pub visible_name: String,
+    pub namespace: String,
+    pub kind: String,
+    pub visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_module: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+}
+
+/// Usage row enriched with display labels and resolved consumer names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnrichedUsage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<u32>,
+    pub category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_module: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumer_function: Option<String>,
+}
+
+/// Dead public item enriched with display labels and navigable source span.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnrichedDeadPub {
+    pub qualified_name: String,
+    pub item_kind: String,
+    pub declared_visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(u32, u32)>,
+}
+
+/// Per-crate dead-public report with enriched findings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnrichedCrateDeadPub {
+    #[serde(rename = "crate")]
+    pub krate: String,
+    pub findings: Vec<EnrichedDeadPub>,
+}
+
 /// One target module (or external symbol when no local module can be resolved)
 /// referenced by a source module. Import counts come from `use` / `extern crate`
 /// bindings; usage counts come from non-import references, including fully

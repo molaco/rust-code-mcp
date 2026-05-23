@@ -878,6 +878,16 @@ For every phase, record:
   Keep `open_workspace_snapshot` server-owned for now because it maps
   directory/storage failures into MCP tool errors. Leave `resolve_chunk_to_item`
   for a later pass because it currently has no production caller.
+- Step 3 add graph-owned query/DTO helpers for repeated enrichment paths:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `7f998139160dc1b189254ff967624d9de7fc7784` on change
+  `nxmnrtrpuvqmnowsxqzywykvwqvuzyno`, with no description set. Added
+  `graph::query::enrichment` with `OpenedSnapshot` helpers for bindings,
+  usages, dead-public findings, and per-crate dead-public reports. Added and
+  re-exported graph-owned `EnrichedBinding`, `EnrichedUsage`,
+  `EnrichedDeadPub`, and `EnrichedCrateDeadPub` DTOs. Verification:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`
+  passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 

@@ -8,6 +8,7 @@
 pub(super) mod audits;
 pub(super) mod calls;
 pub(super) mod crates;
+pub(super) mod enrichment;
 pub(super) mod functions;
 pub(super) mod imports;
 pub(super) mod model;

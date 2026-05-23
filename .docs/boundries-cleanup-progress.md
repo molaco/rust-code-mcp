@@ -625,6 +625,9 @@
 - Step 2 response-helper inventory: completed after pre-step summary at
   working-copy commit `46cf2ba5e96637b7f6f24525b6adbb8079db2d16`, change
   `psuzmtoxpqzwynpxqtrosrnozstxmqpx`.
+- Step 3 graph-owned enrichment facade: completed after pre-step summary at
+  working-copy commit `7f998139160dc1b189254ff967624d9de7fc7784`, change
+  `nxmnrtrpuvqmnowsxqzywykvwqvuzyno`.
 
 ### MCP Evidence
 
@@ -663,18 +666,26 @@
 
 - `.plans/boundries-plan.md`
 - `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-graph/src/graph/query/enrichment.rs`
+- `crates/rmc-graph/src/graph/query/model.rs`
+- `crates/rmc-graph/src/graph/query/mod.rs`
+- `crates/rmc-graph/src/graph/mod.rs`
 
 ### Verification
 
 - Step 1 was VCS-only; no build command required.
 - Step 2 was evidence/docs-only; no build command required.
+- Step 3 graph-only check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
 
 ### Commits
 
 - Step 1 documentation: `ecd3f445` (`docs: record phase 5 step 1`).
-- Step 2 documentation: pending.
+- Step 2 documentation: `5c12e38e`
+  (`docs: record phase 5 response boundary evidence`).
+- Step 3 implementation: pending.
 
 ### Remaining Follow-Up
 
-- Add graph-owned query/DTO helpers for the repeated binding, usage, and
-  dead-pub enrichment paths.
+- Confirm server-visible DTO shapes stay stable, then migrate server call sites
+  to the graph-owned enrichment facade.
