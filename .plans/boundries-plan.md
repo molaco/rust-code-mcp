@@ -736,6 +736,11 @@ For every phase, record:
   on change `ymyrwrtuxnrnoskvtwxmkuqntpmvknnl`. Updated
   `.docs/boundries-cleanup-progress.md` with Phase 3 evidence, verification,
   changed files, remaining follow-up, and commit ledger.
+- Phase completion report: completed. Pre-step `jj show --summary` reported
+  working-copy commit `494fc714c223d82d77d29f69388bdf814596252d` on change
+  `umpvurtuuzqmzkozulwzkpkrwwxmqnxv`. Wrote
+  `.docs/phase-3-boundrie-fix-report.md` and marked the Phase 3 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 

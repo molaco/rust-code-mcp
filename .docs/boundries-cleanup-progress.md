@@ -258,7 +258,7 @@
 
 ## Phase 3: `rmc-indexing` Incremental Indexing Facade
 
-- Status: in progress.
+- Status: complete.
 - Purpose: stop server index/sync production code from constructing
   `IncrementalIndexer` directly while keeping `IncrementalIndexer` public for
   compatibility.
@@ -295,6 +295,9 @@
 - Step 9 ledger update: completed after pre-step summary at commit
   `93f05ca7ba0647954f8055ed3f2d1290a6abbc56`, change
   `ymyrwrtuxnrnoskvtwxmkuqntpmvknnl`.
+- Phase completion report: completed after pre-step summary at commit
+  `494fc714c223d82d77d29f69388bdf814596252d`, change
+  `umpvurtuuzqmzkozulwzkpkrwwxmqnxv`.
 
 ### MCP Evidence
 
@@ -342,6 +345,7 @@
 - `crates/rmc-indexing/src/indexing/mod.rs`
 - `crates/rmc-server/src/tools/endpoints/index.rs`
 - `crates/rmc-server/src/mcp/sync.rs`
+- `.docs/phase-3-boundrie-fix-report.md`
 
 ### Verification
 
@@ -364,7 +368,8 @@
 - Compatibility export docs: `78f38279` (`docs: record phase 3 compatibility export`).
 - Dependency verification docs: `60fb890b` (`docs: verify phase 3 dependencies`).
 - Check-result docs: `0e28bf4e` (`docs: record phase 3 check result`).
+- Ledger docs: `53d5393b` (`docs: record phase 3 ledger`).
 
 ### Remaining Follow-Up
 
-- Write the Phase 3 completion report.
+- Start Phase 4.
