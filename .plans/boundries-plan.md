@@ -941,6 +941,12 @@ For every phase, record:
   `ytzttuwsmnotnkospomqzxuyvnnrvznw`, with no description set.
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server` passed with existing warnings.
+- Step 9 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `70a9dd8ae962004c496c0c1d1f725b519bf11a26` on change
+  `lswunxmsqyoykmzuyryssvvqrtupsqrt`, with no description set. Phase 5
+  implementation work is complete; the separate phase report remains to be
+  written and committed.
 
 ## Phase 0: Baseline And Safety Checks
 
