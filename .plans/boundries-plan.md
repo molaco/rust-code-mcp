@@ -542,7 +542,12 @@ For every phase, record:
   `.docs/architectural-rules.md` from stale Phase B/Phase C wording to the
   current five-rule crate boundary set, marked documentation-only until CI or a
   repo-local harness exists.
-- Step 4 document MCP command/expected result if documentation-only: pending.
+- Step 4 document MCP command/expected result if documentation-only:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `eb7c2f0aa4737f437cf7e94cfa27be831580755c` on change
+  `nkyplvkotxlpnrszkkqnsumlukxmxqvy`. Updated
+  `.docs/architectural-rules.md` with the exact `build_hypergraph` and
+  `forbidden_dependency_check` calls and the expected zero-violation result.
 - Step 5 record dependency direction: pending.
 - Step 6 verify forbidden dependency check: pending.
 - Step 7 focused nix check if a Rust test/check is added: pending.

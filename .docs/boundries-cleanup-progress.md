@@ -85,6 +85,9 @@
 - Step 3 boundary rule set: completed after pre-step summary at commit
   `de436c0ef016f208ae059a2e512b9ea34987bdcd`, change
   `xywskktvkkwvkywrnyxzsuwxwqnxnpqu`.
+- Step 4 documentation-only command/result: completed after pre-step summary
+  at commit `eb7c2f0aa4737f437cf7e94cfa27be831580755c`, change
+  `nkyplvkotxlpnrszkkqnsumlukxmxqvy`.
 
 ### MCP Evidence
 
@@ -113,4 +116,4 @@
 
 ### Remaining Follow-Up
 
-- Document the exact MCP command with expected zero-violation output.
+- Record the exact dependency direction.

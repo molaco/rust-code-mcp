@@ -44,13 +44,61 @@ a repo-local test harness.
 
 ## How to run the check
 
-From inside the workspace (with `mcp__rust-code-mcp` available, e.g. via Claude Code):
+This is documentation-only enforcement. Run the check manually with the
+`rust-code-mcp-refactor` MCP tools:
 
-1. Refresh the snapshot: `mcp__rust-code-mcp__build_hypergraph` with `directory = .`.
-2. Call `mcp__rust-code-mcp__forbidden_dependency_check` with the rule set above.
-3. Expect `"violation_count": 0`.
+```text
+build_hypergraph(
+  directory="/home/molaco/Documents/rust-code-mcp-refactor",
+  force_rebuild=false
+)
 
-The check is also available via the project's main binary (`rust-code-mcp` itself ships this tool — it's dogfooding).
+forbidden_dependency_check(
+  directory="/home/molaco/Documents/rust-code-mcp-refactor",
+  rules=[
+    {
+      consumer: "rmc_engine",
+      producer: "rmc_*",
+      severity: "error",
+      message: "rmc_engine is the foundation crate and must not depend on other rmc_* crates"
+    },
+    {
+      consumer: "rmc_graph",
+      producer: "rmc_server",
+      severity: "error",
+      message: "rmc_graph must not depend on the MCP server layer"
+    },
+    {
+      consumer: "rmc_graph",
+      producer: "rmc_indexing",
+      severity: "warn",
+      message: "rmc_graph should remain independent from indexing"
+    },
+    {
+      consumer: "rmc_indexing",
+      producer: "rmc_server",
+      severity: "error",
+      message: "rmc_indexing must not depend on the MCP server layer"
+    },
+    {
+      consumer: "rmc_indexing",
+      producer: "rmc_graph",
+      severity: "warn",
+      message: "rmc_indexing should remain independent from graph"
+    }
+  ],
+  summary=false,
+  limit=300
+)
+```
+
+Expected result:
+
+```text
+rule_count=5
+violation_count=0
+total_match_count=0
+```
 
 ## Phase C extension (planned, not yet enforced)
 
