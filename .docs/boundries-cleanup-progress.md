@@ -612,7 +612,7 @@
 
 ## Phase 5: `rmc-graph` Query And Response Facade
 
-- Status: implementation complete; phase report pending.
+- Status: complete.
 - Purpose: give server graph tools a narrower graph-owned query/DTO API so
   server response code depends less on raw graph model/storage/snapshot
   internals.
@@ -727,6 +727,7 @@
 - `crates/rmc-server/src/tools/graph/core.rs`
 - `crates/rmc-server/src/tools/graph/surface.rs`
 - `crates/rmc-server/src/tools/graph/response.rs`
+- `.docs/phase-5-boundrie-fix-report.md`
 
 ### Verification
 
@@ -755,8 +756,9 @@
   (`docs: verify phase 5 snapshot boundary`).
 - Step 7 documentation: `51ea5085` (`docs: verify phase 5 graph exports`).
 - Step 8 documentation: `af625dd1` (`docs: record phase 5 check result`).
-- Step 9 ledger update: pending.
+- Step 9 ledger update: `a9a303a0` (`docs: record phase 5 ledger`).
+- Phase 5 report: pending.
 
 ### Remaining Follow-Up
 
-- Write the Phase 5 report.
+- Start Phase 6.

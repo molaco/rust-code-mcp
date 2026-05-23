@@ -947,6 +947,11 @@ For every phase, record:
   `lswunxmsqyoykmzuyryssvvqrtupsqrt`, with no description set. Phase 5
   implementation work is complete; the separate phase report remains to be
   written and committed.
+- Phase 5 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `d5fb2248b18b7f7a930a8e43e1586b6528647f01` on change
+  `nuwpmwmowmwqsokroozulwlrpmmkokvv`, with no description set. Wrote
+  `.docs/phase-5-boundrie-fix-report.md` and marked the Phase 5 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 
