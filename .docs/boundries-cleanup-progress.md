@@ -145,3 +145,20 @@
 ### Remaining Follow-Up
 
 - Start Phase 2.
+
+## Phase 2: `rmc-indexing` Search Facade
+
+- Status: in progress.
+- Purpose: stop server query/codemap production code from opening
+  `TantivyAdapter` directly.
+
+### Step Evidence
+
+- Step 1 `jj show --summary`: completed at working-copy commit
+  `fca77ee055ae15c0176a62da9d84654bbc0beb7b`, change
+  `vpzltotxvvrvnosvqzsytlpnwoklzupw`.
+
+### Remaining Follow-Up
+
+- Refresh MCP evidence for current `TantivyAdapter` dependencies before source
+  edits.

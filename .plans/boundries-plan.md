@@ -580,6 +580,22 @@ For every phase, record:
   `.docs/phase-1-boundrie-fix-report.md` and marked the Phase 1 progress
   ledger complete.
 
+### Phase 2: `rmc-indexing` Search Facade
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `fca77ee055ae15c0176a62da9d84654bbc0beb7b` on change
+  `vpzltotxvvrvnosvqzsytlpnwoklzupw`, with no description set.
+- Step 2 add narrow indexing API for BM25/search opening: pending.
+- Step 3 keep `TantivyAdapter` ownership inside indexing: pending.
+- Step 4 migrate server query code: pending.
+- Step 5 migrate graph codemap server code: pending.
+- Step 6 leave `TantivyAdapter` public for compatibility: pending.
+- Step 7 verify server production modules no longer depend on
+  `tantivy_adapter`: pending.
+- Step 8 run focused nix checks if code changed: pending.
+- Step 9 update ledger and commit: pending.
+- Phase completion report: pending.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
