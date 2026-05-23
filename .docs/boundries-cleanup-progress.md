@@ -641,6 +641,9 @@
 - Step 7 graph export compatibility: completed after pre-step summary at
   working-copy commit `7e351bd2886522f405b4e8dae5c7a03398372960`, change
   `ywoymvywpomsortlzsrsysswkolussyz`.
+- Step 8 focused checks: completed after pre-step summary at working-copy
+  commit `80ca87896b7e6251766396439f3e4f47d9c93d95`, change
+  `ytzttuwsmnotnkospomqzxuyvnnrvznw`.
 
 ### MCP Evidence
 
@@ -733,6 +736,8 @@
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 - Step 6 used MCP verification only; no build command required.
 - Step 7 used MCP export verification only; no build command required.
+- Step 8 combined focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph -p rmc-server`.
 
 ### Commits
 
@@ -745,9 +750,9 @@
   (`refactor: use graph enrichment facade in server`).
 - Step 6 documentation: `0420a460`
   (`docs: verify phase 5 snapshot boundary`).
-- Step 7 documentation: pending.
+- Step 7 documentation: `51ea5085` (`docs: verify phase 5 graph exports`).
+- Step 8 documentation: pending.
 
 ### Remaining Follow-Up
 
-- Run the final focused checks, update the ledger, and write the Phase 5
-  report.
+- Update the ledger and write the Phase 5 report.

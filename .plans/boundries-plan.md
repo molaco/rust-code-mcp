@@ -935,6 +935,12 @@ For every phase, record:
   `DeadPubFinding`, and `CrateDeadPub` remain visible. New graph-owned
   enrichment DTOs `EnrichedBinding`, `EnrichedUsage`, `EnrichedDeadPub`, and
   `EnrichedCrateDeadPub` are also visible.
+- Step 8 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `80ca87896b7e6251766396439f3e4f47d9c93d95` on change
+  `ytzttuwsmnotnkospomqzxuyvnnrvznw`, with no description set.
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server` passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 
