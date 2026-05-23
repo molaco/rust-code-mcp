@@ -972,6 +972,18 @@ For every phase, record:
   `run_fn_body_audit`, plus graph-owned options/result DTOs. Verification:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`
   passed with existing warnings.
+- Step 3 migrate server audit tools to call graph entry points: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `87635fe52b0bd23abe2fdfe0fca66bc73faf9888` on change
+  `ulwzstolouqvzutxpyurqulxlrltxzxy`, with no description set. Updated
+  `rmc_server::tools::graph::audits` to call graph-owned
+  `run_unsafe_audit`, `run_mut_static_audit`, `run_recursion_check`,
+  `run_channel_capacity_audit`, and `run_fn_body_audit`. Server now keeps MCP
+  response envelopes, pagination, summary location stripping, parameter
+  defaults, error mapping, and `spawn_blocking` for RA-load-backed audits.
+  Verification:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`
+  passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 

@@ -777,6 +777,9 @@
 - Step 2 graph-owned audit entry points: completed after pre-step summary at
   working-copy commit `c4258945e608ce3aea72681b42390440dccb7aeb`, change
   `rzwtmmytrvlpqpmoyznrtqolszssmsxv`.
+- Step 3 server audit migration: completed after pre-step summary at
+  working-copy commit `87635fe52b0bd23abe2fdfe0fca66bc73faf9888`, change
+  `ulwzstolouqvzutxpyurqulxlrltxzxy`.
 
 ### MCP Evidence
 
@@ -825,18 +828,23 @@
 - `crates/rmc-graph/src/graph/query/audits.rs`
 - `crates/rmc-graph/src/graph/query/model.rs`
 - `crates/rmc-graph/src/graph/mod.rs`
+- `crates/rmc-server/src/tools/graph/audits.rs`
 
 ### Verification
 
 - Step 1 was VCS-only; no build command required.
 - Step 2 graph-only check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
+- Step 3 server check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 
 ### Commits
 
 - Step 1 documentation: `f6989e95` (`docs: start phase 6 audit facade`).
-- Step 2 implementation: pending.
+- Step 2 implementation: `c045a04f` (`refactor: add graph audit facade`).
+- Step 3 implementation: pending.
 
 ### Remaining Follow-Up
 
-- Migrate server audit tools to call the graph-owned audit facade.
+- Confirm server remains responsible only for MCP parameter parsing and result
+  wrapping.
