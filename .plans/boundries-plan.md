@@ -833,6 +833,12 @@ For every phase, record:
   `semantic_overlaps` reports no `data_dir` cluster and only a two-function
   backend resolver cluster: the shared MCP helper plus the index legacy-model
   wrapper.
+- Step 8 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `f39ef4930e029d287024ee687529aec909c539a8` on change
+  `qmowvluwlrxounuyozuztlmtkykqklpx`. The focused check passed with existing
+  warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-indexing -p rmc-server`.
 
 ## Phase 0: Baseline And Safety Checks
 

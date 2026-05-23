@@ -406,6 +406,9 @@
 - Step 7 semantic/import verification: completed after pre-step summary at
   commit `3144906691a9fa8896a4f4af7d8bffe665ba5474`, change
   `qzmtzqumnzsrlrkxnnyumrprqpvkxwyv`.
+- Step 8 focused nix checks: completed after pre-step summary at commit
+  `f39ef4930e029d287024ee687529aec909c539a8`, change
+  `qmowvluwlrxounuyozuztlmtkykqklpx`.
 
 ### MCP Evidence
 
@@ -570,6 +573,8 @@
   command required because no code changed.
 - Step 7 verification was MCP/source-read only; no build command required
   because no code changed.
+- Step 8 focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-indexing -p rmc-server`.
 - Step 5 focused server check passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 - Step 6 focused resolver tests passed with existing warnings:
@@ -590,7 +595,8 @@
 - Compatibility wrapper docs: `31d872eb` (`docs: record phase 4 compatibility wrapper`).
 - Data dir helper consolidation: `9c666fdd` (`refactor: consolidate server data dir helper`).
 - Backend resolver consolidation: `bdc2d9f4` (`refactor: consolidate backend resolver helpers`).
+- Helper consolidation verification: `d216b1ba` (`docs: verify phase 4 helper consolidation`).
 
 ### Remaining Follow-Up
 
-- Run focused Phase 4 checks through the nix dev shell.
+- Update the Phase 4 ledger and write the phase report.
