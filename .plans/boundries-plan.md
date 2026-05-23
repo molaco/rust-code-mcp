@@ -594,7 +594,13 @@ For every phase, record:
   `rmc_indexing::indexing::tantivy_adapter` through inline references.
   Added `rmc_indexing::indexing::search::open_bm25_search` and reexported it
   from `rmc_indexing::indexing`.
-- Step 3 keep `TantivyAdapter` ownership inside indexing: pending.
+- Step 3 keep `TantivyAdapter` ownership inside indexing: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `826a427bd20ff885143d396195828ca36321d25e` on change
+  `xvtmnykxqyvylnvynkktokluvtwmkqut`. Verified
+  `TantivyAdapter::new` remains used inside `rmc_indexing::indexing::search`
+  and `rmc_indexing::indexing::unified`, while `TantivyAdapter` remains a
+  public compatibility reexport.
 - Step 4 migrate server query code: pending.
 - Step 5 migrate graph codemap server code: pending.
 - Step 6 leave `TantivyAdapter` public for compatibility: pending.

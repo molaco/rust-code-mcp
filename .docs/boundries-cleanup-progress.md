@@ -160,6 +160,9 @@
 - Step 2 indexing search facade: completed after pre-step summary at commit
   `7f3a08365114f8cddf7a3b8b01ee41b7fe057e25`, change
   `ysuwplquvvkqwyptnskkxlqmzymykvkw`.
+- Step 3 Tantivy ownership check: completed after pre-step summary at commit
+  `826a427bd20ff885143d396195828ca36321d25e`, change
+  `xvtmnykxqyvylnvynkktokluvtwmkqut`.
 
 ### MCP Evidence
 
@@ -180,4 +183,4 @@
 
 ### Remaining Follow-Up
 
-- Confirm `TantivyAdapter` remains indexing-owned and public for compatibility.
+- Migrate server query code to `open_bm25_search`.
