@@ -3,10 +3,10 @@
 //! Matches claude-context's SyncManager behavior:
 //! - Runs continuously in background
 //! - Syncs every 5 minutes (configurable)
-//! - Uses IncrementalIndexer for fast change detection
+//! - Uses the indexing incremental service for fast change detection
 //! - Tracks multiple directories independently
 
-use rmc_indexing::indexing::incremental::IncrementalIndexer;
+use rmc_indexing::indexing::{index_project_incrementally, IncrementalIndexRequest};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -125,7 +125,7 @@ impl SyncManager {
 
     /// Sync a single directory
     ///
-    /// Uses IncrementalIndexer for fast change detection:
+    /// Uses the indexing incremental service for fast change detection:
     /// - < 10ms if no changes
     /// - Only reindexes changed files if changes detected
     async fn sync_directory(&self, dir: &Path) -> Result<()> {
@@ -144,23 +144,21 @@ impl SyncManager {
         for indexed in indexes {
             let backend = indexed.backend;
             let paths = indexed.paths;
+            let stored_identity = indexed.stored_identity;
 
-            // Create incremental indexer with the backend recorded in
-            // metadata.json. The stored identity may be a legacy identity, so
-            // pass it through unchanged when reopening the vector store.
-            let mut indexer = IncrementalIndexer::with_backend(
-                &paths.cache_path,
-                &paths.tantivy_path,
-                &paths.collection_name,
-                backend.dim(),
-                &indexed.stored_identity,
-                None,
+            let outcome = index_project_incrementally(IncrementalIndexRequest {
+                codebase_path: dir,
+                cache_path: &paths.cache_path,
+                tantivy_path: &paths.tantivy_path,
+                collection_name: &paths.collection_name,
                 backend,
-            )
+                embedder_identity: &stored_identity,
+                snapshot_path: None,
+                codebase_loc: None,
+                force_reindex: false,
+            })
             .await?;
-
-            // Run incremental indexing
-            let stats = indexer.index_with_change_detection(dir).await?;
+            let stats = outcome.stats;
 
             if stats.indexed_files > 0 {
                 tracing::info!(

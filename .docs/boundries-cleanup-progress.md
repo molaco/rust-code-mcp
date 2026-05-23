@@ -280,6 +280,9 @@
 - Step 4 server index endpoint migration: completed after pre-step summary at
   commit `479b445fcd47137579d8163c82a1c708da2e0d11`, change
   `vzrzzmwnoowxuqryywumzotpoqzyntxz`.
+- Step 5 `SyncManager` migration: completed after pre-step summary at commit
+  `dda24e869997d055f9695b08ca0d8e35ac39a2f4`, change
+  `zuqzzsspslnonryqzuktruxpxtkqwxlm`.
 
 ### MCP Evidence
 
@@ -312,6 +315,7 @@
 - `crates/rmc-indexing/src/indexing/incremental_service.rs`
 - `crates/rmc-indexing/src/indexing/mod.rs`
 - `crates/rmc-server/src/tools/endpoints/index.rs`
+- `crates/rmc-server/src/mcp/sync.rs`
 
 ### Verification
 
@@ -319,6 +323,8 @@
   passed with existing warnings.
 - `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`
   passed with existing warnings.
+- `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`
+  passed again after the `SyncManager` migration, with existing warnings.
 
 ### Commits
 
@@ -326,4 +332,4 @@
 
 ### Remaining Follow-Up
 
-- Migrate `SyncManager` to `index_project_incrementally`.
+- Keep `IncrementalIndexer` and its reexport public for compatibility.

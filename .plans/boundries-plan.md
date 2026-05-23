@@ -698,6 +698,15 @@ For every phase, record:
   `VectorStoreError::VersionMismatch` to the existing actionable MCP error.
   Verification passed with
   `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`.
+- Step 5 migrate `SyncManager` to the facade: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `dda24e869997d055f9695b08ca0d8e35ac39a2f4` on change
+  `zuqzzsspslnonryqzuktruxpxtkqwxlm`. Updated
+  `rmc_server::mcp::sync` to call `index_project_incrementally` for each
+  indexed profile instead of constructing `IncrementalIndexer` directly. The
+  stored embedder identity from `metadata.json` is still passed through for
+  legacy index compatibility. Verification passed with
+  `nix develop ../nix-devshells#cuda-code --command env CUDAFORGE_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=1 cargo check -p rmc-server --jobs 1`.
 
 ## Phase 0: Baseline And Safety Checks
 
