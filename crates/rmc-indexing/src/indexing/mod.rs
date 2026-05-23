@@ -11,11 +11,13 @@ pub mod incremental;
 pub mod indexer_core;
 pub mod merkle;
 pub mod retry;
+pub mod search;
 pub mod tantivy_adapter;
 pub mod unified;
 mod unified_parallel;
 
 pub(crate) use error::IndexingError;
 pub use incremental::{get_snapshot_path, IncrementalIndexer};
+pub use search::open_bm25_search;
 pub use tantivy_adapter::TantivyAdapter;
 pub use unified::{IndexFileResult, IndexStats, UnifiedIndexer};

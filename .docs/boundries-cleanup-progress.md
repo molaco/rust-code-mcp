@@ -157,8 +157,27 @@
 - Step 1 `jj show --summary`: completed at working-copy commit
   `fca77ee055ae15c0176a62da9d84654bbc0beb7b`, change
   `vpzltotxvvrvnosvqzsytlpnwoklzupw`.
+- Step 2 indexing search facade: completed after pre-step summary at commit
+  `7f3a08365114f8cddf7a3b8b01ee41b7fe057e25`, change
+  `ysuwplquvvkqwyptnskkxlqmzymykvkw`.
+
+### MCP Evidence
+
+- `who_imports(target="rmc_indexing::indexing::tantivy_adapter::TantivyAdapter")`
+  returned four bindings, all in indexing modules/tests or the compatibility
+  reexport.
+- `module_dependencies` showed server `query` and `codemap` depend on
+  `rmc_indexing::indexing::tantivy_adapter` through inline references.
+- `get_exports(module="rmc_indexing::indexing", consumer="rmc_server")`
+  confirmed `TantivyAdapter` and the implementation module are still public.
+
+### Files Changed
+
+- `crates/rmc-indexing/src/indexing/search.rs`
+- `crates/rmc-indexing/src/indexing/mod.rs`
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
 
 ### Remaining Follow-Up
 
-- Refresh MCP evidence for current `TantivyAdapter` dependencies before source
-  edits.
+- Confirm `TantivyAdapter` remains indexing-owned and public for compatibility.

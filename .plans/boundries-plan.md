@@ -585,7 +585,15 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `fca77ee055ae15c0176a62da9d84654bbc0beb7b` on change
   `vpzltotxvvrvnosvqzsytlpnwoklzupw`, with no description set.
-- Step 2 add narrow indexing API for BM25/search opening: pending.
+- Step 2 add narrow indexing API for BM25/search opening: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `7f3a08365114f8cddf7a3b8b01ee41b7fe057e25` on change
+  `ysuwplquvvkqwyptnskkxlqmzymykvkw`. MCP evidence showed
+  `rmc_server::tools::endpoints::query` and
+  `rmc_server::tools::graph::codemap` both depend on
+  `rmc_indexing::indexing::tantivy_adapter` through inline references.
+  Added `rmc_indexing::indexing::search::open_bm25_search` and reexported it
+  from `rmc_indexing::indexing`.
 - Step 3 keep `TantivyAdapter` ownership inside indexing: pending.
 - Step 4 migrate server query code: pending.
 - Step 5 migrate graph codemap server code: pending.
