@@ -19,9 +19,17 @@ implementation-module exposure where it is safe.
 
 - Use `jj` first for VCS operations.
 - Before each implementation phase, run `jj show --summary`.
+- Before each phase commit, run `jj status` and confirm the working copy only
+  contains intentional changes for that phase. If unrelated dirty work exists,
+  split the work or stop and record the blocker; do not sweep unrelated changes
+  into the phase commit.
 - After each phase, update the progress notes and commit with `jj commit -m`.
 - Do not run `cargo fmt` or any formatting command.
 - Use MCP tools as the primary evidence source before changing a boundary.
+- Use `module_dependencies` whenever fully qualified inline paths may carry a
+  dependency. `get_imports` and `who_imports` are not sufficient by themselves
+  for verification because they can miss inline references such as
+  `rmc_graph::graph::cosine(...)`.
 - Do not write Python scripts.
 - Do not use stdio MCP harnesses.
 - Source-read only the files/symbols identified by MCP evidence or by compiler
@@ -321,10 +329,12 @@ LOC estimates are rough changed-line ranges. Replace them with actual `jj diff
   - optional page/result wrapper
 - New functions/methods:
   - graph-owned semantic overlap operation
-  - graph-owned similar-to-item operation
+  - optional graph helper that scores already-resolved graph items without
+    opening server/indexing search paths
 - Modified functions/methods:
   - server `semantic_overlaps` graph tool implementation
-  - server `similar_to_item` graph tool implementation
+  - server `similar_to_item` graph tool only if it can call a lower-level graph
+    helper without moving server path/search policy into graph
 - Deleted functions/methods: server-local pairwise cosine/cache orchestration
   after migration.
 - Production LOC change: `+250..520`, with `-140..340` server simplification.
@@ -512,7 +522,7 @@ jj commit -m "docs: start boundaries cleanup ledger"
 - No implementation edits yet.
 - Known dependency direction remains unchanged.
 
-## Phase 1: Workspace Boundary Guardrails
+## Phase 1: Workspace Boundary Rules
 
 ### Goal
 
@@ -529,10 +539,13 @@ module_dependencies(directory, module="rmc_server", summary=true, limit=300)
 forbidden_dependency_check(...same rules as Phase 0...)
 ```
 
-3. Add a documented boundary rule set in the most local existing place. Prefer
-   an existing architecture/audit test if one exists. If not, add a small
-   documentation-only rule section first rather than inventing a new framework.
-4. Record the exact expected dependency direction:
+3. Add a repeatable boundary rule set in the most local existing place. Prefer
+   an existing architecture/audit test if one exists.
+4. If no executable local test pattern exists, add a documentation-only rule
+   section and include the exact MCP `forbidden_dependency_check` command plus
+   expected zero-violation result. Label it as documentation-only, not CI
+   enforcement.
+5. Record the exact expected dependency direction:
 
 ```text
 rmc_server   -> rmc_graph, rmc_indexing, rmc_engine, rmc_config
@@ -541,19 +554,20 @@ rmc_indexing -> rmc_engine, rmc_config
 rmc_engine   -> no rmc_* dependencies
 ```
 
-5. Verify with the MCP forbidden dependency check.
-6. If a Rust test/check is added, run only the focused check through the nix
+6. Verify with the MCP forbidden dependency check.
+7. If a Rust test/check is added, run only the focused check through the nix
    dev shell.
-7. Update the ledger and commit:
+8. Update the ledger and commit:
 
 ```text
-jj commit -m "docs: document crate boundary guardrails"
+jj commit -m "docs: document crate boundary rules"
 ```
 
 ### Success Criteria
 
 - Intended layering is written down in-repo.
-- The rule set can be checked with MCP tools.
+- The rule set can be checked repeatably with MCP tools, and any
+  documentation-only rule is clearly labeled as not yet CI-enforced.
 - No broad code movement yet.
 
 ## Phase 2: `rmc-indexing` Search Facade
@@ -576,9 +590,11 @@ indexing adapter part of the server contract.
 ### MCP Evidence To Refresh
 
 ```text
-who_imports(directory, item="rmc_indexing::indexing::tantivy_adapter", limit=200)
+who_imports(directory, target="rmc_indexing::indexing::tantivy_adapter", limit=200)
 get_imports(directory, module="rmc_server::tools::endpoints::query", summary=false, limit=300)
 get_imports(directory, module="rmc_server::tools::graph::codemap", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::tools::endpoints::query", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::tools::graph::codemap", summary=false, limit=300)
 get_exports(directory, module="rmc_indexing::indexing", consumer="rmc_server", summary=false, limit=300)
 ```
 
@@ -592,8 +608,8 @@ get_exports(directory, module="rmc_indexing::indexing", consumer="rmc_server", s
 4. Migrate server query code to the new indexing facade.
 5. Migrate graph codemap server code to the same facade.
 6. Leave `TantivyAdapter` public for compatibility in this phase.
-7. Verify MCP imports no longer show server production modules importing
-   `tantivy_adapter`.
+7. Verify with `module_dependencies` that server production modules no longer
+   depend on `tantivy_adapter`.
 8. Run focused checks through the nix dev shell if code changed.
 9. Update the ledger and commit:
 
@@ -628,9 +644,11 @@ symbol immediately.
 ### MCP Evidence To Refresh
 
 ```text
-who_imports(directory, item="rmc_indexing::indexing::incremental::IncrementalIndexer", limit=200)
+who_imports(directory, target="rmc_indexing::indexing::incremental::IncrementalIndexer", limit=200)
 get_imports(directory, module="rmc_server::tools::endpoints::index", summary=false, limit=300)
 get_imports(directory, module="rmc_server::mcp::sync", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::tools::endpoints::index", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::mcp::sync", summary=false, limit=300)
 functions_with_filter(directory, krate="rmc_indexing", has_param_type="IncrementalIndexer", summary=true, limit=100)
 ```
 
@@ -643,8 +661,8 @@ functions_with_filter(directory, krate="rmc_indexing", has_param_type="Increment
 4. Migrate server index endpoint to the facade.
 5. Migrate `SyncManager` to the facade.
 6. Keep `IncrementalIndexer` and its current reexport for compatibility.
-7. Verify direct production server imports of `incremental` are gone or
-   intentionally documented.
+7. Verify with `module_dependencies` that direct production server dependency
+   on `incremental` is gone or intentionally documented.
 8. Run focused checks through the nix dev shell.
 9. Update the ledger and commit:
 
@@ -675,11 +693,12 @@ collection names, and indexed profile discovery.
 ### MCP Evidence To Refresh
 
 ```text
-who_imports(directory, item="rmc_server::mcp::project_paths::ProjectPaths", limit=300)
+who_imports(directory, target="rmc_server::mcp::project_paths::ProjectPaths", limit=300)
 functions_with_filter(directory, krate="rmc_server", has_param_type="ProjectPaths", summary=true, limit=100)
 semantic_overlaps(directory, crate_name="rmc_server", item_kind="Function", summary=true, max_pairs=60)
 get_imports(directory, module="rmc_server::mcp::project_paths", summary=false, limit=300)
 get_imports(directory, module="rmc_indexing::indexing::identity", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::mcp::project_paths", summary=false, limit=300)
 ```
 
 ### Steps
@@ -736,6 +755,9 @@ labels, and response-enrichment internals directly.
 get_imports(directory, module="rmc_server::tools::graph::response", summary=false, limit=500)
 get_imports(directory, module="rmc_server::tools::graph::core", summary=false, limit=500)
 get_imports(directory, module="rmc_server::tools::graph::surface", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::graph::response", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::graph::core", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::graph::surface", summary=false, limit=500)
 functions_with_filter(directory, krate="rmc_server", has_param_type="OpenedSnapshot", summary=true, limit=200)
 get_exports(directory, module="rmc_graph::graph", consumer="rmc_server", summary=false, limit=500)
 ```
@@ -784,8 +806,9 @@ directly.
 ### MCP Evidence To Refresh
 
 ```text
-who_imports(directory, item="rmc_graph::graph::loader::load", limit=300)
+who_imports(directory, target="rmc_graph::graph::loader::load", limit=300)
 get_imports(directory, module="rmc_server::tools::graph::audits", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::graph::audits", summary=false, limit=500)
 get_exports(directory, module="rmc_graph::graph", consumer="rmc_server", summary=false, limit=500)
 ```
 
@@ -799,8 +822,8 @@ get_exports(directory, module="rmc_graph::graph", consumer="rmc_server", summary
    - graph DTO construction
 3. Migrate server audit tools to call those entry points.
 4. Keep server responsible only for MCP parameter parsing and result wrapping.
-5. Verify production server imports of `loader::load` and individual audit
-   internals are reduced or removed.
+5. Verify with `module_dependencies` that production server dependencies on
+   `loader::load` and individual audit internals are reduced or removed.
 6. Run focused checks through the nix dev shell.
 7. Update the ledger and commit:
 
@@ -825,6 +848,13 @@ Decision: graph owns embedding-cache and cosine mechanics. Server asks graph
 for similarity results rather than coordinating `ensure_embeddings_for` and
 `cosine` directly.
 
+Scope note: this phase is primarily for `semantic_overlaps`. Do not move the
+whole `similar_to_item` tool into `rmc_graph` unless a clean lower-level search
+facade already exists and the move does not introduce a graph dependency on
+server or indexing. `similar_to_item` currently depends on server project-path
+policy and server hybrid-search construction, so it remains server-owned by
+default.
+
 ### Boundary Problem
 
 Server similarity code coordinates helpers such as embedding cache maintenance
@@ -834,22 +864,25 @@ and cosine math.
 
 ```text
 get_imports(directory, module="rmc_server::tools::graph::similarity", summary=false, limit=500)
-who_imports(directory, item="rmc_graph::graph::embedding_cache::ensure_embeddings_for", limit=300)
-who_imports(directory, item="rmc_graph::graph::math::cosine", limit=300)
+module_dependencies(directory, module="rmc_server::tools::graph::similarity", summary=false, limit=500)
+who_imports(directory, target="rmc_graph::graph::embedding_cache::ensure_embeddings_for", limit=300)
+who_imports(directory, target="rmc_graph::graph::math::cosine", limit=300)
 semantic_overlaps(directory, crate_name="rmc_graph", item_kind="Function", summary=true, max_pairs=40)
 ```
 
 ### Steps
 
 1. Run `jj show --summary`.
-2. Add a graph-owned similarity operation that accepts the necessary query
-   options and returns server-usable DTOs or graph DTOs.
+2. Add a graph-owned semantic-overlap operation that accepts graph/query
+   options and returns graph DTOs.
 3. Keep embedding cache and cosine implementation details inside graph.
-4. Migrate server similarity tools to the facade.
-5. Verify server production imports no longer reach into graph
-   `embedding_cache` or `math`.
-6. Run focused checks through the nix dev shell.
-7. Update the ledger and commit:
+4. Migrate the server `semantic_overlaps` tool to the facade.
+5. Keep `similar_to_item` server-owned unless a safe lower-level graph helper
+   can be used without moving server/indexing path policy into graph.
+6. Verify with `module_dependencies` that server production modules no longer
+   reach into graph `embedding_cache` or `math` for semantic-overlap behavior.
+7. Run focused checks through the nix dev shell.
+8. Update the ledger and commit:
 
 ```text
 jj commit -m "refactor: add graph similarity facade"
@@ -857,9 +890,11 @@ jj commit -m "refactor: add graph similarity facade"
 
 ### Success Criteria
 
-- Server asks graph for similarity results.
+- Server asks graph for semantic-overlap results.
 - Graph owns embedding-cache and scoring mechanics.
 - Public low-level helper use is reduced.
+- `similar_to_item` does not move into graph unless graph can stay independent
+  of server and indexing.
 
 ## Phase 8: `rmc-graph` Storage Cleanup Facade
 
@@ -878,8 +913,9 @@ Server cache code uses graph storage path details through `GraphPaths`.
 ### MCP Evidence To Refresh
 
 ```text
-who_imports(directory, item="rmc_graph::graph::GraphPaths", limit=300)
+who_imports(directory, target="rmc_graph::graph::GraphPaths", limit=300)
 get_imports(directory, module="rmc_server::tools::endpoints::cache", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::tools::endpoints::cache", summary=false, limit=300)
 functions_with_filter(directory, krate="rmc_graph", has_param_type="GraphPaths", summary=true, limit=100)
 ```
 
@@ -889,7 +925,9 @@ functions_with_filter(directory, krate="rmc_graph", has_param_type="GraphPaths",
 2. Add a graph-owned cache/snapshot cleanup API.
 3. Migrate server cache endpoint to call the graph API instead of constructing
    or interpreting graph storage paths directly.
-4. Verify `GraphPaths` use is concentrated in graph snapshot/storage modules.
+4. Verify with `module_dependencies` that server cache code no longer reaches
+   into graph storage layout, and that `GraphPaths` use is concentrated in
+   graph snapshot/storage modules.
 5. Run focused checks through the nix dev shell.
 6. Update the ledger and commit:
 
@@ -972,10 +1010,10 @@ alongside facade exports.
 ```text
 get_exports(directory, module="rmc_engine::search", consumer="rmc_server", summary=false, limit=300)
 get_exports(directory, module="rmc_engine::vector_store", consumer="rmc_server", summary=false, limit=300)
-who_imports(directory, item="rmc_engine::search::bm25", limit=300)
-who_imports(directory, item="rmc_engine::search::resilient", limit=300)
-who_imports(directory, item="rmc_engine::vector_store::lancedb", limit=300)
-who_imports(directory, item="rmc_engine::vector_store::traits", limit=300)
+who_imports(directory, target="rmc_engine::search::bm25", limit=300)
+who_imports(directory, target="rmc_engine::search::resilient", limit=300)
+who_imports(directory, target="rmc_engine::vector_store::lancedb", limit=300)
+who_imports(directory, target="rmc_engine::vector_store::traits", limit=300)
 get_exports(directory, module="rmc_engine::embeddings", consumer="rmc_server", summary=false, limit=300)
 ```
 
@@ -1024,12 +1062,16 @@ need to be public once server uses the new facades.
 
 ```text
 get_exports(directory, module="rmc_indexing::indexing", consumer="rmc_server", summary=false, limit=500)
-who_imports(directory, item="rmc_indexing::indexing::tantivy_adapter", limit=300)
-who_imports(directory, item="rmc_indexing::indexing::identity", limit=300)
-who_imports(directory, item="rmc_indexing::indexing::merkle", limit=300)
-who_imports(directory, item="rmc_indexing::indexing::retry", limit=300)
-who_imports(directory, item="rmc_indexing::indexing::consistency", limit=300)
-who_imports(directory, item="rmc_indexing::indexing::indexer_core", limit=300)
+who_imports(directory, target="rmc_indexing::indexing::tantivy_adapter", limit=300)
+who_imports(directory, target="rmc_indexing::indexing::identity", limit=300)
+who_imports(directory, target="rmc_indexing::indexing::merkle", limit=300)
+who_imports(directory, target="rmc_indexing::indexing::retry", limit=300)
+who_imports(directory, target="rmc_indexing::indexing::consistency", limit=300)
+who_imports(directory, target="rmc_indexing::indexing::indexer_core", limit=300)
+module_dependencies(directory, module="rmc_server::tools::endpoints::query", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::graph::codemap", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::endpoints::index", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::mcp::sync", summary=false, limit=300)
 ```
 
 ### Steps
@@ -1085,12 +1127,18 @@ preserving compatibility where needed.
 ```text
 get_exports(directory, module="rmc_graph::graph", consumer="rmc_server", summary=false, limit=700)
 get_declared_reexports(directory, module="rmc_graph::graph", summary=false, limit=700)
-who_imports(directory, item="rmc_graph::graph::loader", limit=300)
-who_imports(directory, item="rmc_graph::graph::storage", limit=300)
-who_imports(directory, item="rmc_graph::graph::model", limit=300)
-who_imports(directory, item="rmc_graph::graph::ids", limit=300)
-who_imports(directory, item="rmc_graph::graph::bindings", limit=300)
-who_imports(directory, item="rmc_graph::graph::usages", limit=300)
+who_imports(directory, target="rmc_graph::graph::loader", limit=300)
+who_imports(directory, target="rmc_graph::graph::storage", limit=300)
+who_imports(directory, target="rmc_graph::graph::model", limit=300)
+who_imports(directory, target="rmc_graph::graph::ids", limit=300)
+who_imports(directory, target="rmc_graph::graph::bindings", limit=300)
+who_imports(directory, target="rmc_graph::graph::usages", limit=300)
+module_dependencies(directory, module="rmc_server::tools::graph::response", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::core", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::surface", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::audits", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::similarity", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::endpoints::cache", summary=false, limit=500)
 ```
 
 ### Steps
@@ -1151,12 +1199,22 @@ get_exports(directory, module="rmc_indexing::indexing", consumer="rmc_server", s
 get_exports(directory, module="rmc_server", consumer="rmc_server", summary=true, limit=500)
 ```
 
-4. Refresh server deep-import checks:
+4. Refresh server deep-dependency checks. Use both import and dependency tools:
+   `get_imports` catches explicit `use` statements, while
+   `module_dependencies` catches fully qualified inline paths.
 
 ```text
 get_imports(directory, module="rmc_server::tools::graph", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::response", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::core", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::surface", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::audits", summary=false, limit=700)
+module_dependencies(directory, module="rmc_server::tools::graph::similarity", summary=false, limit=700)
 get_imports(directory, module="rmc_server::tools::endpoints::query", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::endpoints::query", summary=false, limit=500)
+module_dependencies(directory, module="rmc_server::tools::endpoints::cache", summary=false, limit=500)
 get_imports(directory, module="rmc_server::mcp::sync", summary=false, limit=300)
+module_dependencies(directory, module="rmc_server::mcp::sync", summary=false, limit=300)
 ```
 
 5. Refresh semantic overlap checks:
@@ -1180,7 +1238,8 @@ jj commit -m "docs: record final boundaries cleanup verification"
 ### Success Criteria
 
 - Forbidden dependency check has no new violations.
-- Server imports fewer graph/indexing internals.
+- Server has fewer graph/indexing internal dependencies, including fully
+  qualified inline references.
 - Public implementation modules are reduced or intentionally documented.
 - Boundary reports/progress notes explain any remaining exceptions.
 
@@ -1189,7 +1248,7 @@ jj commit -m "docs: record final boundaries cleanup verification"
 Use this order unless evidence during a phase shows a safer local sequence:
 
 1. Phase 0: Baseline and safety checks.
-2. Phase 1: Workspace boundary guardrails.
+2. Phase 1: Workspace boundary rules.
 3. Phase 2: Indexing search facade.
 4. Phase 3: Incremental indexing facade.
 5. Phase 4: Project path and identity boundary.
