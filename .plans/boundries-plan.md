@@ -1703,6 +1703,11 @@ For every phase, record:
   `kvpoywpkxnoynymspvyysuxytokuumww`, with no description set. Updated the
   Phase 12 ledger with changed files, verification, MCP evidence, commit
   history, compatibility exceptions, and remaining follow-up.
+- Phase 12 completion report: completed. Pre-report `jj show --summary`
+  reported working-copy commit
+  `9a2c75de241ff9926a987cb8126338cce8aef311` on change
+  `mymsyztxknxnokmtysyzyxrpqmpxzppx`, with no description set. Wrote
+  `.docs/phase-12-boundrie-fix-report.md` and marked Phase 12 complete.
 
 ## Phase 0: Baseline And Safety Checks
 

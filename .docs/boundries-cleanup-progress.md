@@ -1785,7 +1785,17 @@
   (`docs: record graph compatibility exports`).
 - Step 7 documentation: `8f70f1d4`
   (`docs: record phase 12 check result`).
+- Step 8 documentation: `70d39335`
+  (`docs: record phase 12 ledger`).
+
+### Phase Completion
+
+- Phase 12 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `9a2c75de241ff9926a987cb8126338cce8aef311` on change
+  `mymsyztxknxnokmtysyzyxrpqmpxzppx`, with no description set. Wrote
+  `.docs/phase-12-boundrie-fix-report.md` and marked the Phase 12 progress
+  ledger complete.
 
 ### Remaining Follow-Up
 
-- Write the Phase 12 report, mark Phase 12 complete, then start Phase 13.
+- Start Phase 13.
