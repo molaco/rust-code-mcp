@@ -1,0 +1,68 @@
+# Issues 778: Remaining Phase 3-6 Review Items
+
+Source: review list for Phases 3-6 after the boundary cleanup work.
+
+Status baseline:
+
+- Fixed: Phase 5 server test compile regression from stale `EnrichedUsage`
+  import/construction.
+- Fix commit: `8e50ffd1` (`test: fix graph enriched usage test`).
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo test
+  -p rmc-server --no-run` passed with existing warnings.
+
+## Remaining Phase 3 Issues
+
+- Medium: `index_project_incrementally` is the new indexing boundary, but it
+  has no focused tests proving force reindex behavior, backend construction,
+  or facade-level error propagation.
+- Low: `IncrementalIndexOutcome.elapsed` only measures
+  `index_with_change_detection`, not snapshot deletion or `clear_all_data`
+  during force reindex. This preserves prior behavior, but the field name can
+  be misread as total indexing time.
+- Low: Server-side version-mismatch error mapping still depends on
+  `anyhow::Error::downcast_ref::<VectorStoreError>()` after construction moved
+  behind the indexing facade. Add a regression test for the user-facing
+  version-mismatch message.
+
+## Remaining Phase 4 Issues
+
+- Medium: Direct tests for `IndexingProjectPaths` are thin. Most coverage
+  still flows through the server wrapper instead of testing the indexing-owned
+  path policy directly.
+- Low: The test-only server helper mixes an injected vectors root with
+  production `data_dir()` for returned paths. Current tests only check
+  discovery, but future path assertions could be surprised by this.
+- Low / Medium: One malformed vector metadata file can abort all indexed
+  profile discovery. Decide whether strict failure is intended, then document
+  or test that policy.
+
+## Remaining Phase 5 Issues
+
+- Medium: Moved enrichment DTOs changed several fields from `&'static str` to
+  `String`. JSON behavior is preserved, but the static-label guarantee is gone.
+- Medium: Enrichment helpers still swallow snapshot transaction or lookup
+  failures by returning empty or partial data. This was copied behavior, but it
+  is now part of the graph facade API contract.
+- Medium: No focused graph-side tests cover the new enrichment facade and DTO
+  shape.
+
+## Remaining Phase 6 Issues
+
+- Medium: Audit error mapping is string-based. `graph_audit_error` classifies
+  failures by substring matching, which is brittle compared with typed errors.
+- Medium: Some audit handlers still do synchronous graph work inside async
+  handlers. `mut_static_audit` and `recursion_check` call directly, while
+  heavier handlers use `spawn_blocking`.
+- Medium: No focused tests cover graph audit facade DTO mapping or server audit
+  error mapping.
+
+## Current-Suite Issues Not Attributable To Phases 3-6
+
+- High: `rmc-graph` has a stale loader test assumption. The targeted test
+  `graph::loader::tests::load_crate_target_kinds_finds_workspace_targets`
+  expects `src/lib.rs` at the workspace root, but this repo root is a virtual
+  workspace and has no `src/lib.rs`.
+- Medium: `rmc-indexing` tests are not reliably regular in this environment.
+  A targeted `test_calculate_safe_batch_size` hung past 60 seconds, likely
+  because simple unit tests construct `IndexerCore::new`, which initializes the
+  default embedding generator.
