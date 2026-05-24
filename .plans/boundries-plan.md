@@ -1517,6 +1517,11 @@ For every phase, record:
   on change `uvvonrmnuryxwnntprmwqqvukyvwnruz`, with no description set.
   Updated the Phase 10 ledger with changed files, verification, commit
   history, and remaining follow-up.
+- Phase completion report: completed. Pre-report `jj show --summary`
+  reported working-copy commit `3e2d9a6ba3e31f35f831495ffb91fbf80ddaa8e1`
+  on change `kvpnuvmpokupsuyvtnuvtotylmxsypzs`, with no description set.
+  Wrote `.docs/phase-10-boundrie-fix-report.md` and marked the Phase 10
+  progress ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 

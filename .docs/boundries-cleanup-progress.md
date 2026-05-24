@@ -1384,6 +1384,14 @@
 - Step 8 documentation: `93934632`
   (`docs: record phase 10 check result`).
 
+### Phase Completion
+
+- Phase 10 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `3e2d9a6ba3e31f35f831495ffb91fbf80ddaa8e1` on change
+  `kvpnuvmpokupsuyvtnuvtotylmxsypzs`, with no description set. Wrote
+  `.docs/phase-10-boundrie-fix-report.md` and marked the Phase 10 progress
+  ledger complete.
+
 ### Remaining Follow-Up
 
-- Write the Phase 10 completion report, then start Phase 11.
+- Start Phase 11.
