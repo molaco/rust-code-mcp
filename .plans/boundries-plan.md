@@ -1132,6 +1132,14 @@ For every phase, record:
   instead of substring matching. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server`.
+- Phase 6 audit blocking behavior: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `13cdd4282c4e69a0735437c7c574a1569c29127e` on change
+  `uqxnypnpuwuxturwmxuxsorpqwokpknv`, with no description set. Updated
+  `mut_static_audit` and `recursion_check` to run synchronous graph audit
+  facade calls inside `tokio::task::spawn_blocking`, matching the other audit
+  endpoints. Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 
 ## Phase 0: Baseline And Safety Checks
 

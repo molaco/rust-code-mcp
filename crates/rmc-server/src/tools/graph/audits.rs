@@ -4,9 +4,8 @@
 //! endpoint follows the shape documented in `graph_tools.rs`: parse MCP
 //! parameters, call graph-owned audit entry points, paginate, serialize.
 //!
-//! Audits that need a full RA workspace load (`unsafe_audit`,
-//! `channel_capacity_audit`, `fn_body_audit`) wrap the synchronous graph
-//! facade call in `spawn_blocking` so the tokio runtime worker stays free.
+//! Graph audit facade calls are synchronous, so endpoint handlers wrap them in
+//! `spawn_blocking` before rendering MCP responses.
 
 use std::path::PathBuf;
 
@@ -63,7 +62,9 @@ pub(crate) async fn mut_static_audit(
     params: crate::tools::params::MutStaticAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = PathBuf::from(&params.directory);
-    let findings = run_mut_static_audit(&directory)
+    let findings = tokio::task::spawn_blocking(move || run_mut_static_audit(&directory))
+        .await
+        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
         .map_err(graph_audit_error("mut_static_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -94,13 +95,19 @@ pub(crate) async fn recursion_check(
     params: crate::tools::params::RecursionCheckParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = PathBuf::from(&params.directory);
-    let output = run_recursion_check(
-        &directory,
-        RecursionCheckOptions {
-            crate_name: params.crate_name.clone(),
-            max_cycle_length: params.max_cycle_length,
-        },
-    )
+    let crate_name = params.crate_name.clone();
+    let max_cycle_length = params.max_cycle_length;
+    let output = tokio::task::spawn_blocking(move || {
+        run_recursion_check(
+            &directory,
+            RecursionCheckOptions {
+                crate_name,
+                max_cycle_length,
+            },
+        )
+    })
+    .await
+    .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
     .map_err(graph_audit_error("recursion_check"))?;
 
     #[derive(serde::Serialize)]

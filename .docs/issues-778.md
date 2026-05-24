@@ -73,6 +73,10 @@ Status baseline:
   substring matching. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server`.
+- Phase 6 audit blocking behavior: `mut_static_audit` and `recursion_check`
+  now use `tokio::task::spawn_blocking`, matching the other synchronous graph
+  audit facade calls. Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
 
 ## Remaining Phase 3 Issues
 
@@ -88,9 +92,6 @@ Status baseline:
 
 ## Remaining Phase 6 Issues
 
-- Medium: Some audit handlers still do synchronous graph work inside async
-  handlers. `mut_static_audit` and `recursion_check` call directly, while
-  heavier handlers use `spawn_blocking`.
 - Medium: No focused tests cover graph audit facade DTO mapping or server audit
   error mapping.
 
