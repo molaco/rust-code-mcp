@@ -1332,3 +1332,58 @@
   passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
+- Step 9 update ledger and commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `a6239134dec747b3c3c1714df2625bbf306bd9df`
+  on change `uvvonrmnuryxwnntprmwqqvukyvwnruz`, with no description set.
+  Updated the Phase 10 ledger with changed files, verification, commit
+  history, and remaining follow-up.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-engine/src/search/mod.rs`
+- `crates/rmc-engine/src/vector_store/mod.rs`
+- `crates/rmc-engine/src/parser/mod.rs`
+- `crates/rmc-engine/src/embeddings/backend.rs`
+- `crates/rmc-engine/src/embeddings/profile.rs`
+- `crates/rmc-indexing/src/indexing/tantivy_adapter.rs`
+- `crates/rmc-indexing/src/indexing/unified.rs`
+- `crates/rmc-server/src/tools/endpoints/query.rs`
+
+### Verification
+
+- Step 2 MCP/source evidence confirmed no active cross-crate importers of
+  engine implementation modules after production BM25 consumers were migrated
+  to the one-level search facade.
+- Step 3 focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server`.
+- Step 4 focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
+- Step 8 focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
+
+### Commits
+
+- Step 1 documentation: `0a605e3f` (`docs: start phase 10 engine surface`).
+- Step 2 documentation: `55416fc3`
+  (`docs: record phase 10 engine consumers`).
+- Step 3 implementation: `a40c2790`
+  (`refactor: use engine search facade types`).
+- Step 4 implementation: `187b466c`
+  (`refactor: tighten engine implementation modules`).
+- Step 5 documentation: `8aab7525`
+  (`docs: document embedding profile ownership`).
+- Step 6 documentation: `b0b7b27e`
+  (`docs: confirm embedding backend semantics`).
+- Step 7 documentation: `27ebe7af`
+  (`docs: document embedding backend boundary`).
+- Step 8 documentation: `93934632`
+  (`docs: record phase 10 check result`).
+
+### Remaining Follow-Up
+
+- Write the Phase 10 completion report, then start Phase 11.

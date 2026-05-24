@@ -1512,6 +1512,11 @@ For every phase, record:
   passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
+- Step 9 update ledger and commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `a6239134dec747b3c3c1714df2625bbf306bd9df`
+  on change `uvvonrmnuryxwnntprmwqqvukyvwnruz`, with no description set.
+  Updated the Phase 10 ledger with changed files, verification, commit
+  history, and remaining follow-up.
 
 ## Phase 0: Baseline And Safety Checks
 
