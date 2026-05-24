@@ -1799,3 +1799,12 @@
 ### Remaining Follow-Up
 
 - Start Phase 13.
+
+## Phase 13: Final Architecture Verification
+
+### Progress
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `730414f56507ec606ee1bb10cc6e88d5baa774f6` on change
+  `nxmxwtquxzyxxxkqvttqqknvkpwsuqkk`, with no description set. `jj status`
+  reported a clean working copy before Phase 13 verification started.
