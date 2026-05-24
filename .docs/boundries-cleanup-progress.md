@@ -1610,3 +1610,11 @@
 ### Remaining Follow-Up
 
 - Start Phase 12.
+
+## Phase 12: `rmc-graph` Visibility Tightening
+
+### Progress
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `bd54c6908c8042ae3e370500674a33794ebc1098` on change
+  `kuxlmlrylsxmlvxksxnsmyxwsvlsrszo`, with no description set.

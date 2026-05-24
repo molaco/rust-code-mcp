@@ -1631,6 +1631,12 @@ For every phase, record:
   `.docs/phase-11-boundrie-fix-report.md` and marked Phase 11 complete in the
   progress ledger.
 
+### Phase 12: `rmc-graph` Visibility Tightening
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `bd54c6908c8042ae3e370500674a33794ebc1098` on change
+  `kuxlmlrylsxmlvxksxnsmyxwsvlsrszo`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
