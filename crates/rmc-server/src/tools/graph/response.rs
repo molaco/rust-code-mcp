@@ -17,8 +17,7 @@ use rmcp::{
 use serde::Serialize;
 
 use rmc_graph::graph::{
-    GraphEnvOptions, GraphPaths, ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapScope,
-    open_current,
+    ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapScope, open_current_for_workspace,
 };
 use crate::tools::params::ListPaginationParams;
 
@@ -82,9 +81,8 @@ pub(crate) fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot,
     let canonical = dir.canonicalize().map_err(|e| {
         McpError::invalid_params(format!("failed to canonicalize {directory}: {e}"), None)
     })?;
-    let paths = GraphPaths::for_workspace(&canonical);
-    open_current(&paths, GraphEnvOptions::default())
-        .map_err(internal_error("open_current"))?
+    open_current_for_workspace(&canonical)
+        .map_err(internal_error("open_current_for_workspace"))?
         .ok_or_else(|| {
             McpError::invalid_params(
                 format!("no snapshot at {directory} — call build_hypergraph first"),

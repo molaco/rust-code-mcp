@@ -22,8 +22,8 @@ use super::loader::{self, LoadedWorkspace};
 use super::model::{Binding, ExtractionModel, Namespace, Usage};
 use super::storage::{
     CURRENT_POINTER_FILENAME, GraphDatabases, GraphEnvOptions, GraphManifest, GraphPaths,
-    SCHEMA_VERSION, compute_fingerprint, graph_id_for, read_manifest, read_manifest_compatible,
-    write_manifest,
+    SCHEMA_VERSION, compute_fingerprint, default_data_dir, graph_id_for, read_manifest,
+    read_manifest_compatible, write_manifest,
 };
 
 #[derive(Debug, Clone)]
@@ -53,6 +53,98 @@ pub struct BuildResult {
     pub usage_count: u64,
     pub reused: bool,
     pub snapshot_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GraphSnapshotCleanupOptions {
+    pub dry_run: bool,
+    pub data_dir_override: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphSnapshotCleanupEntry {
+    pub label: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GraphSnapshotCleanupReport {
+    pub cleared: Vec<GraphSnapshotCleanupEntry>,
+    pub errors: Vec<String>,
+}
+
+/// Clear the persisted graph snapshot directory for one workspace.
+///
+/// The workspace path is canonicalized when possible, matching the graph
+/// builder/opening path policy. If canonicalization fails, the original path
+/// is still hashed so callers can safely use this for nonexistent paths and
+/// receive an empty report rather than an error.
+pub fn clear_workspace_snapshots(
+    workspace_root: &Path,
+    options: GraphSnapshotCleanupOptions,
+) -> GraphSnapshotCleanupReport {
+    let canonical = fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
+    let base_dir = options.data_dir_override.unwrap_or_else(default_data_dir);
+    let paths = GraphPaths::for_workspace_in(&base_dir, &canonical);
+    let mut report = GraphSnapshotCleanupReport::default();
+    clear_existing_graph_dir(
+        "Hypergraph snapshot",
+        "hypergraph snapshot",
+        &paths.root_dir,
+        options.dry_run,
+        &mut report,
+    );
+    report
+}
+
+/// Clear the root directory that contains all persisted graph snapshots.
+pub fn clear_all_workspace_snapshots(
+    options: GraphSnapshotCleanupOptions,
+) -> GraphSnapshotCleanupReport {
+    let base_dir = options.data_dir_override.unwrap_or_else(default_data_dir);
+    let mut report = GraphSnapshotCleanupReport::default();
+    clear_existing_graph_dir(
+        "All hypergraph snapshots",
+        "hypergraph snapshots",
+        &base_dir,
+        options.dry_run,
+        &mut report,
+    );
+    report
+}
+
+fn clear_existing_graph_dir(
+    label: &str,
+    error_label: &str,
+    path: &Path,
+    dry_run: bool,
+    report: &mut GraphSnapshotCleanupReport,
+) {
+    if !path.exists() {
+        return;
+    }
+    if dry_run {
+        report.cleared.push(GraphSnapshotCleanupEntry {
+            label: label.to_string(),
+            path: path.to_path_buf(),
+        });
+        return;
+    }
+    match fs::remove_dir_all(path) {
+        Ok(()) => report.cleared.push(GraphSnapshotCleanupEntry {
+            label: label.to_string(),
+            path: path.to_path_buf(),
+        }),
+        Err(error) => report
+            .errors
+            .push(format!("Failed to clear {}: {}", error_label, error)),
+    }
+}
+
+/// Open the current published snapshot for a canonical workspace root.
+pub fn open_current_for_workspace(workspace_root: &Path) -> Result<Option<OpenedSnapshot>> {
+    let paths = GraphPaths::for_workspace(workspace_root);
+    open_current(&paths, GraphEnvOptions::default())
 }
 
 pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<BuildResult> {
@@ -526,6 +618,71 @@ mod tests {
     use super::*;
     use crate::graph::model::{BindingKind, NodeKind};
     use std::path::Path;
+
+    #[test]
+    fn clear_workspace_snapshots_dry_run_reports_without_removing() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("workspace");
+        let graphs_root = td.path().join("graphs");
+        fs::create_dir_all(&workspace).unwrap();
+        let paths = GraphPaths::for_workspace_in(&graphs_root, &workspace);
+        fs::create_dir_all(&paths.root_dir).unwrap();
+
+        let report = clear_workspace_snapshots(
+            &workspace,
+            GraphSnapshotCleanupOptions {
+                dry_run: true,
+                data_dir_override: Some(graphs_root),
+            },
+        );
+
+        assert!(paths.root_dir.exists());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.cleared.len(), 1);
+        assert_eq!(report.cleared[0].label, "Hypergraph snapshot");
+        assert_eq!(report.cleared[0].path, paths.root_dir);
+    }
+
+    #[test]
+    fn clear_workspace_snapshots_removes_workspace_root() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("workspace");
+        let graphs_root = td.path().join("graphs");
+        fs::create_dir_all(&workspace).unwrap();
+        let paths = GraphPaths::for_workspace_in(&graphs_root, &workspace);
+        fs::create_dir_all(&paths.root_dir).unwrap();
+
+        let report = clear_workspace_snapshots(
+            &workspace,
+            GraphSnapshotCleanupOptions {
+                dry_run: false,
+                data_dir_override: Some(graphs_root),
+            },
+        );
+
+        assert!(!paths.root_dir.exists());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.cleared.len(), 1);
+        assert_eq!(report.cleared[0].label, "Hypergraph snapshot");
+    }
+
+    #[test]
+    fn clear_all_workspace_snapshots_removes_graph_root() {
+        let td = tempfile::tempdir().unwrap();
+        let graphs_root = td.path().join("graphs");
+        fs::create_dir_all(graphs_root.join("workspace_hash")).unwrap();
+
+        let report = clear_all_workspace_snapshots(GraphSnapshotCleanupOptions {
+            dry_run: false,
+            data_dir_override: Some(graphs_root.clone()),
+        });
+
+        assert!(!graphs_root.exists());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.cleared.len(), 1);
+        assert_eq!(report.cleared[0].label, "All hypergraph snapshots");
+        assert_eq!(report.cleared[0].path, graphs_root);
+    }
 
     #[test]
     fn build_and_open_self_workspace() {

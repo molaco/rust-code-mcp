@@ -1306,6 +1306,31 @@ For every phase, record:
   --command cargo check -p rmc-server` and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
   tests passed).
+- Step 4 storage dependency verification: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `163531c3b4b477154d3f85a6f1b867785003e94d` on change
+  `yypzuvnosopmvpvmwnkskzonvqntrplt`, with no description set. Moved the
+  public cleanup facade to the graph snapshot layer and added
+  `open_current_for_workspace` so server graph response code also stops
+  constructing `GraphPaths` directly. Refreshed the hypergraph:
+  graph `6a0f0a501756b0c9b36c694e073a60fc`, fingerprint
+  `d291e5830be17d570abd3d5892e8c467a858c35d3bfcce3f5617e62be37f118d`.
+  `module_dependencies` for `rmc_server::tools::endpoints::cache` now shows
+  only graph snapshot cleanup dependencies:
+  `GraphSnapshotCleanupOptions`, `GraphSnapshotCleanupReport`,
+  `clear_workspace_snapshots`, and `clear_all_workspace_snapshots`.
+  `get_imports` for the cache endpoint imports only the two snapshot cleanup
+  DTOs from graph. `who_imports` for `GraphPaths` returned 16 bindings, all in
+  graph modules/tests, debug binaries, compatibility reexport, or
+  `probe_workspace`; no server module imports `GraphPaths`. The
+  `functions_with_filter` check found only graph snapshot functions with
+  `GraphPaths` parameters: `open_current`, `open_specific`, and
+  `publish_current`. Supporting verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server`, `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-graph clear_` (3 tests passed), and `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
+  tests passed).
 
 ## Phase 0: Baseline And Safety Checks
 
