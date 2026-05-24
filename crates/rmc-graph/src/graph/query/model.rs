@@ -165,6 +165,65 @@ pub struct FnBodyAuditOutput {
     pub findings: Vec<FnBodyAuditFinding>,
 }
 
+/// Workspace scope represented in semantic-overlap output.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SemanticOverlapScope {
+    pub directory: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crate_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_kind: Option<String>,
+    pub seed_count: usize,
+}
+
+/// A graph item rendered for similarity responses.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SimilarityItem {
+    pub qualified_name: String,
+    pub item_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(u32, u32)>,
+}
+
+/// A pair of graph items that passed the semantic-overlap threshold.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SimilarityPair {
+    pub a: SimilarityItem,
+    pub b: SimilarityItem,
+    pub similarity: f32,
+}
+
+/// Single-linkage cluster of semantically similar graph items.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SimilarityCluster {
+    pub members: Vec<SimilarityItem>,
+    pub avg_similarity: f32,
+    pub min_similarity: f32,
+    pub size: usize,
+    pub truncated: bool,
+}
+
+/// Complete semantic-overlap output rendered by the graph facade.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SemanticOverlapsOutput {
+    pub scope: SemanticOverlapScope,
+    pub threshold: f32,
+    /// Back-compatible alias for `total_pair_count`.
+    pub pair_count: usize,
+    pub total_pair_count: usize,
+    pub total_cluster_count: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub summary: bool,
+    pub output_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairs: Option<Vec<SimilarityPair>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clusters: Option<Vec<SimilarityCluster>>,
+}
+
 /// One target module (or external symbol when no local module can be resolved)
 /// referenced by a source module. Import counts come from `use` / `extern crate`
 /// bindings; usage counts come from non-import references, including fully

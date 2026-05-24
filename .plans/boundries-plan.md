@@ -1198,6 +1198,16 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `039b45e753bd7fb5203b19681768cd5997ad2aa6` on change
   `snlqzpzouynzrmunmsuomvuupqoovtvq`, with no description set.
+- Step 2 add graph-owned semantic-overlap operation: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `6f802d4afdc3ed0b87731cef56667bad87ef4038` on change
+  `qspkvyrummotnxnwqokkmuqsxrlqrzmy`, with no description set. Added
+  `rmc_graph::graph::run_semantic_overlaps` with graph-owned options and
+  similarity DTOs. The new graph query module owns snapshot opening, item
+  enumeration, embedding-cache refresh, identical-source scoring, cosine
+  pair scoring, cluster building, and response DTO construction. Verification
+  passed with existing warnings: `nix develop ../nix-devshells#cuda-code
+  --command cargo check -p rmc-graph`.
 
 ## Phase 0: Baseline And Safety Checks
 

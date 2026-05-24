@@ -907,3 +907,13 @@
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `039b45e753bd7fb5203b19681768cd5997ad2aa6` on change
   `snlqzpzouynzrmunmsuomvuupqoovtvq`, with no description set.
+- Step 2 add graph-owned semantic-overlap operation: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `6f802d4afdc3ed0b87731cef56667bad87ef4038` on change
+  `qspkvyrummotnxnwqokkmuqsxrlqrzmy`, with no description set. Added
+  `crates/rmc-graph/src/graph/query/similarity.rs`, graph-owned
+  `SemanticOverlapOptions`, `GraphSimilarityError`, `run_semantic_overlaps`,
+  and public similarity output DTOs. The facade owns graph item enumeration,
+  embedding-cache refresh, cosine scoring, pair output, and cluster output.
+  Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.

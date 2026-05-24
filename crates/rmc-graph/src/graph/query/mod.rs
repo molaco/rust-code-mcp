@@ -16,6 +16,7 @@ pub(super) mod modules;
 pub(super) mod navigation;
 pub(super) mod overlaps;
 pub(super) mod shared;
+pub(super) mod similarity;
 pub(super) mod surface;
 pub(super) mod usage;
 

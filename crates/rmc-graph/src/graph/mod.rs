@@ -52,7 +52,12 @@ pub use query::model::{
     FunctionFilter, FunctionWithSignature, ItemWithAttribute, ModuleDependency,
     ModuleDependencySymbol, ModuleTreeNode, MutStaticAuditFinding, OverlapScope, OverlapsReport,
     PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursionCheckOutput, RecursionCycle,
-    RecursiveCallersCount, SelfKindFilter, UnsafeAuditFinding, UsageSummaryRow, WorkspaceStats,
+    RecursiveCallersCount, SelfKindFilter, SemanticOverlapScope, SemanticOverlapsOutput,
+    SimilarityCluster, SimilarityItem, SimilarityPair, UnsafeAuditFinding, UsageSummaryRow,
+    WorkspaceStats,
+};
+pub use query::similarity::{
+    GraphSimilarityError, SemanticOverlapOptions, run_semantic_overlaps,
 };
 pub use snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
 pub use storage::{GraphEnvOptions, GraphPaths};
