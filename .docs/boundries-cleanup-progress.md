@@ -1880,3 +1880,27 @@
   parsing helpers. No semantic-overlap result indicated a new layering
   violation; remaining pairs are intentional wrappers, small paired helpers,
   or follow-up refactor candidates outside the boundary cleanup scope.
+- Step 6 focused test/check suite: completed. Pre-step `jj show --summary`
+  reported working-copy commit
+  `3b3dd23319740257da303c2ddd99bf9f7aa79f8f` on change
+  `pxsonpzkpzqlplnzuxsrwyryvmsqnvvr`, with no description set. The following
+  commands passed through the nix dev shell:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-graph -p rmc-server -p rust-code-mcp`;
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rmc-indexing --no-run`;
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  --no-run`;
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  --no-run`;
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example debug_itemscope --example spike_usages --example
+  timing_extract --example benchmark_phases`;
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_merkle_standalone --test test_hybrid_search --test
+  test_mcp_stdio_transport --test test_gpu_index_jsonrpc --no-run`. The
+  commands completed with existing warnings only: the neighboring
+  `nix-devshells` Git tree is dirty, existing `dead_code`/`unreachable_pub`
+  warnings remain, `benchmark_phases` has existing unused variables
+  `index_time` and `actual_start`, and `test_gpu_index_jsonrpc` reports an
+  existing `JsonRpcResponse` dead-code warning.

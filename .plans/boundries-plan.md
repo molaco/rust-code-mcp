@@ -1765,6 +1765,13 @@ For every phase, record:
   `rmc_engine=9` pairs across 7 clusters. No result indicated a new layering
   violation; remaining pairs are intentional wrappers, small paired helpers,
   or follow-up refactor candidates outside the boundary cleanup scope.
+- Step 6 focused test/check suite: completed. Pre-step `jj show --summary`
+  reported working-copy commit
+  `3b3dd23319740257da303c2ddd99bf9f7aa79f8f` on change
+  `pxsonpzkpzqlplnzuxsrwyryvmsqnvvr`, with no description set. The focused
+  crate checks, `--no-run` package test builds, rust-code-mcp example checks,
+  and selected rust-code-mcp integration-test builds all passed through the
+  `cuda-code` nix dev shell with existing warnings only.
 
 ## Phase 0: Baseline And Safety Checks
 
