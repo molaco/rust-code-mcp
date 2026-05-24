@@ -230,4 +230,23 @@ mod tests {
         assert_eq!(indexes[0].stored_identity, legacy_identity);
         assert_eq!(indexes[0].backend.profile.name(), "local-gpu-small");
     }
+
+    #[test]
+    fn indexed_profiles_in_root_returns_paths_under_injected_vectors_root() {
+        let vectors_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rust-code-mcp-injected-root-test");
+        let prefix = collection_prefix(project_dir);
+        let backend = EmbeddingBackend::from_profile_name("local-cpu-small").unwrap();
+        let collection_name = format!("{prefix}cpu");
+        let collection_path = vectors_root.path().join(&collection_name);
+
+        write_metadata(&collection_path, &backend.identity());
+
+        let indexes =
+            ProjectPaths::indexed_profiles_in_root(project_dir, vectors_root.path()).unwrap();
+
+        assert_eq!(indexes.len(), 1);
+        assert_eq!(indexes[0].paths.collection_name, collection_name);
+        assert_eq!(indexes[0].paths.vector_path, collection_path);
+    }
 }

@@ -72,6 +72,23 @@ impl IndexingProjectPaths {
         backend: &EmbeddingBackend,
         collection_name: String,
     ) -> Self {
+        Self::from_existing_collection_name_in_root(
+            data_root,
+            &Self::vectors_root(data_root),
+            dir,
+            backend,
+            collection_name,
+        )
+    }
+
+    /// Build path metadata for an existing vector collection under a known root.
+    pub fn from_existing_collection_name_in_root(
+        data_root: &Path,
+        vectors_root: &Path,
+        dir: &Path,
+        backend: &EmbeddingBackend,
+        collection_name: String,
+    ) -> Self {
         let dir_hash = dir_hash(dir);
         let chunking_identity = active_chunking_identity_for_backend(backend);
         let indexing_identity = indexing_identity(dir, backend, &chunking_identity);
@@ -80,7 +97,7 @@ impl IndexingProjectPaths {
         Self {
             cache_path: data_root.join("cache").join(&dir_hash),
             tantivy_path: data_root.join("index").join(&dir_hash),
-            vector_path: Self::vectors_root(data_root).join(&collection_name),
+            vector_path: vectors_root.join(&collection_name),
             collection_name,
             snapshot_path,
             indexing_identity,
@@ -148,8 +165,13 @@ impl IndexingProjectPaths {
                     vector_path.join("metadata.json").display()
                 )
             })?;
-            let paths =
-                Self::from_existing_collection_name(data_root, dir, &backend, collection_name);
+            let paths = Self::from_existing_collection_name_in_root(
+                data_root,
+                vectors_root,
+                dir,
+                &backend,
+                collection_name,
+            );
 
             indexes.push(IndexedProfilePaths {
                 paths,
@@ -329,6 +351,6 @@ mod tests {
         assert!(profiles.iter().all(|profile| profile
             .paths
             .vector_path
-            .starts_with(data_root.path().join("cache").join("vectors"))));
+            .starts_with(vectors_root.path())));
     }
 }

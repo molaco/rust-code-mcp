@@ -1071,6 +1071,17 @@ For every phase, record:
   discovery. Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
   project_paths::tests`.
+- Phase 4 injected vectors-root behavior: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `9d6b198ed3a009991ed314ef342c299d292181ab` on change
+  `lqrxuumnmtqpqvwpzxluqpvyqqvnurlx`, with no description set. Existing
+  collection path derivation now preserves the vectors root used during
+  discovery, and the server helper has a regression test for returned
+  `vector_path` values under the injected root. Verification passed with
+  existing warnings: `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-indexing project_paths::tests` and `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  mcp::project_paths::tests`.
 
 ## Phase 0: Baseline And Safety Checks
 

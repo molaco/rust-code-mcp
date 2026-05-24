@@ -35,6 +35,13 @@ Status baseline:
   profile discovery. Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
   project_paths::tests`.
+- Phase 4 injected vectors-root behavior: existing collection path derivation
+  now preserves the vectors root used during discovery, and the server
+  test-only helper has a regression test proving returned `vector_path` values
+  stay under the injected root. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  project_paths::tests` and `nix develop ../nix-devshells#cuda-code --command
+  cargo test -p rmc-server mcp::project_paths::tests`.
 
 ## Remaining Phase 3 Issues
 
@@ -42,9 +49,6 @@ Status baseline:
 
 ## Remaining Phase 4 Issues
 
-- Low: The test-only server helper mixes an injected vectors root with
-  production `data_dir()` for returned paths. Current tests only check
-  discovery, but future path assertions could be surprised by this.
 - Low / Medium: One malformed vector metadata file can abort all indexed
   profile discovery. Decide whether strict failure is intended, then document
   or test that policy.
