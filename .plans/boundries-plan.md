@@ -1384,6 +1384,16 @@ For every phase, record:
   confirmed `tools::params` is a private module, its family modules are
   private, its flat reexports are `pub(crate)`, and all MCP parameter structs
   in `tools::params` remain `pub(crate)` rather than public API.
+- Step 5 treat `semantic` privacy as late cleanup: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `36e3e7cd2696bbaded99e62b9cc9fcb11bd7b340` on change
+  `punsvpsnkrslukpusrworzvopyzxyzll`, with no description set. Source search
+  found `crates/rmc-graph/src/graph/statics.rs` tests that assert the
+  qualified name `rmc_server::semantic::SEMANTIC`, so Phase 9 leaves
+  `semantic` public until those symbol-level expectations move. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  semantic` (1 test passed, 200 filtered out, finished in 108.38s).
 
 ## Phase 0: Baseline And Safety Checks
 
