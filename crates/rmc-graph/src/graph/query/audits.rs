@@ -5,9 +5,9 @@
 //! `MUT_STATIC_PATTERNS` const used by `mut_static_audit`. Moved here
 //! from `graph::queries` in PR 10.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 
 use super::super::channel_audit;
 use super::super::fn_body_audit;
@@ -39,6 +39,24 @@ pub struct FnBodyAuditOptions {
     pub crate_name: Option<String>,
     pub patterns: Option<Vec<String>>,
     pub skip_test_fns: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GraphAuditError {
+    #[error("failed to canonicalize {directory}: {source}")]
+    InvalidDirectory {
+        directory: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("no snapshot at {directory}")]
+    MissingSnapshot { directory: PathBuf },
+    #[error("no node found for qualified name `{0}`")]
+    UnknownCrateFilter(String),
+    #[error("`{name}` is a {kind:?}, expected a Crate or its root Module")]
+    InvalidCrateFilterKind { name: String, kind: NodeKind },
+    #[error("{0}")]
+    InvalidPattern(String),
 }
 
 pub fn run_unsafe_audit(directory: &Path) -> Result<Vec<UnsafeAuditFinding>> {
@@ -148,7 +166,7 @@ pub fn run_fn_body_audit(
     options: FnBodyAuditOptions,
 ) -> Result<FnBodyAuditOutput> {
     let patterns = fn_body_audit::parse_pattern_filter(options.patterns.as_deref())
-        .map_err(anyhow::Error::msg)?;
+        .map_err(GraphAuditError::InvalidPattern)?;
     let mut patterns_used: Vec<String> = patterns.iter().map(|pattern| pattern.to_string()).collect();
     patterns_used.sort();
 
@@ -181,16 +199,25 @@ pub fn run_fn_body_audit(
     })
 }
 
-fn canonicalize_directory(directory: &Path) -> Result<std::path::PathBuf> {
+fn canonicalize_directory(directory: &Path) -> Result<PathBuf> {
     directory
         .canonicalize()
-        .with_context(|| format!("failed to canonicalize {}", directory.display()))
+        .map_err(|source| GraphAuditError::InvalidDirectory {
+            directory: directory.to_path_buf(),
+            source,
+        }
+        .into())
 }
 
 fn open_directory_snapshot(directory: &Path) -> Result<OpenedSnapshot> {
     let paths = GraphPaths::for_workspace(directory);
-    super::super::snapshot::open_current(&paths, GraphEnvOptions::default())?
-        .with_context(|| format!("no snapshot at {}", directory.display()))
+    match super::super::snapshot::open_current(&paths, GraphEnvOptions::default())? {
+        Some(snapshot) => Ok(snapshot),
+        None => Err(GraphAuditError::MissingSnapshot {
+            directory: directory.to_path_buf(),
+        }
+        .into()),
+    }
 }
 
 fn resolve_crate_filter(snap: &OpenedSnapshot, crate_name: Option<&str>) -> Result<Option<NodeId>> {
@@ -199,15 +226,19 @@ fn resolve_crate_filter(snap: &OpenedSnapshot, crate_name: Option<&str>) -> Resu
     };
     let (id, node) = snap
         .lookup_by_qualified_name(qn)?
-        .with_context(|| format!("no node found for qualified name `{qn}`"))?;
+        .ok_or_else(|| GraphAuditError::UnknownCrateFilter(qn.to_owned()))?;
     let crate_id = match node.kind {
         NodeKind::Crate => id,
         NodeKind::Module => node
             .crate_id
             .or(node.parent_id)
-            .with_context(|| format!("`{qn}` resolves to a Module with no crate_id"))?,
+            .ok_or_else(|| anyhow::anyhow!("`{qn}` resolves to a Module with no crate_id"))?,
         other => {
-            bail!("`{qn}` is a {other:?}, expected a Crate or its root Module");
+            return Err(GraphAuditError::InvalidCrateFilterKind {
+                name: qn.to_owned(),
+                kind: other,
+            }
+            .into());
         }
     };
     Ok(Some(crate_id))

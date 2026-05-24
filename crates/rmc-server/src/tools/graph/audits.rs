@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use rmc_graph::graph::{
     ChannelCapacityAuditOptions, ChannelCapacityFinding, FnBodyAuditFinding, FnBodyAuditOptions,
-    MutStaticAuditFinding, RecursionCheckOptions, RecursionCycle, UnsafeAuditFinding,
+    GraphAuditError, MutStaticAuditFinding, RecursionCheckOptions, RecursionCycle,
+    UnsafeAuditFinding,
     run_channel_capacity_audit, run_fn_body_audit, run_mut_static_audit, run_recursion_check,
     run_unsafe_audit,
 };
@@ -23,12 +24,7 @@ use rmcp::{ErrorData as McpError, model::CallToolResult};
 fn graph_audit_error(label: &'static str) -> impl FnOnce(anyhow::Error) -> McpError {
     move |error| {
         let message = format!("{error:#}");
-        if message.contains("failed to canonicalize")
-            || message.contains("no snapshot at")
-            || message.contains("no node found for qualified name")
-            || message.contains("expected a Crate or its root Module")
-            || message.contains("unknown pattern")
-        {
+        if error.downcast_ref::<GraphAuditError>().is_some() {
             McpError::invalid_params(message, None)
         } else {
             McpError::internal_error(format!("{label}: {message}"), None)

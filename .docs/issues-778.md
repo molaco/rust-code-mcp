@@ -67,6 +67,12 @@ Status baseline:
   assertion; after loosening that assertion, `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   enrich_usages_applies_summary_shape_and_static_category` passed.
+- Phase 6 typed audit error mapping: added graph-owned `GraphAuditError`
+  variants for invalid audit inputs and missing snapshots, and changed server
+  audit error mapping to classify invalid parameters by downcasting instead of
+  substring matching. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server`.
 
 ## Remaining Phase 3 Issues
 
@@ -82,8 +88,6 @@ Status baseline:
 
 ## Remaining Phase 6 Issues
 
-- Medium: Audit error mapping is string-based. `graph_audit_error` classifies
-  failures by substring matching, which is brittle compared with typed errors.
 - Medium: Some audit handlers still do synchronous graph work inside async
   handlers. `mut_static_audit` and `recursion_check` call directly, while
   heavier handlers use `spawn_blocking`.

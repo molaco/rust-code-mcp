@@ -1122,6 +1122,16 @@ For every phase, record:
   over-specific category assertion; after loosening that assertion,
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   enrich_usages_applies_summary_shape_and_static_category` passed.
+- Phase 6 typed audit error mapping: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `ac20436418fcb55e6734e31ba9b28406e1c6995f` on change
+  `pwxznosuwplpolknyknuzmvlonrroqks`, with no description set. Added
+  graph-owned `GraphAuditError` variants for invalid directories, missing
+  snapshots, invalid crate filters, and unknown function-body patterns; server
+  audit error mapping now classifies invalid parameters by `anyhow` downcast
+  instead of substring matching. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server`.
 
 ## Phase 0: Baseline And Safety Checks
 

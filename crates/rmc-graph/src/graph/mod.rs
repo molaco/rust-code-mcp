@@ -41,7 +41,7 @@ pub use model::{
 };
 pub(crate) use model::EmbeddingRecord;
 pub use query::audits::{
-    ChannelCapacityAuditOptions, FnBodyAuditOptions, RecursionCheckOptions,
+    ChannelCapacityAuditOptions, FnBodyAuditOptions, GraphAuditError, RecursionCheckOptions,
     run_channel_capacity_audit, run_fn_body_audit, run_mut_static_audit, run_recursion_check,
     run_unsafe_audit,
 };
