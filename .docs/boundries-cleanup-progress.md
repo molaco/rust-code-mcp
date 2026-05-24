@@ -974,3 +974,80 @@
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server` and `nix develop ../nix-devshells#cuda-code --command cargo
   test -p rmc-graph similarity_` (6 tests passed).
+- Step 8 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `72cbf9b80d9d36ae0582bf93ebed808260226dda` on change
+  `npyxysnzuxnrkzyswolsvsrttvqzltkq`, with no description set. Phase 7
+  implementation work is complete; the separate phase report remains to be
+  written and committed.
+
+### MCP Evidence
+
+- `build_hypergraph(force_rebuild=false)` rebuilt graph
+  `56dbddbd49bf25977fef1d75a269d455`, fingerprint
+  `53b0c34cc7a90b62bade00ab81ce4ae4baf13a37429fee9d4dd4c740b5364aae`.
+- `module_dependencies(module="rmc_server::tools::graph::similarity")`
+  reports graph dependencies on `rmc_graph::graph::query::similarity`
+  facade exports for semantic overlaps. It does not report server
+  dependencies on graph `embedding_cache` or `math`.
+- `who_imports(target="rmc_graph::graph::embedding_cache::ensure_embeddings_for")`
+  reported only graph query/test imports.
+- `who_imports(target="rmc_graph::graph::math::cosine")` reported only graph
+  math/query/test imports.
+- `semantic_overlaps(crate_name="rmc_graph", item_kind="Function",
+  summary=true, max_pairs=40)` returned 178 seeds, 18 total pairs, and 15
+  total clusters.
+
+### Source-Read Result
+
+- Graph now owns workspace-wide semantic overlap mechanics through
+  `rmc_graph::graph::run_semantic_overlaps`.
+- Server `semantic_overlaps` resolves the embedding backend for MCP, builds
+  `SemanticOverlapOptions`, delegates to graph, maps typed graph similarity
+  errors, and serializes graph DTOs.
+- `similar_to_item` remains server-owned because it still depends on server
+  project path resolution, server hybrid-search construction, and vector-only
+  search.
+- Public graph reexports of `ensure_embeddings_for` and `cosine` were removed;
+  graph-internal codemap callers now use private graph module paths.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-graph/src/graph/codemap/build.rs`
+- `crates/rmc-graph/src/graph/mod.rs`
+- `crates/rmc-graph/src/graph/query/mod.rs`
+- `crates/rmc-graph/src/graph/query/model.rs`
+- `crates/rmc-graph/src/graph/query/similarity.rs`
+- `crates/rmc-server/src/tools/graph/response.rs`
+- `crates/rmc-server/src/tools/graph/similarity.rs`
+- `crates/rmc-server/src/tools/graph/tests.rs`
+
+### Verification
+
+- Graph-only check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
+- Combined focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server`.
+- Graph similarity tests passed:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  similarity_` (6 tests passed).
+
+### Commits
+
+- Step 1 documentation: `7a3b26a8`
+  (`docs: start phase 7 similarity facade`).
+- Step 2 implementation: `94f20c92`
+  (`refactor: add graph similarity facade`).
+- Step 3 documentation: `2091f947`
+  (`docs: verify phase 7 graph similarity internals`).
+- Step 4 implementation: `e3ba55e4`
+  (`refactor: use graph similarity facade in server`).
+- Step 5 documentation: `d4d74fd2`
+  (`docs: keep similar item search server owned`).
+- Step 6 documentation: `1c9f904e`
+  (`docs: verify phase 7 similarity dependencies`).
+- Step 7 documentation: `e97f982b`
+  (`docs: record phase 7 check result`).

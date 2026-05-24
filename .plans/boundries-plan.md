@@ -1266,6 +1266,12 @@ For every phase, record:
   --command cargo check -p rmc-graph -p rmc-server` and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-graph similarity_`
   (6 tests passed).
+- Step 8 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `72cbf9b80d9d36ae0582bf93ebed808260226dda` on change
+  `npyxysnzuxnrkzyswolsvsrttvqzltkq`, with no description set. Phase 7
+  implementation work is complete; the separate phase report remains to be
+  written and committed.
 
 ## Phase 0: Baseline And Safety Checks
 
