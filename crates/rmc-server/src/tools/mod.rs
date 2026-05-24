@@ -1,5 +1,3 @@
-pub mod project_paths;
-
 // Phase 1: Modular structure
 mod endpoints;
 mod params;

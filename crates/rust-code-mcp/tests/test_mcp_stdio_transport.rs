@@ -6,7 +6,7 @@
 use anyhow::{Context, Result, anyhow};
 use rmc_engine::embeddings::EmbeddingBackend;
 use rmc_indexing::indexing::incremental::get_snapshot_path;
-use rmc_server::tools::project_paths::ProjectPaths;
+use rmc_server::mcp::project_paths::ProjectPaths;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;

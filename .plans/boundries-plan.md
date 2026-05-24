@@ -1394,6 +1394,20 @@ For every phase, record:
   passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   semantic` (1 test passed, 200 filtered out, finished in 108.38s).
+- Step 6 migrate `tools::project_paths` compatibility caller: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `c71c3b4f61a2e1d3feeacc64a3db2c471222b1d4` on change
+  `orykxsrltvovutxuxqsvnvmmyvsyltky`, with no description set. Updated the
+  stdio regression test to import `ProjectPaths` from
+  `rmc_server::mcp::project_paths`, removed the `tools::project_paths`
+  compatibility module, and removed the `tools` module declaration for it.
+  Source search found no remaining `rmc_server::tools::project_paths`,
+  `crate::tools::project_paths`, or `tools::project_paths` callers.
+  Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-server -p rust-code-mcp` and `nix develop ../nix-devshells#cuda-code
+  --command cargo test -p rust-code-mcp --test test_mcp_stdio_transport
+  --no-run`.
 
 ## Phase 0: Baseline And Safety Checks
 
