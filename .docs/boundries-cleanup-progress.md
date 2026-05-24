@@ -1403,3 +1403,17 @@
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `548b442d84e685843e1dc80bd27d32197e6d7de9` on change
   `rmtkyypxkmopxowpostpqvuzryoslttm`, with no description set.
+- Step 2 review public indexing implementation modules: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `a548aba593df1259e5f87a0b28d37abfbebace15` on change
+  `mqpnultyottokqxmtomstwlwzrxomyxw`, with no description set. Refreshed the
+  MCP hypergraph with `force_rebuild=true`, producing graph
+  `f1cee8ca9468963703d096ec6dc25950`. `get_exports` showed
+  `rmc_indexing::indexing` still exposes implementation modules including
+  `consistency`, `identity`, `indexer_core`, `merkle`, `retry`,
+  `tantivy_adapter`, and `unified`. `who_imports` returned zero import
+  bindings for the target implementation modules, but source search found
+  external test/example deep paths for `merkle`, `tantivy_adapter`, and
+  `unified`. MCP `module_dependencies` showed server query still depends on
+  `rmc_indexing::indexing::unified`, while server codemap, index, and sync use
+  the newer search/incremental service facades.
