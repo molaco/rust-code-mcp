@@ -5,13 +5,17 @@
 //! `MUT_STATIC_PATTERNS` const used by `mut_static_audit`. Moved here
 //! from `graph::queries` in PR 10.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use super::super::channel_audit;
+use super::super::derive_audit;
+use super::super::docs_audit;
 use super::super::fn_body_audit;
 use super::super::ids::NodeId;
+use super::super::labels::item_kind_display_label;
 use super::super::loader;
 use super::super::model::{ItemKind, Node, NodeKind, StaticMetadata};
 use super::super::recursion_check;
@@ -19,8 +23,9 @@ use super::super::snapshot::OpenedSnapshot;
 use super::super::storage::{GraphEnvOptions, GraphPaths};
 use super::super::unsafe_audit;
 use super::model::{
-    ChannelCapacityFinding, FnBodyAuditFinding, FnBodyAuditOutput, MutStaticAuditFinding,
-    MutStaticFinding, RecursionCheckOutput, RecursionCycle, UnsafeAuditFinding,
+    ChannelCapacityFinding, DeriveAuditFinding, FnBodyAuditFinding, FnBodyAuditOutput,
+    MissingDocsAuditFinding, MutStaticAuditFinding, MutStaticFinding, RecursionCheckOutput,
+    RecursionCycle, UnsafeAuditFinding,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -40,6 +45,22 @@ pub struct FnBodyAuditOptions {
     pub crate_name: Option<String>,
     pub patterns: Option<Vec<String>>,
     pub skip_test_fns: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct MissingDocsAuditOptions {
+    pub crate_name: Option<String>,
+    pub kind_filter: Option<HashSet<ItemKind>>,
+    pub skip_test_items: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeriveAuditOptions {
+    pub crate_name: Option<String>,
+    pub kind_filter: Option<HashSet<ItemKind>>,
+    pub required_derives: HashSet<String>,
+    pub pub_only: bool,
+    pub skip_test_items: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -157,6 +178,46 @@ pub fn run_fn_body_audit(
     })
 }
 
+pub fn run_missing_docs_audit(
+    snap: &OpenedSnapshot,
+    options: MissingDocsAuditOptions,
+) -> Result<Vec<MissingDocsAuditFinding>> {
+    let crate_id_filter = resolve_crate_filter(snap, options.crate_name.as_deref())?;
+    let kind_filter = options
+        .kind_filter
+        .unwrap_or_else(docs_audit::default_kind_filter);
+    let findings = docs_audit::missing_docs_audit(
+        snap,
+        docs_audit::DocsAuditOpts {
+            crate_id_filter,
+            kind_filter,
+            skip_test_items: options.skip_test_items,
+        },
+    )?;
+    Ok(render_missing_docs_findings(findings))
+}
+
+pub fn run_derive_audit(
+    snap: &OpenedSnapshot,
+    options: DeriveAuditOptions,
+) -> Result<Vec<DeriveAuditFinding>> {
+    let crate_id_filter = resolve_crate_filter(snap, options.crate_name.as_deref())?;
+    let kind_filter = options
+        .kind_filter
+        .unwrap_or_else(derive_audit::default_kind_filter);
+    let findings = derive_audit::derive_audit(
+        snap,
+        derive_audit::DeriveAuditOpts {
+            crate_id_filter,
+            kind_filter,
+            required_derives: options.required_derives,
+            pub_only: options.pub_only,
+            skip_test_items: options.skip_test_items,
+        },
+    )?;
+    Ok(render_derive_findings(findings))
+}
+
 fn render_unsafe_findings(findings: Vec<unsafe_audit::UnsafeFinding>) -> Vec<UnsafeAuditFinding> {
     findings
         .into_iter()
@@ -213,6 +274,38 @@ fn render_fn_body_findings(findings: Vec<fn_body_audit::FnBodyFinding>) -> Vec<F
             file: finding.file,
             span: finding.span,
             context: finding.context,
+        })
+        .collect()
+}
+
+fn render_missing_docs_findings(
+    findings: Vec<docs_audit::MissingDocsFinding>,
+) -> Vec<MissingDocsAuditFinding> {
+    findings
+        .into_iter()
+        .map(|finding| MissingDocsAuditFinding {
+            target: finding.target.to_hex(),
+            qualified_name: finding.qualified_name,
+            item_kind: item_kind_display_label(finding.item_kind).to_string(),
+            visibility: finding.visibility,
+            file: finding.file,
+            span: finding.span,
+        })
+        .collect()
+}
+
+fn render_derive_findings(findings: Vec<derive_audit::DeriveFinding>) -> Vec<DeriveAuditFinding> {
+    findings
+        .into_iter()
+        .map(|finding| DeriveAuditFinding {
+            target: finding.target.to_hex(),
+            qualified_name: finding.qualified_name,
+            item_kind: item_kind_display_label(finding.item_kind).to_string(),
+            visibility: finding.visibility,
+            file: finding.file,
+            span: finding.span,
+            current_derives: finding.current_derives,
+            missing_derives: finding.missing_derives,
         })
         .collect()
 }

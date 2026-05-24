@@ -13,10 +13,9 @@ use std::path::Path;
 use std::time::Instant;
 
 use rmc_graph::graph::{
-    BuildOptions, GraphEnvOptions, GraphPaths, NodeId, NodeKind, OpenedSnapshot, build_and_persist,
-    extract, loader, open_current,
+    BuildOptions, GraphEnvOptions, GraphPaths, Node, NodeId, NodeKind, OpenedSnapshot,
+    build_and_persist, extract_workspace_model, load, open_current,
 };
-use rmc_graph::graph::model::Node;
 
 fn pick_high_traffic_target(snap: &OpenedSnapshot) -> Option<(NodeId, Node)> {
     // Find some Item with the largest number of usages_by_target entries.
@@ -71,7 +70,7 @@ fn main() {
     match mode.as_str() {
         "extract" => {
             let t = Instant::now();
-            let loaded = loader::load(workspace_path).expect("load");
+            let loaded = load(workspace_path).expect("load");
             eprintln!(
                 "loader::load                          {:>9.2?}  ({} local crates)",
                 t.elapsed(),
@@ -93,8 +92,8 @@ fn main() {
                 eprintln!("  - {:<32}  origin={}", name, label_origin(k, &loaded.db));
             }
             let t = Instant::now();
-            let model = extract::extract(&loaded);
-            eprintln!("extract::extract (wall)               {:>9.2?}", t.elapsed());
+            let model = extract_workspace_model(&loaded);
+            eprintln!("extract_workspace_model (wall)        {:>9.2?}", t.elapsed());
             eprintln!();
             eprintln!("model summary:");
             eprintln!("  nodes:      {}", model.nodes.len());

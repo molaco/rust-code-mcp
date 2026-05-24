@@ -165,6 +165,34 @@ pub struct FnBodyAuditOutput {
     pub findings: Vec<FnBodyAuditFinding>,
 }
 
+/// Missing-docs audit finding rendered for external callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MissingDocsAuditFinding {
+    pub target: String,
+    pub qualified_name: String,
+    pub item_kind: String,
+    pub visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(u32, u32)>,
+}
+
+/// Derive audit finding rendered for external callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeriveAuditFinding {
+    pub target: String,
+    pub qualified_name: String,
+    pub item_kind: String,
+    pub visibility: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(u32, u32)>,
+    pub current_derives: Vec<String>,
+    pub missing_derives: Vec<String>,
+}
+
 /// Workspace scope represented in semantic-overlap output.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SemanticOverlapScope {

@@ -1,7 +1,7 @@
 //! Dump every ItemScope entry for every module in burn_core, to see whether
 //! RA actually resolves cross-crate imports like `use burn_tensor::Tensor`.
 
-use rmc_graph::graph::loader;
+use rmc_graph::graph::load;
 use ra_ap_hir::Crate;
 use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_hir_def::ModuleDefId;
@@ -15,7 +15,7 @@ fn main() {
         )
         .with_writer(std::io::stderr)
         .init();
-    let loaded = loader::load(Path::new("/home/molaco/Documents/burn")).expect("load");
+    let loaded = load(Path::new("/home/molaco/Documents/burn")).expect("load");
     eprintln!("local_crates = {}", loaded.local_crates.len());
 
     let target_crate_name = std::env::args()

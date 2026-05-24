@@ -1640,3 +1640,21 @@
   earlier phases, and the codemap module because server codemap tools still use
   it as a graph-owned facade. Later visibility changes must preserve these
   groups through root reexports or explicit compatibility modules.
+- Step 4 tighten implementation-module visibility where production callers
+  have moved: completed. Pre-step `jj show --summary` reported working-copy
+  commit `f3f8ab455af60ff50a0d89c90e46b122465e4e5d` on change
+  `pzuxrlpwxqtpynklntypmsswxlxsosmo`, with no description set. Added
+  graph-owned `run_missing_docs_audit` and `run_derive_audit` wrappers plus
+  rendered DTOs, migrated server surface tools to those wrappers, migrated
+  server/debug callers to root facade exports, and made implementation modules
+  private where no production external caller remained. Kept `codemap`,
+  `ids`, `model`, and `snapshot` public as compatibility/stable graph surface
+  modules. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-graph -p rmc-server -p rust-code-mcp` and
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example debug_itemscope --example spike_usages --example
+  timing_extract`. After rebuilding the MCP hypergraph, `get_exports` reported
+  88 server-visible graph bindings instead of 96, and `who_imports` for
+  `docs_audit`, `derive_audit`, and `loader` showed only graph-internal
+  module/test importers.

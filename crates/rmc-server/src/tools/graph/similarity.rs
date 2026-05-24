@@ -13,8 +13,8 @@ use rmcp::{ErrorData as McpError, model::CallToolResult};
 use serde::Serialize;
 
 use rmc_graph::graph::{
-    GraphSimilarityError, SemanticOverlapOptions,
-    labels::item_kind_short_label as short_item_kind_label, run_semantic_overlaps,
+    GraphSimilarityError, SemanticOverlapOptions, item_kind_short_label as short_item_kind_label,
+    run_semantic_overlaps,
 };
 use crate::mcp::project_paths::resolve_embedding_backend_for_mcp;
 use crate::tools::graph::response::*;

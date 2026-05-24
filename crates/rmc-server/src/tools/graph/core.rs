@@ -10,9 +10,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use rmc_graph::graph::snapshot::BuildOptions;
 use rmc_graph::graph::{
-    CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage, ModuleDependency,
+    BuildOptions, CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage, ModuleDependency,
     ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount, UsageSummaryRow,
     WorkspaceStats, build_and_persist,
 };

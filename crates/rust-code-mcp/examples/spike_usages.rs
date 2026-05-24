@@ -12,7 +12,7 @@ use std::time::Instant;
 use ra_ap_hir::{ModuleDef, Semantics, attach_db};
 use ra_ap_ide_db::defs::Definition;
 
-use rmc_graph::graph::loader;
+use rmc_graph::graph::load;
 
 fn main() {
     let workspace = std::env::args()
@@ -27,7 +27,7 @@ fn main() {
     eprintln!("workspace: {}", workspace_path.display());
 
     let t_load = Instant::now();
-    let loaded = loader::load(workspace_path).expect("load");
+    let loaded = load(workspace_path).expect("load");
     eprintln!("load:   {:>8.2?} ({} local crates)", t_load.elapsed(), loaded.local_crates.len());
 
     let db = &loaded.db;

@@ -1653,6 +1653,20 @@ For every phase, record:
   `OpenedSnapshot`, root-reexported graph ID/model types, query DTOs, graph
   audit/similarity facades, and the codemap module used by server codemap
   tools as a graph-owned facade.
+- Step 4 make implementation modules private when MCP evidence allows:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `f3f8ab455af60ff50a0d89c90e46b122465e4e5d` on change
+  `pzuxrlpwxqtpynklntypmsswxlxsosmo`, with no description set. Added graph
+  wrappers for missing-docs and derive audits, migrated server/debug callers
+  to root facade exports, and made avoidable graph implementation modules
+  private. Kept `codemap`, `ids`, `model`, and `snapshot` public as stable or
+  compatibility modules. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-graph -p rmc-server -p rust-code-mcp` and
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example debug_itemscope --example spike_usages --example
+  timing_extract`. Refreshed MCP evidence showed graph exports narrowed from
+  96 to 88 server-visible bindings.
 
 ## Phase 0: Baseline And Safety Checks
 

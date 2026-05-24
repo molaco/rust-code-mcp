@@ -9,12 +9,13 @@
 
 use serde::Serialize;
 
-use rmc_graph::graph::labels::item_kind_display_label as item_kind_label;
 use rmc_graph::graph::ItemWithAttribute;
 use rmc_graph::graph::{
-    EnrichedCrateDeadPub, EnrichedDeadPub, FunctionFilter, FunctionSignature,
-    FunctionWithSignature, ItemKind, Node, NodeId, NodeKind, OverlapsReport,
+    DeriveAuditFinding, DeriveAuditOptions, EnrichedCrateDeadPub, EnrichedDeadPub,
+    FunctionFilter, FunctionSignature, FunctionWithSignature, ItemKind,
+    MissingDocsAuditFinding, MissingDocsAuditOptions, Node, NodeKind, OverlapsReport,
     PubTypeAliasMasqueradingAsReexport, ReExportChain, SelfKindFilter,
+    item_kind_display_label as item_kind_label, run_derive_audit, run_missing_docs_audit,
 };
 use crate::tools::graph::response::*;
 use crate::tools::params::{
@@ -510,37 +511,8 @@ pub(crate) async fn missing_docs_audit(
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
 
-    let crate_id_filter: Option<NodeId> = if let Some(qn) = &params.crate_name {
-        let (id, node) = snap
-            .lookup_by_qualified_name(qn)
-            .map_err(internal_error("lookup_by_qualified_name"))?
-            .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("no node found for qualified name `{qn}`"),
-                    None,
-                )
-            })?;
-        Some(match node.kind {
-            NodeKind::Crate => id,
-            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("`{qn}` resolves to a Module with no crate_id"),
-                    None,
-                )
-            })?,
-            other => {
-                return Err(McpError::invalid_params(
-                    format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
-                    None,
-                ));
-            }
-        })
-    } else {
-        None
-    };
-
     let kind_filter = match params.item_kind.as_deref() {
-        None => rmc_graph::graph::docs_audit::default_kind_filter(),
+        None => None,
         Some(labels) => {
             let mut set = std::collections::HashSet::new();
             for label in labels {
@@ -550,20 +522,20 @@ pub(crate) async fn missing_docs_audit(
                             format!("empty item_kind label in list"),
                             None,
                         )
-                    })?;
+                })?;
                 set.insert(kind);
             }
-            set
+            Some(set)
         }
     };
 
-    let opts = rmc_graph::graph::docs_audit::DocsAuditOpts {
-        crate_id_filter,
+    let opts = MissingDocsAuditOptions {
+        crate_name: params.crate_name.clone(),
         kind_filter,
         skip_test_items: params.skip_test_items.unwrap_or(true),
     };
 
-    let findings = rmc_graph::graph::docs_audit::missing_docs_audit(&snap, opts)
+    let findings = run_missing_docs_audit(&snap, opts)
         .map_err(internal_error("missing_docs_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -573,34 +545,15 @@ pub(crate) async fn missing_docs_audit(
         crate_name: Option<String>,
     }
     #[derive(serde::Serialize)]
-    struct MissingDocsFindingRendered {
-        target: String,
-        qualified_name: String,
-        item_kind: String,
-        visibility: String,
-        file: Option<String>,
-        span: Option<(u32, u32)>,
-    }
-    #[derive(serde::Serialize)]
     struct Resp {
         scope: ScopeSummary,
         finding_count: usize,
         #[serde(flatten)]
         page: ListMeta,
-        findings: Vec<MissingDocsFindingRendered>,
+        findings: Vec<MissingDocsAuditFinding>,
     }
 
-    let mut rendered: Vec<MissingDocsFindingRendered> = findings
-        .into_iter()
-        .map(|f| MissingDocsFindingRendered {
-            target: f.target.to_hex(),
-            qualified_name: f.qualified_name,
-            item_kind: item_kind_label(f.item_kind).to_string(),
-            visibility: f.visibility,
-            file: f.file,
-            span: f.span,
-        })
-        .collect();
+    let mut rendered = findings;
     let page_req = list_page(&params.pagination);
     clear_locations_for_summary(&mut rendered, page_req.summary, |finding| {
         finding.file = None;
@@ -625,37 +578,8 @@ pub(crate) async fn derive_audit(
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
 
-    let crate_id_filter: Option<NodeId> = if let Some(qn) = &params.crate_name {
-        let (id, node) = snap
-            .lookup_by_qualified_name(qn)
-            .map_err(internal_error("lookup_by_qualified_name"))?
-            .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("no node found for qualified name `{qn}`"),
-                    None,
-                )
-            })?;
-        Some(match node.kind {
-            NodeKind::Crate => id,
-            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("`{qn}` resolves to a Module with no crate_id"),
-                    None,
-                )
-            })?,
-            other => {
-                return Err(McpError::invalid_params(
-                    format!("`{qn}` is a {other:?}, expected a Crate or its root Module"),
-                    None,
-                ));
-            }
-        })
-    } else {
-        None
-    };
-
     let kind_filter = match params.item_kind.as_deref() {
-        None => rmc_graph::graph::derive_audit::default_kind_filter(),
+        None => None,
         Some(labels) => {
             let mut set = std::collections::HashSet::new();
             for label in labels {
@@ -679,7 +603,7 @@ pub(crate) async fn derive_audit(
                 }
                 set.insert(kind);
             }
-            set
+            Some(set)
         }
     };
 
@@ -692,15 +616,15 @@ pub(crate) async fn derive_audit(
     let required_derives: std::collections::HashSet<String> =
         params.required_derives.iter().cloned().collect();
 
-    let opts = rmc_graph::graph::derive_audit::DeriveAuditOpts {
-        crate_id_filter,
+    let opts = DeriveAuditOptions {
+        crate_name: params.crate_name.clone(),
         kind_filter,
         required_derives,
         pub_only: params.pub_only.unwrap_or(true),
         skip_test_items: params.skip_test_items.unwrap_or(true),
     };
 
-    let findings = rmc_graph::graph::derive_audit::derive_audit(&snap, opts)
+    let findings = run_derive_audit(&snap, opts)
         .map_err(internal_error("derive_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -710,39 +634,16 @@ pub(crate) async fn derive_audit(
         crate_name: Option<String>,
     }
     #[derive(serde::Serialize)]
-    struct DeriveFindingRendered {
-        target: String,
-        qualified_name: String,
-        item_kind: String,
-        visibility: String,
-        file: Option<String>,
-        span: Option<(u32, u32)>,
-        current_derives: Vec<String>,
-        missing_derives: Vec<String>,
-    }
-    #[derive(serde::Serialize)]
     struct Resp {
         scope: ScopeSummary,
         required_derives: Vec<String>,
         finding_count: usize,
         #[serde(flatten)]
         page: ListMeta,
-        findings: Vec<DeriveFindingRendered>,
+        findings: Vec<DeriveAuditFinding>,
     }
 
-    let mut rendered: Vec<DeriveFindingRendered> = findings
-        .into_iter()
-        .map(|f| DeriveFindingRendered {
-            target: f.target.to_hex(),
-            qualified_name: f.qualified_name,
-            item_kind: item_kind_label(f.item_kind).to_string(),
-            visibility: f.visibility,
-            file: f.file,
-            span: f.span,
-            current_derives: f.current_derives,
-            missing_derives: f.missing_derives,
-        })
-        .collect();
+    let mut rendered = findings;
     let page_req = list_page(&params.pagination);
     clear_locations_for_summary(&mut rendered, page_req.summary, |finding| {
         finding.file = None;

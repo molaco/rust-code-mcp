@@ -3,52 +3,57 @@
 //! Layered as: loader → extraction model → extraction passes → persistence
 //! → read path → MCP tools. Each layer is built and tested in isolation.
 
-pub mod ast_resolve;
+mod ast_resolve;
 pub(in crate::graph) mod audit_util;
-pub mod attributes;
-pub mod bindings;
-pub mod channel_audit;
+mod attributes;
+mod bindings;
+mod channel_audit;
 pub mod codemap;
-pub mod derive_audit;
-pub mod docs_audit;
+mod derive_audit;
+mod docs_audit;
 mod embedding_cache;
-pub mod extract;
-pub mod fn_body_audit;
-pub mod hir_trim;
+mod extract;
+mod fn_body_audit;
+mod hir_trim;
 pub mod ids;
-pub mod impls;
-pub mod labels;
-pub mod loader;
+mod impls;
+mod labels;
+mod loader;
 mod math;
 pub mod model;
 mod query;
-pub mod recursion_check;
-pub mod signatures;
+mod recursion_check;
+mod signatures;
 pub mod snapshot;
-pub mod statics;
-pub mod storage;
+mod statics;
+mod storage;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub mod unsafe_audit;
-pub mod usages;
+mod unsafe_audit;
+mod usages;
 
 pub use ids::{BindingId, NodeId};
+pub use extract::extract as extract_workspace_model;
+pub use labels::{item_kind_display_label, item_kind_short_label};
 pub use loader::{LoadedWorkspace, load};
 pub use model::{
-    Binding, BindingVisibility, FunctionSignature, ItemKind, Namespace, Node, NodeKind, Usage,
+    Binding, BindingVisibility, ExtractionModel, FunctionSignature, ItemKind, Namespace, Node,
+    NodeKind, Usage,
 };
 pub(crate) use model::EmbeddingRecord;
 pub use query::audits::{
-    ChannelCapacityAuditOptions, FnBodyAuditOptions, GraphAuditError, RecursionCheckOptions,
-    run_channel_capacity_audit, run_fn_body_audit, run_mut_static_audit, run_recursion_check,
-    run_unsafe_audit,
+    ChannelCapacityAuditOptions, DeriveAuditOptions, FnBodyAuditOptions, GraphAuditError,
+    MissingDocsAuditOptions, RecursionCheckOptions, run_channel_capacity_audit,
+    run_derive_audit, run_fn_body_audit, run_missing_docs_audit, run_mut_static_audit,
+    run_recursion_check, run_unsafe_audit,
 };
 pub use query::model::{
     CallGraphNode, ChannelCapacityFinding, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding,
-    EnrichedBinding, EnrichedCallSite, EnrichedCrateDeadPub, EnrichedDeadPub, EnrichedUsage,
-    FnBodyAuditFinding, FnBodyAuditOutput, ForbiddenDependencyRule, ForbiddenDependencyViolation,
-    FunctionFilter, FunctionWithSignature, ItemWithAttribute, ModuleDependency,
-    ModuleDependencySymbol, ModuleTreeNode, MutStaticAuditFinding, OverlapScope, OverlapsReport,
+    DeriveAuditFinding, EnrichedBinding, EnrichedCallSite, EnrichedCrateDeadPub,
+    EnrichedDeadPub, EnrichedUsage, FnBodyAuditFinding, FnBodyAuditOutput,
+    ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter, FunctionWithSignature,
+    ItemWithAttribute, MissingDocsAuditFinding, ModuleDependency, ModuleDependencySymbol,
+    ModuleTreeNode, MutStaticAuditFinding, OverlapScope, OverlapsReport,
     PubTypeAliasMasqueradingAsReexport, ReExportChain, RecursionCheckOutput, RecursionCycle,
     RecursiveCallersCount, SelfKindFilter, SemanticOverlapScope, SemanticOverlapsOutput,
     SimilarityCluster, SimilarityItem, SimilarityPair, UnsafeAuditFinding, UsageSummaryRow,
