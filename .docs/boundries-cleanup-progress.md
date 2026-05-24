@@ -1160,3 +1160,12 @@
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `418aceba11919b3c1a46448f3bc5885e1044b4ea` on change
   `mrozmyslwyvyymmnwlmwmqnylrooxqtu`, with no description set.
+- Step 2 keep `tools::router` thin: completed as verification-only. Pre-step
+  `jj show --summary` reported working-copy commit
+  `d0bd6a43da799a6069e09c4f775f642225020e06` on change
+  `lwwmnsznmwowomykvtwmuvsrwwkwmuyq`, with no description set. Source review
+  confirmed `crates/rmc-server/src/tools/router.rs` declares MCP tool methods
+  and delegates to `tools::endpoints::*` or `tools::graph::*`; it does not own
+  lower-layer graph/indexing business logic. The larger `build_codemap`
+  method only destructures parameters before delegating to
+  `tools::graph::codemap::handle_build_codemap`.
