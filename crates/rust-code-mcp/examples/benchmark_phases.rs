@@ -4,8 +4,6 @@ use rmc_indexing::indexing::{FileSystemMerkle, IncrementalIndexer};
 use rmc_engine::parser::RustParser;
 use rmc_engine::chunker::Chunker;
 use rmc_engine::embeddings::EmbeddingGenerator;
-use rmc_indexing::security::SensitiveFileFilter;
-use rmc_indexing::security::secrets::SecretsScanner;
 use std::path::PathBuf;
 use std::time::Instant;
 use walkdir::WalkDir;

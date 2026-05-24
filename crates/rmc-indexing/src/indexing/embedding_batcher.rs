@@ -9,7 +9,7 @@ use rmc_engine::embeddings::{
     Embedding, EmbeddingGenerator, EmbeddingRuntime, EmbeddingTextLen, EmbeddingTokenCounter,
 };
 use crate::indexing::IndexingError;
-use crate::metrics::memory::MemoryMonitor;
+use crate::metrics::MemoryMonitor;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 

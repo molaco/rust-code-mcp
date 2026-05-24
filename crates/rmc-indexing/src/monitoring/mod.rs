@@ -1,4 +1,6 @@
 //! Production monitoring and operational tools
 
-pub mod health;
-pub mod backup;
+mod backup;
+mod health;
+
+pub use health::{ComponentHealth, HealthMonitor, HealthStatus, Status};

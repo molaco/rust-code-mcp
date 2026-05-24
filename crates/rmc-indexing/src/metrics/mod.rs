@@ -3,7 +3,9 @@
 //! Provides detailed performance metrics including throughput, latency percentiles,
 //! phase breakdown, and memory usage tracking.
 
-pub mod memory;
+mod memory;
+
+pub use memory::MemoryMonitor;
 
 use std::time::{Duration, Instant};
 use std::collections::HashMap;

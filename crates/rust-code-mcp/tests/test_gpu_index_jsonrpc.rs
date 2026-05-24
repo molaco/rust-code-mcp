@@ -328,7 +328,7 @@ async fn test_json_rpc_error_handling() -> Result<()> {
 #[tokio::test]
 #[ignore]
 async fn test_gpu_memory_monitoring() -> Result<()> {
-    use rmc_indexing::metrics::memory::MemoryMonitor;
+    use rmc_indexing::metrics::MemoryMonitor;
 
     println!("\n========================================");
     println!("GPU Memory Monitoring Test");

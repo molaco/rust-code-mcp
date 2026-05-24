@@ -1454,3 +1454,21 @@
   `nix develop ../nix-devshells#cuda-code --command cargo test -p
   rust-code-mcp --test test_merkle_standalone --test test_hybrid_search
   --test test_mcp_stdio_transport --no-run`.
+- Step 5 review indexing support-module public API status: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `94c3bc794881f945ec5e519123c164efd29ca867` on change
+  `vsllwmsowrxzkxusmwxupylvknonxruv`, with no description set. Made
+  `metadata_cache` and `security` internal root modules, hid the
+  `metrics::memory` and `monitoring::health` implementation modules behind
+  facade reexports, and kept `metrics::MemoryMonitor` plus
+  `monitoring::{ComponentHealth, HealthMonitor, HealthStatus, Status}` public
+  for the current test/server consumers. `monitoring::backup` is now a private
+  implementation module. Migrated server health, the GPU JSON-RPC test, and
+  the benchmark example away from support-module internals. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server -p rust-code-mcp`,
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example benchmark_phases`, and
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_gpu_index_jsonrpc --no-run`.

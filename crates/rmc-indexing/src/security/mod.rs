@@ -1,6 +1,8 @@
 //! Security module for preventing sensitive data from being indexed
 
-pub mod secrets;
+mod secrets;
+
+pub(crate) use secrets::SecretsScanner;
 
 use glob::Pattern;
 use std::path::Path;

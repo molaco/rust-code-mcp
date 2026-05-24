@@ -6,7 +6,7 @@
 
 use crate::indexing::IndexingError;
 use crate::metadata_cache::MetadataCache;
-use crate::security::secrets::SecretsScanner;
+use crate::security::SecretsScanner;
 use crate::security::SensitiveFileFilter;
 use std::path::Path;
 

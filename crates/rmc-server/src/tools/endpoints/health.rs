@@ -10,7 +10,10 @@ use rmcp::{
 use rmc_engine::embeddings::EmbeddingBackend;
 use crate::mcp::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
 use rmc_engine::vector_store::VectorStore;
-use rmc_indexing::{indexing::open_bm25_search, monitoring::health::HealthMonitor};
+use rmc_indexing::{
+    indexing::open_bm25_search,
+    monitoring::{HealthMonitor, Status},
+};
 
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -142,13 +145,13 @@ pub(crate) async fn health_check(
     let mut response = String::new();
 
     match health.overall {
-        rmc_indexing::monitoring::health::Status::Healthy => {
+        Status::Healthy => {
             response.push_str("✓ System Status: HEALTHY\n\n");
         }
-        rmc_indexing::monitoring::health::Status::Degraded => {
+        Status::Degraded => {
             response.push_str("⚠ System Status: DEGRADED (some components unavailable but system functional)\n\n");
         }
-        rmc_indexing::monitoring::health::Status::Unhealthy => {
+        Status::Unhealthy => {
             response.push_str("✗ System Status: UNHEALTHY (critical components failing)\n\n");
         }
     }

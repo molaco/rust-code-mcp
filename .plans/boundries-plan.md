@@ -1579,6 +1579,22 @@ For every phase, record:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p
   rust-code-mcp --test test_merkle_standalone --test test_hybrid_search
   --test test_mcp_stdio_transport --no-run`.
+- Step 5 review `metadata_cache`, `metrics`, `monitoring`, and `security`:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `94c3bc794881f945ec5e519123c164efd29ca867` on change
+  `vsllwmsowrxzkxusmwxupylvknonxruv`, with no description set. Made
+  `metadata_cache`, `security`, and `monitoring::backup` private
+  implementation modules, exposed `metrics::MemoryMonitor` and
+  `monitoring::{ComponentHealth, HealthMonitor, HealthStatus, Status}`
+  through support-module facades, and migrated server/test/example consumers
+  away from deep support-module paths. Verification passed with existing
+  warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server -p rust-code-mcp`,
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example benchmark_phases`, and
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_gpu_index_jsonrpc --no-run`.
 
 ## Phase 0: Baseline And Safety Checks
 
