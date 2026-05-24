@@ -1625,6 +1625,11 @@ For every phase, record:
   Phase 11 ledger with changed files, MCP evidence, source-read results,
   verification, commit history, and remaining follow-up. The separate Phase 11
   completion report remains to be written and committed.
+- Phase completion report: completed. Pre-step `jj show --summary` reported
+  working-copy commit `38acda816bcd4f0d9467d80625b6b87b5c71bf21` on change
+  `nvnylqzostnuoykrrynxmuwwwnmztwpk`, with no description set. Wrote
+  `.docs/phase-11-boundrie-fix-report.md` and marked Phase 11 complete in the
+  progress ledger.
 
 ## Phase 0: Baseline And Safety Checks
 

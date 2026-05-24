@@ -1596,7 +1596,17 @@
   (`docs: record incremental indexer compatibility`).
 - Step 7 documentation: `cf3845a5`
   (`docs: record phase 11 check result`).
+- Step 8 documentation: `7a3b9f40`
+  (`docs: record phase 11 ledger`).
+
+### Phase Completion
+
+- Phase 11 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `38acda816bcd4f0d9467d80625b6b87b5c71bf21` on change
+  `nvnylqzostnuoykrrynxmuwwwnmztwpk`, with no description set. Wrote
+  `.docs/phase-11-boundrie-fix-report.md` and marked the Phase 11 progress
+  ledger complete.
 
 ### Remaining Follow-Up
 
-- Write the Phase 11 completion report.
+- Start Phase 12.
