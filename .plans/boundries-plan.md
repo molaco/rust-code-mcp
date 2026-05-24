@@ -1675,6 +1675,14 @@ For every phase, record:
   Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   --no-run`; touched debug examples had already checked successfully in Step 4.
+- Step 6 keep compatibility reexports where still needed: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `d68c06ba3e00640c4f65daf2339c23710f58b5dd` on change
+  `kvywxwuslyrslwullmtzzxsqtnvvqkqp`, with no description set. The remaining
+  public graph modules are `codemap`, `ids`, `model`, and `snapshot`.
+  `codemap` remains public for active server codemap tools; `ids`, `model`,
+  and `snapshot` remain compatibility/stable graph surface modules while root
+  reexports remain the preferred public path.
 
 ## Phase 0: Baseline And Safety Checks
 

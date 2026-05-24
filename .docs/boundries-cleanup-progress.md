@@ -1667,3 +1667,14 @@
   and `Node`. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   --no-run`. The touched debug example check had already passed in Step 4.
+- Step 6 keep remaining compatibility exports intentionally: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `d68c06ba3e00640c4f65daf2339c23710f58b5dd` on change
+  `kvywxwuslyrslwullmtzzxsqtnvvqkqp`, with no description set. The remaining
+  public graph modules are `codemap`, `ids`, `model`, and `snapshot`.
+  `codemap` stays public because server codemap tools still use it as the
+  graph-owned codemap facade; `ids`, `model`, and `snapshot` stay public as
+  stable graph data/open-snapshot compatibility modules while their primary
+  supported items are also available through root reexports. MCP
+  `module_dependencies(rmc_server::tools::graph::codemap)` confirmed active
+  server codemap dependencies on graph codemap exports.
