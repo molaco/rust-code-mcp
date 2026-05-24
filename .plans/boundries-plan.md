@@ -1344,8 +1344,13 @@ For every phase, record:
 - Step 6 ledger update: completed. Pre-step `jj show --summary` reported
   working-copy commit `7c408edae0a83fd3b20a5b30bd00004fdb3287a9` on change
   `mxqwsnznktqlvmsnomxrrupkxonkvmvz`, with no description set. Phase 8 code
-  and verification steps are complete; the separate Phase 8 report remains to
-  be written and committed.
+  and verification steps were complete; the separate Phase 8 report was still
+  pending at this step.
+- Phase 8 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `fa9e7c158816499cbb23a3aa5578d840a4463b60` on change
+  `tymoomxzuunzzpxyyuvrtunyzppoutsy`, with no description set. Wrote
+  `.docs/phase-8-boundrie-fix-report.md` and marked the Phase 8 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 
