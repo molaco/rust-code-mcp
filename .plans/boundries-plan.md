@@ -1618,6 +1618,13 @@ For every phase, record:
   --test test_mcp_stdio_transport --test test_gpu_index_jsonrpc --no-run`,
   and `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rust-code-mcp --example benchmark_phases`.
+- Step 8 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `8111febfc5435e4db68027cdd7ab9c06fd707a8d` on change
+  `vzkkvxrltnpkpqspzrmxytwwvxukqszv`, with no description set. Updated the
+  Phase 11 ledger with changed files, MCP evidence, source-read results,
+  verification, commit history, and remaining follow-up. The separate Phase 11
+  completion report remains to be written and committed.
 
 ## Phase 0: Baseline And Safety Checks
 

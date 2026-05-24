@@ -1503,3 +1503,100 @@
   its pre-existing unused-variable warnings for `index_time` and
   `actual_start`; the GPU JSON-RPC test still emits its pre-existing
   `JsonRpcResponse` dead-code warning.
+- Step 8 update ledger and commit: completed. Pre-step `jj show --summary`
+  reported working-copy commit `8111febfc5435e4db68027cdd7ab9c06fd707a8d`
+  on change `vzkkvxrltnpkpqspzrmxytwwvxukqszv`, with no description set.
+  Updated the Phase 11 ledger with changed files, verification, commit
+  history, and remaining follow-up.
+
+### MCP Evidence
+
+- Step 2 `build_hypergraph(force_rebuild=true)` produced graph
+  `f1cee8ca9468963703d096ec6dc25950`.
+- Step 2 `get_exports(module="rmc_indexing::indexing",
+  consumer="rmc_server")` showed implementation modules including
+  `consistency`, `identity`, `indexer_core`, `merkle`, `retry`,
+  `tantivy_adapter`, and `unified` were still public before tightening.
+- Step 4 `build_hypergraph(force_rebuild=true)` produced graph
+  `8d2fad2e10bdcfc9de811ac36e699ca3`; `get_exports` no longer listed the
+  tightened implementation modules as declared exports while facade reexports
+  remained visible.
+- Step 6 `build_hypergraph(force_rebuild=true)` produced graph
+  `da64f03ea621c18612caf4468a58b64f`, fingerprint
+  `705e0cc7b219a72b926567bdbbba263392a2ab656cf7d29a53ace9455f094135`.
+- Step 6 `who_imports(target="rmc_indexing::indexing::IncrementalIndexer")`
+  returned 12 bindings, confirming `IncrementalIndexer` still has
+  compatibility consumers outside production server code.
+- Step 6 `module_dependencies` showed server `index` and `sync` depend on the
+  Phase 3 `incremental_service` facade for production incremental indexing.
+
+### Source-Read Result
+
+- `rmc_indexing::indexing` now keeps implementation modules private while
+  exposing supported facade exports: `UnifiedIndexer`, `IndexStats`,
+  `IndexFileResult`, `IncrementalIndexer`, `get_snapshot_path`,
+  `TantivyAdapter`, `FileSystemMerkle`, and `ChangeSet`.
+- `metadata_cache`, `security`, and `monitoring::backup` are internal modules.
+  Public support APIs now go through `metrics::MemoryMonitor` and
+  `monitoring::{ComponentHealth, HealthMonitor, HealthStatus, Status}`.
+- `IncrementalIndexer` remains public by explicit compatibility decision
+  because tests, benches, examples, a standalone indexing tool, and internal
+  indexing facades still consume it through `rmc_indexing::indexing`.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-indexing/src/indexing/embedding_batcher.rs`
+- `crates/rmc-indexing/src/indexing/file_processor.rs`
+- `crates/rmc-indexing/src/indexing/indexer_core.rs`
+- `crates/rmc-indexing/src/indexing/mod.rs`
+- `crates/rmc-indexing/src/indexing/tantivy_adapter.rs`
+- `crates/rmc-indexing/src/lib.rs`
+- `crates/rmc-indexing/src/metrics/mod.rs`
+- `crates/rmc-indexing/src/monitoring/backup.rs`
+- `crates/rmc-indexing/src/monitoring/mod.rs`
+- `crates/rmc-indexing/src/security/mod.rs`
+- `crates/rmc-server/src/tools/endpoints/health.rs`
+- `crates/rmc-server/src/tools/endpoints/query.rs`
+- `crates/rust-code-mcp/examples/benchmark_phases.rs`
+- `crates/rust-code-mcp/tests/test_gpu_index_jsonrpc.rs`
+- `crates/rust-code-mcp/tests/test_hybrid_search.rs`
+- `crates/rust-code-mcp/tests/test_mcp_stdio_transport.rs`
+- `crates/rust-code-mcp/tests/test_merkle_standalone.rs`
+
+### Verification
+
+- Combined focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server -p rust-code-mcp`.
+- Touched rust-code-mcp integration test targets compiled with existing
+  warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_merkle_standalone --test test_hybrid_search
+  --test test_mcp_stdio_transport --test test_gpu_index_jsonrpc --no-run`.
+- Touched benchmark example check passed with its pre-existing unused-variable
+  warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example benchmark_phases`.
+
+### Commits
+
+- Step 1 documentation: `765027f9`
+  (`docs: start phase 11 indexing visibility`).
+- Step 2 documentation: `571313d6`
+  (`docs: record phase 11 indexing surface evidence`).
+- Step 3 implementation: `81d2bd87`
+  (`refactor: use indexing facade exports`).
+- Step 4 implementation: `2b3f1090`
+  (`refactor: tighten indexing implementation modules`).
+- Step 5 implementation: `eb59e6f7`
+  (`refactor: tighten indexing support modules`).
+- Step 6 documentation: `a4149d64`
+  (`docs: record incremental indexer compatibility`).
+- Step 7 documentation: `cf3845a5`
+  (`docs: record phase 11 check result`).
+
+### Remaining Follow-Up
+
+- Write the Phase 11 completion report.
