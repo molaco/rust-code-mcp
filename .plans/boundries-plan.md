@@ -1422,6 +1422,16 @@ For every phase, record:
   and `semantic`. `get_declared_reexports` for `rmc_server::tools` returned
   only the four intended tools reexports, and `rmc_server::mcp` returned the
   `SyncManager` glob reexport.
+- Step 8 focused nix checks: completed. Pre-step `jj show --summary`
+  reported working-copy commit
+  `656d72cdc727c084cd25e212ea8599beb4b0324c` on change
+  `xvwksozxvkqultozmvrtwmsozlrmrmpx`, with no description set. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-server -p rust-code-mcp`, `nix develop ../nix-devshells#cuda-code
+  --command cargo test -p rmc-server --no-run`, and `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rust-code-mcp --test
+  test_mcp_stdio_transport --no-run`.
 
 ## Phase 0: Baseline And Safety Checks
 
