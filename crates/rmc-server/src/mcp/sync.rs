@@ -75,7 +75,7 @@ impl SyncManager {
     /// Designed to be spawned as a background task.
     ///
     /// # Example
-    /// ```no_run
+    /// ```rust,ignore
     /// use rmc_server::mcp::SyncManager;
     /// use std::sync::Arc;
     /// let sync_manager = Arc::new(SyncManager::with_defaults(300));

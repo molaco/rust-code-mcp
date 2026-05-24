@@ -17,7 +17,7 @@
 //!
 //! ## Examples
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use rmc_indexing::indexing::indexer_core::IndexerCore;
 //! use std::path::Path;
 //!

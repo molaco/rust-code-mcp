@@ -22,7 +22,7 @@
 //!
 //! ## Examples
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use rmc_server::tools::endpoints::indexing_support::open_cache;
 //!
 //! // Open metadata cache

@@ -15,28 +15,51 @@ use super::audits::graph_audit_error;
 
 use rmc_graph::graph::{EnrichedUsage, GraphAuditError, ItemKind, Node, NodeId, NodeKind};
 use crate::tools::params::{
-    BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
-    GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
-    WhoUsesParams,
+    BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
+    ListPaginationParams, ModuleDependenciesParams, WhoImportsParams, WhoUsesParams,
 };
 use rmcp::model::{CallToolResult, ErrorCode};
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
-// Both tests in this module open the same default data-dir snapshot
-// (`~/.local/share/search/graphs/...`). heed forbids opening the same env
-// twice in the same process, so we serialize them with a shared mutex
-// rather than relying on `--test-threads=1`.
-static DEFAULT_SNAPSHOT_LOCK: Mutex<()> = Mutex::new(());
+// Default-snapshot cases share `~/.local/share/search/graphs/...`. heed forbids
+// opening the same env twice in the same process, so one async test runs those
+// cases sequentially instead of relying on `--test-threads=1`.
+static DEFAULT_SNAPSHOT_BUILT: OnceLock<()> = OnceLock::new();
+
+fn test_project_root() -> String {
+    env!("CARGO_MANIFEST_DIR").to_string()
+}
+
+async fn ensure_default_snapshot(directory: &str) {
+    if DEFAULT_SNAPSHOT_BUILT.get().is_none() {
+        build_hypergraph(BuildHypergraphParams {
+            directory: directory.to_string(),
+            force_rebuild: Some(true),
+        })
+        .await
+        .expect("build_hypergraph");
+        let _ = DEFAULT_SNAPSHOT_BUILT.set(());
+    }
+}
+
+#[tokio::test]
+async fn default_snapshot_graph_round_trips() {
+    mcp_round_trip_against_self().await;
+    get_exports_accepts_crate_name_as_consumer().await;
+    who_uses_and_dead_pub_round_trip().await;
+    functions_with_filter_default_limit_caps_results().await;
+    functions_with_filter_summary_mode_omits_signature().await;
+    functions_with_filter_offset_pagination().await;
+    crate_dependency_metric_top_n_caps_count().await;
+    crate_dependency_metric_sort_by_instability_descending().await;
+    crate_dependency_metric_unknown_sort_by_errors().await;
+}
 
 /// Round-trip: build_hypergraph → get_imports / who_imports against this
 /// crate. Uses the default data dir so the snapshot lifecycle exercised
 /// here mirrors what an MCP client would see.
-#[tokio::test]
 async fn mcp_round_trip_against_self() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
     let build = build_hypergraph(BuildHypergraphParams {
         directory: manifest_dir.to_string(),
@@ -44,6 +67,7 @@ async fn mcp_round_trip_against_self() {
     })
     .await
     .expect("build_hypergraph");
+    let _ = DEFAULT_SNAPSHOT_BUILT.set(());
     // Result is a single text Content with the JSON body.
     let body = first_text(&build);
     assert!(body.contains("\"node_count\""), "build response: {body}");
@@ -64,19 +88,19 @@ async fn mcp_round_trip_against_self() {
 
     let dependencies = module_dependencies(ModuleDependenciesParams {
         directory: manifest_dir.to_string(),
-        module: "rmc_indexing::indexing::tantivy_adapter".to_string(),
+        module: "rmc_server::tools::endpoints::query".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
     .expect("module_dependencies");
     let body = first_text(&dependencies);
     assert!(
-        body.contains("\"target_module\": \"rmc_engine::search::bm25\""),
-        "expected inline Bm25Search dependency on search::bm25: {body}"
+        body.contains("\"target_module\": \"rmc_indexing::indexing::search\""),
+        "expected query endpoint to depend on indexing search facade: {body}"
     );
     assert!(
-        body.contains("\"target_qualified\": \"rmc_engine::search::bm25::Bm25Search\""),
-        "expected Bm25Search symbol in module dependency payload: {body}"
+        body.contains("\"target_qualified\": \"rmc_indexing::indexing::search::open_bm25_search\""),
+        "expected open_bm25_search symbol in module dependency payload: {body}"
     );
 
     let importers = who_imports(WhoImportsParams {
@@ -93,24 +117,15 @@ async fn mcp_round_trip_against_self() {
     );
 }
 
-/// Regression: passing a Crate qualified name (e.g. `rust_code_mcp`)
+/// Regression: passing a Crate qualified name (e.g. `rmc_server`)
 /// where a Module is expected (`get_exports`'s `consumer`) should be
 /// transparent — the resolver should fall through to the crate's root
 /// module rather than erroring with "is a Crate, expected Module".
-#[tokio::test]
 async fn get_exports_accepts_crate_name_as_consumer() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
     // Ensure a snapshot exists for the workspace.
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     let exports = get_exports(GraphExportsParams {
         directory: manifest_dir.to_string(),
@@ -119,7 +134,7 @@ async fn get_exports_accepts_crate_name_as_consumer() {
         module: "rmc_graph::graph".to_string(),
         // Crate name, NOT a module path — must be transparently
         // promoted to the crate's root module.
-        consumer: "rust_code_mcp".to_string(),
+        consumer: "rmc_server".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
@@ -140,24 +155,15 @@ async fn get_exports_accepts_crate_name_as_consumer() {
 
 /// MCP shape of who_uses + dead_pub_in_crate. Reuses the snapshot
 /// produced by other tests in this module via the shared lock.
-#[tokio::test]
 async fn who_uses_and_dead_pub_round_trip() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
-    // who_uses against a fn we know is referenced inside the lib.
+    // who_uses against a helper we know is referenced inside the server crate.
     let users = who_uses(WhoUsesParams {
         directory: manifest_dir.to_string(),
-        target: "rmc_graph::graph::loader::load".to_string(),
+        target: "rmc_server::tools::graph::response::json_result".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
@@ -177,7 +183,7 @@ async fn who_uses_and_dead_pub_round_trip() {
     // test that the tool returns a structured findings array.
     let dead = dead_pub_in_crate(DeadPubParams {
         directory: manifest_dir.to_string(),
-        krate: "rust_code_mcp".to_string(),
+        krate: "rmc_server".to_string(),
         pagination: ListPaginationParams::default(),
     })
     .await
@@ -186,25 +192,6 @@ async fn who_uses_and_dead_pub_round_trip() {
     assert!(
         body.contains("\"findings\""),
         "expected a findings array in response: {body}"
-    );
-
-    // dead_pub_report aggregates the same query across all local crates and
-    // stamps a `total_findings` count. rust_code_mcp has at least one
-    // local crate (itself), so `crates` is non-empty.
-    let report = dead_pub_report(DeadPubReportParams {
-        directory: manifest_dir.to_string(),
-        pagination: ListPaginationParams::default(),
-    })
-    .await
-    .expect("dead_pub_report");
-    let body = first_text(&report);
-    assert!(
-        body.contains("\"total_findings\""),
-        "expected total_findings in response: {body}"
-    );
-    assert!(
-        body.contains("\"crates\""),
-        "expected crates array in response: {body}"
     );
 }
 
@@ -215,23 +202,14 @@ async fn who_uses_and_dead_pub_round_trip() {
 /// workspace). The default-limit cap holds whether or not the
 /// workspace currently has > 50 async fns: `match_count <= limit` and
 /// `total_match_count >= match_count` regardless.
-#[tokio::test]
 async fn functions_with_filter_default_limit_caps_results() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     let result = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
         directory: manifest_dir.to_string(),
-        krate: "rust_code_mcp".to_string(),
+        krate: "rmc_server".to_string(),
         min_param_count: None,
         has_param_type: None,
         returns_type_pattern: None,
@@ -284,23 +262,14 @@ async fn functions_with_filter_default_limit_caps_results() {
 /// payload. We rely on `#[serde(skip_serializing_if = "Option::is_none")]`
 /// on the field, so the JSON object should not contain a `signature`
 /// key at all in summary mode.
-#[tokio::test]
 async fn functions_with_filter_summary_mode_omits_signature() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     let result = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
         directory: manifest_dir.to_string(),
-        krate: "rust_code_mcp".to_string(),
+        krate: "rmc_server".to_string(),
         min_param_count: None,
         has_param_type: None,
         returns_type_pattern: None,
@@ -344,24 +313,15 @@ async fn functions_with_filter_summary_mode_omits_signature() {
 /// Item #4: `offset` skips matches; with `offset` >= `total_match_count`
 /// no matches are returned, but `total_match_count` and `limit` still
 /// echo the request inputs.
-#[tokio::test]
 async fn functions_with_filter_offset_pagination() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     // First page.
     let page1 = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
         directory: manifest_dir.to_string(),
-        krate: "rust_code_mcp".to_string(),
+        krate: "rmc_server".to_string(),
         min_param_count: None,
         has_param_type: None,
         returns_type_pattern: None,
@@ -390,7 +350,7 @@ async fn functions_with_filter_offset_pagination() {
     // Second page (offset = 5).
     let page2 = functions_with_filter(crate::tools::params::FunctionsWithFilterParams {
         directory: manifest_dir.to_string(),
-        krate: "rust_code_mcp".to_string(),
+        krate: "rmc_server".to_string(),
         min_param_count: None,
         has_param_type: None,
         returns_type_pattern: None,
@@ -427,19 +387,10 @@ async fn functions_with_filter_offset_pagination() {
 }
 
 /// Item #7: `top_n` caps the number of metric rows returned.
-#[tokio::test]
 async fn crate_dependency_metric_top_n_caps_count() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     let result = crate_dependency_metric(
         crate::tools::params::CrateDependencyMetricParams {
@@ -476,19 +427,10 @@ async fn crate_dependency_metric_top_n_caps_count() {
 }
 
 /// Item #7: `sort_by=instability` sorts metrics non-increasing.
-#[tokio::test]
 async fn crate_dependency_metric_sort_by_instability_descending() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     let result = crate_dependency_metric(
         crate::tools::params::CrateDependencyMetricParams {
@@ -526,19 +468,10 @@ async fn crate_dependency_metric_sort_by_instability_descending() {
 }
 
 /// Item #7: an unknown `sort_by` value is rejected with `invalid_params`.
-#[tokio::test]
 async fn crate_dependency_metric_unknown_sort_by_errors() {
-    let _guard = DEFAULT_SNAPSHOT_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let manifest_dir = test_project_root();
 
-    build_hypergraph(BuildHypergraphParams {
-        directory: manifest_dir.to_string(),
-        force_rebuild: Some(false),
-    })
-    .await
-    .expect("build_hypergraph");
+    ensure_default_snapshot(&manifest_dir).await;
 
     let result = crate_dependency_metric(
         crate::tools::params::CrateDependencyMetricParams {

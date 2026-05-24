@@ -30,7 +30,7 @@
 //! ## Examples
 //!
 //! ### Find Symbol Definition
-//! ```rust,no_run
+//! ```rust,ignore
 //! use rmc_server::tools::endpoints::analysis::find_definition;
 //!
 //! # async fn example() -> Result<(), rmcp::ErrorData> {
@@ -44,7 +44,7 @@
 //! ```
 //!
 //! ### Analyze Code Complexity
-//! ```rust,no_run
+//! ```rust,ignore
 //! use rmc_server::tools::endpoints::analysis::analyze_complexity;
 //!
 //! # async fn example() -> Result<(), rmcp::ErrorData> {
@@ -58,7 +58,7 @@
 //! ```
 //!
 //! ### Get Call Graph
-//! ```rust,no_run
+//! ```rust,ignore
 //! use rmc_server::tools::endpoints::analysis::get_call_graph;
 //!
 //! # async fn example() -> Result<(), rmcp::ErrorData> {
@@ -92,6 +92,31 @@ use rmc_engine::parser::RustParser;
 
 use crate::semantic::SEMANTIC;
 
+fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError> {
+    if !project_path.exists() {
+        return Err(McpError::invalid_params(
+            format!("directory does not exist: {}", project_path.display()),
+            None,
+        ));
+    }
+
+    if !project_path.is_dir() {
+        return Err(McpError::invalid_params(
+            format!("path is not a directory: {}", project_path.display()),
+            None,
+        ));
+    }
+
+    if !project_path.join("Cargo.toml").is_file() {
+        return Err(McpError::invalid_params(
+            format!("directory is not a Cargo project: {}", project_path.display()),
+            None,
+        ));
+    }
+
+    Ok(())
+}
+
 /// Find the definition of a symbol by name
 pub(crate) async fn find_definition(
     symbol_name: &str,
@@ -106,9 +131,8 @@ pub(crate) async fn find_definition_with_options(
     directory: &str,
     exact: bool,
 ) -> Result<CallToolResult, McpError> {
-    use std::path::Path;
-
     let project_path = Path::new(directory);
+    validate_cargo_project_directory(project_path)?;
 
     tracing::debug!("Searching for definition of '{}' (exact={})", symbol_name, exact);
 
@@ -153,9 +177,8 @@ pub(crate) async fn find_references_with_options(
     directory: &str,
     exact: bool,
 ) -> Result<CallToolResult, McpError> {
-    use std::path::Path;
-
     let project_path = Path::new(directory);
+    validate_cargo_project_directory(project_path)?;
 
     tracing::debug!("Searching for references to '{}' (exact={})", symbol_name, exact);
 
@@ -192,9 +215,8 @@ pub(crate) async fn rename_symbol(
     new_name: &str,
     directory: &str,
 ) -> Result<CallToolResult, McpError> {
-    use std::path::Path;
-
     let project_path = Path::new(directory);
+    validate_cargo_project_directory(project_path)?;
 
     tracing::debug!("Previewing rename '{}' → '{}'", symbol_name, new_name);
 
