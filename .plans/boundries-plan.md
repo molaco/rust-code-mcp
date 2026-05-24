@@ -1475,6 +1475,15 @@ For every phase, record:
   references. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rmc-indexing -p rmc-server`.
+- Step 4 tighten implementation-module visibility: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `7f68455c8ce3445f05842d283d6c380de6b7ac8f` on change
+  `yvurtoqvqqvokrpylxpqrmyoxmzwmuky`, with no description set. Made the
+  `rmc_engine::search`, `rmc_engine::vector_store`, and `rmc_engine::parser`
+  implementation modules private while preserving their existing facade
+  reexports. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
 
 ## Phase 0: Baseline And Safety Checks
 

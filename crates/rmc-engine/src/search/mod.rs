@@ -2,10 +2,10 @@
 //!
 //! Implements Reciprocal Rank Fusion (RRF) to merge results from multiple search engines
 
-pub mod bm25;
-pub mod error;
-pub mod resilient;
-pub mod rrf_tuner;
+mod bm25;
+mod error;
+mod resilient;
+mod rrf_tuner;
 
 pub use bm25::Bm25Search;
 pub use error::SearchError;

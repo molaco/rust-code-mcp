@@ -3,9 +3,9 @@
 //! Provides vector search capabilities for code chunks using embeddings.
 //! Uses LanceDB as the embedded, zero-config backend.
 
-pub mod error;
-pub mod lancedb;
-pub mod traits;
+mod error;
+mod lancedb;
+mod traits;
 
 // Re-exports
 pub use error::VectorStoreError;

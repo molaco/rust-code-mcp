@@ -3,9 +3,9 @@
 //! Extracts symbols (functions, structs, traits, etc.) from Rust source files
 //! and builds a call graph for understanding code relationships.
 
-pub mod call_graph;
-pub mod imports;
-pub mod type_references;
+mod call_graph;
+mod imports;
+mod type_references;
 
 mod rust_parser;
 mod types;
