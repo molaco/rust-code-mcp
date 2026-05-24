@@ -1395,3 +1395,11 @@
 ### Remaining Follow-Up
 
 - Start Phase 11.
+
+## Phase 11: `rmc-indexing` Visibility Tightening
+
+### Progress
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `548b442d84e685843e1dc80bd27d32197e6d7de9` on change
+  `rmtkyypxkmopxowpostpqvuzryoslttm`, with no description set.

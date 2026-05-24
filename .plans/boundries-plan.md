@@ -1523,6 +1523,12 @@ For every phase, record:
   Wrote `.docs/phase-10-boundrie-fix-report.md` and marked the Phase 10
   progress ledger complete.
 
+### Phase 11: `rmc-indexing` Visibility Tightening
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `548b442d84e685843e1dc80bd27d32197e6d7de9` on change
+  `rmtkyypxkmopxowpostpqvuzryoslttm`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
