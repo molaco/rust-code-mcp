@@ -1824,3 +1824,21 @@
   `rmc_indexing=0.125`, `rmc_graph=0.08333333333333333`, and
   `rmc_engine=0.06666666666666667`. The five-rule
   `forbidden_dependency_check` returned `violation_count=0`.
+- Step 3 refresh public-surface checks: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `5ad01a338c16b122bad871f753979afcbecfd62e` on change
+  `osvxrwxwzuxtqlmktqqsomxkpzxyzmmu`, with no description set. Initial
+  `get_exports` results were `rmc_engine=6`, `rmc_graph::graph=88`,
+  `rmc_indexing::indexing=22`, and `rmc_server=3`. The indexing export list
+  exposed `error_collection` as a public declared module even though source
+  search showed only internal crate consumers and its contents are already
+  `pub(crate)`. Tightened it from `pub mod error_collection` to
+  `pub(crate) mod error_collection` in
+  `crates/rmc-indexing/src/indexing/mod.rs`. Focused verification passed with
+  existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server`. Rebuilt the hypergraph, producing graph
+  `504065740f18b789a68fae1df31f284e`, fingerprint
+  `8d0ca1ca693bc425de8a0e7c3ac2e44e8250847c5905d0e9634a6e138bbce516`.
+  Final `get_exports` counts were `rmc_engine=6`, `rmc_graph::graph=88`,
+  `rmc_indexing::indexing=21`, and `rmc_server=3`.

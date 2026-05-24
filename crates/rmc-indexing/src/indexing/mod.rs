@@ -4,7 +4,7 @@ pub(crate) mod backup;
 mod consistency;
 pub(crate) mod embedding_batcher;
 pub mod error;
-pub mod error_collection;
+pub(crate) mod error_collection;
 pub(crate) mod file_processor;
 mod identity;
 mod incremental;
