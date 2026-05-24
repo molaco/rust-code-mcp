@@ -1174,6 +1174,24 @@ For every phase, record:
   cargo test -p rmc-indexing test_calculate_safe_batch_size`, and
   `timeout 180s nix develop ../nix-devshells#cuda-code --command cargo test
   -p rmc-indexing --lib`.
+- Current-suite server validation remediation: completed after pre-step
+  `jj status` reported no changes, empty working-copy commit `9280c628`, and
+  parent commit `59417009 test: fix remaining boundary validation issues`.
+  Fixed the remaining server and indexing validation failures found after
+  Phases 3 through 6: analysis endpoints now reject directories that are not
+  Cargo projects; private/internal doctest examples are marked `rust,ignore`;
+  server graph round-trip tests use the `rmc-server` crate root and current
+  qualified names; the stale BM25 dependency assertion now checks the
+  indexing-owned `open_bm25_search` facade; the expensive `dead_pub_report`
+  aggregation was removed from the focused round-trip; and default-snapshot
+  graph endpoint cases now run sequentially in one async test to avoid
+  concurrent `heed`/LMDB opens against the same persisted graph snapshot.
+  Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command timeout 1200s cargo test -p
+  rmc-server` and `nix develop ../nix-devshells#cuda-code --command timeout
+  600s cargo check -p rmc-indexing -p rmc-graph -p rmc-server`. Earlier in
+  the same remediation pass, `nix develop ../nix-devshells#cuda-code
+  --command timeout 900s cargo test -p rmc-indexing` passed.
 
 ## Phase 0: Baseline And Safety Checks
 
