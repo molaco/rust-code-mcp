@@ -1278,6 +1278,12 @@ For every phase, record:
   `.docs/phase-7-boundrie-fix-report.md` and marked the Phase 7 progress
   ledger complete.
 
+### Phase 8: `rmc-graph` Storage Cleanup Facade
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `b1c1d1efc726c59be81c2bab2173c5cc9901db53` on change
+  `orrluuuuxommuvvnvqkuspowlszrkpoo`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
