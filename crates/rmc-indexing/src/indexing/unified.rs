@@ -8,6 +8,7 @@
 use rmc_engine::chunker::{ChunkId, CodeChunk};
 use rmc_config::config::IndexerConfig;
 use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+use rmc_engine::search::Bm25Search;
 use crate::indexing::indexer_core::IndexerCore;
 use crate::indexing::tantivy_adapter::TantivyAdapter;
 use crate::indexing::unified_parallel::{
@@ -471,7 +472,7 @@ impl UnifiedIndexer {
     }
 
     /// Create a Bm25Search instance from the Tantivy index
-    pub fn create_bm25_search(&self) -> Result<rmc_engine::search::bm25::Bm25Search> {
+    pub fn create_bm25_search(&self) -> Result<Bm25Search> {
         self.tantivy.create_bm25_search()
     }
 

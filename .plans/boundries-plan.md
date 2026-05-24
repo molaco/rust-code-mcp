@@ -1465,6 +1465,16 @@ For every phase, record:
   expose both implementation modules and facade reexports, while
   `rmc_engine::embeddings` exposes `EmbeddingBackend`, `EmbeddingProfile`,
   `EmbeddingGenerator`, and related embedding boundary types.
+- Step 3 migrate production consumers to facade reexports: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `61f941d7e1f85ff3994f81e05ad0ab3473ed01ac` on change
+  `pssllkpopytptyqvltpyzkpwtvxnxypu`, with no description set. Updated
+  indexing and server production code to use `rmc_engine::search::Bm25Search`
+  instead of inline `rmc_engine::search::bm25::Bm25Search` paths. Source
+  search found no remaining production inline `search::bm25::Bm25Search`
+  references. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server`.
 
 ## Phase 0: Baseline And Safety Checks
 

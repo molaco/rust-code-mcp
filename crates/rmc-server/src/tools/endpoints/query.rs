@@ -12,7 +12,7 @@ use std::path::Path;
 use tracing;
 
 use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
-use rmc_engine::search::HybridSearch;
+use rmc_engine::search::{Bm25Search, HybridSearch};
 use rmc_indexing::indexing::open_bm25_search;
 use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend_for_mcp,
@@ -242,7 +242,7 @@ fn resolve_query_backend(
 /// indexer was configured with a non-default variant.
 pub(crate) async fn create_hybrid_search(
     paths: &ProjectPaths,
-    bm25_search: Option<rmc_engine::search::bm25::Bm25Search>,
+    bm25_search: Option<Bm25Search>,
     configured_backend: EmbeddingBackend,
 ) -> Result<HybridSearch, McpError> {
     let resolved = resolve_query_backend(paths, configured_backend)?;

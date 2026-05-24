@@ -54,6 +54,7 @@
 use rmc_engine::chunker::CodeChunk;
 use rmc_config::config::TantivyConfig;
 use rmc_engine::schema::ChunkSchema;
+use rmc_engine::search::Bm25Search;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tantivy::{doc, Index, IndexWriter};
@@ -188,8 +189,8 @@ impl TantivyAdapter {
     }
 
     /// Create a Bm25Search instance from this adapter
-    pub fn create_bm25_search(&self) -> Result<rmc_engine::search::bm25::Bm25Search> {
-        rmc_engine::search::bm25::Bm25Search::from_index(self.index.clone())
+    pub fn create_bm25_search(&self) -> Result<Bm25Search> {
+        Bm25Search::from_index(self.index.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create Bm25Search: {}", e))
     }
 }
