@@ -1294,6 +1294,18 @@ For every phase, record:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rmc-graph` and `nix develop ../nix-devshells#cuda-code --command cargo
   test -p rmc-graph clear_` (3 tests passed).
+- Step 3 migrate server cache endpoint to call the graph API: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `98082c4c3d3d4cd0988387bcd31359ef4c51ff00` on change
+  `txpklmnkupptwsnopypttlxnwktzzzqy`, with no description set. Server
+  `clear_cache` now delegates per-workspace and all-workspace hypergraph
+  cleanup to `clear_workspace_snapshots` and `clear_all_workspace_snapshots`.
+  Source search found no remaining direct server references to
+  `rmc_graph::graph::GraphPaths` or `rmc_graph::graph::storage`. Verification
+  passed with existing warnings: `nix develop ../nix-devshells#cuda-code
+  --command cargo check -p rmc-server` and `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
+  tests passed).
 
 ## Phase 0: Baseline And Safety Checks
 

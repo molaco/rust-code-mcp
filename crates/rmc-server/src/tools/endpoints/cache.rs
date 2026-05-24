@@ -9,6 +9,7 @@ use rmcp::{
     model::{CallToolResult, Content},
     schemars, ErrorData as McpError,
 };
+use rmc_graph::graph::{GraphSnapshotCleanupOptions, GraphSnapshotCleanupReport};
 use std::path::Path;
 
 use crate::mcp::project_paths::{data_dir, dir_hash};
@@ -56,6 +57,20 @@ fn clear_existing_dir(
         Ok(_) => cleared.push(format!("{}: {}", label, path.display())),
         Err(e) => errors.push(format!("Failed to clear {}: {}", error_label, e)),
     }
+}
+
+fn record_graph_cleanup_report(
+    report: GraphSnapshotCleanupReport,
+    cleared: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    cleared.extend(
+        report
+            .cleared
+            .into_iter()
+            .map(|entry| format!("{}: {}", entry.label, entry.path.display())),
+    );
+    errors.extend(report.errors);
 }
 
 /// Clear cache, index, and vector store for a project or all projects
@@ -145,18 +160,18 @@ pub(crate) async fn clear_cache(
             }
         }
 
-        // 4. Optionally clear the persisted hypergraph snapshot. Resolve
-        // the per-workspace path via the same primitive `build_hypergraph`
-        // uses (`GraphPaths::for_workspace`) so the canonicalization and
-        // hash logic stay in one place.
+        // 4. Optionally clear the persisted hypergraph snapshot through the
+        // graph-owned cleanup API so graph storage layout stays encapsulated.
         if include_hypergraph {
-            let canonical = std::fs::canonicalize(dir_path).unwrap_or_else(|_| dir_path.into());
-            let paths = rmc_graph::graph::GraphPaths::for_workspace(&canonical);
-            clear_existing_dir(
-                "Hypergraph snapshot",
-                "hypergraph snapshot",
-                &paths.root_dir,
-                dry_run,
+            let report = rmc_graph::graph::clear_workspace_snapshots(
+                dir_path,
+                GraphSnapshotCleanupOptions {
+                    dry_run,
+                    data_dir_override: None,
+                },
+            );
+            record_graph_cleanup_report(
+                report,
                 &mut cleared,
                 &mut errors,
             );
@@ -183,17 +198,17 @@ pub(crate) async fn clear_cache(
             &mut errors,
         );
 
-        // All-projects hypergraph wipe: nuke the entire `graphs/` dir
-        // under the data dir. That's `default_data_dir()` from
-        // `graph::storage` — same parent that `GraphPaths::for_workspace`
-        // hashes underneath.
+        // All-projects hypergraph wipe goes through graph-owned cleanup so
+        // the server does not know where graph snapshots live.
         if include_hypergraph {
-            let graphs_dir = rmc_graph::graph::storage::default_data_dir();
-            clear_existing_dir(
-                "All hypergraph snapshots",
-                "hypergraph snapshots",
-                &graphs_dir,
-                dry_run,
+            let report = rmc_graph::graph::clear_all_workspace_snapshots(
+                GraphSnapshotCleanupOptions {
+                    dry_run,
+                    data_dir_override: None,
+                },
+            );
+            record_graph_cleanup_report(
+                report,
                 &mut cleared,
                 &mut errors,
             );
