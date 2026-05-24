@@ -1377,6 +1377,13 @@ For every phase, record:
   passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rmc-server`.
+- Step 4 keep `tools::params` internal: completed as verification-only.
+  Pre-step `jj show --summary` reported working-copy commit
+  `f4da094f0a1f7c729a74b93373fb3d2abb1d1615` on change
+  `rnvkvtnqvwkyutvmlllprxzvmnxmtrzl`, with no description set. Source review
+  confirmed `tools::params` is a private module, its family modules are
+  private, its flat reexports are `pub(crate)`, and all MCP parameter structs
+  in `tools::params` remain `pub(crate)` rather than public API.
 
 ## Phase 0: Baseline And Safety Checks
 
