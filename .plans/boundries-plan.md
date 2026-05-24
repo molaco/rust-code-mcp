@@ -1742,6 +1742,20 @@ For every phase, record:
   `8d0ca1ca693bc425de8a0e7c3ac2e44e8250847c5905d0e9634a6e138bbce516`.
   Final public-surface counts were `rmc_engine=6`, `rmc_graph::graph=88`,
   `rmc_indexing::indexing=21`, and `rmc_server=3`.
+- Step 4 refresh server deep-dependency checks: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `7437a8407b5dbd0ce94d86bdf7f5bd68cbd096cf` on change
+  `povmlypzvvrntkumpzmsmmtxmnwrnruw`, with no description set.
+  `get_imports` returned 0 imports for `rmc_server::tools::graph`, 17 for
+  `rmc_server::tools::endpoints::query`, and 10 for
+  `rmc_server::mcp::sync`. `module_dependencies` returned dependency group
+  counts of `graph::response=12`, `graph::core=10`, `graph::surface=11`,
+  `graph::audits=7`, `graph::similarity=13`, `endpoints::query=17`,
+  `endpoints::cache=7`, and `mcp::sync=10`. The remaining graph/indexing
+  dependencies are stable modules, facade-reexport targets, or explicit
+  compatibility exports; no server production module dependency on
+  `docs_audit`, `derive_audit`, `loader`, `storage`, `tantivy_adapter`, or
+  `error_collection` was observed.
 
 ## Phase 0: Baseline And Safety Checks
 

@@ -1842,3 +1842,21 @@
   `8d0ca1ca693bc425de8a0e7c3ac2e44e8250847c5905d0e9634a6e138bbce516`.
   Final `get_exports` counts were `rmc_engine=6`, `rmc_graph::graph=88`,
   `rmc_indexing::indexing=21`, and `rmc_server=3`.
+- Step 4 refresh server deep-dependency checks: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `7437a8407b5dbd0ce94d86bdf7f5bd68cbd096cf` on change
+  `povmlypzvvrntkumpzmsmmtxmnwrnruw`, with no description set.
+  `get_imports(module="rmc_server::tools::graph")` returned 0 imports for the
+  parent module, `get_imports(module="rmc_server::tools::endpoints::query")`
+  returned 17 imports, and `get_imports(module="rmc_server::mcp::sync")`
+  returned 10 imports. `module_dependencies` returned dependency group counts:
+  `graph::response=12`, `graph::core=10`, `graph::surface=11`,
+  `graph::audits=7`, `graph::similarity=13`, `endpoints::query=17`,
+  `endpoints::cache=7`, and `mcp::sync=10`. The graph tool modules depend on
+  stable graph modules or facade-reexport targets (`snapshot`, `model`,
+  `ids`, `query::model`, `query::audits`, `query::similarity`, and the
+  reexported label helpers). `mcp::sync` depends on the indexing
+  `incremental_service` facade. `endpoints::query` depends on the indexing
+  `search` facade and supported `UnifiedIndexer`/`IndexStats` exports. No
+  server production module dependency on `docs_audit`, `derive_audit`,
+  `loader`, `storage`, `tantivy_adapter`, or `error_collection` was observed.
