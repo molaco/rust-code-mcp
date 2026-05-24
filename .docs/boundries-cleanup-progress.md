@@ -1211,3 +1211,17 @@
   rmc-server -p rust-code-mcp` and `nix develop ../nix-devshells#cuda-code
   --command cargo test -p rust-code-mcp --test test_mcp_stdio_transport
   --no-run`.
+- Step 7 verify server public exports: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `7ea2b94aa4faf206c22435ac3f2792c703ba7f0a` on change
+  `kknqyswrtonszvszpttxolopwmmoystr`, with no description set. Refreshed the
+  MCP hypergraph: graph `e669ac6eeba2bb252aa05150b435baa2`, fingerprint
+  `cff3f2f33f298d34766a50b6578f4212466eadbfdf76f6399bf5b36567eddb29`.
+  `get_exports(module="rmc_server::tools", consumer="rmc_server")` returned
+  the intended tools facade: `SearchToolRouter`, `SearchTool`,
+  `index_codebase`, and `IndexCodebaseParams`. `get_exports` for
+  `rmc_server::mcp` returned `SyncManager` plus the public `sync` and
+  `project_paths` modules. Root `rmc_server` exports remain `tools`, `mcp`,
+  and `semantic`. `get_declared_reexports` for `rmc_server::tools` returned
+  only the four intended tools reexports, and `rmc_server::mcp` returned the
+  `SyncManager` glob reexport.
