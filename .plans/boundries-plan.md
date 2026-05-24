@@ -1232,6 +1232,15 @@ For every phase, record:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server` and `nix develop ../nix-devshells#cuda-code --command cargo
   test -p rmc-graph similarity_`.
+- Step 5 keep `similar_to_item` server-owned: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `0de06380951010fdc893e2954a649b6246c661d7` on change
+  `msuwkqmlltplmzuznwwuorqxpzwzmlyr`, with no description set. Source search
+  confirms `similar_to_item` remains implemented in
+  `rmc_server::tools::graph::similarity` and routed by the server. Its
+  server-only dependencies on `resolve_embedding_backend_for_mcp`,
+  `ProjectPaths::from_directory`, `create_hybrid_search`, and
+  `vector_only_search` remain outside `rmc_graph`.
 
 ## Phase 0: Baseline And Safety Checks
 

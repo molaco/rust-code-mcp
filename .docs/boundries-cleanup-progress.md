@@ -943,3 +943,11 @@
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server` and `nix develop ../nix-devshells#cuda-code --command cargo
   test -p rmc-graph similarity_`.
+- Step 5 keep `similar_to_item` server-owned: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `0de06380951010fdc893e2954a649b6246c661d7` on change
+  `msuwkqmlltplmzuznwwuorqxpzwzmlyr`, with no description set. Source search
+  found `similar_to_item` only in server routing/params/implementation code,
+  not as a graph facade. The tool still depends on server project path
+  resolution, server hybrid-search construction, and vector-only search, so
+  it intentionally stays server-owned for Phase 7.
