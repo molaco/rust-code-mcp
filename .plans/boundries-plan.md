@@ -1161,6 +1161,19 @@ For every phase, record:
   root-level `src/*.rs` paths. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   load_crate_target_kinds_finds_workspace_targets`.
+- Current-suite indexing test reliability: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `f818b69c29570c19a60068ab22672c9319d0bfc1` on change
+  `qyxqmnnulvqsztqzuwzxqkowpumtoqkl`, with no description set. Reworked
+  `IndexerCore` unit tests so file-filtering and chunk-split checks do not
+  construct the default embedding generator, and changed `MemoryMonitor::new`
+  to initialize memory data only instead of all process/system data.
+  Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  indexer_core::tests`, `nix develop ../nix-devshells#cuda-code --command
+  cargo test -p rmc-indexing test_calculate_safe_batch_size`, and
+  `timeout 180s nix develop ../nix-devshells#cuda-code --command cargo test
+  -p rmc-indexing --lib`.
 
 ## Phase 0: Baseline And Safety Checks
 

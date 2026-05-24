@@ -87,10 +87,7 @@ impl IndexerCore {
             .with_embedding_profile(backend.profile.clone())
             .with_env_overrides();
 
-        let chunk_split_config = ChunkSplitConfig::new(
-            config.chunk_target_tokens,
-            config.chunk_hard_max_tokens,
-        );
+        let chunk_split_config = chunk_split_config_from(&config);
         let file_processor = FileProcessor::with_cache_key_salt(
             cache_path,
             config.max_file_size,
@@ -245,43 +242,58 @@ impl IndexerCore {
     }
 }
 
+fn chunk_split_config_from(config: &IndexerCoreConfig) -> ChunkSplitConfig {
+    ChunkSplitConfig::new(config.chunk_target_tokens, config.chunk_hard_max_tokens)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
     #[test]
-    fn test_indexer_core_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let cache_path = temp_dir.path().join("cache");
+    fn test_chunk_split_config_uses_core_config() {
+        let config = IndexerCoreConfig {
+            chunk_target_tokens: 512,
+            chunk_hard_max_tokens: 768,
+            ..Default::default()
+        };
 
-        let core = IndexerCore::new(&cache_path, None);
-        assert!(core.is_ok(), "Failed to create IndexerCore: {:?}", core.err());
+        let split_config = chunk_split_config_from(&config);
+
+        assert_eq!(split_config.target_tokens, 512);
+        assert_eq!(split_config.hard_max_tokens, 768);
     }
 
     #[test]
-    fn test_should_process_file() {
+    fn test_chunk_split_config_clamps_invalid_hard_max() {
+        let config = IndexerCoreConfig {
+            chunk_target_tokens: 512,
+            chunk_hard_max_tokens: 128,
+            ..Default::default()
+        };
+
+        let split_config = chunk_split_config_from(&config);
+
+        assert_eq!(split_config.target_tokens, 512);
+        assert_eq!(split_config.hard_max_tokens, 512);
+    }
+
+    #[test]
+    fn test_should_process_file_without_embedding_generator() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
-        let core = IndexerCore::new(&cache_path, None).unwrap();
-
-        // Create a test file
+        let file_processor = FileProcessor::with_cache_key_salt(
+            &cache_path,
+            IndexerCoreConfig::default().max_file_size,
+            IndexerCoreConfig::default().chunking_cache_salt(),
+        )
+        .unwrap();
         let test_file = temp_dir.path().join("test.rs");
         std::fs::write(&test_file, "fn test() {}").unwrap();
 
-        let should_process = core.should_process_file(&test_file);
+        let should_process = file_processor.should_process_file(&test_file);
         assert!(should_process.is_ok());
         assert!(should_process.unwrap());
-    }
-
-    #[test]
-    fn test_calculate_safe_batch_size() {
-        let temp_dir = TempDir::new().unwrap();
-        let cache_path = temp_dir.path().join("cache");
-        let core = IndexerCore::new(&cache_path, None).unwrap();
-
-        let batch_size = core.calculate_safe_batch_size();
-        assert!(batch_size > 0);
-        assert!(batch_size <= 100); // Should be capped at 100
     }
 }

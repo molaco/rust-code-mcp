@@ -12,7 +12,7 @@ pub struct MemoryMonitor {
 impl MemoryMonitor {
     /// Create a new memory monitor
     pub fn new() -> Self {
-        let mut system = System::new_all();
+        let mut system = System::new();
         system.refresh_memory();
         Self { system }
     }

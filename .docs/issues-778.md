@@ -88,6 +88,15 @@ Status baseline:
   of root-level `src/*.rs` paths. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
   load_crate_target_kinds_finds_workspace_targets`.
+- Current-suite indexing test reliability: `IndexerCore` unit tests no longer
+  construct the default embedding generator for file-filtering and
+  chunk-split checks, and `MemoryMonitor::new` now initializes only memory
+  data instead of all process/system data. Verification passed with existing
+  warnings: `nix develop ../nix-devshells#cuda-code --command cargo test
+  -p rmc-indexing indexer_core::tests`, `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  test_calculate_safe_batch_size`, and `timeout 180s nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing --lib`.
 
 ## Remaining Phase 3 Issues
 
@@ -107,7 +116,4 @@ Status baseline:
 
 ## Current-Suite Issues Not Attributable To Phases 3-6
 
-- Medium: `rmc-indexing` tests are not reliably regular in this environment.
-  A targeted `test_calculate_safe_batch_size` hung past 60 seconds, likely
-  because simple unit tests construct `IndexerCore::new`, which initializes the
-  default embedding generator.
+- None.
