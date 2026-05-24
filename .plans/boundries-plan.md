@@ -1505,6 +1505,13 @@ For every phase, record:
   `txoyuqwnvqzttkymnvyowsmmvxtrpuwu`, with no description set. Added rustdoc
   identifying `EmbeddingBackend` as the shared runtime, cache identity, and
   dimension contract used by indexing, graph, and server crates.
+- Step 8 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `87d64b368ae7ba68431ae04fbea6c2b49de960c0` on change
+  `mmttxlnqxspokwwqrmyznzqllovvonsz`, with no description set. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
 
 ## Phase 0: Baseline And Safety Checks
 
