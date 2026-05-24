@@ -1692,3 +1692,100 @@
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rust-code-mcp --example debug_itemscope --example spike_usages --example
   timing_extract`.
+- Step 8 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `dfeec2a6e346e754e97e0da43d9b69d8548a4892` on change
+  `kvpoywpkxnoynymspvyysuxytokuumww`, with no description set. Updated the
+  Phase 12 ledger with changed files, verification, MCP evidence, commit
+  history, compatibility exceptions, and remaining follow-up.
+
+### MCP Evidence
+
+- Step 2 `build_hypergraph(force_rebuild=true)` produced graph
+  `da64f03ea621c18612caf4468a58b64f`.
+- Step 2 `get_exports(module="rmc_graph::graph", consumer="rmc_server")`
+  showed 96 server-visible graph bindings before tightening, and
+  `get_reexports(module="rmc_graph::graph")` showed 74 explicit facade
+  reexports.
+- Step 4 `build_hypergraph(force_rebuild=true)` produced graph
+  `b9e01b5aeda04ae51a1c584f0512f8dc`, fingerprint
+  `3d561d6c149beda49ab51ac0da17115f6de0d4ebeb8771c5e034de7968a57d10`.
+- Step 4 `get_exports(module="rmc_graph::graph", consumer="rmc_server")`
+  showed 88 server-visible graph bindings after tightening, down from 96.
+- Step 4 `who_imports` for `rmc_graph::graph::docs_audit`,
+  `rmc_graph::graph::derive_audit`, and `rmc_graph::graph::loader` showed
+  only graph-internal module/test importers after server and debug consumers
+  moved to supported facade exports.
+- Step 6 `module_dependencies(module="rmc_server::tools::graph::codemap")`
+  confirmed active server codemap dependencies on graph codemap exports, so
+  `rmc_graph::graph::codemap` remains an intentional compatibility module.
+
+### Source-Read Result
+
+- `rmc_graph::graph` now keeps implementation modules private:
+  `ast_resolve`, `attributes`, `bindings`, `channel_audit`, `derive_audit`,
+  `docs_audit`, `extract`, `fn_body_audit`, `hir_trim`, `impls`, `labels`,
+  `loader`, `recursion_check`, `signatures`, `statics`, `storage`,
+  `unsafe_audit`, and `usages`.
+- The remaining public graph modules are `codemap`, `ids`, `model`, and
+  `snapshot`. `codemap` remains public for server codemap tools; `ids`,
+  `model`, and `snapshot` remain stable compatibility modules while root
+  reexports are the preferred public path.
+- Graph-owned wrappers now expose missing-docs and derive audits through
+  `run_missing_docs_audit` and `run_derive_audit`, including rendered DTOs,
+  so server graph tools no longer depend on `docs_audit` or `derive_audit`
+  implementation modules.
+- Server graph tools and debug examples now use root graph facade exports such
+  as `BuildOptions`, `load`, `extract_workspace_model`, and
+  `item_kind_short_label` instead of private implementation modules.
+
+### Files Changed
+
+- `.plans/boundries-plan.md`
+- `.docs/boundries-cleanup-progress.md`
+- `crates/rmc-graph/src/graph/mod.rs`
+- `crates/rmc-graph/src/graph/query/audits.rs`
+- `crates/rmc-graph/src/graph/query/model.rs`
+- `crates/rmc-server/src/tools/graph/core.rs`
+- `crates/rmc-server/src/tools/graph/similarity.rs`
+- `crates/rmc-server/src/tools/graph/surface.rs`
+- `crates/rust-code-mcp/examples/debug_itemscope.rs`
+- `crates/rust-code-mcp/examples/spike_usages.rs`
+- `crates/rust-code-mcp/examples/timing_extract.rs`
+
+### Verification
+
+- Combined focused check passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-graph -p rmc-server -p rust-code-mcp`.
+- Graph no-run tests compiled with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  --no-run`.
+- Server no-run tests compiled with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  --no-run`.
+- Touched debug examples compiled with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example debug_itemscope --example spike_usages --example
+  timing_extract`.
+
+### Commits
+
+- Step 1 documentation: `36d3eaaa`
+  (`docs: start phase 12 graph visibility`).
+- Step 2 documentation: `656cbbaf`
+  (`docs: record phase 12 graph facade evidence`).
+- Step 3 documentation: `b8fd6f94`
+  (`docs: record phase 12 stable graph exports`).
+- Step 4 implementation: `4f4860cf`
+  (`refactor: tighten graph implementation modules`).
+- Step 5 documentation: `8ed5a684`
+  (`docs: verify graph debug consumers`).
+- Step 6 documentation: `767a9b52`
+  (`docs: record graph compatibility exports`).
+- Step 7 documentation: `8f70f1d4`
+  (`docs: record phase 12 check result`).
+
+### Remaining Follow-Up
+
+- Write the Phase 12 report, mark Phase 12 complete, then start Phase 13.

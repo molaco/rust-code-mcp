@@ -1697,6 +1697,12 @@ For every phase, record:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rust-code-mcp --example debug_itemscope --example spike_usages --example
   timing_extract`.
+- Step 8 update the ledger and commit: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `dfeec2a6e346e754e97e0da43d9b69d8548a4892` on change
+  `kvpoywpkxnoynymspvyysuxytokuumww`, with no description set. Updated the
+  Phase 12 ledger with changed files, verification, MCP evidence, commit
+  history, compatibility exceptions, and remaining follow-up.
 
 ## Phase 0: Baseline And Safety Checks
 
