@@ -1067,3 +1067,16 @@
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `b1c1d1efc726c59be81c2bab2173c5cc9901db53` on change
   `orrluuuuxommuvvnvqkuspowlszrkpoo`, with no description set.
+- Step 2 add graph-owned cache/snapshot cleanup API: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `a142565cdcf8f1465c568be4234eff49b5e6fe2c` on change
+  `omtlysvxxlpvylyzmkrtntnulupxynym`, with no description set. Added
+  `clear_workspace_snapshots`, `clear_all_workspace_snapshots`,
+  `GraphSnapshotCleanupOptions`, `GraphSnapshotCleanupEntry`, and
+  `GraphSnapshotCleanupReport` in `rmc_graph::graph`. The graph API owns
+  workspace graph path calculation, all-workspace graph root resolution,
+  dry-run reporting, and removal/error collection. Verification passed with
+  existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-graph` and `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-graph clear_` (3 tests passed).

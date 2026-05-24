@@ -58,4 +58,7 @@ pub use query::similarity::{
     GraphSimilarityError, SemanticOverlapOptions, run_semantic_overlaps,
 };
 pub use snapshot::{BuildOptions, OpenedSnapshot, build_and_persist, open_current};
-pub use storage::{GraphEnvOptions, GraphPaths};
+pub use storage::{
+    GraphEnvOptions, GraphPaths, GraphSnapshotCleanupEntry, GraphSnapshotCleanupOptions,
+    GraphSnapshotCleanupReport, clear_all_workspace_snapshots, clear_workspace_snapshots,
+};
