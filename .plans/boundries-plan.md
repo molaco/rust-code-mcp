@@ -1258,6 +1258,14 @@ For every phase, record:
   graph-internal query/test importers. MCP `semantic_overlaps` scoped to
   `crate_name="rmc_graph"`, `item_kind="Function"`, `summary=true`, and
   `max_pairs=40` returned 178 seeds, 18 pairs, and 15 clusters.
+- Step 7 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `9a27b5751bc24252d875d8e87c761c0b7f097c5a` on change
+  `ykpxzxowosoplyyukxtpwrrpqmquwwzu`, with no description set. Verification
+  passed with existing warnings: `nix develop ../nix-devshells#cuda-code
+  --command cargo check -p rmc-graph -p rmc-server` and `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-graph similarity_`
+  (6 tests passed).
 
 ## Phase 0: Baseline And Safety Checks
 
