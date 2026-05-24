@@ -1630,3 +1630,13 @@
   reexports. Source/MCP evidence showed the root graph module must remain the
   compatibility facade while later steps reduce avoidable declared module
   exposure.
+- Step 3 keep stable public graph groups visible: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `395df4c382a3267153f110dc6f0e57ed22fbb523` on change
+  `vnqozyqnxywrlwqvykyzspypyrvymxwq`, with no description set. The stable
+  public groups for this phase are snapshot build/open/cleanup APIs,
+  `OpenedSnapshot`, graph ID/model types already reexported at
+  `rmc_graph::graph`, query DTOs, graph audit/similarity facades added in
+  earlier phases, and the codemap module because server codemap tools still use
+  it as a graph-owned facade. Later visibility changes must preserve these
+  groups through root reexports or explicit compatibility modules.

@@ -1645,6 +1645,14 @@ For every phase, record:
   server-visible graph bindings and `get_reexports` reported 74 explicit
   facade reexports, confirming that `rmc_graph::graph` remains the
   compatibility facade while implementation modules are tightened underneath.
+- Step 3 keep stable public graph groups visible: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `395df4c382a3267153f110dc6f0e57ed22fbb523` on change
+  `vnqozyqnxywrlwqvykyzspypyrvymxwq`, with no description set. The stable
+  public groups for this phase are snapshot build/open/cleanup APIs,
+  `OpenedSnapshot`, root-reexported graph ID/model types, query DTOs, graph
+  audit/similarity facades, and the codemap module used by server codemap
+  tools as a graph-owned facade.
 
 ## Phase 0: Baseline And Safety Checks
 
