@@ -1268,3 +1268,20 @@
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `93da984cc37b76983fbf24e64a16df3136ddd97b` on change
   `rpymxmznvyyowomornmtylzpsuuqonsy`, with no description set.
+- Step 2 confirm active engine implementation-module consumers: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `e6de81386071f5530aeeea7ea33e7e14452ff4ee` on change
+  `xvpssnupvstnqqynwwspkxsszrzzumrm`, with no description set. MCP
+  `who_imports` found only engine test-module glob imports for
+  `search::bm25`, `search::resilient`, `search::rrf_tuner`,
+  `vector_store::lancedb`, and `vector_store::traits`; no cross-crate import
+  edges depend on those implementation modules. Source search found inline
+  production references to `rmc_engine::search::bm25::Bm25Search` in
+  indexing/server code, which can use the existing
+  `rmc_engine::search::Bm25Search` facade reexport. Parser helper-module
+  search found no external importers for `imports` or `call_graph`, and
+  `type_references` is used inside `rmc_engine::parser` itself. Export
+  checks confirmed `rmc_engine::search` and `rmc_engine::vector_store` still
+  expose both implementation modules and facade reexports, while
+  `rmc_engine::embeddings` exposes `EmbeddingBackend`, `EmbeddingProfile`,
+  `EmbeddingGenerator`, and related embedding boundary types.
