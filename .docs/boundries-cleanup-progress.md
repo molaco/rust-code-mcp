@@ -1120,3 +1120,13 @@
   test -p rmc-graph clear_` (3 tests passed), and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
   tests passed).
+- Step 5 focused nix checks: completed. Pre-step `jj show --summary`
+  reported working-copy commit
+  `1ca43a0b76b242c5e4804561f0e9fefe6fc17772` on change
+  `mwvzzoypltvwrsuvusomvyvplyouxzpl`, with no description set. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server`, `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-graph clear_` (3 tests passed), and `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
+  tests passed).
