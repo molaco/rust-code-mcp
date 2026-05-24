@@ -1636,6 +1636,15 @@ For every phase, record:
 - Step 1 `jj show --summary`: completed. Current working-copy commit was
   `bd54c6908c8042ae3e370500674a33794ebc1098` on change
   `kuxlmlrylsxmlvxksxnsmyxwsvlsrszo`, with no description set.
+- Step 2 treat `rmc_graph::graph` as a compatibility facade: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `d98edfa467d0b00c8f4e2e93f905a2df04583d6e` on change
+  `kupxotvnkszypusruwmvqylrvwlrpwsp`, with no description set. Refreshed the
+  MCP hypergraph with `force_rebuild=true`, producing graph
+  `da64f03ea621c18612caf4468a58b64f`. `get_exports` reported 96
+  server-visible graph bindings and `get_reexports` reported 74 explicit
+  facade reexports, confirming that `rmc_graph::graph` remains the
+  compatibility facade while implementation modules are tightened underneath.
 
 ## Phase 0: Baseline And Safety Checks
 
