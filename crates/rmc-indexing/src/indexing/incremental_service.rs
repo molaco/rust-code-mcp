@@ -26,6 +26,7 @@ pub struct IncrementalIndexRequest<'a> {
 #[derive(Debug)]
 pub struct IncrementalIndexOutcome {
     pub stats: IndexStats,
+    /// Total elapsed time for the facade call, including force-reindex cleanup.
     pub elapsed: Duration,
 }
 
@@ -84,6 +85,8 @@ async fn index_project_incrementally_with_factory<F>(
 where
     F: IncrementalIndexerFactory,
 {
+    let start = Instant::now();
+
     if request.force_reindex {
         if let Some(snapshot_path) = request.snapshot_path {
             if snapshot_path.exists() {
@@ -102,7 +105,6 @@ where
         indexer.clear_all_data().await?;
     }
 
-    let start = Instant::now();
     let stats = indexer
         .index_with_change_detection(request.codebase_path)
         .await?;
@@ -128,6 +130,7 @@ mod tests {
         create_error: Option<&'static str>,
         clear_error: Option<&'static str>,
         index_error: Option<&'static str>,
+        clear_delay: Duration,
         stats: IndexStats,
     }
 
@@ -181,10 +184,16 @@ mod tests {
 
     impl IncrementalIndexRunner for FakeIndexer {
         async fn clear_all_data(&mut self) -> Result<()> {
-            let mut state = self.state.lock().unwrap();
-            state.events.push("clear".to_string());
-            if let Some(message) = state.clear_error {
+            let (error, delay) = {
+                let mut state = self.state.lock().unwrap();
+                state.events.push("clear".to_string());
+                (state.clear_error, state.clear_delay)
+            };
+            if let Some(message) = error {
                 return Err(anyhow!(message));
+            }
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
             }
             Ok(())
         }
@@ -295,6 +304,42 @@ mod tests {
         assert_eq!(build.snapshot_path.as_deref(), Some(snapshot_path.as_path()));
         assert_eq!(build.codebase_loc, Some(42));
         assert!(!build.force_reindex);
+    }
+
+    #[tokio::test]
+    async fn elapsed_includes_force_reindex_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let codebase_path = temp_dir.path().join("codebase");
+        let cache_path = temp_dir.path().join("cache");
+        let tantivy_path = temp_dir.path().join("tantivy");
+        std::fs::create_dir(&codebase_path).unwrap();
+
+        let backend = test_backend();
+        let embedder_identity = backend.identity();
+        let factory = FakeFactory::default();
+        {
+            let mut state = factory.state.lock().unwrap();
+            state.clear_delay = Duration::from_millis(20);
+        }
+
+        let outcome = index_project_incrementally_with_factory(
+            IncrementalIndexRequest {
+                codebase_path: &codebase_path,
+                cache_path: &cache_path,
+                tantivy_path: &tantivy_path,
+                collection_name: "elapsed_includes_cleanup",
+                backend,
+                embedder_identity: &embedder_identity,
+                snapshot_path: None,
+                codebase_loc: None,
+                force_reindex: true,
+            },
+            &factory,
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.elapsed >= Duration::from_millis(20));
     }
 
     #[tokio::test]

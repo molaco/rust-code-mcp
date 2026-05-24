@@ -1044,6 +1044,15 @@ For every phase, record:
   propagation. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
   incremental_service::tests`.
+- Phase 3 elapsed timing semantics: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `3a4785cb7c1c6851e35d3b494256e880e0d4e44f` on change
+  `tvtwwmsqyrklpnupppuskkkuwksrqusn`, with no description set. Moved the
+  elapsed timer to facade entry so `IncrementalIndexOutcome.elapsed` covers
+  force-reindex cleanup as well as change detection, documented the field, and
+  added a focused cleanup-delay test. Verification passed with existing
+  warnings: `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rmc-indexing incremental_service::tests`.
 
 ## Phase 0: Baseline And Safety Checks
 

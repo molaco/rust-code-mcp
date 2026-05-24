@@ -17,13 +17,15 @@ Status baseline:
   inputs, and facade-level error propagation. Verification passed with
   existing warnings: `nix develop ../nix-devshells#cuda-code --command cargo
   test -p rmc-indexing incremental_service::tests`.
+- Phase 3 elapsed timing semantics: `IncrementalIndexOutcome.elapsed` now
+  measures the full facade call, including force-reindex snapshot deletion and
+  `clear_all_data`; the field has an explicit doc comment and a focused test.
+  Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  incremental_service::tests`.
 
 ## Remaining Phase 3 Issues
 
-- Low: `IncrementalIndexOutcome.elapsed` only measures
-  `index_with_change_detection`, not snapshot deletion or `clear_all_data`
-  during force reindex. This preserves prior behavior, but the field name can
-  be misread as total indexing time.
 - Low: Server-side version-mismatch error mapping still depends on
   `anyhow::Error::downcast_ref::<VectorStoreError>()` after construction moved
   behind the indexing facade. Add a regression test for the user-facing
