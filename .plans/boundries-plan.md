@@ -1432,6 +1432,11 @@ For every phase, record:
   --command cargo test -p rmc-server --no-run`, and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rust-code-mcp --test
   test_mcp_stdio_transport --no-run`.
+- Step 9 ledger update: completed. Pre-step `jj show --summary` reported
+  working-copy commit `1af4c10e99da408c7ac5071ee5aa8b58b53a4fc7` on change
+  `zpqmmtnpxssynwlokxqoplwvwwxzsuqr`, with no description set. Phase 9 code,
+  export verification, and focused checks are complete; the separate Phase 9
+  report remains to be written and committed.
 
 ## Phase 0: Baseline And Safety Checks
 

@@ -1235,3 +1235,23 @@
   --command cargo test -p rmc-server --no-run`, and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rust-code-mcp --test
   test_mcp_stdio_transport --no-run`.
+- Step 9 ledger update: completed. Pre-step `jj show --summary` reported
+  working-copy commit `1af4c10e99da408c7ac5071ee5aa8b58b53a4fc7` on change
+  `zpqmmtnpxssynwlokxqoplwvwwxzsuqr`, with no description set. Phase 9 code,
+  export verification, and focused checks are complete; the separate Phase 9
+  report remains to be written and committed.
+
+### Commits
+
+- Step 1 documentation: `d3c0c78f` (`docs: start phase 9 server cleanup`).
+- Router boundary docs: `a59551c9` (`docs: record phase 9 router boundary`).
+- Helper cleanup: `27faf679` (`refactor: remove unused server indexing helpers`).
+- Params boundary docs: `0c84f62c` (`docs: record phase 9 params boundary`).
+- Semantic visibility docs: `9a6b22db` (`docs: record semantic visibility decision`).
+- Project paths compatibility cleanup: `fccbc47a` (`refactor: remove project paths compatibility reexport`).
+- Export verification docs: `28e8e683` (`docs: verify phase 9 server exports`).
+- Check-result docs: `200aaa7d` (`docs: record phase 9 check result`).
+
+### Remaining Follow-Up
+
+- Write and commit the Phase 9 report.
