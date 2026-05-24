@@ -951,3 +951,18 @@
   not as a graph facade. The tool still depends on server project path
   resolution, server hybrid-search construction, and vector-only search, so
   it intentionally stays server-owned for Phase 7.
+- Step 6 verify server production modules no longer reach graph
+  `embedding_cache` or `math` for semantic-overlap behavior: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `7e840eff61b539599656d74b6f9f659983a5ebb8` on change
+  `vovntxlqqmtptkmqntkvvowoxsqyyqzw`, with no description set.
+  `build_hypergraph(force_rebuild=false)` rebuilt graph
+  `56dbddbd49bf25977fef1d75a269d455`, fingerprint
+  `53b0c34cc7a90b62bade00ab81ce4ae4baf13a37429fee9d4dd4c740b5364aae`.
+  `module_dependencies(rmc_server::tools::graph::similarity)` reported graph
+  dependencies on `rmc_graph::graph::query::similarity` facade exports and no
+  server dependency on graph `embedding_cache` or `math`. `who_imports`
+  confirmed `embedding_cache::ensure_embeddings_for` and `math::cosine` are
+  imported only inside graph query/test modules. MCP `semantic_overlaps`
+  evidence for `rmc_graph` functions returned 178 seeds, 18 pairs, and 15
+  clusters.

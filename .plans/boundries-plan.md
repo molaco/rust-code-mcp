@@ -1241,6 +1241,23 @@ For every phase, record:
   server-only dependencies on `resolve_embedding_backend_for_mcp`,
   `ProjectPaths::from_directory`, `create_hybrid_search`, and
   `vector_only_search` remain outside `rmc_graph`.
+- Step 6 verify server production modules no longer reach graph
+  `embedding_cache` or `math` for semantic-overlap behavior: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `7e840eff61b539599656d74b6f9f659983a5ebb8` on change
+  `vovntxlqqmtptkmqntkvvowoxsqyyqzw`, with no description set.
+  `build_hypergraph(force_rebuild=false)` rebuilt graph
+  `56dbddbd49bf25977fef1d75a269d455`, fingerprint
+  `53b0c34cc7a90b62bade00ab81ce4ae4baf13a37429fee9d4dd4c740b5364aae`.
+  `module_dependencies(rmc_server::tools::graph::similarity)` now reports
+  dependencies on the graph similarity facade
+  `GraphSimilarityError`, `SemanticOverlapOptions`, and
+  `run_semantic_overlaps`, with no server dependency on graph
+  `embedding_cache` or `math`. `who_imports` for
+  `embedding_cache::ensure_embeddings_for` and `math::cosine` reported only
+  graph-internal query/test importers. MCP `semantic_overlaps` scoped to
+  `crate_name="rmc_graph"`, `item_kind="Function"`, `summary=true`, and
+  `max_pairs=40` returned 178 seeds, 18 pairs, and 15 clusters.
 
 ## Phase 0: Baseline And Safety Checks
 
