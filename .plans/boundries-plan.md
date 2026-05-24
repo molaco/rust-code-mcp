@@ -1193,6 +1193,12 @@ For every phase, record:
   the same remediation pass, `nix develop ../nix-devshells#cuda-code
   --command timeout 900s cargo test -p rmc-indexing` passed.
 
+### Phase 7: `rmc-graph` Similarity Facade
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `039b45e753bd7fb5203b19681768cd5997ad2aa6` on change
+  `snlqzpzouynzrmunmsuomvuupqoovtvq`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal

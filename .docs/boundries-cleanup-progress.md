@@ -900,6 +900,10 @@
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
   --no-run`.
 
-### Remaining Follow-Up
+## Phase 7: `rmc-graph` Similarity Facade
 
-- Start Phase 7.
+### Progress
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `039b45e753bd7fb5203b19681768cd5997ad2aa6` on change
+  `snlqzpzouynzrmunmsuomvuupqoovtvq`, with no description set.
