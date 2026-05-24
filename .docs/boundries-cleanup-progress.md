@@ -1311,3 +1311,11 @@
   that keeps `EmbeddingProfile` as the engine-owned embedding configuration
   model and clarifies that higher crates select, persist, and pass profiles
   without owning the schema.
+- Step 6 confirm embedding backend semantics are unchanged: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `ccbebd6c078cbca95db5ca5465f5a99af04577c1` on change
+  `stwryqtyryzsvruqsrklqzuyzlxpqmou`, with no description set. No embedding
+  runtime, identity, profile parsing, or backend construction semantics were
+  changed; the previous step was ownership rustdoc only. The
+  `jj diff --from @- --stat` check reported no working-copy file changes at
+  the start of this step.
