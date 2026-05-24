@@ -69,7 +69,7 @@ pub(crate) struct IndexerCore {
 
 impl IndexerCore {
     /// Create a new IndexerCore with the default embedding backend.
-    pub fn new(
+    pub(crate) fn new(
         cache_path: &Path,
         config: Option<IndexerCoreConfig>,
     ) -> Result<Self, IndexingError> {
@@ -77,7 +77,7 @@ impl IndexerCore {
     }
 
     /// Create a new IndexerCore with an explicit embedding backend.
-    pub fn with_backend(
+    pub(crate) fn with_backend(
         cache_path: &Path,
         config: Option<IndexerCoreConfig>,
         backend: EmbeddingBackend,
@@ -112,33 +112,33 @@ impl IndexerCore {
     // --- File processing delegation (FileProcessor) ---
 
     /// Check if a file should be processed (security and size checks)
-    pub fn should_process_file(&self, file_path: &Path) -> Result<bool, IndexingError> {
+    pub(crate) fn should_process_file(&self, file_path: &Path) -> Result<bool, IndexingError> {
         self.file_processor.should_process_file(file_path)
     }
 
     /// Fast check if file has likely changed using only stat info (mtime + size).
     /// Avoids reading file content. Use as a pre-filter before `has_file_changed`.
-    pub fn has_stat_changed(&self, file_path: &Path) -> Result<bool, IndexingError> {
+    pub(crate) fn has_stat_changed(&self, file_path: &Path) -> Result<bool, IndexingError> {
         self.file_processor.has_stat_changed(file_path)
     }
 
     /// Check if file has changed (using metadata cache, reads content hash)
-    pub fn has_file_changed(&self, file_path: &Path, content: &str) -> Result<bool, IndexingError> {
+    pub(crate) fn has_file_changed(&self, file_path: &Path, content: &str) -> Result<bool, IndexingError> {
         self.file_processor.has_file_changed(file_path, content)
     }
 
     /// Update metadata cache for a file
-    pub fn update_file_metadata(&self, file_path: &Path, content: &str) -> Result<(), IndexingError> {
+    pub(crate) fn update_file_metadata(&self, file_path: &Path, content: &str) -> Result<(), IndexingError> {
         self.file_processor.update_file_metadata(file_path, content)
     }
 
     /// Get reference to metadata cache
-    pub fn metadata_cache(&self) -> &MetadataCache {
+    pub(crate) fn metadata_cache(&self) -> &MetadataCache {
         self.file_processor.metadata_cache()
     }
 
     /// Clear metadata cache
-    pub fn clear_metadata_cache(&self) -> Result<(), IndexingError> {
+    pub(crate) fn clear_metadata_cache(&self) -> Result<(), IndexingError> {
         self.file_processor.clear_metadata_cache()
     }
 
@@ -147,7 +147,7 @@ impl IndexerCore {
     /// Process a single file: parse, chunk, and prepare for indexing
     ///
     /// This is a synchronous operation suitable for parallel processing with Rayon.
-    pub fn process_file_sync(&self, file_path: &Path) -> Result<ProcessedFile, IndexingError> {
+    pub(crate) fn process_file_sync(&self, file_path: &Path) -> Result<ProcessedFile, IndexingError> {
         let parse_start = Instant::now();
 
         // Security checks (delegated to file_processor)
@@ -207,7 +207,7 @@ impl IndexerCore {
     /// Generate embeddings for chunks in batches.
     ///
     /// Uses GPU-optimized batch size to avoid OOM on GPU memory.
-    pub async fn generate_embeddings_batched(
+    pub(crate) async fn generate_embeddings_batched(
         &self,
         chunks: &[CodeChunk],
     ) -> Result<Vec<Embedding>, IndexingError> {
@@ -217,27 +217,27 @@ impl IndexerCore {
     }
 
     /// Calculate safe batch size for parallel processing based on available memory
-    pub fn calculate_safe_batch_size(&self) -> usize {
+    pub(crate) fn calculate_safe_batch_size(&self) -> usize {
         self.embedding_batcher.calculate_safe_batch_size()
     }
 
     /// Get current memory usage percentage
-    pub fn memory_usage_percent(&self) -> f64 {
+    pub(crate) fn memory_usage_percent(&self) -> f64 {
         self.embedding_batcher.memory_usage_percent()
     }
 
     /// Refresh memory monitor
-    pub fn refresh_memory_monitor(&self) {
+    pub(crate) fn refresh_memory_monitor(&self) {
         self.embedding_batcher.refresh_memory_monitor()
     }
 
     /// Get current memory used in bytes
-    pub fn memory_used_bytes(&self) -> u64 {
+    pub(crate) fn memory_used_bytes(&self) -> u64 {
         self.embedding_batcher.memory_used_bytes()
     }
 
     /// Get reference to embedding generator for cloning
-    pub fn embedding_generator(&self) -> &EmbeddingGenerator {
+    pub(crate) fn embedding_generator(&self) -> &EmbeddingGenerator {
         self.embedding_batcher.embedding_generator()
     }
 }

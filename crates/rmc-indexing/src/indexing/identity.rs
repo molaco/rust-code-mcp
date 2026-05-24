@@ -14,7 +14,7 @@ pub(crate) fn active_chunking_identity() -> String {
 }
 
 /// Active chunking identity for a specific embedding backend.
-pub fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
+pub(super) fn active_chunking_identity_for_backend(backend: &EmbeddingBackend) -> String {
     IndexerCoreConfig::default()
         .with_embedding_profile(backend.profile.clone())
         .with_env_overrides()
@@ -30,7 +30,7 @@ pub(crate) fn canonical_codebase_path(codebase_path: &Path) -> PathBuf {
 }
 
 /// Stable identity for all embedding-sensitive indexing artifacts.
-pub fn indexing_identity(
+pub(super) fn indexing_identity(
     codebase_path: &Path,
     backend: &EmbeddingBackend,
     chunking_identity: &str,
@@ -45,7 +45,7 @@ pub fn indexing_identity(
 }
 
 /// SHA-256 hex digest for a stable identity string.
-pub fn identity_hash(identity: &str) -> String {
+pub(super) fn identity_hash(identity: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(identity.as_bytes());
     format!("{:x}", hasher.finalize())

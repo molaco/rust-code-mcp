@@ -14,22 +14,22 @@ use rmc_engine::schema::ChunkSchema;
 #[derive(Debug, Clone)]
 pub(crate) struct ConsistencyReport {
     /// Number of chunks in Tantivy
-    pub tantivy_count: usize,
+    pub(crate) tantivy_count: usize,
     /// Number of chunks in vector store
-    pub vector_count: usize,
+    pub(crate) vector_count: usize,
     /// Chunk IDs present in Tantivy but missing from vector store
-    pub missing_from_vectors: Vec<ChunkId>,
+    pub(crate) missing_from_vectors: Vec<ChunkId>,
     /// Chunk IDs present in vector store but missing from Tantivy
-    pub missing_from_tantivy: Vec<ChunkId>,
+    pub(crate) missing_from_tantivy: Vec<ChunkId>,
     /// Whether the indexes are consistent
-    pub is_consistent: bool,
+    pub(crate) is_consistent: bool,
 }
 
 impl ConsistencyReport {
     /// Log a human-readable summary.
     ///
     /// MCP stdio servers must keep stdout reserved for JSON-RPC frames.
-    pub fn print_summary(&self) {
+    pub(crate) fn print_summary(&self) {
         let missing_from_vectors_preview: Vec<_> =
             self.missing_from_vectors.iter().take(10).collect();
         let missing_from_tantivy_preview: Vec<_> =
@@ -57,7 +57,7 @@ pub(crate) struct ConsistencyChecker {
 
 impl ConsistencyChecker {
     /// Create a new consistency checker
-    pub fn new(
+    pub(crate) fn new(
         tantivy_index: Index,
         vector_store: VectorStore,
         schema: ChunkSchema,
@@ -70,7 +70,7 @@ impl ConsistencyChecker {
     }
 
     /// Check consistency between Tantivy and vector store indexes
-    pub async fn check(&self) -> Result<ConsistencyReport> {
+    pub(crate) async fn check(&self) -> Result<ConsistencyReport> {
         tracing::info!("Starting consistency check...");
 
         // Get all chunk IDs from Tantivy
@@ -137,7 +137,7 @@ impl ConsistencyChecker {
     /// Repair inconsistencies by reindexing missing chunks
     ///
     /// This is a placeholder for future implementation
-    pub async fn repair(&self, _report: &ConsistencyReport) -> Result<()> {
+    pub(crate) async fn repair(&self, _report: &ConsistencyReport) -> Result<()> {
         // TODO: Implement repair logic
         // - For chunks missing from vector store: re-embed and re-index
         // - For chunks missing from Tantivy: re-index from source or remove from vector store

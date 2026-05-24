@@ -7,21 +7,21 @@ use regex::Regex;
 
 /// A match for a potential secret
 #[derive(Debug, Clone)]
-pub struct SecretMatch {
+pub(crate) struct SecretMatch {
     /// Name of the pattern that matched
-    pub pattern_name: String,
+    pub(crate) pattern_name: String,
     /// Line number where the match was found (if available)
-    pub line_number: Option<usize>,
+    pub(crate) line_number: Option<usize>,
 }
 
 /// Scanner for detecting secrets in code
-pub struct SecretsScanner {
+pub(crate) struct SecretsScanner {
     patterns: Vec<(String, Regex)>,
 }
 
 impl SecretsScanner {
     /// Create a new secrets scanner with default patterns
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let patterns = vec![
             // AWS Access Keys
             (
@@ -76,7 +76,7 @@ impl SecretsScanner {
     /// Scan content for potential secrets
     ///
     /// Returns a list of matches found in the content
-    pub fn scan(&self, content: &str) -> Vec<SecretMatch> {
+    pub(crate) fn scan(&self, content: &str) -> Vec<SecretMatch> {
         let mut matches = Vec::new();
 
         for (name, pattern) in &self.patterns {
@@ -96,12 +96,12 @@ impl SecretsScanner {
     /// Check if content should be excluded from indexing
     ///
     /// Returns true if any secrets are detected
-    pub fn should_exclude(&self, content: &str) -> bool {
+    pub(crate) fn should_exclude(&self, content: &str) -> bool {
         !self.scan(content).is_empty()
     }
 
     /// Get a summary of what secrets were found
-    pub fn scan_summary(&self, content: &str) -> String {
+    pub(crate) fn scan_summary(&self, content: &str) -> String {
         let matches = self.scan(content);
 
         if matches.is_empty() {

@@ -158,12 +158,12 @@ pub(crate) struct PhaseTimer {
 
 impl PhaseTimer {
     /// Start a new timer
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { start: Instant::now() }
     }
 
     /// Get elapsed time since timer started
-    pub fn elapsed(&self) -> Duration {
+    fn elapsed(&self) -> Duration {
         self.start.elapsed()
     }
 }

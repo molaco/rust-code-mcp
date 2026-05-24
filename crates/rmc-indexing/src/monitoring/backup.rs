@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tracing;
 
 /// Manages backups of Merkle tree snapshots
-pub struct BackupManager {
+pub(crate) struct BackupManager {
     backup_dir: PathBuf,
     retention_count: usize,
 }
@@ -19,7 +19,7 @@ impl BackupManager {
     /// # Arguments
     /// * `backup_dir` - Directory to store backups
     /// * `retention_count` - Number of backups to keep (default: 7)
-    pub fn new(backup_dir: PathBuf, retention_count: usize) -> Result<Self> {
+    pub(crate) fn new(backup_dir: PathBuf, retention_count: usize) -> Result<Self> {
         std::fs::create_dir_all(&backup_dir)
             .context(format!("Failed to create backup directory: {}", backup_dir.display()))?;
 
@@ -33,7 +33,7 @@ impl BackupManager {
     ///
     /// Returns the path to the created backup file.
     /// Automatically rotates old backups according to retention policy.
-    pub fn create_backup(&self, merkle: &FileSystemMerkle) -> Result<PathBuf> {
+    pub(crate) fn create_backup(&self, merkle: &FileSystemMerkle) -> Result<PathBuf> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .context("Failed to get system time")?
@@ -62,7 +62,7 @@ impl BackupManager {
     ///
     /// Returns `Ok(Some(merkle))` if a backup was found and restored,
     /// `Ok(None)` if no backups exist.
-    pub fn restore_latest(&self) -> Result<Option<FileSystemMerkle>> {
+    pub(crate) fn restore_latest(&self) -> Result<Option<FileSystemMerkle>> {
         let mut backups = self.list_backups()?;
 
         if backups.is_empty() {
@@ -90,7 +90,7 @@ impl BackupManager {
     }
 
     /// List all backup files
-    pub fn list_backups(&self) -> Result<Vec<std::fs::DirEntry>> {
+    pub(crate) fn list_backups(&self) -> Result<Vec<std::fs::DirEntry>> {
         let backups: Vec<_> = std::fs::read_dir(&self.backup_dir)
             .context(format!("Failed to read backup directory: {}", self.backup_dir.display()))?
             .filter_map(|e| e.ok())
@@ -133,12 +133,12 @@ impl BackupManager {
     }
 
     /// Get the backup directory path
-    pub fn backup_dir(&self) -> &Path {
+    pub(crate) fn backup_dir(&self) -> &Path {
         &self.backup_dir
     }
 
     /// Get the retention count
-    pub fn retention_count(&self) -> usize {
+    pub(crate) fn retention_count(&self) -> usize {
         self.retention_count
     }
 }

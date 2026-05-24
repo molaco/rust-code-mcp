@@ -34,7 +34,7 @@ pub(crate) struct FileStat {
 
 impl FileStat {
     /// Read stat info from filesystem (cheap: no file content read)
-    pub fn from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let metadata = std::fs::metadata(path)?;
         Ok(Self {
             last_modified: metadata
@@ -48,7 +48,7 @@ impl FileStat {
 
 impl FileMetadata {
     /// Create new metadata from file content
-    pub fn from_content(content: &str, last_modified: u64, size: u64) -> Self {
+    pub(crate) fn from_content(content: &str, last_modified: u64, size: u64) -> Self {
         Self {
             hash: Self::hash_content(content),
             last_modified,
@@ -69,13 +69,13 @@ impl FileMetadata {
 }
 
 /// Cache for tracking file metadata
-pub struct MetadataCache {
+pub(crate) struct MetadataCache {
     db: Db,
 }
 
 impl MetadataCache {
     /// Open or create a metadata cache at the given path
-    pub fn new(path: &Path) -> Result<Self, sled::Error> {
+    pub(crate) fn new(path: &Path) -> Result<Self, sled::Error> {
         // Ensure parent directories exist (sled only creates the final directory)
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
@@ -103,7 +103,7 @@ impl MetadataCache {
     }
 
     /// Remove metadata for a file (e.g., when file is deleted)
-    pub fn remove(&self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn remove(&self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.db.remove(file_path)?;
         Ok(())
     }
@@ -125,7 +125,7 @@ impl MetadataCache {
     /// Returns true if:
     /// - File is not in cache (never indexed)
     /// - Content hash differs from cached hash
-    pub fn has_changed(&self, file_path: &str, content: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    pub(crate) fn has_changed(&self, file_path: &str, content: &str) -> Result<bool, Box<dyn std::error::Error>> {
         let current_hash = FileMetadata::hash_content(content);
 
         match self.get(file_path)? {
@@ -135,7 +135,7 @@ impl MetadataCache {
     }
 
     /// Get all cached file paths
-    pub fn list_files(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub(crate) fn list_files(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut files = Vec::new();
         for item in self.db.iter() {
             let (key, _) = item?;
@@ -146,17 +146,17 @@ impl MetadataCache {
     }
 
     /// Clear all cached metadata (useful for re-indexing from scratch)
-    pub fn clear(&self) -> Result<(), sled::Error> {
+    pub(crate) fn clear(&self) -> Result<(), sled::Error> {
         self.db.clear()
     }
 
     /// Get total number of cached files
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.db.len()
     }
 
     /// Check if cache is empty
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.db.is_empty()
     }
 }

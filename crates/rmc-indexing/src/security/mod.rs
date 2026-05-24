@@ -8,13 +8,13 @@ use glob::Pattern;
 use std::path::Path;
 
 /// Filter for sensitive files that should not be indexed
-pub struct SensitiveFileFilter {
+pub(crate) struct SensitiveFileFilter {
     excluded_patterns: Vec<Pattern>,
 }
 
 impl SensitiveFileFilter {
     /// Create a new filter with default exclusion patterns
-    pub fn default() -> Self {
+    pub(crate) fn default() -> Self {
         let patterns = vec![
             // Environment files
             ".env",
@@ -58,7 +58,7 @@ impl SensitiveFileFilter {
     }
 
     /// Create a filter with custom exclusion patterns
-    pub fn with_patterns(patterns: Vec<String>) -> Result<Self, glob::PatternError> {
+    pub(crate) fn with_patterns(patterns: Vec<String>) -> Result<Self, glob::PatternError> {
         let compiled_patterns: Result<Vec<Pattern>, _> =
             patterns.iter().map(|p| Pattern::new(p)).collect();
 
@@ -70,7 +70,7 @@ impl SensitiveFileFilter {
     /// Check if a file should be indexed
     ///
     /// Returns true if the file should be indexed, false if it should be excluded
-    pub fn should_index(&self, path: &Path) -> bool {
+    pub(crate) fn should_index(&self, path: &Path) -> bool {
         let path_str = path.to_string_lossy();
 
         for pattern in &self.excluded_patterns {
@@ -84,7 +84,7 @@ impl SensitiveFileFilter {
     }
 
     /// Get the list of excluded patterns as strings
-    pub fn excluded_patterns(&self) -> Vec<String> {
+    pub(crate) fn excluded_patterns(&self) -> Vec<String> {
         self.excluded_patterns
             .iter()
             .map(|p| p.as_str().to_string())
@@ -92,7 +92,7 @@ impl SensitiveFileFilter {
     }
 
     /// Add a pattern to the exclusion list
-    pub fn add_pattern(&mut self, pattern: &str) -> Result<(), glob::PatternError> {
+    pub(crate) fn add_pattern(&mut self, pattern: &str) -> Result<(), glob::PatternError> {
         let compiled = Pattern::new(pattern)?;
         self.excluded_patterns.push(compiled);
         Ok(())
@@ -108,7 +108,6 @@ impl Default for SensitiveFileFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_env_file_exclusion() {

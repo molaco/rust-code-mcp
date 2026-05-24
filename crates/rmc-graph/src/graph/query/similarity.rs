@@ -57,6 +57,27 @@ pub enum GraphSimilarityError {
     InvalidOutputMode(String),
 }
 
+#[derive(Debug, Clone)]
+struct SeedCtx {
+    id: NodeId,
+    node: Node,
+    content_hash: [u8; 16],
+    cached_vec: Vec<f32>,
+}
+
+#[derive(Debug)]
+struct SemanticOverlapScoringRequest {
+    seeds: Vec<SeedCtx>,
+    scope: SemanticOverlapScope,
+    threshold: f32,
+    limit: usize,
+    offset: usize,
+    summary: bool,
+    max_cluster_size: usize,
+    output_mode: String,
+    cross_crate_only: bool,
+}
+
 pub async fn run_semantic_overlaps(
     directory: &Path,
     backend: &EmbeddingBackend,
@@ -93,13 +114,6 @@ pub async fn run_semantic_overlaps(
     let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
     let embeddings = ensure_embeddings_for(&snap, &seed_nids, backend).await?;
 
-    struct SeedCtx {
-        id: NodeId,
-        node: Node,
-        content_hash: [u8; 16],
-        cached_vec: Vec<f32>,
-    }
-
     let mut seeds_ctx = Vec::with_capacity(seeds.len());
     for (seed_id, seed_node) in seeds.drain(..) {
         if let Some(embedding) = embeddings.get(&seed_id) {
@@ -112,6 +126,44 @@ pub async fn run_semantic_overlaps(
         }
     }
 
+    let seed_count = seeds_ctx.len();
+    let request = SemanticOverlapScoringRequest {
+        seeds: seeds_ctx,
+        scope: SemanticOverlapScope {
+            directory: directory.to_string_lossy().to_string(),
+            crate_name,
+            item_kind: item_kind_filter_label,
+            seed_count,
+        },
+        threshold,
+        limit,
+        offset,
+        summary,
+        max_cluster_size,
+        output_mode,
+        cross_crate_only,
+    };
+
+    tokio::task::spawn_blocking(move || score_semantic_overlaps(request))
+        .await
+        .map_err(|error| anyhow::anyhow!("semantic overlap scoring task failed: {error}"))
+}
+
+fn score_semantic_overlaps(
+    request: SemanticOverlapScoringRequest,
+) -> SemanticOverlapsOutput {
+    let SemanticOverlapScoringRequest {
+        seeds,
+        scope,
+        threshold,
+        limit,
+        offset,
+        summary,
+        max_cluster_size,
+        output_mode,
+        cross_crate_only,
+    } = request;
+
     let mut edges: HashMap<(NodeId, NodeId), Vec<f32>> = HashMap::new();
     let canonical_edge = |a: NodeId, b: NodeId| -> (NodeId, NodeId) {
         if a.as_bytes() < b.as_bytes() {
@@ -122,7 +174,7 @@ pub async fn run_semantic_overlaps(
     };
 
     let mut by_hash: HashMap<[u8; 16], Vec<usize>> = HashMap::new();
-    for (i, ctx) in seeds_ctx.iter().enumerate() {
+    for (i, ctx) in seeds.iter().enumerate() {
         by_hash.entry(ctx.content_hash).or_default().push(i);
     }
     for indices in by_hash.values() {
@@ -130,9 +182,9 @@ pub async fn run_semantic_overlaps(
             continue;
         }
         for ai in 0..indices.len() {
-            let a = &seeds_ctx[indices[ai]];
+            let a = &seeds[indices[ai]];
             for bi in (ai + 1)..indices.len() {
-                let b = &seeds_ctx[indices[bi]];
+                let b = &seeds[indices[bi]];
                 if cross_crate_only && a.node.crate_id == b.node.crate_id {
                     continue;
                 }
@@ -142,11 +194,11 @@ pub async fn run_semantic_overlaps(
         }
     }
 
-    for i in 0..seeds_ctx.len() {
-        let va = &seeds_ctx[i].cached_vec;
-        for j in (i + 1)..seeds_ctx.len() {
-            let a = &seeds_ctx[i];
-            let b = &seeds_ctx[j];
+    for i in 0..seeds.len() {
+        let va = &seeds[i].cached_vec;
+        for j in (i + 1)..seeds.len() {
+            let a = &seeds[i];
+            let b = &seeds[j];
             if a.content_hash == b.content_hash {
                 continue;
             }
@@ -172,9 +224,8 @@ pub async fn run_semantic_overlaps(
     pairs.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal));
     let total_pair_count = pairs.len();
 
-    let seed_count = seeds_ctx.len();
     let seed_index: HashMap<NodeId, &Node> =
-        seeds_ctx.iter().map(|ctx| (ctx.id, &ctx.node)).collect();
+        seeds.iter().map(|ctx| (ctx.id, &ctx.node)).collect();
     let lookup_ref = |id: NodeId| -> Option<SimilarityItem> {
         seed_index
             .get(&id)
@@ -186,13 +237,6 @@ pub async fn run_semantic_overlaps(
         clusters.retain(|cluster| cluster.size <= max_cluster_size);
     }
     let total_cluster_count = clusters.len();
-
-    let scope = SemanticOverlapScope {
-        directory: directory.to_string_lossy().to_string(),
-        crate_name,
-        item_kind: item_kind_filter_label,
-        seed_count,
-    };
 
     if output_mode == "pairs" {
         let pair_refs: Vec<SimilarityPair> = pairs
@@ -207,7 +251,7 @@ pub async fn run_semantic_overlaps(
                 })
             })
             .collect();
-        return Ok(SemanticOverlapsOutput {
+        return SemanticOverlapsOutput {
             scope,
             threshold,
             pair_count: total_pair_count,
@@ -219,11 +263,11 @@ pub async fn run_semantic_overlaps(
             output_mode,
             pairs: Some(pair_refs),
             clusters: None,
-        });
+        };
     }
 
     let clusters = page_clusters_by_member_limit(clusters, offset, limit);
-    Ok(SemanticOverlapsOutput {
+    SemanticOverlapsOutput {
         scope,
         threshold,
         pair_count: total_pair_count,
@@ -235,7 +279,7 @@ pub async fn run_semantic_overlaps(
         output_mode,
         pairs: None,
         clusters: Some(clusters),
-    })
+    }
 }
 
 fn canonicalize_directory(directory: &Path) -> Result<PathBuf> {
@@ -497,6 +541,92 @@ mod tests {
         let mut id = [0u8; 32];
         id[0] = byte;
         NodeId(id)
+    }
+
+    fn seed_ctx(
+        byte: u8,
+        qualified_name: &str,
+        crate_byte: u8,
+        content_hash: [u8; 16],
+        cached_vec: Vec<f32>,
+    ) -> SeedCtx {
+        SeedCtx {
+            id: nid(byte),
+            node: Node {
+                id: nid(byte),
+                kind: NodeKind::Item,
+                display_name: qualified_name
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(qualified_name)
+                    .to_string(),
+                qualified_name: qualified_name.to_string(),
+                crate_id: Some(nid(crate_byte)),
+                parent_id: None,
+                item_kind: Some(ItemKind::Function),
+                file: Some(format!("src/{byte}.rs")),
+                span: Some((u32::from(byte), u32::from(byte) + 1)),
+                visibility: Some("pub".to_string()),
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+            content_hash,
+            cached_vec,
+        }
+    }
+
+    fn scoring_request(
+        seeds: Vec<SeedCtx>,
+        output_mode: &str,
+    ) -> SemanticOverlapScoringRequest {
+        let seed_count = seeds.len();
+        SemanticOverlapScoringRequest {
+            seeds,
+            scope: SemanticOverlapScope {
+                directory: "/workspace".to_string(),
+                crate_name: Some("crate".to_string()),
+                item_kind: Some("Function".to_string()),
+                seed_count,
+            },
+            threshold: 0.8,
+            limit: 50,
+            offset: 0,
+            summary: false,
+            max_cluster_size: 15,
+            output_mode: output_mode.to_string(),
+            cross_crate_only: false,
+        }
+    }
+
+    #[test]
+    fn semantic_overlap_scoring_helper_matches_expected_output() {
+        let seeds = vec![
+            seed_ctx(1, "crate::a", 10, [1; 16], vec![1.0, 0.0]),
+            seed_ctx(2, "crate::b", 10, [2; 16], vec![0.9, 0.1]),
+            seed_ctx(3, "other::c", 11, [1; 16], vec![0.0, 1.0]),
+        ];
+
+        let pairs_output = score_semantic_overlaps(scoring_request(seeds.clone(), "pairs"));
+        let pairs = pairs_output.pairs.as_ref().unwrap();
+        assert_eq!(pairs_output.scope.seed_count, 3);
+        assert_eq!(pairs_output.total_pair_count, 2);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].a.qualified_name, "crate::a");
+        assert_eq!(pairs[0].b.qualified_name, "other::c");
+        assert_eq!(pairs[0].similarity, 1.0);
+        assert_eq!(pairs[1].a.qualified_name, "crate::a");
+        assert_eq!(pairs[1].b.qualified_name, "crate::b");
+        assert!((pairs[1].similarity - 0.9938837).abs() < 1e-5);
+
+        let clusters_output = score_semantic_overlaps(scoring_request(seeds, "clusters"));
+        let clusters = clusters_output.clusters.as_ref().unwrap();
+        assert_eq!(clusters_output.total_pair_count, pairs_output.total_pair_count);
+        assert_eq!(clusters_output.total_cluster_count, 1);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].size, 3);
+        assert_eq!(clusters[0].members.len(), 3);
+        assert!((clusters[0].avg_similarity - ((1.0 + pairs[1].similarity) / 2.0)).abs() < 1e-5);
+        assert!((clusters[0].min_similarity - pairs[1].similarity).abs() < 1e-5);
     }
 
     #[test]

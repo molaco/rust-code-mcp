@@ -22,11 +22,11 @@ pub(crate) enum ErrorCategory {
 #[derive(Debug, Clone)]
 pub(crate) struct ErrorDetail {
     /// Path to the file that failed
-    pub file_path: PathBuf,
+    pub(crate) file_path: PathBuf,
     /// Category of the error
-    pub category: ErrorCategory,
+    pub(crate) category: ErrorCategory,
     /// Error message
-    pub message: String,
+    pub(crate) message: String,
 }
 
 /// Thread-safe collector for indexing errors
@@ -37,29 +37,29 @@ pub(crate) struct ErrorCollector {
 
 impl ErrorCollector {
     /// Create a new error collector
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             errors: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// Record an error
-    pub fn record(&self, error: ErrorDetail) {
+    pub(crate) fn record(&self, error: ErrorDetail) {
         self.errors.lock().unwrap().push(error);
     }
 
     /// Get all collected errors
-    pub fn get_errors(&self) -> Vec<ErrorDetail> {
+    pub(crate) fn get_errors(&self) -> Vec<ErrorDetail> {
         self.errors.lock().unwrap().clone()
     }
 
     /// Get the number of errors
-    pub fn error_count(&self) -> usize {
+    pub(crate) fn error_count(&self) -> usize {
         self.errors.lock().unwrap().len()
     }
 
     /// Get errors by category
-    pub fn errors_by_category(&self, category: ErrorCategory) -> Vec<ErrorDetail> {
+    pub(crate) fn errors_by_category(&self, category: ErrorCategory) -> Vec<ErrorDetail> {
         self.errors
             .lock()
             .unwrap()
@@ -70,7 +70,7 @@ impl ErrorCollector {
     }
 
     /// Clear all errors
-    pub fn clear(&self) {
+    pub(crate) fn clear(&self) {
         self.errors.lock().unwrap().clear();
     }
 }
