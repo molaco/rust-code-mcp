@@ -47,6 +47,12 @@ Status baseline:
   warning, while direct metadata reads remain strict. Verification passed with
   existing warnings: `nix develop ../nix-devshells#cuda-code --command cargo
   test -p rmc-indexing project_paths::tests`.
+- Phase 5 static label DTOs: graph enrichment DTO fields backed by closed
+  label sets now use `&'static str` again (`namespace`, binding `kind`, usage
+  `category`, and dead-public `item_kind`), while dynamic visibility and node
+  kind strings stay owned. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  usage_summary_omits_navigation_fields`.
 
 ## Remaining Phase 3 Issues
 
@@ -58,8 +64,6 @@ Status baseline:
 
 ## Remaining Phase 5 Issues
 
-- Medium: Moved enrichment DTOs changed several fields from `&'static str` to
-  `String`. JSON behavior is preserved, but the static-label guarantee is gone.
 - Medium: Enrichment helpers still swallow snapshot transaction or lookup
   failures by returning empty or partial data. This was copied behavior, but it
   is now part of the graph facade API contract.

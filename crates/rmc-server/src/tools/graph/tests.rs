@@ -787,7 +787,7 @@ fn usage_summary_omits_navigation_fields() {
         file: None,
         start: None,
         end: None,
-        category: "Read".to_string(),
+        category: "Read",
         consumer_module: Some("crate::module".to_string()),
         consumer_function: Some("crate::module::caller".to_string()),
     };

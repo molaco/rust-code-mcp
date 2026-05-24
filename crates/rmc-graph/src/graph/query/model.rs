@@ -40,8 +40,8 @@ pub struct CrateDeadPub {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnrichedBinding {
     pub visible_name: String,
-    pub namespace: String,
-    pub kind: String,
+    pub namespace: &'static str,
+    pub kind: &'static str,
     pub visibility: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from_module: Option<String>,
@@ -60,7 +60,7 @@ pub struct EnrichedUsage {
     pub start: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<u32>,
-    pub category: String,
+    pub category: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_module: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +71,7 @@ pub struct EnrichedUsage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnrichedDeadPub {
     pub qualified_name: String,
-    pub item_kind: String,
+    pub item_kind: &'static str,
     pub declared_visibility: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,

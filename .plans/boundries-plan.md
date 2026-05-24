@@ -1091,6 +1091,16 @@ For every phase, record:
   strict. Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
   project_paths::tests`.
+- Phase 5 static label DTOs: completed after pre-step `jj show --summary`
+  reported working-copy commit
+  `248569ba8316b640013ffb35aa19fd0833698184` on change
+  `muwknkowzpxztnvrpyqprokvwozoosot`, with no description set. Graph
+  enrichment DTO fields backed by closed label sets now use `&'static str`
+  again (`namespace`, binding `kind`, usage `category`, and dead-public
+  `item_kind`), while dynamic visibility and node-kind strings stay owned.
+  Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  usage_summary_omits_navigation_fields`.
 
 ## Phase 0: Baseline And Safety Checks
 

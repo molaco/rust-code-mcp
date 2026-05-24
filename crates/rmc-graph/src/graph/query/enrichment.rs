@@ -25,8 +25,8 @@ impl OpenedSnapshot {
                     .flatten();
                 EnrichedBinding {
                     visible_name: binding.visible_name,
-                    namespace: namespace_label(binding.namespace).to_string(),
-                    kind: binding_kind_label(binding.kind).to_string(),
+                    namespace: namespace_label(binding.namespace),
+                    kind: binding_kind_label(binding.kind),
                     visibility: visibility_label(self, &rtxn, &binding.visibility),
                     from_module: from_module_node
                         .as_ref()
@@ -64,7 +64,7 @@ impl OpenedSnapshot {
                     file: if summary { None } else { Some(usage.file) },
                     start: if summary { None } else { Some(usage.start) },
                     end: if summary { None } else { Some(usage.end) },
-                    category: usage_category_label(usage.category).to_string(),
+                    category: usage_category_label(usage.category),
                     consumer_module: consumer_node
                         .as_ref()
                         .map(|node| node.qualified_name.clone()),
@@ -89,7 +89,7 @@ impl OpenedSnapshot {
         };
         EnrichedDeadPub {
             qualified_name: finding.qualified_name,
-            item_kind: item_kind_display_label(finding.item_kind).to_string(),
+            item_kind: item_kind_display_label(finding.item_kind),
             declared_visibility: visibility,
             file,
             span,
