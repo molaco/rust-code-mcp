@@ -10,11 +10,16 @@ Status baseline:
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo test
   -p rmc-server --no-run` passed with existing warnings.
 
+## Resolved In This Remediation Series
+
+- Phase 3 indexing facade tests: added focused tests for
+  `index_project_incrementally` force reindex behavior, backend construction
+  inputs, and facade-level error propagation. Verification passed with
+  existing warnings: `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-indexing incremental_service::tests`.
+
 ## Remaining Phase 3 Issues
 
-- Medium: `index_project_incrementally` is the new indexing boundary, but it
-  has no focused tests proving force reindex behavior, backend construction,
-  or facade-level error propagation.
 - Low: `IncrementalIndexOutcome.elapsed` only measures
   `index_with_change_detection`, not snapshot deletion or `clear_all_data`
   during force reindex. This preserves prior behavior, but the field name can

@@ -1033,6 +1033,18 @@ For every phase, record:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
   --no-run` passed with existing warnings.
 
+### Issues 778 Remediation
+
+- Phase 3 indexing facade tests: completed after pre-step `jj show --summary`
+  reported working-copy commit
+  `a5635c829a745ac1fb10a049bcd46ad4493aba45` on change
+  `rusxvvkpytpmuwnlmqpvsknzkyllxumm`, with no description set. Added focused
+  `index_project_incrementally` tests for force reindex snapshot deletion and
+  clearing order, backend construction inputs, and factory/clear/index error
+  propagation. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  incremental_service::tests`.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
