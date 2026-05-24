@@ -1319,3 +1319,9 @@
   changed; the previous step was ownership rustdoc only. The
   `jj diff --from @- --stat` check reported no working-copy file changes at
   the start of this step.
+- Step 7 document `EmbeddingBackend` as the formal cross-crate boundary:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `e6985ba7d4ac63019d3fbc6c1e8a13062e1bf20d` on change
+  `txoyuqwnvqzttkymnvyowsmmvxtrpuwu`, with no description set. Added rustdoc
+  identifying `EmbeddingBackend` as the shared runtime, cache identity, and
+  dimension contract used by indexing, graph, and server crates.

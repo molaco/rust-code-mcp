@@ -15,6 +15,12 @@ use super::profile::{
 };
 use super::util::arc;
 
+/// Cross-crate embedding runtime boundary.
+///
+/// Indexing, graph, and server crates use this type when they need a concrete
+/// embedding runtime choice, cache identity, or dimension contract. Backend
+/// construction and identity parsing remain engine-owned so higher crates do
+/// not duplicate runtime-specific policy.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmbeddingBackend {
     pub profile: EmbeddingProfile,
