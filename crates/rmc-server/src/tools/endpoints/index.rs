@@ -431,6 +431,24 @@ mod tests {
     }
 
     #[test]
+    fn version_mismatch_error_keeps_clear_cache_guidance() {
+        let error = anyhow::Error::new(VectorStoreError::version_mismatch(
+            "stored-embedder",
+            "configured-embedder",
+        ))
+        .context("Failed to initialize VectorStore");
+
+        let mcp_error = indexing_error_to_mcp(error, std::path::Path::new("/workspace/project"));
+        let text = mcp_error.to_string();
+
+        assert!(text.contains("Cannot index with embedder `configured-embedder`"));
+        assert!(text.contains("existing index was built with `stored-embedder`"));
+        assert!(text.contains("clear_cache"));
+        assert!(text.contains("/workspace/project"));
+        assert!(!text.contains("Indexing failed"));
+    }
+
+    #[test]
     fn parse_variant_accepts_known_aliases() {
         assert!(matches!(
             parse_variant("qwen3-0.6b").unwrap(),

@@ -23,13 +23,16 @@ Status baseline:
   Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
   incremental_service::tests`.
+- Phase 3 version-mismatch error mapping: added a server regression test that
+  an `anyhow`-wrapped `VectorStoreError::VersionMismatch` still maps to the
+  actionable MCP `clear_cache` guidance with stored/configured embedder IDs.
+  Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  version_mismatch_error_keeps_clear_cache_guidance`.
 
 ## Remaining Phase 3 Issues
 
-- Low: Server-side version-mismatch error mapping still depends on
-  `anyhow::Error::downcast_ref::<VectorStoreError>()` after construction moved
-  behind the indexing facade. Add a regression test for the user-facing
-  version-mismatch message.
+- None.
 
 ## Remaining Phase 4 Issues
 

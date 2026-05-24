@@ -1053,6 +1053,15 @@ For every phase, record:
   added a focused cleanup-delay test. Verification passed with existing
   warnings: `nix develop ../nix-devshells#cuda-code --command cargo test -p
   rmc-indexing incremental_service::tests`.
+- Phase 3 version-mismatch error mapping: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `f11e1618cd9f7a6066027f02309340ce28717153` on change
+  `mktwztyympzrvmlvmprsmuurwyuwtwvm`, with no description set. Added a server
+  regression test proving an `anyhow`-wrapped `VectorStoreError::VersionMismatch`
+  still maps to the actionable MCP `clear_cache` guidance with stored and
+  configured embedder IDs. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  version_mismatch_error_keeps_clear_cache_guidance`.
 
 ## Phase 0: Baseline And Safety Checks
 
