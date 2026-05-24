@@ -1667,6 +1667,14 @@ For every phase, record:
   rust-code-mcp --example debug_itemscope --example spike_usages --example
   timing_extract`. Refreshed MCP evidence showed graph exports narrowed from
   96 to 88 server-visible bindings.
+- Step 5 keep debug binaries/examples/tests working: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `856a5492b9096cdcf05e214c783e94ce9f236d01` on change
+  `qpqnkzrxyqytxlnustulzmxorykvoozu`, with no description set. Touched debug
+  examples now use root graph facade exports instead of private modules.
+  Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  --no-run`; touched debug examples had already checked successfully in Step 4.
 
 ## Phase 0: Baseline And Safety Checks
 

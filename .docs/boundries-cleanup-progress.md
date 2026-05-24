@@ -1658,3 +1658,12 @@
   88 server-visible graph bindings instead of 96, and `who_imports` for
   `docs_audit`, `derive_audit`, and `loader` showed only graph-internal
   module/test importers.
+- Step 5 keep debug examples and tests working through supported paths:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `856a5492b9096cdcf05e214c783e94ce9f236d01` on change
+  `qpqnkzrxyqytxlnustulzmxorykvoozu`, with no description set. The debug
+  examples that used `graph::loader`, `graph::extract`, or `graph::model`
+  internals now use root facade exports such as `load`, `extract_workspace_model`,
+  and `Node`. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  --no-run`. The touched debug example check had already passed in Step 4.
