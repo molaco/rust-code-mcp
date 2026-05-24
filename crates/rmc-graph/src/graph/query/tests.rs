@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use super::super::ids::NodeId;
-use super::super::model::{Binding, BindingKind, ItemKind, Node, NodeKind};
+use super::super::model::{Binding, BindingKind, ItemKind, Namespace, Node, NodeKind};
 use super::model::*;
 use super::navigation::{impl_module_item_alias_parts, is_impl_module_item_alias_candidate};
 use super::shared::{MAX_REEXPORT_HOPS, dependency_node_for};
@@ -140,6 +140,102 @@ fn who_imports_finds_target() {
         from_modules.contains(&graph_mod_id),
         "expected graph mod to appear among importers of loader::load"
     );
+}
+
+#[test]
+fn enrich_bindings_resolves_static_labels_and_target_nodes() {
+    let snap = shared_snapshot();
+    let (graph_mod_id, _) = snap
+        .lookup_by_qualified_name("rmc_graph::graph")
+        .unwrap()
+        .unwrap();
+    let imports = snap.imports_of(graph_mod_id).unwrap();
+    let binding = imports
+        .into_iter()
+        .find(|binding| binding.visible_name == "load")
+        .expect("graph::load re-export binding");
+
+    let enriched = snap.enrich_bindings(vec![binding]).unwrap();
+    let row = &enriched[0];
+
+    assert_eq!(row.visible_name, "load");
+    assert_eq!(row.namespace, "Value");
+    assert_eq!(row.kind, "NamedImport");
+    assert_eq!(row.visibility, "pub");
+    assert_eq!(row.from_module.as_deref(), Some("rmc_graph::graph"));
+    assert_eq!(row.target.as_deref(), Some("rmc_graph::graph::loader::load"));
+    assert_eq!(row.target_kind.as_deref(), Some("Item.Fn"));
+}
+
+#[test]
+fn enrich_usages_applies_summary_shape_and_static_category() {
+    let snap = shared_snapshot();
+    let (load_fn_id, _) = snap
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
+        .unwrap()
+        .unwrap();
+    let usage = snap
+        .usages_of(load_fn_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("usage of loader::load");
+
+    let enriched = snap.enrich_usages(vec![usage], true).unwrap();
+    let row = &enriched[0];
+
+    assert!(row.file.is_none());
+    assert!(row.start.is_none());
+    assert!(row.end.is_none());
+    assert!(matches!(row.category, "Read" | "Write" | "Test" | "Other"));
+    assert!(row.consumer_module.is_some());
+}
+
+#[test]
+fn enrich_dead_pub_resolves_item_kind_and_source_span() {
+    let snap = shared_snapshot();
+    let (load_fn_id, node) = snap
+        .lookup_by_qualified_name("rmc_graph::graph::loader::load")
+        .unwrap()
+        .unwrap();
+    let finding = DeadPubFinding {
+        target: load_fn_id,
+        qualified_name: node.qualified_name.clone(),
+        item_kind: node.item_kind.expect("loader::load item kind"),
+        declared_visibility: BindingVisibility::Public,
+    };
+
+    let enriched = snap.enrich_dead_pub(finding).unwrap();
+
+    assert_eq!(enriched.qualified_name, "rmc_graph::graph::loader::load");
+    assert_eq!(enriched.item_kind, "Function");
+    assert_eq!(enriched.declared_visibility, "pub");
+    assert!(enriched.file.is_some());
+}
+
+#[test]
+fn enrich_bindings_errors_on_missing_referenced_node() {
+    let snap = shared_snapshot();
+    let (graph_mod_id, _) = snap
+        .lookup_by_qualified_name("rmc_graph::graph")
+        .unwrap()
+        .unwrap();
+    let missing = NodeId([242u8; 32]);
+    let binding = Binding {
+        from_module: graph_mod_id,
+        namespace: Namespace::Value,
+        visible_name: "missing".to_string(),
+        target: missing,
+        kind: BindingKind::NamedImport,
+        visibility: BindingVisibility::Public,
+        is_explicit_pub_use: false,
+    };
+
+    let error = snap.enrich_bindings(vec![binding]).unwrap_err();
+    let text = error.to_string();
+
+    assert!(text.contains("referenced but not found"));
+    assert!(text.contains(&missing.to_hex()));
 }
 
 #[test]

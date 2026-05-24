@@ -1111,6 +1111,17 @@ For every phase, record:
   MCP internal errors. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
   -p rmc-server`.
+- Phase 5 graph-side enrichment tests: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `bfe76b5948a1190529cbf81a1bf982252c09e28f` on change
+  `unpznyrtxrknvvznslqslmtywuwkqkyr`, with no description set. Added focused
+  graph tests for enriched binding label/node resolution, usage summary shape,
+  dead-public DTO shape, and missing referenced-node error propagation.
+  Verification: the first `nix develop ../nix-devshells#cuda-code --command
+  cargo test -p rmc-graph enrich_` run passed three new tests and exposed one
+  over-specific category assertion; after loosening that assertion,
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  enrich_usages_applies_summary_shape_and_static_category` passed.
 
 ## Phase 0: Baseline And Safety Checks
 

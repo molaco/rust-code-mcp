@@ -59,6 +59,14 @@ Status baseline:
   Server graph endpoints map those errors to MCP internal errors. Verification
   passed with existing warnings: `nix develop ../nix-devshells#cuda-code
   --command cargo check -p rmc-graph -p rmc-server`.
+- Phase 5 graph-side enrichment tests: added focused graph tests for enriched
+  binding label/node resolution, usage summary shape, dead-public DTO shape,
+  and missing referenced-node error propagation. Verification: the first
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  enrich_` run passed three new tests and exposed one over-specific category
+  assertion; after loosening that assertion, `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  enrich_usages_applies_summary_shape_and_static_category` passed.
 
 ## Remaining Phase 3 Issues
 
@@ -70,8 +78,7 @@ Status baseline:
 
 ## Remaining Phase 5 Issues
 
-- Medium: No focused graph-side tests cover the new enrichment facade and DTO
-  shape.
+- None.
 
 ## Remaining Phase 6 Issues
 
