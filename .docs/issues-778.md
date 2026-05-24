@@ -77,6 +77,12 @@ Status baseline:
   now use `tokio::task::spawn_blocking`, matching the other synchronous graph
   audit facade calls. Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
+- Phase 6 audit facade tests: added focused graph tests for audit DTO
+  rendering and server tests for typed audit error mapping vs internal error
+  mapping. Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-graph audit_dto`
+  and `nix develop ../nix-devshells#cuda-code --command cargo test
+  -p rmc-server graph_audit_error_maps`.
 
 ## Remaining Phase 3 Issues
 
@@ -92,8 +98,7 @@ Status baseline:
 
 ## Remaining Phase 6 Issues
 
-- Medium: No focused tests cover graph audit facade DTO mapping or server audit
-  error mapping.
+- None.
 
 ## Current-Suite Issues Not Attributable To Phases 3-6
 

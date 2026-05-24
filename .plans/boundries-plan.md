@@ -1140,6 +1140,18 @@ For every phase, record:
   facade calls inside `tokio::task::spawn_blocking`, matching the other audit
   endpoints. Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo check -p rmc-server`.
+- Phase 6 audit facade tests: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `c4b8ce78069a6e48af4e3a899d52728393fa399b` on change
+  `sknlnlrvsvtvmxwlxyuyqzmvypozxspu`, with no description set. Extracted
+  graph audit DTO rendering helpers and added focused tests for unsafe,
+  mutable-static, channel-capacity, and function-body audit DTO mapping. Added
+  server tests proving typed `GraphAuditError` values map to
+  `INVALID_PARAMS` while untyped failures map to `INTERNAL_ERROR`.
+  Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-graph audit_dto`
+  and `nix develop ../nix-devshells#cuda-code --command cargo test
+  -p rmc-server graph_audit_error_maps`.
 
 ## Phase 0: Baseline And Safety Checks
 

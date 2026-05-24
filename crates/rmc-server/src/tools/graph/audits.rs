@@ -20,7 +20,7 @@ use crate::tools::graph::response::*;
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
-fn graph_audit_error(label: &'static str) -> impl FnOnce(anyhow::Error) -> McpError {
+pub(super) fn graph_audit_error(label: &'static str) -> impl FnOnce(anyhow::Error) -> McpError {
     move |error| {
         let message = format!("{error:#}");
         if error.downcast_ref::<GraphAuditError>().is_some() {

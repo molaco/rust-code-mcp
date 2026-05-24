@@ -17,6 +17,7 @@ use super::super::model::{ItemKind, Node, NodeKind, StaticMetadata};
 use super::super::recursion_check;
 use super::super::snapshot::OpenedSnapshot;
 use super::super::storage::{GraphEnvOptions, GraphPaths};
+use super::super::unsafe_audit;
 use super::model::{
     ChannelCapacityFinding, FnBodyAuditFinding, FnBodyAuditOutput, MutStaticAuditFinding,
     MutStaticFinding, RecursionCheckOutput, RecursionCycle, UnsafeAuditFinding,
@@ -64,34 +65,14 @@ pub fn run_unsafe_audit(directory: &Path) -> Result<Vec<UnsafeAuditFinding>> {
     let snap = open_directory_snapshot(&canonical)?;
     let loaded = loader::load(&canonical)?;
     let findings = snap.unsafe_audit(&loaded)?;
-    Ok(findings
-        .into_iter()
-        .map(|finding| UnsafeAuditFinding {
-            file: finding.file,
-            span: finding.span,
-            line_count: finding.line_count,
-            enclosing_function: finding.enclosing_function.map(|id| id.to_hex()),
-            enclosing_function_name: finding.enclosing_function_name,
-            has_safety_comment: finding.has_safety_comment,
-        })
-        .collect())
+    Ok(render_unsafe_findings(findings))
 }
 
 pub fn run_mut_static_audit(directory: &Path) -> Result<Vec<MutStaticAuditFinding>> {
     let canonical = canonicalize_directory(directory)?;
     let snap = open_directory_snapshot(&canonical)?;
     let findings = snap.mut_static_audit()?;
-    Ok(findings
-        .into_iter()
-        .map(|finding| MutStaticAuditFinding {
-            item: finding.item.to_hex(),
-            qualified_name: finding.qualified_name,
-            matched_pattern: finding.matched_pattern,
-            type_string: finding.type_string,
-            file: finding.file,
-            span: finding.span,
-        })
-        .collect())
+    Ok(render_mut_static_findings(findings))
 }
 
 pub fn run_recursion_check(
@@ -146,19 +127,7 @@ pub fn run_channel_capacity_audit(
             skip_test_fns: options.skip_test_fns,
         },
     )?;
-    Ok(findings
-        .into_iter()
-        .map(|finding| ChannelCapacityFinding {
-            crate_name: finding.crate_name,
-            kind: finding.kind,
-            bounded: finding.bounded,
-            capacity: finding.capacity,
-            file: finding.file,
-            span: finding.span,
-            enclosing_function: finding.enclosing_function.map(|id| id.to_hex()),
-            enclosing_function_name: finding.enclosing_function_name,
-        })
-        .collect())
+    Ok(render_channel_capacity_findings(findings))
 }
 
 pub fn run_fn_body_audit(
@@ -167,8 +136,7 @@ pub fn run_fn_body_audit(
 ) -> Result<FnBodyAuditOutput> {
     let patterns = fn_body_audit::parse_pattern_filter(options.patterns.as_deref())
         .map_err(GraphAuditError::InvalidPattern)?;
-    let mut patterns_used: Vec<String> = patterns.iter().map(|pattern| pattern.to_string()).collect();
-    patterns_used.sort();
+    let patterns_used = sorted_pattern_names(&patterns);
 
     let canonical = canonicalize_directory(directory)?;
     let snap = open_directory_snapshot(&canonical)?;
@@ -185,18 +153,76 @@ pub fn run_fn_body_audit(
     )?;
     Ok(FnBodyAuditOutput {
         patterns_used,
-        findings: findings
-            .into_iter()
-            .map(|finding| FnBodyAuditFinding {
-                target: finding.target.map(|id| id.to_hex()),
-                qualified_name: finding.qualified_name,
-                pattern: finding.pattern,
-                file: finding.file,
-                span: finding.span,
-                context: finding.context,
-            })
-            .collect(),
+        findings: render_fn_body_findings(findings),
     })
+}
+
+fn render_unsafe_findings(findings: Vec<unsafe_audit::UnsafeFinding>) -> Vec<UnsafeAuditFinding> {
+    findings
+        .into_iter()
+        .map(|finding| UnsafeAuditFinding {
+            file: finding.file,
+            span: finding.span,
+            line_count: finding.line_count,
+            enclosing_function: finding.enclosing_function.map(|id| id.to_hex()),
+            enclosing_function_name: finding.enclosing_function_name,
+            has_safety_comment: finding.has_safety_comment,
+        })
+        .collect()
+}
+
+fn render_mut_static_findings(findings: Vec<MutStaticFinding>) -> Vec<MutStaticAuditFinding> {
+    findings
+        .into_iter()
+        .map(|finding| MutStaticAuditFinding {
+            item: finding.item.to_hex(),
+            qualified_name: finding.qualified_name,
+            matched_pattern: finding.matched_pattern,
+            type_string: finding.type_string,
+            file: finding.file,
+            span: finding.span,
+        })
+        .collect()
+}
+
+fn render_channel_capacity_findings(
+    findings: Vec<channel_audit::ChannelFinding>,
+) -> Vec<ChannelCapacityFinding> {
+    findings
+        .into_iter()
+        .map(|finding| ChannelCapacityFinding {
+            crate_name: finding.crate_name,
+            kind: finding.kind,
+            bounded: finding.bounded,
+            capacity: finding.capacity,
+            file: finding.file,
+            span: finding.span,
+            enclosing_function: finding.enclosing_function.map(|id| id.to_hex()),
+            enclosing_function_name: finding.enclosing_function_name,
+        })
+        .collect()
+}
+
+fn render_fn_body_findings(findings: Vec<fn_body_audit::FnBodyFinding>) -> Vec<FnBodyAuditFinding> {
+    findings
+        .into_iter()
+        .map(|finding| FnBodyAuditFinding {
+            target: finding.target.map(|id| id.to_hex()),
+            qualified_name: finding.qualified_name,
+            pattern: finding.pattern,
+            file: finding.file,
+            span: finding.span,
+            context: finding.context,
+        })
+        .collect()
+}
+
+fn sorted_pattern_names(
+    patterns: &std::collections::HashSet<&'static str>,
+) -> Vec<String> {
+    let mut patterns_used: Vec<String> = patterns.iter().map(|pattern| pattern.to_string()).collect();
+    patterns_used.sort();
+    patterns_used
 }
 
 fn canonicalize_directory(directory: &Path) -> Result<PathBuf> {
@@ -374,5 +400,110 @@ impl OpenedSnapshot {
         loaded: &super::super::loader::LoadedWorkspace,
     ) -> Result<Vec<super::super::unsafe_audit::UnsafeFinding>> {
         super::super::unsafe_audit::unsafe_audit_impl(loaded, self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    fn node_id(byte: u8) -> NodeId {
+        NodeId([byte; 32])
+    }
+
+    #[test]
+    fn audit_dto_rendering_converts_unsafe_ids_to_hex() {
+        let enclosing = node_id(7);
+        let rows = render_unsafe_findings(vec![unsafe_audit::UnsafeFinding {
+            file: "src/lib.rs".to_string(),
+            span: (10, 20),
+            line_count: 3,
+            enclosing_function: Some(enclosing),
+            enclosing_function_name: Some("crate::f".to_string()),
+            has_safety_comment: true,
+        }]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].file, "src/lib.rs");
+        assert_eq!(rows[0].span, (10, 20));
+        assert_eq!(rows[0].line_count, 3);
+        assert_eq!(rows[0].enclosing_function.as_deref(), Some(enclosing.to_hex().as_str()));
+        assert_eq!(rows[0].enclosing_function_name.as_deref(), Some("crate::f"));
+        assert!(rows[0].has_safety_comment);
+    }
+
+    #[test]
+    fn audit_dto_rendering_converts_mut_static_ids_to_hex() {
+        let item = node_id(9);
+        let rows = render_mut_static_findings(vec![MutStaticFinding {
+            item,
+            qualified_name: "crate::STATE".to_string(),
+            matched_pattern: "OnceLock".to_string(),
+            type_string: "OnceLock<String>".to_string(),
+            file: Some("src/state.rs".to_string()),
+            span: Some((30, 42)),
+        }]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].item, item.to_hex());
+        assert_eq!(rows[0].qualified_name, "crate::STATE");
+        assert_eq!(rows[0].matched_pattern, "OnceLock");
+        assert_eq!(rows[0].type_string, "OnceLock<String>");
+        assert_eq!(rows[0].file.as_deref(), Some("src/state.rs"));
+        assert_eq!(rows[0].span, Some((30, 42)));
+    }
+
+    #[test]
+    fn audit_dto_rendering_converts_channel_ids_to_hex() {
+        let enclosing = node_id(11);
+        let rows = render_channel_capacity_findings(vec![channel_audit::ChannelFinding {
+            crate_name: "rmc_server".to_string(),
+            kind: "tokio_mpsc".to_string(),
+            bounded: true,
+            capacity: Some(64),
+            file: "src/channel.rs".to_string(),
+            span: (50, 70),
+            enclosing_function: Some(enclosing),
+            enclosing_function_name: Some("crate::spawn".to_string()),
+        }]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].crate_name, "rmc_server");
+        assert_eq!(rows[0].kind, "tokio_mpsc");
+        assert!(rows[0].bounded);
+        assert_eq!(rows[0].capacity, Some(64));
+        assert_eq!(rows[0].file, "src/channel.rs");
+        assert_eq!(rows[0].span, (50, 70));
+        assert_eq!(rows[0].enclosing_function.as_deref(), Some(enclosing.to_hex().as_str()));
+        assert_eq!(rows[0].enclosing_function_name.as_deref(), Some("crate::spawn"));
+    }
+
+    #[test]
+    fn audit_dto_rendering_converts_fn_body_ids_and_sorts_patterns() {
+        let target = node_id(13);
+        let rows = render_fn_body_findings(vec![fn_body_audit::FnBodyFinding {
+            target: Some(target),
+            qualified_name: Some("crate::fallible".to_string()),
+            pattern: "unwrap".to_string(),
+            file: "src/fallible.rs".to_string(),
+            span: (80, 95),
+            context: "value.unwrap()".to_string(),
+        }]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target.as_deref(), Some(target.to_hex().as_str()));
+        assert_eq!(rows[0].qualified_name.as_deref(), Some("crate::fallible"));
+        assert_eq!(rows[0].pattern, "unwrap");
+        assert_eq!(rows[0].file, "src/fallible.rs");
+        assert_eq!(rows[0].span, (80, 95));
+        assert_eq!(rows[0].context, "value.unwrap()");
+
+        let patterns = HashSet::from(["unwrap", "panic_macros", "expect"]);
+        assert_eq!(
+            sorted_pattern_names(&patterns),
+            vec!["expect", "panic_macros", "unwrap"]
+        );
     }
 }

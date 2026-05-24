@@ -11,13 +11,15 @@ use super::crates::*;
 use super::response::*;
 use super::surface::*;
 
-use rmc_graph::graph::{EnrichedUsage, ItemKind, Node, NodeId, NodeKind};
+use super::audits::graph_audit_error;
+
+use rmc_graph::graph::{EnrichedUsage, GraphAuditError, ItemKind, Node, NodeId, NodeKind};
 use crate::tools::params::{
     BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
     GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
     WhoUsesParams,
 };
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, ErrorCode};
 use std::sync::Mutex;
 
 // Both tests in this module open the same default data-dir snapshot
@@ -553,6 +555,33 @@ async fn crate_dependency_metric_unknown_sort_by_errors() {
     assert!(
         msg.contains("sort_by") && msg.contains("garbage_key"),
         "error must mention both `sort_by` and the bad value, got: {msg}"
+    );
+}
+
+#[test]
+fn graph_audit_error_maps_typed_audit_failures_to_invalid_params() {
+    let err = graph_audit_error("fn_body_audit")(GraphAuditError::InvalidPattern(
+        "unknown pattern `nope`".to_string(),
+    )
+    .into());
+
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(
+        err.message.contains("unknown pattern `nope`"),
+        "typed graph audit error should be exposed directly, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn graph_audit_error_maps_untyped_failures_to_internal_error() {
+    let err = graph_audit_error("unsafe_audit")(anyhow::anyhow!("storage failed"));
+
+    assert_eq!(err.code, ErrorCode::INTERNAL_ERROR);
+    assert!(
+        err.message.contains("unsafe_audit: storage failed"),
+        "untyped audit errors should keep the endpoint label, got: {}",
+        err.message
     );
 }
 
