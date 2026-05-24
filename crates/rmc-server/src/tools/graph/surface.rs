@@ -67,10 +67,13 @@ pub(crate) async fn dead_pub_in_crate(params: DeadPubParams) -> Result<CallToolR
         .map_err(internal_error("dead_pub_in_crate"))?;
 
     let page_req = list_page(&params.pagination);
-    let mut enriched: Vec<EnrichedDeadPub> = findings
-        .into_iter()
-        .map(|finding| snap.enrich_dead_pub(finding))
-        .collect();
+    let mut enriched = Vec::new();
+    for finding in findings {
+        enriched.push(
+            snap.enrich_dead_pub(finding)
+                .map_err(internal_error("enrich_dead_pub"))?,
+        );
+    }
     clear_locations_for_summary(&mut enriched, page_req.summary, |finding| {
         finding.file = None;
         finding.span = None;
@@ -89,10 +92,13 @@ pub(crate) async fn dead_pub_report(params: DeadPubReportParams) -> Result<CallT
         .dead_pub_report()
         .map_err(internal_error("dead_pub_report"))?;
 
-    let crates: Vec<EnrichedCrateDeadPub> = report
-        .into_iter()
-        .map(|crate_report| snap.enrich_crate_dead_pub(crate_report))
-        .collect();
+    let mut crates: Vec<EnrichedCrateDeadPub> = Vec::new();
+    for crate_report in report {
+        crates.push(
+            snap.enrich_crate_dead_pub(crate_report)
+                .map_err(internal_error("enrich_crate_dead_pub"))?,
+        );
+    }
     let total: usize = crates.iter().map(|c| c.findings.len()).sum();
     let page_req = list_page(&params.pagination);
     let mut flat: Vec<(String, EnrichedDeadPub)> = Vec::new();

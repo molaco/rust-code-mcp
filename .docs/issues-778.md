@@ -53,6 +53,12 @@ Status baseline:
   kind strings stay owned. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
   usage_summary_omits_navigation_fields`.
+- Phase 5 enrichment error contract: graph enrichment methods now return
+  `Result` and propagate snapshot transaction failures, storage lookup errors,
+  and missing referenced nodes instead of returning empty or partial data.
+  Server graph endpoints map those errors to MCP internal errors. Verification
+  passed with existing warnings: `nix develop ../nix-devshells#cuda-code
+  --command cargo check -p rmc-graph -p rmc-server`.
 
 ## Remaining Phase 3 Issues
 
@@ -64,9 +70,6 @@ Status baseline:
 
 ## Remaining Phase 5 Issues
 
-- Medium: Enrichment helpers still swallow snapshot transaction or lookup
-  failures by returning empty or partial data. This was copied behavior, but it
-  is now part of the graph facade API contract.
 - Medium: No focused graph-side tests cover the new enrichment facade and DTO
   shape.
 

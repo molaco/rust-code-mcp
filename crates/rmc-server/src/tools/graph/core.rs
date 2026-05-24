@@ -85,7 +85,10 @@ pub(crate) async fn get_imports(params: GraphImportsParams) -> Result<CallToolRe
         .map(|(_, n)| n.qualified_name)
         .unwrap_or(params.module.clone());
 
-    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
+    let bindings = snap
+        .enrich_bindings(bindings)
+        .map_err(internal_error("enrich_bindings"))?;
+    let (page, bindings) = page_list(bindings, list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(module_name),
@@ -131,7 +134,10 @@ pub(crate) async fn get_exports(params: GraphExportsParams) -> Result<CallToolRe
         .exports_of(module_id, consumer_id)
         .map_err(internal_error("exports_of"))?;
 
-    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
+    let bindings = snap
+        .enrich_bindings(bindings)
+        .map_err(internal_error("enrich_bindings"))?;
+    let (page, bindings) = page_list(bindings, list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(params.module),
@@ -149,7 +155,10 @@ pub(crate) async fn get_reexports(params: GraphReexportsParams) -> Result<CallTo
         .reexports_of(module_id, consumer_id)
         .map_err(internal_error("reexports_of"))?;
 
-    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
+    let bindings = snap
+        .enrich_bindings(bindings)
+        .map_err(internal_error("enrich_bindings"))?;
+    let (page, bindings) = page_list(bindings, list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(params.module),
@@ -168,7 +177,10 @@ pub(crate) async fn get_declared_reexports(
         .declared_reexports_of(module_id)
         .map_err(internal_error("declared_reexports_of"))?;
 
-    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
+    let bindings = snap
+        .enrich_bindings(bindings)
+        .map_err(internal_error("enrich_bindings"))?;
+    let (page, bindings) = page_list(bindings, list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: Some(params.module),
@@ -194,7 +206,10 @@ pub(crate) async fn who_imports(params: WhoImportsParams) -> Result<CallToolResu
         .who_imports(target_id)
         .map_err(internal_error("who_imports"))?;
 
-    let (page, bindings) = page_list(snap.enrich_bindings(bindings), list_page(&params.pagination));
+    let bindings = snap
+        .enrich_bindings(bindings)
+        .map_err(internal_error("enrich_bindings"))?;
+    let (page, bindings) = page_list(bindings, list_page(&params.pagination));
     json_result(&BindingsListResponse {
         page,
         module: None,
@@ -220,7 +235,10 @@ pub(crate) async fn who_uses(params: WhoUsesParams) -> Result<CallToolResult, Mc
         .map_err(internal_error("usages_of"))?;
 
     let page_req = list_page(&params.pagination);
-    let (page, usages) = page_list(snap.enrich_usages(usages, page_req.summary), page_req);
+    let usages = snap
+        .enrich_usages(usages, page_req.summary)
+        .map_err(internal_error("enrich_usages"))?;
+    let (page, usages) = page_list(usages, page_req);
     json_result(&UsagesListResponse {
         target: target_node.qualified_name,
         page,

@@ -1101,6 +1101,16 @@ For every phase, record:
   Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server
   usage_summary_omits_navigation_fields`.
+- Phase 5 enrichment error contract: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `9f19d735ab462bf976d048a01bf47a50e6e6f596` on change
+  `osrvsrknsqtslyymnyouptvkzqkvkonn`, with no description set. Graph
+  enrichment methods now return `Result` and propagate snapshot transaction
+  failures, storage lookup errors, and missing referenced nodes instead of
+  returning empty or partial data; server graph endpoints map those errors to
+  MCP internal errors. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server`.
 
 ## Phase 0: Baseline And Safety Checks
 
