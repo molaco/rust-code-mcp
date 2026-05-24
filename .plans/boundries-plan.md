@@ -1595,6 +1595,17 @@ For every phase, record:
   rust-code-mcp --example benchmark_phases`, and
   `nix develop ../nix-devshells#cuda-code --command cargo test -p
   rust-code-mcp --test test_gpu_index_jsonrpc --no-run`.
+- Step 6 keep `IncrementalIndexer` public for compatibility: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `49463879742b3d67ba3a6bf6e23c3bc0ee4f0d6d` on change
+  `xwlwttpuwlmntlvwlwpyxtouoxlmqmql`, with no description set. Refreshed the
+  MCP hypergraph with `force_rebuild=true`, producing graph
+  `da64f03ea621c18612caf4468a58b64f`. MCP `who_imports` and source search
+  confirmed `IncrementalIndexer` remains used by rust-code-mcp tests, benches,
+  examples, a standalone index tool, and internal indexing tests/facades. MCP
+  `module_dependencies` confirmed server `index` and `sync` production paths
+  use `incremental_service` rather than constructing `IncrementalIndexer`
+  directly. No code change was made and no build command was required.
 
 ## Phase 0: Baseline And Safety Checks
 

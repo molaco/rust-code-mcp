@@ -1472,3 +1472,20 @@
   rust-code-mcp --example benchmark_phases`, and
   `nix develop ../nix-devshells#cuda-code --command cargo test -p
   rust-code-mcp --test test_gpu_index_jsonrpc --no-run`.
+- Step 6 keep `IncrementalIndexer` as a compatibility export: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `49463879742b3d67ba3a6bf6e23c3bc0ee4f0d6d` on change
+  `xwlwttpuwlmntlvwlwpyxtouoxlmqmql`, with no description set. Refreshed the
+  MCP hypergraph with `force_rebuild=true`, producing graph
+  `da64f03ea621c18612caf4468a58b64f` and fingerprint
+  `705e0cc7b219a72b926567bdbbba263392a2ab656cf7d29a53ace9455f094135`.
+  MCP `who_imports(target="rmc_indexing::indexing::IncrementalIndexer")`
+  returned 12 bindings, including `embedding_profile_smoke`,
+  `benchmark_phases`, `test_incremental_indexing`,
+  `bench_incremental_performance`, `benchmark_gpu_performance`,
+  `quick_bench`, `test_full_incremental_flow`, and `index_codebase`, plus
+  internal indexing tests/facade usage. Source search confirmed these consumers
+  import `IncrementalIndexer` through `rmc_indexing::indexing`. MCP
+  `module_dependencies` showed server `index` and `sync` use the Phase 3
+  `incremental_service` facade instead of constructing `IncrementalIndexer`
+  directly. No code change was made and no build command was required.
