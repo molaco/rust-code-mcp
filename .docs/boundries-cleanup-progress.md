@@ -1152,3 +1152,11 @@
   `tymoomxzuunzzpxyyuvrtunyzppoutsy`, with no description set. Wrote
   `.docs/phase-8-boundrie-fix-report.md` and marked the Phase 8 progress
   ledger complete.
+
+## Phase 9: `rmc-server` Internal Boundary Cleanup
+
+### Progress
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `418aceba11919b3c1a46448f3bc5885e1044b4ea` on change
+  `mrozmyslwyvyymmnwlmwmqnylrooxqtu`, with no description set.
