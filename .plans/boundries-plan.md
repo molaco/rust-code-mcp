@@ -1772,6 +1772,14 @@ For every phase, record:
   crate checks, `--no-run` package test builds, rust-code-mcp example checks,
   and selected rust-code-mcp integration-test builds all passed through the
   `cuda-code` nix dev shell with existing warnings only.
+- Step 7 update final ledger/report: completed. Pre-step `jj show --summary`
+  reported working-copy commit
+  `125609e54139d1700c14c66f337e142a475aa104` on change
+  `sqkupwnrmylvtuowssurmqstslqnwmpk`, with no description set. Final
+  before/after metrics, files changed, verification commands, and commits are
+  recorded in `.docs/boundries-cleanup-progress.md` and
+  `.docs/phase-13-boundrie-fix-report.md`.
+- Step 8 final commit: completed by the final Phase 13 ledger/report commit.
 
 ## Phase 0: Baseline And Safety Checks
 
