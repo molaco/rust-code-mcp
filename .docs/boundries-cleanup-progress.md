@@ -1238,8 +1238,8 @@
 - Step 9 ledger update: completed. Pre-step `jj show --summary` reported
   working-copy commit `1af4c10e99da408c7ac5071ee5aa8b58b53a4fc7` on change
   `zpqmmtnpxssynwlokxqoplwvwwxzsuqr`, with no description set. Phase 9 code,
-  export verification, and focused checks are complete; the separate Phase 9
-  report remains to be written and committed.
+  export verification, and focused checks were complete; the separate Phase 9
+  report was still pending at this step.
 
 ### Commits
 
@@ -1251,7 +1251,12 @@
 - Project paths compatibility cleanup: `fccbc47a` (`refactor: remove project paths compatibility reexport`).
 - Export verification docs: `28e8e683` (`docs: verify phase 9 server exports`).
 - Check-result docs: `200aaa7d` (`docs: record phase 9 check result`).
+- Ledger docs: `2febe4d1` (`docs: record phase 9 ledger`).
 
-### Remaining Follow-Up
+### Phase Completion
 
-- Write and commit the Phase 9 report.
+- Phase 9 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `03d824b9b855fb22d08bcc52ff5f32818257eb45` on change
+  `xsqrqployrzwyptkmoqurswywpmxlukn`, with no description set. Wrote
+  `.docs/phase-9-boundrie-fix-report.md` and marked the Phase 9 progress
+  ledger complete.

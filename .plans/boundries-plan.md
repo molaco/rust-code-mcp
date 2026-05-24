@@ -1435,8 +1435,13 @@ For every phase, record:
 - Step 9 ledger update: completed. Pre-step `jj show --summary` reported
   working-copy commit `1af4c10e99da408c7ac5071ee5aa8b58b53a4fc7` on change
   `zpqmmtnpxssynwlokxqoplwvwwxzsuqr`, with no description set. Phase 9 code,
-  export verification, and focused checks are complete; the separate Phase 9
-  report remains to be written and committed.
+  export verification, and focused checks were complete; the separate Phase 9
+  report was still pending at this step.
+- Phase 9 report: completed after pre-report `jj show --summary` reported
+  working-copy commit `03d824b9b855fb22d08bcc52ff5f32818257eb45` on change
+  `xsqrqployrzwyptkmoqurswywpmxlukn`, with no description set. Wrote
+  `.docs/phase-9-boundrie-fix-report.md` and marked the Phase 9 progress
+  ledger complete.
 
 ## Phase 0: Baseline And Safety Checks
 
