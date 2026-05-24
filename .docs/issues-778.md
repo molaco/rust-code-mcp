@@ -29,6 +29,12 @@ Status baseline:
   Verification passed with existing warnings: `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server
   version_mismatch_error_keeps_clear_cache_guidance`.
+- Phase 4 indexing-owned path policy coverage: added direct
+  `IndexingProjectPaths` tests for data-root layout, identity-scoped
+  collection names, existing collection path derivation, and direct indexed
+  profile discovery. Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  project_paths::tests`.
 
 ## Remaining Phase 3 Issues
 
@@ -36,9 +42,6 @@ Status baseline:
 
 ## Remaining Phase 4 Issues
 
-- Medium: Direct tests for `IndexingProjectPaths` are thin. Most coverage
-  still flows through the server wrapper instead of testing the indexing-owned
-  path policy directly.
 - Low: The test-only server helper mixes an injected vectors root with
   production `data_dir()` for returned paths. Current tests only check
   discovery, but future path assertions could be surprised by this.

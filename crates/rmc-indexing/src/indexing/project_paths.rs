@@ -207,3 +207,128 @@ pub fn read_embedder_identity(vector_path: &Path) -> Result<Option<String>, Stri
 
     Ok(Some(identity.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn backend(name: &str) -> EmbeddingBackend {
+        EmbeddingBackend::from_profile_name(name).unwrap()
+    }
+
+    fn write_metadata(collection: &Path, identity: &str) {
+        std::fs::create_dir_all(collection).unwrap();
+        std::fs::write(
+            collection.join("metadata.json"),
+            serde_json::json!({ "embedder_version": identity }).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn from_directory_uses_data_root_layout_and_identity_scoped_collection() {
+        let data_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rmc-indexing-project-paths-test");
+        let backend = backend("local-cpu-small");
+
+        let paths = IndexingProjectPaths::from_directory(data_root.path(), project_dir, &backend);
+
+        assert_eq!(paths.dir_hash, dir_hash(project_dir));
+        assert_eq!(
+            paths.cache_path,
+            data_root.path().join("cache").join(&paths.dir_hash)
+        );
+        assert_eq!(
+            paths.tantivy_path,
+            data_root.path().join("index").join(&paths.dir_hash)
+        );
+        assert_eq!(
+            paths.vector_path,
+            data_root.path().join("cache").join("vectors").join(&paths.collection_name)
+        );
+        assert!(paths.collection_name.starts_with(&collection_prefix(project_dir)));
+
+        let alternate = IndexingProjectPaths::from_directory_with_chunking_identity(
+            data_root.path(),
+            project_dir,
+            &backend,
+            "chunk-policy:test".to_string(),
+        );
+        assert_ne!(paths.indexing_identity, alternate.indexing_identity);
+        assert_ne!(paths.collection_name, alternate.collection_name);
+        assert_ne!(paths.snapshot_path, alternate.snapshot_path);
+    }
+
+    #[test]
+    fn existing_collection_uses_trusted_name_under_data_root_vectors() {
+        let data_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rmc-indexing-existing-collection-test");
+        let backend = backend("local-cpu-small");
+        let collection_name = format!("{}legacy", collection_prefix(project_dir));
+
+        let paths = IndexingProjectPaths::from_existing_collection_name(
+            data_root.path(),
+            project_dir,
+            &backend,
+            collection_name.clone(),
+        );
+
+        assert_eq!(paths.collection_name, collection_name);
+        assert_eq!(
+            paths.vector_path,
+            data_root.path().join("cache").join("vectors").join(&paths.collection_name)
+        );
+        assert_eq!(
+            paths.cache_path,
+            data_root.path().join("cache").join(&paths.dir_hash)
+        );
+        assert_eq!(
+            paths.tantivy_path,
+            data_root.path().join("index").join(&paths.dir_hash)
+        );
+    }
+
+    #[test]
+    fn indexed_profiles_in_root_discovers_matching_project_profiles() {
+        let data_root = TempDir::new().unwrap();
+        let vectors_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rmc-indexing-profile-discovery-test");
+        let prefix = collection_prefix(project_dir);
+        let default_backend = EmbeddingBackend::default();
+        let cpu_backend = backend("local-cpu-small");
+
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}default")),
+            &default_backend.identity(),
+        );
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}cpu")),
+            &cpu_backend.identity(),
+        );
+        write_metadata(
+            &vectors_root.path().join("code_chunks_unrelated"),
+            &default_backend.identity(),
+        );
+
+        let mut profiles = IndexingProjectPaths::indexed_profiles_in_root(
+            data_root.path(),
+            project_dir,
+            vectors_root.path(),
+        )
+        .unwrap();
+        profiles.sort_by(|a, b| a.backend.model_id().cmp(b.backend.model_id()));
+
+        assert_eq!(profiles.len(), 2);
+        assert!(profiles
+            .iter()
+            .any(|profile| profile.backend.model_id() == default_backend.model_id()));
+        assert!(profiles
+            .iter()
+            .any(|profile| profile.backend.model_id() == cpu_backend.model_id()));
+        assert!(profiles.iter().all(|profile| profile
+            .paths
+            .vector_path
+            .starts_with(data_root.path().join("cache").join("vectors"))));
+    }
+}

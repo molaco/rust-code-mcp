@@ -1062,6 +1062,15 @@ For every phase, record:
   configured embedder IDs. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
   version_mismatch_error_keeps_clear_cache_guidance`.
+- Phase 4 indexing-owned path policy coverage: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `2710be2151cd8ae99047cbf9be86f7d5d9506940` on change
+  `srryzkzxzpmnzszyzxlnytkmyknrktqv`, with no description set. Added direct
+  `IndexingProjectPaths` tests for data-root layout, identity-scoped
+  collection names, existing collection path derivation, and indexed profile
+  discovery. Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  project_paths::tests`.
 
 ## Phase 0: Baseline And Safety Checks
 
