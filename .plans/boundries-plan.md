@@ -1484,6 +1484,13 @@ For every phase, record:
   reexports. Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p
   rmc-engine -p rmc-indexing -p rmc-server -p rust-code-mcp`.
+- Step 5 document `EmbeddingProfile` ownership: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `50ca0238532f22e83a9f4e9615d99b95590c49ed` on change
+  `lllzosuzmrooqkposktyxzyzzlqllzmr`, with no description set. Added rustdoc
+  that keeps `EmbeddingProfile` as the engine-owned embedding configuration
+  model and clarifies that higher crates select, persist, and pass profiles
+  without owning the schema.
 
 ## Phase 0: Baseline And Safety Checks
 

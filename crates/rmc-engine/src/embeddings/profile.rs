@@ -19,6 +19,11 @@ pub(crate) const QWEN3_CODE_QUERY_PREFIX: &str =
 pub(crate) const BGE_SEARCH_QUERY_PREFIX: &str =
     "Represent this sentence for searching relevant passages: ";
 
+/// Engine-owned embedding configuration model.
+///
+/// Higher crates may select, persist, and pass profiles around, but the
+/// profile schema and built-in profile registry live in `rmc_engine` with the
+/// embedding runtimes they describe.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmbeddingProfile {
     pub name: Arc<str>,
