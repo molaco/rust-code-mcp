@@ -1678,3 +1678,17 @@
   supported items are also available through root reexports. MCP
   `module_dependencies(rmc_server::tools::graph::codemap)` confirmed active
   server codemap dependencies on graph codemap exports.
+- Step 7 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `c5a3067633e6cc466fc8167f711a9b2eb05bc70c` on change
+  `snzmuzvlxwyrxptlxyqqmtwypstmvqmn`, with no description set. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  --no-run`,
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  --no-run`,
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server -p rust-code-mcp`, and
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example debug_itemscope --example spike_usages --example
+  timing_extract`.
