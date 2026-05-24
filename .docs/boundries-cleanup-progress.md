@@ -883,7 +883,22 @@
   (`docs: verify phase 6 audit dependencies`).
 - Step 6 documentation: `550a943e` (`docs: record phase 6 check result`).
 - Step 7 ledger update: `7b74638e` (`docs: record phase 6 ledger`).
-- Phase 6 report: pending.
+- Phase 6 report: `3100af84` (`docs: add phase 6 boundaries report`).
+
+### Post-Phase 6 Remediation
+
+- User review found a Phase 5 server test compile regression: the graph
+  endpoint test still constructed `EnrichedUsage` through the old local import
+  surface after the DTO moved to `rmc_graph`.
+- Pre-step `jj show --summary` reported working-copy commit
+  `e281eb189679deb5589ba1caabfc0f1cd6edfdde`, change
+  `uyrmqyvukmwsqsqsyoknllwkvqkylvvx`.
+- Updated `crates/rmc-server/src/tools/graph/tests.rs` to import
+  `EnrichedUsage` from `rmc_graph::graph` and construct its `category` as a
+  `String`.
+- Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  --no-run`.
 
 ### Remaining Follow-Up
 

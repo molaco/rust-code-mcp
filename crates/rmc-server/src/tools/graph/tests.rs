@@ -11,7 +11,7 @@ use super::crates::*;
 use super::response::*;
 use super::surface::*;
 
-use rmc_graph::graph::{ItemKind, Node, NodeId, NodeKind};
+use rmc_graph::graph::{EnrichedUsage, ItemKind, Node, NodeId, NodeKind};
 use crate::tools::params::{
     BuildHypergraphParams, DeadPubParams, DeadPubReportParams, GraphExportsParams,
     GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
@@ -787,7 +787,7 @@ fn usage_summary_omits_navigation_fields() {
         file: None,
         start: None,
         end: None,
-        category: "Read",
+        category: "Read".to_string(),
         consumer_module: Some("crate::module".to_string()),
         consumer_function: Some("crate::module::caller".to_string()),
     };

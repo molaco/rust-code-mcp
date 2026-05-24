@@ -1023,6 +1023,15 @@ For every phase, record:
   `kkrkqztmlupqppvsuvunvrsmyyzokwkx`, with no description set. Wrote
   `.docs/phase-6-boundrie-fix-report.md` and marked the Phase 6 progress
   ledger complete.
+- Post-Phase 6 remediation: completed after pre-step `jj show --summary`
+  reported working-copy commit
+  `e281eb189679deb5589ba1caabfc0f1cd6edfdde` on change
+  `uyrmqyvukmwsqsqsyoknllwkvqkylvvx`, with no description set. User review
+  found a Phase 5 server test compile regression after `EnrichedUsage` moved
+  to `rmc_graph`; updated the graph test to import the graph-owned DTO and use
+  the DTO's `String` category field. Verification:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server
+  --no-run` passed with existing warnings.
 
 ## Phase 0: Baseline And Safety Checks
 
