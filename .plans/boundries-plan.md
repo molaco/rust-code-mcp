@@ -1443,6 +1443,12 @@ For every phase, record:
   `.docs/phase-9-boundrie-fix-report.md` and marked the Phase 9 progress
   ledger complete.
 
+### Phase 10: `rmc-engine` Public Surface Tightening
+
+- Step 1 `jj show --summary`: completed. Current working-copy commit was
+  `93da984cc37b76983fbf24e64a16df3136ddd97b` on change
+  `rpymxmznvyyowomornmtylzpsuuqonsy`, with no description set.
+
 ## Phase 0: Baseline And Safety Checks
 
 ### Goal
