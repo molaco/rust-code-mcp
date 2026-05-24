@@ -1,7 +1,6 @@
 //! Benchmark each indexing phase separately
 
-use rmc_indexing::indexing::incremental::IncrementalIndexer;
-use rmc_indexing::indexing::merkle::FileSystemMerkle;
+use rmc_indexing::indexing::{FileSystemMerkle, IncrementalIndexer};
 use rmc_engine::parser::RustParser;
 use rmc_engine::chunker::Chunker;
 use rmc_engine::embeddings::EmbeddingGenerator;
@@ -193,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("\nPHASE 4: TANTIVY INDEXING");
     let tantivy_start = Instant::now();
     {
-        use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
+        use rmc_indexing::indexing::TantivyAdapter;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
@@ -243,7 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("    collection: {}", collection_name);
 
         // Delete existing snapshot to force full reindex
-        let snapshot_path = rmc_indexing::indexing::incremental::get_snapshot_path(&dir);
+        let snapshot_path = rmc_indexing::indexing::get_snapshot_path(&dir);
         let _ = std::fs::remove_file(&snapshot_path);
         println!("  Deleted snapshot to force full reindex");
 

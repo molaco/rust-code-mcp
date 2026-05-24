@@ -23,6 +23,7 @@ pub use incremental::{get_snapshot_path, IncrementalIndexer};
 pub use incremental_service::{
     index_project_incrementally, IncrementalIndexOutcome, IncrementalIndexRequest,
 };
+pub use merkle::{ChangeSet, FileSystemMerkle};
 pub use project_paths::{
     collection_prefix, dir_hash, read_embedder_identity, IndexedProfilePaths,
     IndexingProjectPaths,

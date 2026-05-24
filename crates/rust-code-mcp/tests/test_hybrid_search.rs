@@ -1,4 +1,4 @@
-use rmc_indexing::indexing::unified::UnifiedIndexer;
+use rmc_indexing::indexing::UnifiedIndexer;
 use rmc_engine::search::HybridSearch;
 use std::path::Path;
 use tempfile::TempDir;

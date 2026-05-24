@@ -30,7 +30,7 @@
 //! ## Examples
 //!
 //! ```rust,no_run
-//! use rmc_indexing::indexing::tantivy_adapter::TantivyAdapter;
+//! use rmc_indexing::indexing::TantivyAdapter;
 //! use rmc_config::config::TantivyConfig;
 //! use std::path::Path;
 //!

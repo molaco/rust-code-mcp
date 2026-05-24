@@ -13,7 +13,7 @@ use tracing;
 
 use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use rmc_engine::search::{Bm25Search, HybridSearch};
-use rmc_indexing::indexing::open_bm25_search;
+use rmc_indexing::indexing::{open_bm25_search, IndexStats, UnifiedIndexer};
 use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend_for_mcp,
 };
@@ -147,9 +147,7 @@ async fn ensure_indexed(
     paths: &ProjectPaths,
     backend: EmbeddingBackend,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
-) -> Result<rmc_indexing::indexing::unified::IndexStats, McpError> {
-    use rmc_indexing::indexing::unified::UnifiedIndexer;
-
+) -> Result<IndexStats, McpError> {
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
     let resolved = resolve_query_backend(paths, backend)?;
     let backend = resolved.backend;
@@ -284,7 +282,7 @@ pub(crate) async fn create_hybrid_search(
 fn format_results(
     results: &[rmc_engine::search::SearchResult],
     keyword: &str,
-    stats: Option<&rmc_indexing::indexing::unified::IndexStats>,
+    stats: Option<&IndexStats>,
     rebuilt: bool,
 ) -> String {
     if results.is_empty() {

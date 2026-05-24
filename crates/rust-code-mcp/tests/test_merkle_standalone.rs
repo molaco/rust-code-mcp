@@ -3,8 +3,7 @@
 //! These tests verify the core Merkle tree functionality.
 
 use anyhow::Result;
-use rmc_indexing::indexing::merkle::{ChangeSet, FileSystemMerkle};
-use std::path::PathBuf;
+use rmc_indexing::indexing::FileSystemMerkle;
 use tempfile::TempDir;
 
 #[test]

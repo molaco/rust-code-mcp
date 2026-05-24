@@ -1417,3 +1417,21 @@
   `unified`. MCP `module_dependencies` showed server query still depends on
   `rmc_indexing::indexing::unified`, while server codemap, index, and sync use
   the newer search/incremental service facades.
+- Step 3 migrate deep indexing-path consumers to facade reexports: completed.
+  Pre-step `jj show --summary` reported working-copy commit
+  `43db92827a8c6802d780c3c46401d7f3dd719993` on change
+  `twrwporsryquyryomowoyxkpzlxynrtr`, with no description set. Added facade
+  reexports for `ChangeSet` and `FileSystemMerkle`, migrated server query to
+  `IndexStats` and `UnifiedIndexer` from the indexing facade, and migrated
+  rust-code-mcp tests/examples off deep `unified`, `merkle`,
+  `tantivy_adapter`, and `incremental` paths. Source search found no remaining
+  external deep indexing paths for those modules. Verification passed with
+  existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server -p rust-code-mcp`; touched test target
+  compilation also passed with
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_merkle_standalone --test test_hybrid_search
+  --test test_mcp_stdio_transport --no-run` and
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_merkle_standalone --no-run`.
