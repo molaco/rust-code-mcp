@@ -1606,6 +1606,18 @@ For every phase, record:
   `module_dependencies` confirmed server `index` and `sync` production paths
   use `incremental_service` rather than constructing `IncrementalIndexer`
   directly. No code change was made and no build command was required.
+- Step 7 run focused checks through the nix dev shell: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `9f5b2e8e31c0b0c39811428f31200dfacbc318f4` on change
+  `lrxoslltluxowkwzpxozzxtqwpwsrykz`, with no description set. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server -p rust-code-mcp`,
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_merkle_standalone --test test_hybrid_search
+  --test test_mcp_stdio_transport --test test_gpu_index_jsonrpc --no-run`,
+  and `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rust-code-mcp --example benchmark_phases`.
 
 ## Phase 0: Baseline And Safety Checks
 
