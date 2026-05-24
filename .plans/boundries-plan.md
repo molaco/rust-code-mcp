@@ -1208,6 +1208,16 @@ For every phase, record:
   pair scoring, cluster building, and response DTO construction. Verification
   passed with existing warnings: `nix develop ../nix-devshells#cuda-code
   --command cargo check -p rmc-graph`.
+- Step 3 keep embedding cache and cosine implementation details inside graph:
+  completed for the new facade. Pre-step `jj show --summary` reported
+  working-copy commit `1fb5b0e52f108d220ef5d47affbd41f4f9a458e1` on change
+  `wnusvywuxmpqkmxourpqzutosmryxvoq`, with no description set. Source search
+  shows `rmc_graph::graph::query::similarity` reaches
+  `embedding_cache::ensure_embeddings_for` and `math::cosine` through private
+  graph module paths. The old public compatibility reexports remain only
+  until the server `semantic_overlaps` migration in the next step; source
+  search identified the remaining server calls at
+  `crates/rmc-server/src/tools/graph/similarity.rs`.
 
 ## Phase 0: Baseline And Safety Checks
 

@@ -917,3 +917,12 @@
   embedding-cache refresh, cosine scoring, pair output, and cluster output.
   Verification passed with existing warnings:
   `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph`.
+- Step 3 keep embedding cache and cosine implementation details inside graph:
+  completed for the new facade. Pre-step `jj show --summary` reported
+  working-copy commit `1fb5b0e52f108d220ef5d47affbd41f4f9a458e1` on change
+  `wnusvywuxmpqkmxourpqzutosmryxvoq`, with no description set.
+  `rg` evidence showed the new graph facade calls
+  `embedding_cache::ensure_embeddings_for` and `math::cosine` through private
+  graph module paths. The existing public compatibility reexports are left in
+  place until Step 4 migrates server `semantic_overlaps`; the remaining server
+  low-level calls are in `crates/rmc-server/src/tools/graph/similarity.rs`.
