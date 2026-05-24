@@ -227,9 +227,9 @@ mod tests {
 
     #[test]
     fn load_crate_target_kinds_finds_workspace_targets() {
-        // CARGO_MANIFEST_DIR is `crates/rmc-graph/` after Phase 7 B.7.
-        // The asserts below expect workspace-root targets (src/main.rs, examples/*.rs),
-        // so resolve up two levels to the workspace root.
+        // CARGO_MANIFEST_DIR is `crates/rmc-graph/`. Resolve up two levels to
+        // the virtual workspace root; target source paths are still rooted in
+        // their workspace-member directories.
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
@@ -237,15 +237,17 @@ mod tests {
         let (_by_name, by_root_file) = load_crate_target_kinds(manifest_dir);
 
         assert_eq!(
-            by_root_file.get("src/lib.rs").map(String::as_str),
+            by_root_file.get("crates/rmc-graph/src/lib.rs").map(String::as_str),
             Some("lib")
         );
         assert_eq!(
-            by_root_file.get("src/main.rs").map(String::as_str),
+            by_root_file.get("crates/rust-code-mcp/src/main.rs").map(String::as_str),
             Some("bin")
         );
         assert_eq!(
-            by_root_file.get("examples/graph_burn.rs").map(String::as_str),
+            by_root_file
+                .get("crates/rust-code-mcp/examples/graph_burn.rs")
+                .map(String::as_str),
             Some("example")
         );
     }

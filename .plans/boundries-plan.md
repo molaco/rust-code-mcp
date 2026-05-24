@@ -1152,6 +1152,15 @@ For every phase, record:
   ../nix-devshells#cuda-code --command cargo test -p rmc-graph audit_dto`
   and `nix develop ../nix-devshells#cuda-code --command cargo test
   -p rmc-server graph_audit_error_maps`.
+- Current-suite graph loader test: completed after pre-step `jj show
+  --summary` reported working-copy commit
+  `b4c460389d3c3beb463212d901e3757f6a018488` on change
+  `wypssuzynqrqsmrlnxnkknwznllttuop`, with no description set. Updated
+  `load_crate_target_kinds_finds_workspace_targets` to assert
+  workspace-member target paths under the virtual workspace root instead of
+  root-level `src/*.rs` paths. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  load_crate_target_kinds_finds_workspace_targets`.
 
 ## Phase 0: Baseline And Safety Checks
 

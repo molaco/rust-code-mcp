@@ -83,6 +83,11 @@ Status baseline:
   ../nix-devshells#cuda-code --command cargo test -p rmc-graph audit_dto`
   and `nix develop ../nix-devshells#cuda-code --command cargo test
   -p rmc-server graph_audit_error_maps`.
+- Current-suite graph loader test: updated the target-kind metadata test to
+  assert workspace-member target paths under the virtual workspace root instead
+  of root-level `src/*.rs` paths. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph
+  load_crate_target_kinds_finds_workspace_targets`.
 
 ## Remaining Phase 3 Issues
 
@@ -102,10 +107,6 @@ Status baseline:
 
 ## Current-Suite Issues Not Attributable To Phases 3-6
 
-- High: `rmc-graph` has a stale loader test assumption. The targeted test
-  `graph::loader::tests::load_crate_target_kinds_finds_workspace_targets`
-  expects `src/lib.rs` at the workspace root, but this repo root is a virtual
-  workspace and has no `src/lib.rs`.
 - Medium: `rmc-indexing` tests are not reliably regular in this environment.
   A targeted `test_calculate_safe_batch_size` hung past 60 seconds, likely
   because simple unit tests construct `IndexerCore::new`, which initializes the
