@@ -1,22 +1,21 @@
 //! Similarity endpoint family.
 //!
-//! Vector-similarity queries backed by the persisted hypergraph: a per-Item
-//! semantic nearest-neighbor lookup (`similar_to_item`) and a workspace-wide
-//! pairwise/clustered duplicate-detection audit (`semantic_overlaps`). Both
-//! resolve seed Items by qualified name, embed source bytes via the
-//! configured backend (cached vectors live in LMDB), and run cosine
-//! similarity over the result set. They reach cluster/page helpers + the
-//! shared `ItemRef` / `SimilarityCluster` shapes via
-//! `crate::tools::graph::response::*`.
+//! Similarity endpoint family.
+//!
+//! `similar_to_item` remains server-owned because it depends on server
+//! project-path and hybrid-search policy. Workspace-wide `semantic_overlaps`
+//! delegates graph item enumeration, embedding-cache use, cosine scoring, and
+//! clustering to the graph-owned similarity facade.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 use serde::Serialize;
 
-use rmc_graph::graph::labels::item_kind_short_label as short_item_kind_label;
-use rmc_graph::graph::{Node, NodeId, NodeKind};
+use rmc_graph::graph::{
+    GraphSimilarityError, SemanticOverlapOptions,
+    labels::item_kind_short_label as short_item_kind_label, run_semantic_overlaps,
+};
 use crate::mcp::project_paths::resolve_embedding_backend_for_mcp;
 use crate::tools::graph::response::*;
 use crate::tools::params::{SemanticOverlapsParams, SimilarToItemParams};
@@ -178,29 +177,6 @@ pub(crate) async fn similar_to_item(
     json_result(&resp)
 }
 
-/// v1.1 "semantic_overlaps": workspace-wide duplicate-detection audit with
-/// a per-Item embedding cache.
-///
-/// Algorithm (replaces v1.0's per-seed `vector_only_search` pipeline):
-///   1. Enumerate seed Items (filter by crate / item_kind / file+span / tests).
-///   2. For each seed: read source bytes, hash them (SHA-256 truncated to
-///      16 bytes), look up `embeddings_by_target` — if hit AND content_hash
-///      AND embedder_version match, reuse the cached vector; else mark for
-///      embedding.
-///   3. Batch-embed all cache misses via `EmbeddingGenerator::embed_documents`
-///      in chunks of `EMBED_CHUNK`; persist each fresh vector to LMDB.
-///   4. Identical-source short-circuit (v1.1c): items sharing a content_hash
-///      get `score = 1.0` directly (skip cosine for that pair).
-///   5. In-memory pairwise cosine over remaining (NodeId, vector) pairs.
-///      O(N²) on embedder-dim vectors (default 1024 for Qwen3-0.6B) —
-///      comfortable for a few thousand items.
-///   6. Apply existing filters (cross_crate_only, skip_tests, threshold) and
-///      dedupe symmetric edges via canonical (smaller-id-first) key.
-///
-/// Subsequent scans on unchanged code reuse cached vectors — only freshly
-/// modified items pay the embedding cost. The cache lives in LMDB at the
-/// `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears
-/// it (the new graph_id implies a fresh snapshot env).
 pub(crate) async fn semantic_overlaps(
     params: SemanticOverlapsParams,
 ) -> Result<CallToolResult, McpError> {
@@ -209,291 +185,25 @@ pub(crate) async fn semantic_overlaps(
         params.embedding_profile.as_deref(),
         Path::new(&directory),
     )?;
-    // Default cutoff is model-derived: cosine-similarity scales differ
-    // between embedding models, and `ensure_embeddings_for` embeds with
-    // `backend`, so the default threshold is sourced from the same model.
-    let threshold = params
-        .threshold
-        .unwrap_or_else(|| backend.semantic_overlap_threshold());
-    let limit = params.max_pairs.unwrap_or(50);
-    let offset = params.offset.unwrap_or(0);
-    let summary = params.summary.unwrap_or(false);
-    let max_cluster_size = params.max_cluster_size.unwrap_or(15);
-    let output_mode = params
-        .output_mode
-        .as_deref()
-        .unwrap_or("clusters")
-        .to_string();
-    if output_mode != "pairs" && output_mode != "clusters" {
-        return Err(McpError::invalid_params(
-            format!(
-                "output_mode must be \"pairs\" or \"clusters\"; got `{output_mode}`"
-            ),
-            None,
-        ));
-    }
-    let skip_tests = params.skip_test_chunks.unwrap_or(true);
-    let cross_crate_only = params.cross_crate_only.unwrap_or(false);
-    let item_kind_filter_label = params.item_kind.clone();
-    let crate_name = params.crate_name.clone();
-
-    // 1. Open snapshot.
-    let snap = open_workspace_snapshot(&directory)?;
-
-    // 2. Resolve crate scope (if any).
-    let crate_id_filter: Option<NodeId> = if let Some(qn) = &crate_name {
-        let (id, node) = snap
-            .lookup_by_qualified_name(qn)
-            .map_err(internal_error("lookup_by_qualified_name"))?
-            .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("no node found for qualified name `{qn}`"),
-                    None,
-                )
-            })?;
-        Some(match node.kind {
-            NodeKind::Crate => id,
-            NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("`{qn}` resolves to a Module with no crate_id"),
-                    None,
-                )
-            })?,
-            other => {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "`{qn}` is a {other:?}, expected a Crate or its root Module"
-                    ),
-                    None,
-                ));
-            }
-        })
-    } else {
-        None
-    };
-
-    let item_kind_enum = parse_item_kind_filter(item_kind_filter_label.as_deref())?;
-
-    // 3. Enumerate seed Items: NodeKind::Item with optional crate/item_kind
-    //    filters; require file+span (skip synthetic/macro-generated).
-    let mut seeds: Vec<(NodeId, Node)> = Vec::new();
-    {
-        let rtxn = snap
-            .env
-            .read_txn()
-            .map_err(|e| McpError::internal_error(format!("read_txn: {e}"), None))?;
-        for entry in snap
-            .dbs
-            .nodes_by_id
-            .iter(&rtxn)
-            .map_err(|e| McpError::internal_error(format!("nodes_by_id.iter: {e}"), None))?
-        {
-            let (key, node) = entry
-                .map_err(|e| McpError::internal_error(format!("nodes_by_id entry: {e}"), None))?;
-            if node.kind != NodeKind::Item {
-                continue;
-            }
-            if let Some(cid) = crate_id_filter {
-                if node.crate_id != Some(cid) {
-                    continue;
-                }
-            }
-            if let Some(want_kind) = item_kind_enum {
-                if node.item_kind != Some(want_kind) {
-                    continue;
-                }
-            }
-            if node.file.is_none() || node.span.is_none() {
-                continue;
-            }
-            if skip_tests && node.qualified_name.contains("::tests::") {
-                continue;
-            }
-            let mut id = [0u8; 32];
-            id.copy_from_slice(key);
-            seeds.push((NodeId(id), node));
-        }
-    }
-
-    // 4. Resolve embeddings via the shared helper. It performs the read
-    //    pass (hash + cache lookup), the async batched embed, and the
-    //    write pass for fresh vectors. After the call, `embeddings`
-    //    contains one entry per seed whose source was readable +
-    //    non-empty + spannable.
-    let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
-    let embeddings = rmc_graph::graph::ensure_embeddings_for(&snap, &seed_nids, &backend)
-        .await
-        .map_err(internal_error("ensure_embeddings_for"))?;
-
-    // Per-seed context retained for the pairwise pass: id, node, hash,
-    // vector. Items the helper skipped (unreadable file, empty source,
-    // out-of-range span) are dropped here.
-    struct SeedCtx {
-        id: NodeId,
-        node: Node,
-        content_hash: [u8; 16],
-        cached_vec: Option<Vec<f32>>,
-    }
-
-    let mut seeds_ctx: Vec<SeedCtx> = Vec::with_capacity(seeds.len());
-    for (seed_id, seed_node) in seeds.drain(..) {
-        if let Some(emb) = embeddings.get(&seed_id) {
-            seeds_ctx.push(SeedCtx {
-                id: seed_id,
-                node: seed_node,
-                content_hash: emb.content_hash,
-                cached_vec: Some(emb.vector.clone()),
-            });
-        }
-    }
-
-    // 5. Edge accumulator. For symmetric dedup we use a canonical
-    //    (smaller-id-first) key.
-    type EdgeKey = (NodeId, NodeId);
-    let mut edges: HashMap<EdgeKey, Vec<f32>> = HashMap::new();
-
-    let canonical = |a: NodeId, b: NodeId| -> EdgeKey {
-        if a.as_bytes() < b.as_bytes() {
-            (a, b)
-        } else {
-            (b, a)
-        }
-    };
-
-    // 6. v1.1c — identical-source short-circuit. Items sharing a content_hash
-    //    get score=1.0 directly (subject to existing filters); skip the
-    //    cosine pass for those pairs.
-    let mut by_hash: HashMap<[u8; 16], Vec<usize>> = HashMap::new();
-    for (i, ctx) in seeds_ctx.iter().enumerate() {
-        if ctx.cached_vec.is_some() {
-            by_hash.entry(ctx.content_hash).or_default().push(i);
-        }
-    }
-    for indices in by_hash.values() {
-        if indices.len() < 2 {
-            continue;
-        }
-        for ai in 0..indices.len() {
-            let a = &seeds_ctx[indices[ai]];
-            for bi in (ai + 1)..indices.len() {
-                let b = &seeds_ctx[indices[bi]];
-                if cross_crate_only && a.node.crate_id == b.node.crate_id {
-                    continue;
-                }
-                // skip_tests was already enforced during seed enumeration.
-                let key = canonical(a.id, b.id);
-                edges.entry(key).or_default().push(1.0);
-            }
-        }
-    }
-
-    // 7. In-memory pairwise cosine. O(N²) on embedder-dim vectors
-    //    (default 1024 for Qwen3-0.6B). Identical-hash pairs are
-    //    skipped here (already handled above with score=1.0).
-    for i in 0..seeds_ctx.len() {
-        let Some(va) = seeds_ctx[i].cached_vec.as_ref() else {
-            continue;
-        };
-        for j in (i + 1)..seeds_ctx.len() {
-            let Some(vb) = seeds_ctx[j].cached_vec.as_ref() else {
-                continue;
-            };
-            let a = &seeds_ctx[i];
-            let b = &seeds_ctx[j];
-            if a.content_hash == b.content_hash {
-                continue;
-            }
-            if cross_crate_only && a.node.crate_id == b.node.crate_id {
-                continue;
-            }
-            let score = rmc_graph::graph::cosine(va, vb);
-            if score < threshold {
-                continue;
-            }
-            let key = canonical(a.id, b.id);
-            edges.entry(key).or_default().push(score);
-        }
-    }
-
-    // 8. Symmetric dedup: average the per-direction scores.
-    let mut pairs: Vec<(NodeId, NodeId, f32)> = edges
-        .into_iter()
-        .map(|((a, b), scores)| {
-            let avg = scores.iter().sum::<f32>() / scores.len() as f32;
-            (a, b, avg)
-        })
-        .collect();
-    pairs.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(std::cmp::Ordering::Equal));
-    let total_pair_count = pairs.len();
-
-    // 9. Build response. v1.1 only ever produces edges between seeds, so
-    //    the lookup table is the seeds themselves — no fallback `node_by_id`
-    //    read needed.
-    let seed_count = seeds_ctx.len();
-    let seed_index: HashMap<NodeId, &Node> =
-        seeds_ctx.iter().map(|c| (c.id, &c.node)).collect();
-    let lookup_ref = |id: NodeId| -> Option<ItemRef> {
-        seed_index
-            .get(&id)
-            .map(|node| node_to_item_ref(node, summary))
-    };
-
-    let scope = ScopeSummary {
-        directory: directory.clone(),
-        crate_name: crate_name.clone(),
-        item_kind: item_kind_filter_label.clone(),
-        seed_count,
-    };
-
-    let mut clusters = build_clusters(&pairs, usize::MAX, lookup_ref);
-    if max_cluster_size > 0 {
-        clusters.retain(|c| c.size <= max_cluster_size);
-    }
-    let total_cluster_count = clusters.len();
-
-    if output_mode == "pairs" {
-        let pair_refs: Vec<SimilarityPair> = pairs
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .filter_map(|(a, b, s)| {
-                Some(SimilarityPair {
-                    a: lookup_ref(a)?,
-                    b: lookup_ref(b)?,
-                    similarity: s,
-                })
-            })
-            .collect();
-        return json_result(&SemanticOverlapsResp {
-            scope,
-            threshold,
-            pair_count: total_pair_count,
-            total_pair_count,
-            total_cluster_count,
-            offset,
-            limit,
-            summary,
-            output_mode,
-            pairs: Some(pair_refs),
-            clusters: None,
-        });
-    }
-
-    // Clusters mode (default).
-    let clusters = page_clusters_by_member_limit(clusters, offset, limit);
-    json_result(&SemanticOverlapsResp {
-        scope,
-        threshold,
-        pair_count: total_pair_count,
-        total_pair_count,
-        total_cluster_count,
-        offset,
-        limit,
-        summary,
-        output_mode,
-        pairs: None,
-        clusters: Some(clusters),
-    })
+    let output = run_semantic_overlaps(
+        Path::new(&directory),
+        &backend,
+        SemanticOverlapOptions {
+            threshold: params.threshold,
+            max_pairs: params.max_pairs,
+            offset: params.offset,
+            summary: params.summary,
+            max_cluster_size: params.max_cluster_size,
+            output_mode: params.output_mode,
+            skip_test_chunks: params.skip_test_chunks,
+            cross_crate_only: params.cross_crate_only,
+            item_kind: params.item_kind,
+            crate_name: params.crate_name,
+        },
+    )
+    .await
+    .map_err(graph_similarity_error("semantic_overlaps"))?;
+    json_result(&output)
 }
 
 // ----- response shapes -----
@@ -530,37 +240,13 @@ pub(crate) struct SimilarMatch {
     pub(crate) preview: String,
 }
 
-#[derive(Debug, Serialize)]
-pub(crate) struct SemanticOverlapsResp {
-    pub(crate) scope: ScopeSummary,
-    pub(crate) threshold: f32,
-    /// Back-compatible alias for `total_pair_count`.
-    pub(crate) pair_count: usize,
-    pub(crate) total_pair_count: usize,
-    pub(crate) total_cluster_count: usize,
-    pub(crate) offset: usize,
-    pub(crate) limit: usize,
-    pub(crate) summary: bool,
-    pub(crate) output_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) pairs: Option<Vec<SimilarityPair>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) clusters: Option<Vec<SimilarityCluster>>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ScopeSummary {
-    pub(crate) directory: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) crate_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) item_kind: Option<String>,
-    pub(crate) seed_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct SimilarityPair {
-    pub(crate) a: ItemRef,
-    pub(crate) b: ItemRef,
-    pub(crate) similarity: f32,
+fn graph_similarity_error(label: &'static str) -> impl FnOnce(anyhow::Error) -> McpError {
+    move |error| {
+        let message = format!("{error:#}");
+        if error.downcast_ref::<GraphSimilarityError>().is_some() {
+            McpError::invalid_params(message, None)
+        } else {
+            McpError::internal_error(format!("{label}: {message}"), None)
+        }
+    }
 }

@@ -488,3 +488,174 @@ fn page_clusters_by_member_limit(
     }
     paged
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nid(byte: u8) -> NodeId {
+        let mut id = [0u8; 32];
+        id[0] = byte;
+        NodeId(id)
+    }
+
+    #[test]
+    fn similarity_clusters_two_groups_drop_singletons() {
+        let a = nid(1);
+        let b = nid(2);
+        let c = nid(3);
+        let d = nid(4);
+        let e = nid(5);
+        let edges = vec![
+            (a, b, 0.90),
+            (b, c, 0.85),
+            (d, e, 0.95),
+        ];
+        let lookup = |id: NodeId| {
+            Some(SimilarityItem {
+                qualified_name: format!("n_{}", id.as_bytes()[0]),
+                item_kind: Some("Fn".to_string()),
+                file: Some("x.rs".to_string()),
+                span: Some((0, 0)),
+            })
+        };
+
+        let clusters = build_clusters(&edges, 50, lookup);
+
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].size, 2);
+        assert_eq!(clusters[1].size, 3);
+        assert!(!clusters[0].truncated);
+        assert!(!clusters[1].truncated);
+        assert!((clusters[0].avg_similarity - 0.95).abs() < 1e-5);
+        assert!((clusters[0].min_similarity - 0.95).abs() < 1e-5);
+        let abc_avg = clusters[1].avg_similarity;
+        assert!((abc_avg - 0.875).abs() < 1e-5, "avg = {abc_avg}");
+        assert!((clusters[1].min_similarity - 0.85).abs() < 1e-5);
+    }
+
+    #[test]
+    fn similarity_clusters_cap_members_and_mark_truncated() {
+        let a = nid(1);
+        let b = nid(2);
+        let c = nid(3);
+        let d = nid(4);
+        let edges = vec![
+            (a, b, 0.90),
+            (b, c, 0.90),
+            (c, d, 0.90),
+        ];
+        let lookup = |id: NodeId| {
+            Some(SimilarityItem {
+                qualified_name: format!("n_{}", id.as_bytes()[0]),
+                item_kind: None,
+                file: Some("x.rs".to_string()),
+                span: Some((0, 0)),
+            })
+        };
+
+        let clusters = build_clusters(&edges, 2, lookup);
+
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].size, 4);
+        assert_eq!(clusters[0].members.len(), 2);
+        assert!(clusters[0].truncated);
+    }
+
+    #[test]
+    fn similarity_item_summary_omits_file_and_span() {
+        let node = Node {
+            id: nid(1),
+            kind: NodeKind::Item,
+            display_name: "thing".to_string(),
+            qualified_name: "crate::thing".to_string(),
+            crate_id: None,
+            parent_id: None,
+            item_kind: Some(ItemKind::Function),
+            file: Some("src/lib.rs".to_string()),
+            span: Some((10, 20)),
+            visibility: Some("pub".to_string()),
+            attributes: Vec::new(),
+            crate_target_kind: None,
+        };
+
+        let full = serde_json::to_value(node_to_similarity_item(&node, false)).unwrap();
+        assert_eq!(full["file"], "src/lib.rs");
+        assert_eq!(full["span"][0], 10);
+        assert_eq!(full["span"][1], 20);
+
+        let summary = serde_json::to_value(node_to_similarity_item(&node, true)).unwrap();
+        assert_eq!(summary["qualified_name"], "crate::thing");
+        assert!(summary.get("file").is_none());
+        assert!(summary.get("span").is_none());
+    }
+
+    #[test]
+    fn similarity_cluster_paging_caps_total_emitted_members() {
+        let mk_ref = |name: &str| SimilarityItem {
+            qualified_name: name.to_string(),
+            item_kind: Some("Fn".to_string()),
+            file: Some("x.rs".to_string()),
+            span: Some((0, 0)),
+        };
+        let clusters = vec![
+            SimilarityCluster {
+                members: vec![mk_ref("a"), mk_ref("b"), mk_ref("c")],
+                avg_similarity: 0.95,
+                min_similarity: 0.90,
+                size: 3,
+                truncated: false,
+            },
+            SimilarityCluster {
+                members: vec![mk_ref("d"), mk_ref("e")],
+                avg_similarity: 0.90,
+                min_similarity: 0.85,
+                size: 2,
+                truncated: false,
+            },
+        ];
+
+        let paged = page_clusters_by_member_limit(clusters, 0, 4);
+
+        assert_eq!(paged.len(), 2);
+        assert_eq!(paged[0].members.len(), 3);
+        assert!(!paged[0].truncated);
+        assert_eq!(paged[1].members.len(), 1);
+        assert!(paged[1].truncated);
+        let emitted: usize = paged.iter().map(|cluster| cluster.members.len()).sum();
+        assert_eq!(emitted, 4);
+    }
+
+    #[test]
+    fn similarity_cluster_paging_offset_skips_whole_clusters() {
+        let mk_cluster = |name: &str| SimilarityCluster {
+            members: vec![SimilarityItem {
+                qualified_name: name.to_string(),
+                item_kind: None,
+                file: Some("x.rs".to_string()),
+                span: Some((0, 0)),
+            }],
+            avg_similarity: 0.9,
+            min_similarity: 0.9,
+            size: 1,
+            truncated: false,
+        };
+
+        let paged = page_clusters_by_member_limit(
+            vec![mk_cluster("skip"), mk_cluster("keep")],
+            1,
+            50,
+        );
+
+        assert_eq!(paged.len(), 1);
+        assert_eq!(paged[0].members[0].qualified_name, "keep");
+    }
+
+    #[test]
+    fn similarity_clusters_empty_input() {
+        let edges: Vec<(NodeId, NodeId, f32)> = Vec::new();
+        let lookup = |_id: NodeId| -> Option<SimilarityItem> { None };
+        let clusters = build_clusters(&edges, 50, lookup);
+        assert!(clusters.is_empty());
+    }
+}

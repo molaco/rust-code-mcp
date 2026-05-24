@@ -13,7 +13,7 @@ use super::surface::*;
 
 use super::audits::graph_audit_error;
 
-use rmc_graph::graph::{EnrichedUsage, GraphAuditError, ItemKind, Node, NodeId, NodeKind};
+use rmc_graph::graph::{EnrichedUsage, GraphAuditError};
 use crate::tools::params::{
     BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
     ListPaginationParams, ModuleDependenciesParams, WhoImportsParams, WhoUsesParams,
@@ -527,19 +527,7 @@ fn first_text(result: &CallToolResult) -> String {
         .unwrap_or_default()
 }
 
-// ----- semantic_overlaps unit tests -----
-//
-// Note: a `resolve_chunk_to_item` end-to-end test would need a fully
-// populated LMDB snapshot, which is hard to make deterministic.
-// The plan defers it; we only test the pure helpers here:
-//   - `line_range_overlaps` (the overlap predicate),
-//   - `build_clusters` (single-linkage union-find).
-
-fn nid(byte: u8) -> NodeId {
-    let mut id = [0u8; 32];
-    id[0] = byte;
-    NodeId(id)
-}
+// ----- retained vector-to-graph helper tests -----
 
 #[test]
 fn line_range_overlaps_inclusive_bounds() {
@@ -554,161 +542,6 @@ fn line_range_overlaps_inclusive_bounds() {
     assert!(line_range_overlaps(50, 60, 1, 100));
     // identical
     assert!(line_range_overlaps(7, 7, 7, 7));
-}
-
-#[test]
-fn build_clusters_two_groups_drops_singletons() {
-    let a = nid(1);
-    let b = nid(2);
-    let c = nid(3);
-    let d = nid(4);
-    let e = nid(5);
-    let edges = vec![
-        (a, b, 0.90),
-        (b, c, 0.85),
-        (d, e, 0.95),
-    ];
-    let lookup = |id: NodeId| {
-        Some(ItemRef {
-            qualified_name: format!("n_{}", id.as_bytes()[0]),
-            item_kind: Some("Fn".to_string()),
-            file: Some("x.rs".to_string()),
-            span: Some((0, 0)),
-        })
-    };
-
-    let clusters = build_clusters(&edges, 50, lookup);
-
-    // Two clusters {A,B,C} and {D,E}; no singletons.
-    assert_eq!(clusters.len(), 2);
-    // Sorted by avg_similarity desc: {D,E} (avg 0.95) before {A,B,C} (avg 0.875).
-    assert_eq!(clusters[0].size, 2);
-    assert_eq!(clusters[1].size, 3);
-    assert!(!clusters[0].truncated);
-    assert!(!clusters[1].truncated);
-    // {D,E} avg / min both 0.95.
-    assert!((clusters[0].avg_similarity - 0.95).abs() < 1e-5);
-    assert!((clusters[0].min_similarity - 0.95).abs() < 1e-5);
-    // {A,B,C} avg of 0.90 and 0.85 = 0.875.
-    let abc_avg = clusters[1].avg_similarity;
-    assert!((abc_avg - 0.875).abs() < 1e-5, "avg = {abc_avg}");
-    // min_similarity for {A,B,C} is 0.85.
-    assert!((clusters[1].min_similarity - 0.85).abs() < 1e-5);
-}
-
-#[test]
-fn build_clusters_max_members_caps_and_marks_truncated() {
-    let a = nid(1);
-    let b = nid(2);
-    let c = nid(3);
-    let d = nid(4);
-    // 4-node single cluster via single-linkage chain.
-    let edges = vec![
-        (a, b, 0.90),
-        (b, c, 0.90),
-        (c, d, 0.90),
-    ];
-    let lookup = |id: NodeId| {
-        Some(ItemRef {
-            qualified_name: format!("n_{}", id.as_bytes()[0]),
-            item_kind: None,
-            file: Some("x.rs".to_string()),
-            span: Some((0, 0)),
-        })
-    };
-    let clusters = build_clusters(&edges, 2, lookup);
-    assert_eq!(clusters.len(), 1);
-    assert_eq!(clusters[0].size, 4);
-    assert_eq!(clusters[0].members.len(), 2);
-    assert!(clusters[0].truncated);
-}
-
-#[test]
-fn item_ref_summary_omits_file_and_span() {
-    let node = Node {
-        id: nid(1),
-        kind: NodeKind::Item,
-        display_name: "thing".to_string(),
-        qualified_name: "crate::thing".to_string(),
-        crate_id: None,
-        parent_id: None,
-        item_kind: Some(ItemKind::Function),
-        file: Some("src/lib.rs".to_string()),
-        span: Some((10, 20)),
-        visibility: Some("pub".to_string()),
-        attributes: Vec::new(),
-        crate_target_kind: None,
-    };
-
-    let full = serde_json::to_value(node_to_item_ref(&node, false)).unwrap();
-    assert_eq!(full["file"], "src/lib.rs");
-    assert_eq!(full["span"][0], 10);
-    assert_eq!(full["span"][1], 20);
-
-    let summary = serde_json::to_value(node_to_item_ref(&node, true)).unwrap();
-    assert_eq!(summary["qualified_name"], "crate::thing");
-    assert!(summary.get("file").is_none());
-    assert!(summary.get("span").is_none());
-}
-
-#[test]
-fn page_clusters_caps_total_emitted_members() {
-    let mk_ref = |name: &str| ItemRef {
-        qualified_name: name.to_string(),
-        item_kind: Some("Fn".to_string()),
-        file: Some("x.rs".to_string()),
-        span: Some((0, 0)),
-    };
-    let clusters = vec![
-        SimilarityCluster {
-            members: vec![mk_ref("a"), mk_ref("b"), mk_ref("c")],
-            avg_similarity: 0.95,
-            min_similarity: 0.90,
-            size: 3,
-            truncated: false,
-        },
-        SimilarityCluster {
-            members: vec![mk_ref("d"), mk_ref("e")],
-            avg_similarity: 0.90,
-            min_similarity: 0.85,
-            size: 2,
-            truncated: false,
-        },
-    ];
-
-    let paged = page_clusters_by_member_limit(clusters, 0, 4);
-
-    assert_eq!(paged.len(), 2);
-    assert_eq!(paged[0].members.len(), 3);
-    assert!(!paged[0].truncated);
-    assert_eq!(paged[1].members.len(), 1);
-    assert!(paged[1].truncated);
-    let emitted: usize = paged.iter().map(|c| c.members.len()).sum();
-    assert_eq!(emitted, 4);
-}
-
-#[test]
-fn page_clusters_offset_skips_whole_clusters() {
-    let mk_cluster = |name: &str| SimilarityCluster {
-        members: vec![ItemRef {
-            qualified_name: name.to_string(),
-            item_kind: None,
-            file: Some("x.rs".to_string()),
-            span: Some((0, 0)),
-        }],
-        avg_similarity: 0.9,
-        min_similarity: 0.9,
-        size: 1,
-        truncated: false,
-    };
-    let paged = page_clusters_by_member_limit(
-        vec![mk_cluster("skip"), mk_cluster("keep")],
-        1,
-        50,
-    );
-
-    assert_eq!(paged.len(), 1);
-    assert_eq!(paged[0].members[0].qualified_name, "keep");
 }
 
 #[test]
@@ -786,14 +619,6 @@ fn call_site_summary_omits_navigation_fields() {
     assert_eq!(full["file"], "src/lib.rs");
     assert_eq!(full["start"], 10);
     assert_eq!(full["end"], 20);
-}
-
-#[test]
-fn build_clusters_empty_input() {
-    let edges: Vec<(NodeId, NodeId, f32)> = Vec::new();
-    let lookup = |_id: NodeId| -> Option<ItemRef> { None };
-    let clusters = build_clusters(&edges, 50, lookup);
-    assert!(clusters.is_empty());
 }
 
 // -----------------------------------------------------------------

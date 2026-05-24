@@ -32,10 +32,8 @@ pub(crate) mod test_support;
 pub mod unsafe_audit;
 pub mod usages;
 
-pub use embedding_cache::ensure_embeddings_for;
 pub use ids::{BindingId, NodeId};
 pub use loader::{LoadedWorkspace, load};
-pub use math::cosine;
 pub use model::{
     Binding, BindingVisibility, FunctionSignature, ItemKind, Namespace, Node, NodeKind, Usage,
 };

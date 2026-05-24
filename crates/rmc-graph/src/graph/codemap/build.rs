@@ -260,7 +260,7 @@ pub async fn build_codemap(
         if opts.embedding_policy == EmbeddingPolicy::ComputeMissing && !missing.is_empty() {
             // Codemap is not profile-parameterized; embed with the default
             // backend, matching the prompt embedder constructed above.
-            let resolved = crate::graph::ensure_embeddings_for(
+            let resolved = crate::graph::embedding_cache::ensure_embeddings_for(
                 snap,
                 &missing,
                 &rmc_engine::embeddings::EmbeddingBackend::default(),
@@ -282,7 +282,7 @@ pub async fn build_codemap(
         let gp = *graph_prox.get(&nid).unwrap_or(&0.0);
         let emb_sim = prompt_emb
             .as_ref()
-            .and_then(|pe| cached.get(&nid).map(|nv| crate::graph::cosine(pe, nv)));
+            .and_then(|pe| cached.get(&nid).map(|nv| crate::graph::math::cosine(pe, nv)));
         let r = match emb_sim {
             Some(s) => 0.40 * s + 0.35 * bm + 0.25 * gp,
             None => 0.60 * bm + 0.40 * gp,

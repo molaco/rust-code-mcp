@@ -926,3 +926,20 @@
   graph module paths. The existing public compatibility reexports are left in
   place until Step 4 migrates server `semantic_overlaps`; the remaining server
   low-level calls are in `crates/rmc-server/src/tools/graph/similarity.rs`.
+- Step 4 migrate the server `semantic_overlaps` tool to the facade:
+  completed. Pre-step `jj show --summary` reported working-copy commit
+  `d6e25d0d55f8190fce2e9e6c05eada5207aac4e3` on change
+  `ozymokktwuqnqpzwqrnopwrprqznopqy`, with no description set. Updated
+  `crates/rmc-server/src/tools/graph/similarity.rs` so
+  `semantic_overlaps` calls graph-owned `run_semantic_overlaps` and keeps
+  only MCP parameter adaptation/error mapping/JSON serialization. Removed
+  server-local similarity DTO and cluster helpers from
+  `crates/rmc-server/src/tools/graph/response.rs`, moved their pure tests to
+  `crates/rmc-graph/src/graph/query/similarity.rs`, removed the public graph
+  reexports of `ensure_embeddings_for` and `cosine`, and updated graph
+  codemap internals to use private graph module paths. Source search found no
+  remaining server production calls to graph `ensure_embeddings_for` or
+  `cosine`. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph
+  -p rmc-server` and `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-graph similarity_`.
