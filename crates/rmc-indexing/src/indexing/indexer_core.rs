@@ -18,7 +18,7 @@
 //! ## Examples
 //!
 //! ```rust,ignore
-//! use rmc_indexing::indexing::indexer_core::IndexerCore;
+//! use rmc_indexing::indexing::UnifiedIndexer;
 //! use std::path::Path;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {

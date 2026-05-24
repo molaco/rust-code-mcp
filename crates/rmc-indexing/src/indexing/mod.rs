@@ -1,21 +1,21 @@
 //! Indexing module - Unified pipeline for both Tantivy and vector store
 
 pub(crate) mod backup;
-pub mod consistency;
+mod consistency;
 pub(crate) mod embedding_batcher;
 pub mod error;
 pub mod error_collection;
 pub(crate) mod file_processor;
-pub mod identity;
-pub mod incremental;
+mod identity;
+mod incremental;
 pub mod incremental_service;
-pub mod indexer_core;
-pub mod merkle;
+mod indexer_core;
+mod merkle;
 pub mod project_paths;
-pub mod retry;
+mod retry;
 pub mod search;
-pub mod tantivy_adapter;
-pub mod unified;
+mod tantivy_adapter;
+mod unified;
 mod unified_parallel;
 
 pub(crate) use error::IndexingError;

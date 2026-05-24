@@ -1560,6 +1560,25 @@ For every phase, record:
   --test test_mcp_stdio_transport --no-run` and
   `nix develop ../nix-devshells#cuda-code --command cargo test -p
   rust-code-mcp --test test_merkle_standalone --no-run`.
+- Step 4 tighten indexing implementation-module visibility while keeping
+  facade exports public: completed. Pre-step `jj show --summary` reported
+  working-copy commit `958a3eed30a039b39ca12c7577471f694f53ca70` on change
+  `zwnzwxxkvoouwuwokkuzuolozovxsrtw`, with no description set. Made
+  `consistency`, `identity`, `incremental`, `indexer_core`, `merkle`,
+  `retry`, `tantivy_adapter`, and `unified` private modules, kept their
+  supported facade reexports public, and moved the remaining internal
+  monitoring Merkle caller to the facade reexport. Refreshed the MCP
+  hypergraph with `force_rebuild=true`, producing graph
+  `8d2fad2e10bdcfc9de811ac36e699ca3`; `get_exports` no longer lists those
+  implementation modules as declared exports, while facade exports such as
+  `UnifiedIndexer`, `IndexStats`, `IndexFileResult`, `IncrementalIndexer`,
+  `get_snapshot_path`, `TantivyAdapter`, `FileSystemMerkle`, and `ChangeSet`
+  remain visible. Verification passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-indexing -p rmc-server -p rust-code-mcp` and
+  `nix develop ../nix-devshells#cuda-code --command cargo test -p
+  rust-code-mcp --test test_merkle_standalone --test test_hybrid_search
+  --test test_mcp_stdio_transport --no-run`.
 
 ## Phase 0: Baseline And Safety Checks
 

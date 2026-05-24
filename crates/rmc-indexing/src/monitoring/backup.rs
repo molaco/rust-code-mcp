@@ -2,7 +2,7 @@
 //!
 //! Provides automatic backup rotation with configurable retention
 
-use crate::indexing::merkle::FileSystemMerkle;
+use crate::indexing::FileSystemMerkle;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tracing;
