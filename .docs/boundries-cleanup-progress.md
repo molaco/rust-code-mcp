@@ -1130,3 +1130,20 @@
   test -p rmc-graph clear_` (3 tests passed), and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
   tests passed).
+- Step 6 ledger update: completed. Pre-step `jj show --summary` reported
+  working-copy commit `7c408edae0a83fd3b20a5b30bd00004fdb3287a9` on change
+  `mxqwsnznktqlvmsnomxrrupkxonkvmvz`, with no description set. Phase 8 code
+  and verification steps are complete; the separate Phase 8 report remains to
+  be written and committed.
+
+### Commits
+
+- Step 1 documentation: `8306e692` (`docs: start phase 8 storage cleanup facade`).
+- Storage cleanup facade: `253b76c1` (`refactor: add graph storage cleanup facade`).
+- Server cache migration: `ea86c85d` (`refactor: use graph storage cleanup facade in cache`).
+- Graph path opening facade: `28d27cd2` (`refactor: hide graph paths behind snapshot facade`).
+- Check-result docs: `36e10267` (`docs: record phase 8 check result`).
+
+### Remaining Follow-Up
+
+- Write and commit the Phase 8 report.

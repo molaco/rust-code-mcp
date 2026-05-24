@@ -1341,6 +1341,11 @@ For every phase, record:
   test -p rmc-graph clear_` (3 tests passed), and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server cache` (7
   tests passed).
+- Step 6 ledger update: completed. Pre-step `jj show --summary` reported
+  working-copy commit `7c408edae0a83fd3b20a5b30bd00004fdb3287a9` on change
+  `mxqwsnznktqlvmsnomxrrupkxonkvmvz`, with no description set. Phase 8 code
+  and verification steps are complete; the separate Phase 8 report remains to
+  be written and committed.
 
 ## Phase 0: Baseline And Safety Checks
 
