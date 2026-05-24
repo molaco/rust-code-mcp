@@ -1169,3 +1169,14 @@
   lower-layer graph/indexing business logic. The larger `build_codemap`
   method only destructures parameters before delegating to
   `tools::graph::codemap::handle_build_codemap`.
+- Step 3 remove server-side helper duplication: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `5f834598d6cdc20a22e216c90c65c7568e867f3f` on change
+  `powrovouytsxlwomwklzwuvrplmuvmov`, with no description set. Removed the
+  unused `tools::endpoints::indexing_support` module, which only wrapped
+  low-level Tantivy index/cache opening after the indexing facades existed,
+  and removed stale router/module documentation references to it. Source
+  search found no remaining `indexing_support` references. Verification
+  passed with existing warnings:
+  `nix develop ../nix-devshells#cuda-code --command cargo check -p
+  rmc-server`.

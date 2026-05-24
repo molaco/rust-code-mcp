@@ -3,7 +3,7 @@
 //! `SearchToolRouter` is the MCP-protocol entry point. Every tool the server
 //! exposes is declared here as a `#[tool]` method; bodies delegate to focused
 //! modules under `endpoints/` (`query`, `analysis`, `index`, `health`,
-//! `cache`, `indexing_support`) and `graph_tools`. The router itself
+//! `cache`) and `graph_tools`. The router itself
 //! only does parameter wrapping, response formatting, and optional sync-manager
 //! plumbing — no business logic.
 //!
@@ -13,7 +13,7 @@
 //! SearchToolRouter (this module)
 //!     ├─→ endpoints::query / endpoints::analysis (search, navigation, similarity)
 //!     ├─→ graph_tools                            (persisted-hypergraph endpoints)
-//!     ├─→ endpoints::indexing_support / endpoints::index (hypergraph build, codebase index)
+//!     ├─→ endpoints::index                       (hypergraph build, codebase index)
 //!     ├─→ endpoints::health                      (health_check)
 //!     └─→ endpoints::cache                       (clear_cache)
 //! ```
