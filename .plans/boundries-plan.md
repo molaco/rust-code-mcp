@@ -1756,6 +1756,15 @@ For every phase, record:
   compatibility exports; no server production module dependency on
   `docs_audit`, `derive_audit`, `loader`, `storage`, `tantivy_adapter`, or
   `error_collection` was observed.
+- Step 5 refresh semantic overlap checks: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `33cdf0788aff16ce112909c88887f04cc0e492bf` on change
+  `qoqmzomwpytkrpysylzzmwovnvyvqspn`, with no description set. The overlap
+  scans reported `rmc_server=17` pairs across 10 clusters, `rmc_graph=21`
+  pairs across 18 clusters, `rmc_indexing=5` pairs across 5 clusters, and
+  `rmc_engine=9` pairs across 7 clusters. No result indicated a new layering
+  violation; remaining pairs are intentional wrappers, small paired helpers,
+  or follow-up refactor candidates outside the boundary cleanup scope.
 
 ## Phase 0: Baseline And Safety Checks
 

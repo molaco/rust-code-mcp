@@ -1860,3 +1860,23 @@
   `search` facade and supported `UnifiedIndexer`/`IndexStats` exports. No
   server production module dependency on `docs_audit`, `derive_audit`,
   `loader`, `storage`, `tantivy_adapter`, or `error_collection` was observed.
+- Step 5 refresh semantic overlap checks: completed. Pre-step
+  `jj show --summary` reported working-copy commit
+  `33cdf0788aff16ce112909c88887f04cc0e492bf` on change
+  `qoqmzomwpytkrpysylzzmwovnvyvqspn`, with no description set.
+  `semantic_overlaps(crate_name="rmc_server", item_kind="Function",
+  summary=true, max_pairs=80)` reported 17 pairs across 10 clusters, mostly
+  paired MCP graph endpoints and option/no-option semantic endpoint wrappers.
+  `semantic_overlaps(crate_name="rmc_graph", item_kind="Function",
+  summary=true, max_pairs=60)` reported 21 pairs across 18 clusters, led by
+  audit/similarity facade helpers (`resolve_crate_filter`,
+  `open_directory_snapshot`, `canonicalize_directory`) and wrapper-to-core
+  audit functions. `semantic_overlaps(crate_name="rmc_indexing",
+  item_kind="Function", summary=true, max_pairs=60)` reported 5 pairs across
+  5 clusters, including async/sync retry and facade/default helper pairs.
+  `semantic_overlaps(crate_name="rmc_engine", item_kind="Function",
+  summary=true, max_pairs=60)` reported 9 pairs across 7 clusters, including
+  precision/recall, default/with-edition parser helpers, and OpenRouter config
+  parsing helpers. No semantic-overlap result indicated a new layering
+  violation; remaining pairs are intentional wrappers, small paired helpers,
+  or follow-up refactor candidates outside the boundary cleanup scope.
