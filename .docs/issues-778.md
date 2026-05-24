@@ -42,6 +42,11 @@ Status baseline:
   `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
   project_paths::tests` and `nix develop ../nix-devshells#cuda-code --command
   cargo test -p rmc-server mcp::project_paths::tests`.
+- Phase 4 malformed metadata policy: indexed profile discovery now skips
+  malformed matching vector metadata or invalid embedder identities with a
+  warning, while direct metadata reads remain strict. Verification passed with
+  existing warnings: `nix develop ../nix-devshells#cuda-code --command cargo
+  test -p rmc-indexing project_paths::tests`.
 
 ## Remaining Phase 3 Issues
 
@@ -49,9 +54,7 @@ Status baseline:
 
 ## Remaining Phase 4 Issues
 
-- Low / Medium: One malformed vector metadata file can abort all indexed
-  profile discovery. Decide whether strict failure is intended, then document
-  or test that policy.
+- None.
 
 ## Remaining Phase 5 Issues
 

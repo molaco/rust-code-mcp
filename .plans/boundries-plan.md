@@ -1082,6 +1082,15 @@ For every phase, record:
   test -p rmc-indexing project_paths::tests` and `nix develop
   ../nix-devshells#cuda-code --command cargo test -p rmc-server
   mcp::project_paths::tests`.
+- Phase 4 malformed metadata policy: completed after pre-step
+  `jj show --summary` reported working-copy commit
+  `91eb91c6ad3f98e115311946a2cb4a9ad2e4c328` on change
+  `qprunovqqpnkrvxwvvlowppvktwuuxkk`, with no description set. Indexed
+  profile discovery now skips malformed matching vector metadata or invalid
+  embedder identities with a warning, while direct metadata reads remain
+  strict. Verification passed with existing warnings: `nix develop
+  ../nix-devshells#cuda-code --command cargo test -p rmc-indexing
+  project_paths::tests`.
 
 ## Phase 0: Baseline And Safety Checks
 

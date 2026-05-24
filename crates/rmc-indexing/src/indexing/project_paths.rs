@@ -156,15 +156,29 @@ impl IndexingProjectPaths {
             }
 
             let vector_path = entry.path();
-            let Some(stored_identity) = read_embedder_identity(&vector_path)? else {
-                continue;
+            let stored_identity = match read_embedder_identity(&vector_path) {
+                Ok(Some(identity)) => identity,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        vector_path = %vector_path.display(),
+                        error = %error,
+                        "skipping malformed vector index metadata during profile discovery"
+                    );
+                    continue;
+                }
             };
-            let backend = EmbeddingBackend::from_identity(&stored_identity).map_err(|e| {
-                format!(
-                    "invalid embedder identity in {}: {e}",
-                    vector_path.join("metadata.json").display()
-                )
-            })?;
+            let backend = match EmbeddingBackend::from_identity(&stored_identity) {
+                Ok(backend) => backend,
+                Err(error) => {
+                    tracing::warn!(
+                        vector_path = %vector_path.display(),
+                        error = %error,
+                        "skipping vector index with invalid embedder identity during profile discovery"
+                    );
+                    continue;
+                }
+            };
             let paths = Self::from_existing_collection_name_in_root(
                 data_root,
                 vectors_root,
@@ -352,5 +366,53 @@ mod tests {
             .paths
             .vector_path
             .starts_with(vectors_root.path())));
+    }
+
+    #[test]
+    fn indexed_profiles_skips_malformed_metadata_and_discovers_valid_profiles() {
+        let data_root = TempDir::new().unwrap();
+        let vectors_root = TempDir::new().unwrap();
+        let project_dir = Path::new("/tmp/rmc-indexing-malformed-profile-test");
+        let prefix = collection_prefix(project_dir);
+        let backend = backend("local-cpu-small");
+
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}valid")),
+            &backend.identity(),
+        );
+        std::fs::create_dir_all(vectors_root.path().join(format!("{prefix}bad-json"))).unwrap();
+        std::fs::write(
+            vectors_root
+                .path()
+                .join(format!("{prefix}bad-json"))
+                .join("metadata.json"),
+            "{not valid json",
+        )
+        .unwrap();
+        std::fs::create_dir_all(vectors_root.path().join(format!("{prefix}missing-version")))
+            .unwrap();
+        std::fs::write(
+            vectors_root
+                .path()
+                .join(format!("{prefix}missing-version"))
+                .join("metadata.json"),
+            serde_json::json!({ "other": "field" }).to_string(),
+        )
+        .unwrap();
+        write_metadata(
+            &vectors_root.path().join(format!("{prefix}unknown-identity")),
+            "unknown-identity",
+        );
+
+        let profiles = IndexingProjectPaths::indexed_profiles_in_root(
+            data_root.path(),
+            project_dir,
+            vectors_root.path(),
+        )
+        .unwrap();
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].stored_identity, backend.identity());
+        assert_eq!(profiles[0].paths.collection_name, format!("{prefix}valid"));
     }
 }
