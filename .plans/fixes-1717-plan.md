@@ -817,6 +817,24 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 
 ## Phase 6: Search Runtime Object Cache
 
+### Execution Status
+
+- [x] Step 1: confirmed object sharing constraints.
+- [ ] Step 2: add cache type.
+- [ ] Step 3: wire cache into query path.
+- [ ] Step 4: add invalidation hooks.
+- [ ] Step 5: add tests.
+- [ ] Step 6: re-run latency sample.
+
+### Step 1 Sharing Constraints
+
+- The cache belongs in `rmc-server`, near router/runtime state. Engine and indexing should stay unaware of MCP server lifecycle.
+- `EmbeddingGenerator` is cloneable and Arc-backed. It can be cached by embedding backend/profile identity and cloned into each `HybridSearch`.
+- `VectorStore` is cloneable and wraps a `Send + Sync` backend trait object. It can be cached by vector path plus embedder identity.
+- `Bm25Search` is cloneable, but its Tantivy reader can become stale after writes. Cache it only if invalidation is explicit on every clear/reindex/recreate path.
+- `HybridSearch` should remain per-call because it is just a wrapper around cached components plus the current BM25 option/config.
+- Router-created state must also be shared with graph codemap/similarity paths that call `create_hybrid_search`, otherwise those paths keep paying cold setup costs.
+
 ### Goal
 
 Reduce repeated warm-search setup overhead by caching expensive runtime objects with explicit invalidation.
