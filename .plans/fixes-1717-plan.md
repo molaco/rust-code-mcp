@@ -1031,7 +1031,7 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rm
 
 - [x] Step 1: targeted unit and integration tests passed.
 - [x] Step 2: package checks passed.
-- [ ] Step 3: MCP behavior checks.
+- [x] Step 3: MCP behavior checks passed.
 - [ ] Step 4: MCP tool-surface check.
 - [ ] Step 5: dependency boundary inspection.
 - [ ] Step 6: final result recording.
@@ -1058,6 +1058,16 @@ Command run through the configured nix dev shell:
 - `cargo check -p rmc-engine -p rmc-indexing -p rmc-graph -p rmc-server`: passed.
 
 The check emitted the same class of existing dead-code/unreachable-public warnings plus the external dirty warning for `../nix-devshells`; no build failures were observed.
+
+### Step 3 MCP Behavior Notes
+
+MCP checks were run against `/home/molaco/Documents/rust-code-mcp-refactor` with the refactor MCP server.
+
+- `health_check`: reported overall `healthy`; BM25, vector, and Merkle checks were healthy.
+- `clear_cache` with `dry_run=true` and `include_hypergraph=true`: reported the expected metadata cache, Tantivy index, vector store, and hypergraph snapshot paths without deleting them.
+- `build_hypergraph(force_rebuild=false)`: first run rebuilt because the workspace fingerprint changed after plan-document edits; second run returned the same `graph_id` and `fingerprint` with `reused: true`.
+- Three repeated warm `search` calls for `WorkspaceLockRegistry`: returned consistent top results and completed in 0.3931s, 0.3463s, and 0.4676s.
+- Follow-up `health_check`: remained overall `healthy`.
 
 ### Expected Output
 
