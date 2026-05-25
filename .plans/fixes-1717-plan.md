@@ -44,7 +44,7 @@ nix develop ../nix-devshells#cuda-code --command {command}
 - [x] Step 1: checked working copy with `jj status`. Current expected dirty files before the step commit were this new plan file and the pre-existing `.plans/mcp-side-by-side-comparison-2.md` change. The pre-existing side-by-side comparison plan change is unrelated and must stay out of fixes-1717 commits.
 - [x] Step 2: recorded current relevant code paths.
 - [x] Step 3: established targeted test commands.
-- [ ] Step 4: record baseline MCP observations.
+- [x] Step 4: recorded baseline MCP observations.
 
 ### Current Code Path Notes
 
@@ -72,6 +72,17 @@ nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph snapsho
 nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server build_hypergraph
 nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rmc-indexing -p rmc-graph -p rmc-server
 ```
+
+### Baseline MCP Observations
+
+Current non-destructive sample against `/home/molaco/Documents/rust-code-mcp-refactor`:
+
+- `health_check`: original and refactor both reported healthy BM25, vector, and Merkle state. Both reported 2513 vectors and the same Qwen3 0.6B embedding identity.
+- `clear_cache(dry_run=true)`: original would clear only `/home/molaco/.local/share/mcp-rust-code-original-qwen3/...`; refactor would clear only `/home/molaco/.local/share/mcp-rust-code-refactor-qwen3/...`. This confirms current data-root isolation without deleting state.
+- `search(keyword="SearchTool")`: original wall time was about 1.45s; refactor wall time was about 0.77s. Both returned 10 results with the same result set. The first two equal-score results appeared in opposite order, which is the already-known tie behavior and remains out of scope for this plan.
+- `build_hypergraph(force_rebuild=false)`: original wall time was about 17.74s; refactor wall time was about 23.43s. Both returned `reused=true`, graph id `b0810e8277b124a995405b624070885d`, 3173 nodes, 5741 bindings, and 8328 usages. This confirms the warm reuse path still pays expensive setup work.
+
+Destructive post-clear baseline was not rerun in this step so the current indexes remain available for implementation work. The existing side-by-side evidence in `.plans/mcp-side-by-side-comparison-2.md` records the relevant cache-clear behavior: targeted clears were isolated by server root, but the original server's vector store repopulated after clear while the refactor remained at zero vectors.
 
 ### Goal
 
