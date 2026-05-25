@@ -545,7 +545,7 @@ Adjust test filters to match actual test names.
 - [x] Step 2: extracted pure preflight helpers.
 - [x] Step 3: added fast reuse function.
 - [x] Step 4: reordered `build_and_persist`.
-- [ ] Step 5: ensure manifest writes keep preflight fields.
+- [x] Step 5: confirmed manifest writes keep preflight fields.
 - [ ] Step 6: add tests.
 
 ### Step 1 Inspection Notes
@@ -579,6 +579,13 @@ Adjust test filters to match actual test names.
 - `force_rebuild=true`, missing manifests, changed fingerprints, and unusable snapshot data fall through to the existing load/extract/write path.
 - The write path creates graph directories only after preflight misses, so warm reuse remains read-side except for filesystem metadata reads.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph` passed with pre-existing warnings.
+
+### Step 5 Manifest Notes
+
+- Existing `GraphManifest` fields are sufficient for preflight reuse: `graph_id`, `workspace_root`, `workspace_hash`, `fingerprint`, `schema_version`, `node_count`, `binding_count`, and `usage_count`.
+- Both manifest write sites in `build_and_persist` and `persist_loaded` still populate the same fields from `SnapshotIdentity` and current extraction counts.
+- `usage_count` remains `#[serde(default)]`, preserving compatibility with older manifests that predate that field.
+- No production code change was required for this step.
 
 ### Goal
 
