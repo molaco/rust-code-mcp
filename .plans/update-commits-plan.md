@@ -619,6 +619,51 @@ If Phase 4 only updates this plan or docs with verification results:
 jj commit -m "docs: record update commit verification"
 ```
 
+### Execution Status
+
+- [x] Phase start guard: ran `jj show --summary` before Phase 4
+  verification.
+- [x] Verified the rename and semantic paths with:
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server rename`
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server semantic`
+- [x] Verified the crate-types graph/server paths with:
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server crate_types`
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph crate_types`
+- [x] Verified the combined compile surface with:
+  - `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server -p rmc-graph`
+- [x] Result: all Phase 4 test/check commands passed. The commands emitted
+  existing dead-code / unreachable-pub warnings and a dirty
+  `../nix-devshells` warning; no compile or test failures.
+- [x] Boundary scan result:
+  - `rg -n "rmc_server|crate::semantic|crate::tools" crates/rmc-graph/src crates/rmc-engine/src crates/rmc-indexing/src`
+    only found literal fixture strings in graph tests.
+  - `rg -n "rmc_graph|rmc_server|rmc_indexing" crates/rmc-engine/src`
+    returned no matches.
+  - The port keeps server MCP schema/routing in `rmc-server`, graph query
+    logic and DTOs in `rmc-graph`, and no upstream dependency from
+    `rmc-engine`.
+- [x] Source comparison against `../rust-code-mcp-final` confirmed the three
+  source commits and their intended feature surfaces:
+  - `496f8b78` position-based rename disambiguation.
+  - `7a7d87ff` crate-types hypergraph query.
+  - `a35bb621` full-workspace rename preview loading.
+- [x] Refactor-specific audit result:
+  - position-based rename is adapted to
+    `crates/rmc-server/src/semantic/*`, `tools/endpoints/analysis.rs`,
+    `tools/params/search.rs`, and `tools/router.rs`;
+  - full rename loading is implemented inside `rmc-server` semantic loading,
+    while `rmc-graph` already uses `no_deps=false` for hypergraph loading;
+  - crate-types query ownership is split correctly between
+    `rmc-graph::graph::query` and the `rmc-server` MCP surface.
+- [x] Code-level MCP schema audit confirmed the rebuilt source has:
+  - `rename_symbol` optional `file_path`, `line`, and `column`;
+  - `crate_types` router method and `CrateTypesParams`;
+  - `build_hypergraph` description text with `no_deps=false`.
+- [x] Note: the already-running deferred MCP tool registry available in this
+  chat still appeared stale for `mcp__rust_code_mcp_refactor__` during this
+  verification, so it was not used as implementation evidence. The checked
+  source, docs, and tests reflect the intended rebuilt server behavior.
+
 ## Recommended Implementation Order
 
 1. Phase 1: position-based rename disambiguation.
