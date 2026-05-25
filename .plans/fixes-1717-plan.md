@@ -824,7 +824,7 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - [x] Step 3: wired cache into query path.
 - [x] Step 4: added invalidation hooks.
 - [x] Step 5: added tests.
-- [ ] Step 6: re-run latency sample.
+- [x] Step 6: re-ran latency sample.
 
 ### Step 1 Sharing Constraints
 
@@ -874,6 +874,15 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server search_runtime_cache
 nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server test_search_empty_keyword
 ```
+
+### Step 6 Sampling Results
+
+MCP tool wall-time samples after search runtime cache wiring for `search(directory=/home/molaco/Documents/rust-code-mcp-refactor, keyword=SearchTool)`:
+
+- Refactor post-cache samples, seconds: `0.3678, 0.4533, 0.3740, 0.3654, 0.3673, 0.3772, 0.3484, 0.3658, 0.3533, 0.4399`.
+- Post-cache distribution: n=10, min=0.3484s, median=0.3676s, p90=0.4399s, max=0.4533s, mean=0.3812s.
+- Phase 5 refactor baseline was median=0.4737s, p90=0.9032s, max=1.1660s, mean=0.5792s.
+- Interpretation: post-cache samples show lower median and substantially lower variance/outliers for this warm-search query.
 
 ### Goal
 
