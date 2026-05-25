@@ -300,6 +300,7 @@ pub(crate) async fn clear_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_compute_dir_hash() {
@@ -332,6 +333,47 @@ mod tests {
         }, None)
         .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn targeted_clear_untracks_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let sync_manager = Arc::new(crate::mcp::SyncManager::with_defaults(300));
+        sync_manager.track_directory(project_dir.join(".")).await;
+
+        let result = clear_cache(ClearCacheParams {
+            directory: Some(project_dir.display().to_string()),
+            include_hypergraph: None,
+            dry_run: Some(false),
+        }, Some(&sync_manager))
+        .await;
+
+        assert!(result.is_ok());
+        let tracked = sync_manager.get_tracked_directories().await;
+        assert!(tracked.is_empty());
+    }
+
+    #[tokio::test]
+    async fn targeted_clear_dry_run_keeps_directory_tracked() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let canonical = std::fs::canonicalize(&project_dir).unwrap();
+        let sync_manager = Arc::new(crate::mcp::SyncManager::with_defaults(300));
+        sync_manager.track_directory(project_dir.clone()).await;
+
+        let result = clear_cache(ClearCacheParams {
+            directory: Some(project_dir.display().to_string()),
+            include_hypergraph: None,
+            dry_run: Some(true),
+        }, Some(&sync_manager))
+        .await;
+
+        assert!(result.is_ok());
+        let tracked = sync_manager.get_tracked_directories().await;
+        assert_eq!(tracked, vec![canonical]);
     }
 
     #[test]

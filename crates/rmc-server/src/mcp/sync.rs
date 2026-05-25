@@ -250,6 +250,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_track_directory_canonicalizes_existing_path() {
+        let sync_manager = SyncManager::with_defaults(300);
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let dotted_dir = project_dir.join(".");
+
+        sync_manager.track_directory(dotted_dir).await;
+
+        let tracked = sync_manager.get_tracked_directories().await;
+        assert_eq!(tracked, vec![std::fs::canonicalize(&project_dir).unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn test_untrack_directory_canonicalizes_existing_path() {
+        let sync_manager = SyncManager::with_defaults(300);
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+
+        sync_manager.track_directory(project_dir.clone()).await;
+        sync_manager.untrack_directory(&project_dir.join(".")).await;
+
+        let tracked = sync_manager.get_tracked_directories().await;
+        assert!(tracked.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_untrack_all_directories() {
+        let sync_manager = SyncManager::with_defaults(300);
+        sync_manager.track_directory(PathBuf::from("/tmp/test1")).await;
+        sync_manager.track_directory(PathBuf::from("/tmp/test2")).await;
+
+        let count = sync_manager.untrack_all_directories().await;
+
+        assert_eq!(count, 2);
+        let tracked = sync_manager.get_tracked_directories().await;
+        assert!(tracked.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_track_multiple_directories() {
         let sync_manager = SyncManager::with_defaults(300);
         let dir1 = PathBuf::from("/tmp/test1");

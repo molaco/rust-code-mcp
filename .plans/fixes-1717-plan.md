@@ -268,7 +268,7 @@ Adjust test filters to match actual test names.
 - [x] Step 3: canonicalized targeted directory inputs.
 - [x] Step 4: untracked targeted directories before deletion.
 - [x] Step 5: preserved global clear semantics with explicit untracking.
-- [ ] Step 6: add tests.
+- [x] Step 6: added tests.
 
 ### Step 1 Wiring Notes
 
@@ -308,6 +308,18 @@ Adjust test filters to match actual test names.
 - Global dry runs preserve sync tracking because no state is deleted.
 - This keeps the user-facing global clear semantics while preventing the sync loop from rebuilding globally cleared indexes from stale tracked-directory state.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 6 Test Notes
+
+- Added sync-manager tests for canonicalized tracking, canonicalized untracking, and `untrack_all_directories`.
+- Added cache endpoint tests proving targeted non-dry-run clear untracks the workspace and targeted dry-run clear keeps the workspace tracked.
+- Verification passed:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server untrack
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server clear_cache
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server targeted_clear
+```
 
 ### Goal
 
