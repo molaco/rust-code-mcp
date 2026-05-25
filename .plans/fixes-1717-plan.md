@@ -542,7 +542,7 @@ Adjust test filters to match actual test names.
 ### Execution Status
 
 - [x] Step 1: inspected current snapshot identity logic.
-- [ ] Step 2: extract pure preflight helpers.
+- [x] Step 2: extracted pure preflight helpers.
 - [ ] Step 3: add fast reuse function.
 - [ ] Step 4: reorder `build_and_persist`.
 - [ ] Step 5: ensure manifest writes keep preflight fields.
@@ -556,6 +556,13 @@ Adjust test filters to match actual test names.
 - `graph_id_for` derives the graph id from `workspace_hash`, fingerprint, and `SCHEMA_VERSION`.
 - The reuse path checks `manifest_path.exists()`, reads the manifest with `read_manifest`, and returns the manifest counts when `force_rebuild=false`.
 - `read_manifest` treats schema mismatch as an error, while `read_manifest_compatible` soft-fails schema mismatch for read/open paths. The preflight should preserve the current `build_and_persist` error semantics unless Step 3 deliberately narrows them.
+
+### Step 2 Implementation Notes
+
+- Added an internal `SnapshotIdentity` helper carrying the workspace root, graph paths, fingerprint, graph id, snapshot dir, and manifest path.
+- Extracted `graph_paths_for_workspace`, `snapshot_identity`, and `compute_snapshot_identity` so graph identity logic is centralized inside `rmc_graph`.
+- Updated `build_and_persist` and `persist_loaded` to use the shared helpers while keeping the existing post-loader reuse behavior.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph` passed with pre-existing warnings.
 
 ### Goal
 

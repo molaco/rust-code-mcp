@@ -55,6 +55,16 @@ pub struct BuildResult {
     pub snapshot_path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct SnapshotIdentity {
+    workspace_root: PathBuf,
+    paths: GraphPaths,
+    fingerprint: String,
+    graph_id: String,
+    snapshot_dir: PathBuf,
+    manifest_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GraphSnapshotCleanupOptions {
     pub dry_run: bool,
@@ -147,6 +157,37 @@ pub fn open_current_for_workspace(workspace_root: &Path) -> Result<Option<Opened
     open_current(&paths, GraphEnvOptions::default())
 }
 
+fn graph_paths_for_workspace(workspace_root: &Path, options: &BuildOptions) -> GraphPaths {
+    match &options.data_dir_override {
+        Some(base) => GraphPaths::for_workspace_in(base, workspace_root),
+        None => GraphPaths::for_workspace(workspace_root),
+    }
+}
+
+fn snapshot_identity(
+    workspace_root: PathBuf,
+    paths: GraphPaths,
+    fingerprint: String,
+) -> SnapshotIdentity {
+    let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
+    let snapshot_dir = paths.snapshot_dir(&graph_id);
+    let manifest_path = paths.manifest_path(&graph_id);
+
+    SnapshotIdentity {
+        workspace_root,
+        paths,
+        fingerprint,
+        graph_id,
+        snapshot_dir,
+        manifest_path,
+    }
+}
+
+fn compute_snapshot_identity(workspace_root: PathBuf, paths: GraphPaths) -> Result<SnapshotIdentity> {
+    let fingerprint = compute_fingerprint(&workspace_root)?;
+    Ok(snapshot_identity(workspace_root, paths, fingerprint))
+}
+
 pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<BuildResult> {
     let timing = std::env::var_os("EXTRACT_TIMING").is_some();
 
@@ -160,60 +201,63 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
         );
     }
 
-    let paths = match &options.data_dir_override {
-        Some(base) => GraphPaths::for_workspace_in(base, &loaded.workspace_root),
-        None => GraphPaths::for_workspace(&loaded.workspace_root),
-    };
+    let paths = graph_paths_for_workspace(&loaded.workspace_root, &options);
     paths.ensure_dirs()?;
 
-    let t = std::time::Instant::now();
-    let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
-    if timing {
+    let identity = if timing {
+        let t = std::time::Instant::now();
+        let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
         eprintln!(
             "build:   compute_fingerprint          {:>9.2?}",
             t.elapsed()
         );
-    }
-    let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
-    let snapshot_dir = paths.snapshot_dir(&graph_id);
-    let manifest_path = paths.manifest_path(&graph_id);
+        snapshot_identity(loaded.workspace_root.clone(), paths, fingerprint)
+    } else {
+        compute_snapshot_identity(loaded.workspace_root.clone(), paths)?
+    };
 
-    if !options.force_rebuild && manifest_path.exists() {
-        let manifest = read_manifest(&manifest_path)?;
+    if !options.force_rebuild && identity.manifest_path.exists() {
+        let manifest = read_manifest(&identity.manifest_path)?;
         if timing {
             eprintln!("build:   reused existing snapshot");
         }
         return Ok(BuildResult {
             graph_id: manifest.graph_id,
-            workspace_root: loaded.workspace_root,
+            workspace_root: identity.workspace_root,
             fingerprint: manifest.fingerprint,
             node_count: manifest.node_count,
             binding_count: manifest.binding_count,
             usage_count: manifest.usage_count,
             reused: true,
-            snapshot_path: snapshot_dir,
+            snapshot_path: identity.snapshot_dir,
         });
     }
 
-    if snapshot_dir.exists() {
-        fs::remove_dir_all(&snapshot_dir)
-            .with_context(|| format!("failed to clear stale {}", snapshot_dir.display()))?;
+    if identity.snapshot_dir.exists() {
+        fs::remove_dir_all(&identity.snapshot_dir)
+            .with_context(|| format!("failed to clear stale {}", identity.snapshot_dir.display()))?;
     }
-    fs::create_dir_all(&snapshot_dir)?;
+    fs::create_dir_all(&identity.snapshot_dir)?;
 
     let env = unsafe {
         options
             .env
             .to_open_options()
-            .open(&snapshot_dir)
-            .with_context(|| format!("open heed env at {}", snapshot_dir.display()))?
+            .open(&identity.snapshot_dir)
+            .with_context(|| format!("open heed env at {}", identity.snapshot_dir.display()))?
     };
 
     let model = extract::extract(&loaded);
 
     let t = std::time::Instant::now();
-    let (node_count, binding_count, usage_count) =
-        write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
+    let (node_count, binding_count, usage_count) = write_model(
+        &env,
+        options.env,
+        &model,
+        &identity.paths.workspace_hash,
+        &identity.fingerprint,
+        &identity.graph_id,
+    )?;
     if timing {
         eprintln!(
             "build:   write_model (LMDB)           {:>9.2?}  ({} nodes, {} bindings, {} usages)",
@@ -225,29 +269,29 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
     }
 
     let manifest = GraphManifest {
-        graph_id: graph_id.clone(),
+        graph_id: identity.graph_id.clone(),
         workspace_root: loaded.workspace_root.display().to_string(),
-        workspace_hash: paths.workspace_hash.clone(),
-        fingerprint: fingerprint.clone(),
+        workspace_hash: identity.paths.workspace_hash.clone(),
+        fingerprint: identity.fingerprint.clone(),
         schema_version: SCHEMA_VERSION,
         created_at_unix: now_unix()?,
         node_count,
         binding_count,
         usage_count,
     };
-    write_manifest(&manifest_path, &manifest)?;
+    write_manifest(&identity.manifest_path, &manifest)?;
 
-    publish_current(&paths, &graph_id)?;
+    publish_current(&identity.paths, &identity.graph_id)?;
 
     Ok(BuildResult {
-        graph_id,
-        workspace_root: loaded.workspace_root,
-        fingerprint,
+        graph_id: identity.graph_id,
+        workspace_root: identity.workspace_root,
+        fingerprint: identity.fingerprint,
         node_count,
         binding_count,
         usage_count,
         reused: false,
-        snapshot_path: snapshot_dir,
+        snapshot_path: identity.snapshot_dir,
     })
 }
 
@@ -256,48 +300,48 @@ pub(crate) fn persist_loaded(
     loaded: &LoadedWorkspace,
     options: &BuildOptions,
 ) -> Result<BuildResult> {
-    let paths = match &options.data_dir_override {
-        Some(base) => GraphPaths::for_workspace_in(base, &loaded.workspace_root),
-        None => GraphPaths::for_workspace(&loaded.workspace_root),
-    };
+    let paths = graph_paths_for_workspace(&loaded.workspace_root, options);
     paths.ensure_dirs()?;
-    let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
-    let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
-    let snapshot_dir = paths.snapshot_dir(&graph_id);
-    let manifest_path = paths.manifest_path(&graph_id);
+    let identity = compute_snapshot_identity(loaded.workspace_root.clone(), paths)?;
 
-    if snapshot_dir.exists() {
-        fs::remove_dir_all(&snapshot_dir)?;
+    if identity.snapshot_dir.exists() {
+        fs::remove_dir_all(&identity.snapshot_dir)?;
     }
-    fs::create_dir_all(&snapshot_dir)?;
-    let env = unsafe { options.env.to_open_options().open(&snapshot_dir)? };
+    fs::create_dir_all(&identity.snapshot_dir)?;
+    let env = unsafe { options.env.to_open_options().open(&identity.snapshot_dir)? };
 
     let model = extract::extract(loaded);
-    let (node_count, binding_count, usage_count) =
-        write_model(&env, options.env, &model, &paths.workspace_hash, &fingerprint, &graph_id)?;
+    let (node_count, binding_count, usage_count) = write_model(
+        &env,
+        options.env,
+        &model,
+        &identity.paths.workspace_hash,
+        &identity.fingerprint,
+        &identity.graph_id,
+    )?;
     let manifest = GraphManifest {
-        graph_id: graph_id.clone(),
+        graph_id: identity.graph_id.clone(),
         workspace_root: loaded.workspace_root.display().to_string(),
-        workspace_hash: paths.workspace_hash.clone(),
-        fingerprint: fingerprint.clone(),
+        workspace_hash: identity.paths.workspace_hash.clone(),
+        fingerprint: identity.fingerprint.clone(),
         schema_version: SCHEMA_VERSION,
         created_at_unix: now_unix()?,
         node_count,
         binding_count,
         usage_count,
     };
-    write_manifest(&manifest_path, &manifest)?;
-    publish_current(&paths, &graph_id)?;
+    write_manifest(&identity.manifest_path, &manifest)?;
+    publish_current(&identity.paths, &identity.graph_id)?;
 
     Ok(BuildResult {
-        graph_id,
-        workspace_root: loaded.workspace_root.clone(),
-        fingerprint,
+        graph_id: identity.graph_id,
+        workspace_root: identity.workspace_root,
+        fingerprint: identity.fingerprint,
         node_count,
         binding_count,
         usage_count,
         reused: false,
-        snapshot_path: snapshot_dir,
+        snapshot_path: identity.snapshot_dir,
     })
 }
 
