@@ -1034,7 +1034,7 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rm
 - [x] Step 3: MCP behavior checks passed.
 - [x] Step 4: MCP tool-surface check passed.
 - [x] Step 5: dependency boundary inspection passed.
-- [ ] Step 6: final result recording.
+- [x] Step 6: final result recorded.
 
 ### Step 1 Test Notes
 
@@ -1096,6 +1096,16 @@ Boundary checks used both source inspection and MCP dependency analysis.
   `rmc_indexing::indexing::search` depends only on `rmc_engine` plus external crates;
   `rmc_graph::graph::snapshot` depends on graph internals plus external crates;
   `rmc_engine::vector_store` depends only on engine internals plus external crates.
+
+### Step 6 Final Result
+
+Phase 7 is complete. The fixes were verified together through focused tests, package checks, MCP behavior checks, MCP tool-surface metadata, and dependency-boundary inspection.
+
+- No formatting command was run.
+- No public MCP parameter drift was found for the touched tools.
+- No forbidden crate dependency was found.
+- The unrelated `.plans/mcp-side-by-side-comparison-2.md` working-copy change remained outside all fixes-1717 commits.
+- No extra `.docs/` report was added because this plan now contains the integration result details.
 
 ### Expected Output
 
