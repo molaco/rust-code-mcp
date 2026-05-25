@@ -6,7 +6,7 @@
 //! and pulled in helpers via `#[cfg(test)]` use lines). We re-stage those
 //! names explicitly here so the test bodies stay verbatim.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::super::ids::NodeId;
 use super::super::model::{Binding, BindingKind, ItemKind, Namespace, Node, NodeKind};
@@ -31,6 +31,21 @@ fn test_node(qualified_name: &str, display_name: &str, item_kind: Option<ItemKin
         visibility: None,
         attributes: Vec::new(),
         crate_target_kind: None,
+    }
+}
+
+fn crate_id_by_name(crate_name: &str) -> NodeId {
+    let snap = shared_snapshot();
+    let (id, node) = snap
+        .lookup_by_qualified_name(crate_name)
+        .unwrap()
+        .unwrap_or_else(|| panic!("crate/root module `{crate_name}` not in snapshot"));
+    if node.kind == NodeKind::Crate {
+        id
+    } else {
+        node.crate_id
+            .or(node.parent_id)
+            .unwrap_or_else(|| panic!("`{crate_name}` resolved to module with no crate id"))
     }
 }
 
@@ -1003,6 +1018,81 @@ fn items_with_attribute_finds_derive_users() {
             h.match_location,
         );
     }
+}
+
+#[test]
+fn crate_types_returns_known_type_items() {
+    let snap = shared_snapshot();
+    let crate_id = crate_id_by_name("rmc_graph");
+    let kind_filter = HashSet::from([
+        ItemKind::Struct,
+        ItemKind::Enum,
+        ItemKind::Union,
+        ItemKind::Trait,
+        ItemKind::TypeAlias,
+    ]);
+    let types = snap
+        .crate_types(crate_id, &kind_filter, false, true)
+        .expect("crate_types failed");
+    assert!(
+        !types.is_empty(),
+        "expected at least one type item in rmc_graph"
+    );
+    let qnames: Vec<String> = types.iter().map(|item| item.qualified_name.clone()).collect();
+    assert!(
+        qnames
+            .iter()
+            .any(|q| q == "rmc_graph::graph::model::Node"),
+        "expected Node among crate types, got {qnames:?}"
+    );
+    assert!(
+        qnames
+            .iter()
+            .any(|q| q == "rmc_graph::graph::model::ItemKind"),
+        "expected ItemKind among crate types, got {qnames:?}"
+    );
+    assert!(
+        types.iter().all(|item| item.item_kind.is_type()),
+        "crate_types with default type filter returned a non-type item: {types:?}"
+    );
+    assert!(
+        types
+            .windows(2)
+            .all(|w| w[0].qualified_name.as_str() <= w[1].qualified_name.as_str()),
+        "crate_types results should be sorted by qualified_name"
+    );
+}
+
+#[test]
+fn crate_types_pub_only_and_test_filters_hold() {
+    let snap = shared_snapshot();
+    let crate_id = crate_id_by_name("rmc_graph");
+    let kind_filter = HashSet::from([
+        ItemKind::Struct,
+        ItemKind::Enum,
+        ItemKind::Union,
+        ItemKind::Trait,
+        ItemKind::TypeAlias,
+    ]);
+    let public_types = snap
+        .crate_types(crate_id, &kind_filter, true, true)
+        .expect("crate_types pub_only failed");
+    assert!(
+        !public_types.is_empty(),
+        "expected at least one public type item in rmc_graph"
+    );
+    assert!(
+        public_types
+            .iter()
+            .all(|item| item.visibility.as_deref() == Some("pub")),
+        "pub_only must only return pure pub items: {public_types:?}"
+    );
+    assert!(
+        public_types
+            .iter()
+            .all(|item| !item.qualified_name.contains("::tests::")),
+        "skip_test_items=true must drop test-module items: {public_types:?}"
+    );
 }
 
 /// Item #2 audit: anchored matching must NOT surface items whose

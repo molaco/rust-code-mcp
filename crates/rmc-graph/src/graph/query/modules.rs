@@ -14,9 +14,11 @@ use super::super::labels::{
     binding_kind_label as label_binding_kind, item_kind_short_label as label_item_kind,
     node_kind_label,
 };
-use super::super::model::{Binding, BindingKind, BindingVisibility, NodeKind};
+use super::super::model::{Binding, BindingKind, BindingVisibility, ItemKind, Node, NodeKind};
 use super::super::snapshot::OpenedSnapshot;
-use super::model::{ModuleTreeNode, NodeKindCounts, VisibilityCounts, WorkspaceStats};
+use super::model::{
+    CrateTypeItem, ModuleTreeNode, NodeKindCounts, VisibilityCounts, WorkspaceStats,
+};
 
 impl OpenedSnapshot {
     /// Recursive module/item tree rooted at the crate node whose
@@ -37,14 +39,6 @@ impl OpenedSnapshot {
         let crate_id = crate_id
             .with_context(|| format!("no Crate node with qualified_name `{crate_name}`"))?;
 
-        // Pre-build a target -> formatted-visibility map for every Item in this
-        // crate. The model stores visibility on the declaring `Binding`, not
-        // on the Item Node, so without this lookup `module_tree` would emit
-        // `null` for every item. One linear pass over `bindings_by_id` filtered
-        // by the item's owning crate keeps build_module_tree's per-item lookup
-        // O(1).
-        let mut item_visibility: HashMap<NodeId, String> = HashMap::new();
-        // First, collect the set of Item NodeIds in this crate.
         let mut crate_items: HashSet<NodeId> = HashSet::new();
         for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
             let (key, node) = entry?;
@@ -54,26 +48,85 @@ impl OpenedSnapshot {
                 crate_items.insert(NodeId(id));
             }
         }
-        // Second, walk bindings_by_id and pick up Declared bindings whose
-        // target is one of those items. If an item somehow has multiple
-        // Declared bindings (defensively — shouldn't happen in well-formed
-        // extraction), prefer one whose `from_module` matches the item's
-        // parent module; otherwise keep the first.
+        let item_visibility = self.declared_item_visibility_map(&rtxn, &crate_items)?;
+
+        self.build_module_tree(&rtxn, crate_id, depth, 0, &item_visibility)
+    }
+
+    pub fn crate_types(
+        &self,
+        crate_id: NodeId,
+        kind_filter: &HashSet<ItemKind>,
+        pub_only: bool,
+        skip_test_items: bool,
+    ) -> Result<Vec<CrateTypeItem>> {
+        let rtxn = self.env.read_txn()?;
+        let mut candidates: Vec<(NodeId, Node)> = Vec::new();
+        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
+            let (key, node) = entry?;
+            if node.kind != NodeKind::Item || node.crate_id != Some(crate_id) {
+                continue;
+            }
+            let Some(kind) = node.item_kind else {
+                continue;
+            };
+            if !kind_filter.contains(&kind) {
+                continue;
+            }
+            if skip_test_items && node.qualified_name.contains("::tests::") {
+                continue;
+            }
+            let mut id = [0u8; 32];
+            id.copy_from_slice(key);
+            candidates.push((NodeId(id), node));
+        }
+
+        let item_ids: HashSet<NodeId> = candidates.iter().map(|(id, _)| *id).collect();
+        let item_visibility = self.declared_item_visibility_map(&rtxn, &item_ids)?;
+
+        let mut out = Vec::with_capacity(candidates.len());
+        for (id, node) in candidates {
+            let visibility = item_visibility.get(&id).cloned();
+            if pub_only && visibility.as_deref() != Some("pub") {
+                continue;
+            }
+            let Some(kind) = node.item_kind else {
+                continue;
+            };
+            out.push(CrateTypeItem {
+                target: id,
+                qualified_name: node.qualified_name,
+                display_name: node.display_name,
+                item_kind: kind,
+                visibility,
+                file: node.file,
+                span: node.span,
+            });
+        }
+        out.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Ok(out)
+    }
+
+    fn declared_item_visibility_map(
+        &self,
+        rtxn: &RoTxn<'_, heed::WithoutTls>,
+        item_ids: &HashSet<NodeId>,
+    ) -> Result<HashMap<NodeId, String>> {
         let mut item_parents: HashMap<NodeId, NodeId> = HashMap::new();
-        for item_id in &crate_items {
-            if let Some(node) = self.dbs.nodes_by_id.get(&rtxn, item_id.as_bytes())? {
+        for item_id in item_ids {
+            if let Some(node) = self.dbs.nodes_by_id.get(rtxn, item_id.as_bytes())? {
                 if let Some(parent) = node.parent_id {
                     item_parents.insert(*item_id, parent);
                 }
             }
         }
         let mut item_vis_picks: HashMap<NodeId, (BindingVisibility, bool)> = HashMap::new();
-        for entry in self.dbs.bindings_by_id.iter(&rtxn)? {
+        for entry in self.dbs.bindings_by_id.iter(rtxn)? {
             let (_k, binding) = entry?;
             if binding.kind != BindingKind::Declared {
                 continue;
             }
-            if !crate_items.contains(&binding.target) {
+            if !item_ids.contains(&binding.target) {
                 continue;
             }
             let parent_match = item_parents
@@ -93,11 +146,11 @@ impl OpenedSnapshot {
                 }
             }
         }
+        let mut item_visibility: HashMap<NodeId, String> = HashMap::new();
         for (id, (vis, _)) in item_vis_picks {
-            item_visibility.insert(id, format_binding_visibility(&rtxn, self, vis));
+            item_visibility.insert(id, format_binding_visibility(rtxn, self, vis));
         }
-
-        self.build_module_tree(&rtxn, crate_id, depth, 0, &item_visibility)
+        Ok(item_visibility)
     }
 
     fn build_module_tree(

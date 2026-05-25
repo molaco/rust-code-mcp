@@ -7,19 +7,23 @@
 //! directory, open snapshot, resolve qualified names, run the query,
 //! serialize.
 
+use std::collections::HashSet;
+
 use serde::Serialize;
 
 use rmc_graph::graph::ItemWithAttribute;
 use rmc_graph::graph::{
-    DeriveAuditFinding, DeriveAuditOptions, EnrichedCrateDeadPub, EnrichedDeadPub,
-    FunctionFilter, FunctionSignature, FunctionWithSignature, ItemKind,
-    MissingDocsAuditFinding, MissingDocsAuditOptions, Node, NodeKind, OverlapsReport,
+    CrateTypeItem, DeriveAuditFinding, DeriveAuditOptions, EnrichedCrateDeadPub,
+    EnrichedDeadPub, FunctionFilter, FunctionSignature, FunctionWithSignature, ItemKind,
+    MissingDocsAuditFinding, MissingDocsAuditOptions, Node, NodeId, NodeKind, OverlapsReport,
     PubTypeAliasMasqueradingAsReexport, ReExportChain, SelfKindFilter,
-    item_kind_display_label as item_kind_label, run_derive_audit, run_missing_docs_audit,
+    item_kind_display_label as item_kind_label, item_kind_short_label as short_item_kind_label,
+    run_derive_audit, run_missing_docs_audit,
 };
 use crate::tools::graph::response::*;
 use crate::tools::params::{
-    DeadPubParams, DeadPubReportParams, EnumVariantsParams, FunctionSignatureParams,
+    CrateTypesParams, DeadPubParams, DeadPubReportParams, EnumVariantsParams,
+    FunctionSignatureParams,
     FunctionsWithFilterParams, ItemAttributesParams, ItemsWithAttributeParams, OverlapsParams,
     PubUsePubTypeAuditParams, ReExportChainParams,
 };
@@ -300,36 +304,7 @@ pub(crate) async fn functions_with_filter(
     params: FunctionsWithFilterParams,
 ) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
-    let (id, node) = snap
-        .lookup_by_qualified_name(&params.krate)
-        .map_err(internal_error("lookup_by_qualified_name"))?
-        .ok_or_else(|| {
-            McpError::invalid_params(
-                format!("no node found for qualified name `{}`", params.krate),
-                None,
-            )
-        })?;
-    let crate_id = match node.kind {
-        NodeKind::Crate => id,
-        NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
-            McpError::invalid_params(
-                format!(
-                    "`{}` resolves to a Module with no crate_id",
-                    params.krate
-                ),
-                None,
-            )
-        })?,
-        other => {
-            return Err(McpError::invalid_params(
-                format!(
-                    "`{}` is a {other:?}, expected a crate or its root module",
-                    params.krate
-                ),
-                None,
-            ));
-        }
-    };
+    let crate_id = resolve_crate_or_root_module(&snap, &params.krate)?;
 
     let self_kind = match params.self_kind.as_deref() {
         None => None,
@@ -386,6 +361,49 @@ pub(crate) async fn functions_with_filter(
         limit,
         match_count: enriched.len(),
         matches: enriched,
+    })
+}
+
+pub(crate) async fn crate_types(
+    params: CrateTypesParams,
+) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let crate_id = resolve_crate_or_root_module(&snap, &params.krate)?;
+    let include_associated_types = params.include_associated_types.unwrap_or(false);
+    let kind_filter =
+        parse_crate_type_kind_filter(params.item_kind.as_deref(), include_associated_types)?;
+    let pub_only = params.pub_only.unwrap_or(false);
+    let skip_test_items = params.skip_test_items.unwrap_or(true);
+
+    let matches = snap
+        .crate_types(crate_id, &kind_filter, pub_only, skip_test_items)
+        .map_err(internal_error("crate_types"))?;
+
+    let mut rendered: Vec<CrateTypeRendered> = matches
+        .into_iter()
+        .map(|item: CrateTypeItem| CrateTypeRendered {
+            target: item.target.to_hex(),
+            qualified_name: item.qualified_name,
+            display_name: item.display_name,
+            item_kind: short_item_kind_label(item.item_kind).to_string(),
+            visibility: item.visibility,
+            file: item.file,
+            span: item.span,
+        })
+        .collect();
+    let page_req = list_page(&params.pagination);
+    clear_locations_for_summary(&mut rendered, page_req.summary, |item| {
+        item.file = None;
+        item.span = None;
+    });
+    let type_count = rendered.len();
+    let (page, types) = page_list(rendered, page_req);
+
+    json_result(&CrateTypesResponse {
+        krate: params.krate,
+        type_count,
+        page,
+        types,
     })
 }
 
@@ -664,6 +682,80 @@ pub(crate) async fn derive_audit(
     })
 }
 
+fn resolve_crate_or_root_module(
+    snap: &rmc_graph::graph::OpenedSnapshot,
+    qualified_name: &str,
+) -> Result<NodeId, McpError> {
+    let (id, node) = snap
+        .lookup_by_qualified_name(qualified_name)
+        .map_err(internal_error("lookup_by_qualified_name"))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("no node found for qualified name `{qualified_name}`"),
+                None,
+            )
+        })?;
+    match node.kind {
+        NodeKind::Crate => Ok(id),
+        NodeKind::Module => node.crate_id.or(node.parent_id).ok_or_else(|| {
+            McpError::invalid_params(
+                format!("`{qualified_name}` resolves to a Module with no crate_id"),
+                None,
+            )
+        }),
+        other => Err(McpError::invalid_params(
+            format!("`{qualified_name}` is a {other:?}, expected a Crate or its root Module"),
+            None,
+        )),
+    }
+}
+
+fn parse_crate_type_kind_filter(
+    labels: Option<&[String]>,
+    include_associated_types: bool,
+) -> Result<HashSet<ItemKind>, McpError> {
+    let mut set = HashSet::new();
+    match labels {
+        None => {
+            for kind in [
+                ItemKind::Struct,
+                ItemKind::Enum,
+                ItemKind::Union,
+                ItemKind::Trait,
+                ItemKind::TypeAlias,
+            ] {
+                set.insert(kind);
+            }
+            if include_associated_types {
+                set.insert(ItemKind::AssocType);
+            }
+        }
+        Some(labels) => {
+            for label in labels {
+                let kind = parse_item_kind_filter(Some(label.as_str()))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            "empty item_kind label in list".to_string(),
+                            None,
+                        )
+                    })?;
+                if kind.is_type() || (include_associated_types && kind == ItemKind::AssocType) {
+                    set.insert(kind);
+                } else {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "crate_types only accepts Struct | Enum | Union | Trait | TypeAlias{}; got {kind:?}",
+                            if include_associated_types { " | AssocType" } else { "" }
+                        ),
+                        None,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(set)
+}
+
 // ----- response shapes -----
 
 #[derive(Debug, Serialize)]
@@ -818,4 +910,27 @@ pub(crate) struct FunctionsWithFilterMatch {
     /// full FunctionSignature.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) signature: Option<FunctionSignature>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CrateTypesResponse {
+    pub(crate) krate: String,
+    pub(crate) type_count: usize,
+    #[serde(flatten)]
+    pub(crate) page: ListMeta,
+    pub(crate) types: Vec<CrateTypeRendered>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CrateTypeRendered {
+    pub(crate) target: String,
+    pub(crate) qualified_name: String,
+    pub(crate) display_name: String,
+    pub(crate) item_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) visibility: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) span: Option<(u32, u32)>,
 }

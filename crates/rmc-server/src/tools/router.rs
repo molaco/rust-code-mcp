@@ -531,6 +531,16 @@ impl SearchToolRouter {
     }
 
     #[tool(
+        description = "List crate-owned type items from the hypergraph snapshot. Defaults to Struct, Enum, Union, Trait, and TypeAlias; optional filters support pure `pub` only, associated types, test-module exclusion, and pagination. Requires build_hypergraph to have created a snapshot first."
+    )]
+    async fn crate_types(
+        &self,
+        Parameters(params): Parameters<crate::tools::params::CrateTypesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph::surface::crate_types(params).await
+    }
+
+    #[tool(
         description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio. In `visibility`, `module_private` is the canonical bucket for declarations visible only inside their declaring module; `pub_self` and `private` are retained compatibility aliases/legacy buckets and are explained in `visibility_notes`; `restricted_to` is for broader module-subtree restrictions such as `pub(super)` / `pub(in path)`."
     )]
     async fn workspace_stats(

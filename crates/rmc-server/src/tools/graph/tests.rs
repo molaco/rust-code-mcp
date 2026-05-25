@@ -15,8 +15,9 @@ use super::audits::graph_audit_error;
 
 use rmc_graph::graph::{EnrichedUsage, GraphAuditError};
 use crate::tools::params::{
-    BuildHypergraphParams, DeadPubParams, GraphExportsParams, GraphImportsParams,
-    ListPaginationParams, ModuleDependenciesParams, WhoImportsParams, WhoUsesParams,
+    BuildHypergraphParams, CrateTypesParams, DeadPubParams, GraphExportsParams,
+    GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
+    WhoUsesParams,
 };
 use rmcp::model::{CallToolResult, ErrorCode};
 use std::sync::OnceLock;
@@ -43,7 +44,7 @@ async fn ensure_default_snapshot(directory: &str) {
 }
 
 #[tokio::test]
-async fn default_snapshot_graph_round_trips() {
+async fn default_snapshot_graph_round_trips_with_crate_types() {
     mcp_round_trip_against_self().await;
     get_exports_accepts_crate_name_as_consumer().await;
     who_uses_and_dead_pub_round_trip().await;
@@ -53,6 +54,7 @@ async fn default_snapshot_graph_round_trips() {
     crate_dependency_metric_top_n_caps_count().await;
     crate_dependency_metric_sort_by_instability_descending().await;
     crate_dependency_metric_unknown_sort_by_errors().await;
+    crate_types_round_trip().await;
 }
 
 /// Round-trip: build_hypergraph → get_imports / who_imports against this
@@ -488,6 +490,99 @@ async fn crate_dependency_metric_unknown_sort_by_errors() {
     assert!(
         msg.contains("sort_by") && msg.contains("garbage_key"),
         "error must mention both `sort_by` and the bad value, got: {msg}"
+    );
+}
+
+async fn crate_types_round_trip() {
+    let manifest_dir = test_project_root();
+
+    ensure_default_snapshot(&manifest_dir).await;
+
+    let result = crate_types(CrateTypesParams {
+        directory: manifest_dir.to_string(),
+        krate: "rmc_graph".to_string(),
+        item_kind: None,
+        pub_only: None,
+        include_associated_types: None,
+        skip_test_items: Some(true),
+        pagination: ListPaginationParams {
+            limit: Some(5),
+            offset: Some(0),
+            summary: Some(false),
+        },
+    })
+    .await
+    .expect("crate_types");
+    let body = first_text(&result);
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("response was not valid JSON: {e} — body: {body}"));
+    assert_eq!(v["krate"], "rmc_graph");
+    assert!(
+        v.get("type_count").and_then(|x| x.as_u64()).unwrap_or(0) > 0,
+        "expected crate_types to find at least one type: {body}"
+    );
+    let types = v
+        .get("types")
+        .and_then(|x| x.as_array())
+        .expect("types array present");
+    assert!(
+        !types.is_empty(),
+        "expected returned types after pagination: {body}"
+    );
+    assert!(
+        body.contains("\"qualified_name\""),
+        "expected qualified_name fields in crate_types response: {body}"
+    );
+
+    let summary = crate_types(CrateTypesParams {
+        directory: manifest_dir.to_string(),
+        krate: "rmc_graph".to_string(),
+        item_kind: Some(vec!["Struct".to_string()]),
+        pub_only: None,
+        include_associated_types: None,
+        skip_test_items: Some(true),
+        pagination: ListPaginationParams {
+            limit: Some(1),
+            offset: Some(0),
+            summary: Some(true),
+        },
+    })
+    .await
+    .expect("crate_types summary");
+    let body = first_text(&summary);
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("response was not valid JSON: {e} — body: {body}"));
+    let first = v["types"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item.as_object())
+        .expect("one summary type object");
+    assert!(
+        !first.contains_key("file") && !first.contains_key("span"),
+        "summary=true must omit file/span: {first:?}"
+    );
+    assert_eq!(
+        v.get("returned_match_count").and_then(|x| x.as_u64()),
+        Some(1),
+        "limit=1 must return one item in this fixture: {body}"
+    );
+
+    let invalid = crate_types(CrateTypesParams {
+        directory: manifest_dir.to_string(),
+        krate: "rmc_graph".to_string(),
+        item_kind: Some(vec!["Function".to_string()]),
+        pub_only: None,
+        include_associated_types: None,
+        skip_test_items: Some(true),
+        pagination: ListPaginationParams::default(),
+    })
+    .await;
+    let err = invalid.expect_err("non-type item_kind should be rejected");
+    assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    assert!(
+        err.message.contains("crate_types only accepts"),
+        "invalid kind error should explain accepted type kinds, got: {}",
+        err.message
     );
 }
 

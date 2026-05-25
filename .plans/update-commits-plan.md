@@ -410,6 +410,32 @@ nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server crate_
 nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph -p rmc-server
 ```
 
+### Execution Status
+
+- [x] Phase start guard: ran `jj show --summary` before editing Phase 2.
+- [x] Added graph-owned `CrateTypeItem` and
+  `OpenedSnapshot::crate_types(...)`, reusing a shared
+  `declared_item_visibility_map(...)` for item visibility.
+- [x] Re-exported `CrateTypeItem` from `rmc_graph::graph`.
+- [x] Added `CrateTypesParams`, the `crate_types` MCP router method, and the
+  `tools::graph::surface::crate_types(...)` endpoint.
+- [x] Added `resolve_crate_or_root_module(...)` in the surface layer and used
+  it for both `functions_with_filter(...)` and `crate_types(...)`.
+- [x] Added `parse_crate_type_kind_filter(...)` with default type kinds,
+  optional associated types, and invalid-params rejection for non-type kinds.
+- [x] Added `crate_types` documentation to `TOOLS.md`.
+- [x] Added graph query tests for known type items, `pub_only`, sorted output,
+  and test-module exclusion. Added server endpoint coverage for JSON shape,
+  summary omission of `file`/`span`, pagination, and invalid non-type filters.
+- [x] Verified with:
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph crate_types`
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server crate_types`
+  - `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph -p rmc-server`
+- [x] Result: all Phase 2 checks passed. The graph/server crate-types tests
+  each took about 110 seconds because they build or reuse a hypergraph
+  snapshot. The commands emitted existing dead-code warnings and a dirty
+  `../nix-devshells` warning; no compile or test failures.
+
 ### Commit
 
 ```sh

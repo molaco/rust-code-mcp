@@ -459,6 +459,18 @@ pub struct ModuleTreeNode {
     pub children: Vec<ModuleTreeNode>,
 }
 
+/// One crate-owned type item returned by `crate_types`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrateTypeItem {
+    pub target: NodeId,
+    pub qualified_name: String,
+    pub display_name: String,
+    pub item_kind: ItemKind,
+    pub visibility: Option<String>,
+    pub file: Option<String>,
+    pub span: Option<(u32, u32)>,
+}
+
 /// Result of `workspace_stats`: counters across the whole snapshot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceStats {

@@ -265,6 +265,28 @@ pub(crate) struct ModuleTreeParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub(crate) struct CrateTypesParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Crate qualified name to scope the search (accepts the crate name or its root module)")]
+    pub krate: String,
+    #[schemars(description = "Optional type item kinds to include. Defaults to Struct, Enum, Union, Trait, TypeAlias.")]
+    #[serde(default)]
+    pub item_kind: Option<Vec<String>>,
+    #[schemars(description = "Only include pure `pub` type items. Default false.")]
+    #[serde(default)]
+    pub pub_only: Option<bool>,
+    #[schemars(description = "Include associated type items. Default false.")]
+    #[serde(default)]
+    pub include_associated_types: Option<bool>,
+    #[schemars(description = "Drop items inside `::tests::` modules. Default true.")]
+    #[serde(default)]
+    pub skip_test_items: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct WorkspaceStatsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,

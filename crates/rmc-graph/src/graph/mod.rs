@@ -48,8 +48,8 @@ pub use query::audits::{
     run_recursion_check, run_unsafe_audit,
 };
 pub use query::model::{
-    CallGraphNode, ChannelCapacityFinding, CrateDeadPub, CrateEdge, CrateMetric, DeadPubFinding,
-    DeriveAuditFinding, EnrichedBinding, EnrichedCallSite, EnrichedCrateDeadPub,
+    CallGraphNode, ChannelCapacityFinding, CrateDeadPub, CrateEdge, CrateMetric, CrateTypeItem,
+    DeadPubFinding, DeriveAuditFinding, EnrichedBinding, EnrichedCallSite, EnrichedCrateDeadPub,
     EnrichedDeadPub, EnrichedUsage, FnBodyAuditFinding, FnBodyAuditOutput,
     ForbiddenDependencyRule, ForbiddenDependencyViolation, FunctionFilter, FunctionWithSignature,
     ItemWithAttribute, MissingDocsAuditFinding, ModuleDependency, ModuleDependencySymbol,

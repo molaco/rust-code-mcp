@@ -36,6 +36,7 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`crate_edges`](#crate_edges) | Graph: Structure | Cross-crate consumer→producer edges |
 | [`overlaps`](#overlaps) | Graph: Structure | Workspace name-collision/shadow report |
 | [`module_tree`](#module_tree) | Graph: Structure | Recursive module/item tree dump |
+| [`crate_types`](#crate_types) | Graph: Structure | Crate-owned type items with filters |
 | [`workspace_stats`](#workspace_stats) | Graph: Structure | Workspace counters (nodes/items/bindings) |
 | [`forbidden_dependency_check`](#forbidden_dependency_check) | Graph: Audit | Architectural-rule check over crate edges |
 | [`enum_variants`](#enum_variants) | Graph: Audit | Enumerate variants of an enum |
@@ -956,6 +957,38 @@ Recursive module/item tree dump rooted at the specified crate.
 ```
 
 **Returns:** `{ tree: ModuleTreeNode }` — a recursive struct of nested modules and their items.
+
+---
+
+#### crate_types
+
+List crate-owned type items from the current hypergraph snapshot. Defaults to `Struct`, `Enum`, `Union`, `Trait`, and `TypeAlias`; associated types are excluded unless requested.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root |
+| `krate` | string | Yes | Crate qualified name, or its root module |
+| `item_kind` | string[] | No | Optional subset of `Struct`, `Enum`, `Union`, `Trait`, `TypeAlias`; `AssocType` is allowed when `include_associated_types` is true |
+| `pub_only` | boolean | No | Only include pure `pub` type items. Default false |
+| `include_associated_types` | boolean | No | Include associated type items. Default false |
+| `skip_test_items` | boolean | No | Drop items whose qualified name contains `::tests::`. Default true |
+| `limit` | integer | No | Max returned items after sorting. Default 50 |
+| `offset` | integer | No | Offset into sorted results. Default 0 |
+| `summary` | boolean | No | Omit `file` and `span` from returned items. Default false |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "krate": "my_crate",
+  "pub_only": false,
+  "skip_test_items": true,
+  "limit": 100
+}
+```
+
+**Returns:** `{ krate, type_count, total_match_count, offset, limit, summary, returned_match_count, types }`, where each type carries `target`, `qualified_name`, `display_name`, `item_kind`, `visibility`, `file`, and `span`.
 
 ---
 
