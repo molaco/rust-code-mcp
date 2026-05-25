@@ -539,6 +539,24 @@ Adjust test filters to match actual test names.
 
 ## Phase 4: Fast Hypergraph Reuse Preflight
 
+### Execution Status
+
+- [x] Step 1: inspected current snapshot identity logic.
+- [ ] Step 2: extract pure preflight helpers.
+- [ ] Step 3: add fast reuse function.
+- [ ] Step 4: reorder `build_and_persist`.
+- [ ] Step 5: ensure manifest writes keep preflight fields.
+- [ ] Step 6: add tests.
+
+### Step 1 Inspection Notes
+
+- `build_and_persist` currently calls `loader::load(directory)` before any snapshot identity work, so warm reuse still pays rust-analyzer workspace loading.
+- `GraphPaths::for_workspace` and `GraphPaths::for_workspace_in` derive `workspace_hash` from the canonical workspace root using `ids::workspace_hash`.
+- `compute_fingerprint` hashes every `.rs` file plus `Cargo.toml` and `Cargo.lock`, excluding `target/` and `.git/`.
+- `graph_id_for` derives the graph id from `workspace_hash`, fingerprint, and `SCHEMA_VERSION`.
+- The reuse path checks `manifest_path.exists()`, reads the manifest with `read_manifest`, and returns the manifest counts when `force_rebuild=false`.
+- `read_manifest` treats schema mismatch as an error, while `read_manifest_compatible` soft-fails schema mismatch for read/open paths. The preflight should preserve the current `build_and_persist` error semantics unless Step 3 deliberately narrows them.
+
 ### Goal
 
 Make warm `build_hypergraph(force_rebuild=false)` reuse persisted graph state without loading the rust-analyzer workspace first.
