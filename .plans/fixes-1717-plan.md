@@ -396,7 +396,7 @@ Adjust test filters to match actual test names.
 ### Execution Status
 
 - [x] Step 1: located existing shared server state.
-- [ ] Step 2: add lock registry type.
+- [x] Step 2: added lock registry type.
 - [ ] Step 3: wire lock registry into endpoints.
 - [ ] Step 4: apply locking in write paths.
 - [ ] Step 5: apply locking around search paths that may trigger indexing.
@@ -409,6 +409,14 @@ Adjust test filters to match actual test names.
 - Search, index, and cache endpoint functions already receive the sync manager from the router. That makes the router the right place to also own and pass an operation lock registry.
 - The lock registry should live in `crates/rmc-server/src/mcp/` next to `SyncManager`, because it is server runtime coordination rather than engine, indexing, or graph business logic.
 - `SearchToolRouter::new()` should keep working by constructing its own lock registry without a sync manager; `SearchToolRouter::with_sync_manager(...)` should share one registry with the background sync loop.
+
+### Step 2 Implementation Notes
+
+- Added `mcp::WorkspaceLockRegistry` keyed by canonical workspace directory.
+- The first implementation uses a conservative per-workspace async mutex for both `lock_exclusive` and `lock_shared`.
+- The registry avoids holding the global lock map while awaiting the per-workspace lock.
+- Added `mcp::WorkspaceLockGuard` to hold the owned async mutex guard and expose the normalized workspace path for diagnostics/tests.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal
 

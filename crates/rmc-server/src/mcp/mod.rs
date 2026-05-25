@@ -5,5 +5,7 @@
 
 pub mod project_paths;
 pub mod sync;
+pub mod workspace_locks;
 
 pub use sync::*;
+pub use workspace_locks::*;
