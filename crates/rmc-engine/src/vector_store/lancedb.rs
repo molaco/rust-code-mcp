@@ -170,6 +170,63 @@ impl LanceDbBackend {
         Ok(backend)
     }
 
+    /// Open an existing LanceDB backend without creating directories, tables,
+    /// indexes, or metadata.
+    pub async fn open_existing(
+        path: PathBuf,
+        vector_dim: usize,
+        embedder_identity: &str,
+    ) -> Result<Self, VectorStoreError> {
+        if !path.is_dir() {
+            return Err(VectorStoreError::not_found(format!(
+                "vector store directory does not exist: {}",
+                path.display()
+            )));
+        }
+
+        let metadata = read_metadata(&path)?.ok_or_else(|| {
+            VectorStoreError::not_found(format!(
+                "vector store metadata does not exist: {}",
+                metadata_path(&path).display()
+            ))
+        })?;
+        if metadata.embedder_version != embedder_identity {
+            return Err(VectorStoreError::version_mismatch(
+                metadata.embedder_version,
+                embedder_identity,
+            ));
+        }
+
+        let db = connect(path.to_string_lossy().as_ref())
+            .execute()
+            .await
+            .map_err(|e| VectorStoreError::connection(format!("Failed to connect: {}", e)))?;
+
+        let tables = db
+            .table_names()
+            .execute()
+            .await
+            .map_err(|e| VectorStoreError::backend(format!("Failed to list tables: {}", e)))?;
+        if !tables.iter().any(|name| name == TABLE_NAME) {
+            return Err(VectorStoreError::not_found(format!(
+                "vector table does not exist: {}",
+                TABLE_NAME
+            )));
+        }
+
+        db.open_table(TABLE_NAME)
+            .execute()
+            .await
+            .map_err(|e| VectorStoreError::not_found(format!("Table not found: {}", e)))?;
+
+        Ok(Self {
+            db,
+            table_name: TABLE_NAME.to_string(),
+            vector_dim,
+            schema: Arc::new(Self::create_schema_for_dim(vector_dim)),
+        })
+    }
+
     /// Create Arrow schema for vectors table (static version for initialization)
     fn create_schema_for_dim(vector_dim: usize) -> Schema {
         Schema::new(vec![

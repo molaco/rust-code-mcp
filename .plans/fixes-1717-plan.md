@@ -132,7 +132,7 @@ Capture the current behavior before changing production code, so regressions can
 ### Execution Status
 
 - [x] Step 1: inspected `VectorStore::new_embedded` and `LanceDbBackend::new`; write side effects are now identified.
-- [ ] Step 2: add the read-only opener.
+- [x] Step 2: added the read-only opener.
 - [ ] Step 3: refactor shared read-only pieces if useful.
 - [ ] Step 4: update server health.
 - [ ] Step 5: add focused tests.
@@ -143,6 +143,13 @@ Capture the current behavior before changing production code, so regressions can
 - `LanceDbBackend::new` writes by calling `std::fs::create_dir_all`, then connects to LanceDB, calls `ensure_table_exists`, creates the table and BTree indexes when missing, and writes `metadata.json` when absent.
 - The read-only opener must validate the database path and metadata file before connecting, open the existing table instead of ensuring it, and keep the existing embedder identity mismatch behavior.
 - Existing `VectorStoreError::NotFound` is suitable for missing path, missing metadata, and missing table errors; no new error type is required unless implementation details make messages ambiguous.
+
+### Step 2 Implementation Notes
+
+- Added `LanceDbBackend::open_existing`, which validates the vector-store directory, requires `metadata.json`, preserves embedder mismatch checks, lists existing LanceDB tables, and opens the `vectors` table without creating directories, tables, indexes, or metadata.
+- Added `VectorStore::open_existing_embedded` as the public engine wrapper for read-side probes.
+- Kept `VectorStore::new_embedded` and `LanceDbBackend::new` unchanged for write-capable indexing paths.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine` passed with pre-existing dead-code warnings.
 
 ### Goal
 

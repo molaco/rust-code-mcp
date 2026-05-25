@@ -86,6 +86,22 @@ impl VectorStore {
         })
     }
 
+    /// Open an existing embedded backend without creating missing storage.
+    ///
+    /// This is intended for read-side probes such as health checks. Missing
+    /// directories, tables, or metadata return [`VectorStoreError::NotFound`]
+    /// instead of creating an empty vector store.
+    pub async fn open_existing_embedded(
+        path: PathBuf,
+        vector_size: usize,
+        embedder_identity: &str,
+    ) -> Result<Self, VectorStoreError> {
+        let backend = LanceDbBackend::open_existing(path, vector_size, embedder_identity).await?;
+        Ok(Self {
+            backend: Arc::new(backend),
+        })
+    }
+
     /// Create from config
     pub async fn from_config(config: VectorStoreConfig) -> Result<Self, VectorStoreError> {
         match config {
