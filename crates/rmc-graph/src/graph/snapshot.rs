@@ -183,9 +183,34 @@ fn snapshot_identity(
     }
 }
 
-fn compute_snapshot_identity(workspace_root: PathBuf, paths: GraphPaths) -> Result<SnapshotIdentity> {
+fn compute_snapshot_identity(
+    workspace_root: PathBuf,
+    paths: GraphPaths,
+) -> Result<SnapshotIdentity> {
     let fingerprint = compute_fingerprint(&workspace_root)?;
     Ok(snapshot_identity(workspace_root, paths, fingerprint))
+}
+
+fn try_reuse_existing_snapshot(identity: &SnapshotIdentity) -> Result<Option<BuildResult>> {
+    if !identity.manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest = read_manifest(&identity.manifest_path)?;
+    if !identity.snapshot_dir.join("data.mdb").exists() {
+        return Ok(None);
+    }
+
+    Ok(Some(BuildResult {
+        graph_id: manifest.graph_id,
+        workspace_root: identity.workspace_root.clone(),
+        fingerprint: manifest.fingerprint,
+        node_count: manifest.node_count,
+        binding_count: manifest.binding_count,
+        usage_count: manifest.usage_count,
+        reused: true,
+        snapshot_path: identity.snapshot_dir.clone(),
+    }))
 }
 
 pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<BuildResult> {
@@ -216,21 +241,13 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
         compute_snapshot_identity(loaded.workspace_root.clone(), paths)?
     };
 
-    if !options.force_rebuild && identity.manifest_path.exists() {
-        let manifest = read_manifest(&identity.manifest_path)?;
-        if timing {
-            eprintln!("build:   reused existing snapshot");
+    if !options.force_rebuild {
+        if let Some(result) = try_reuse_existing_snapshot(&identity)? {
+            if timing {
+                eprintln!("build:   reused existing snapshot");
+            }
+            return Ok(result);
         }
-        return Ok(BuildResult {
-            graph_id: manifest.graph_id,
-            workspace_root: identity.workspace_root,
-            fingerprint: manifest.fingerprint,
-            node_count: manifest.node_count,
-            binding_count: manifest.binding_count,
-            usage_count: manifest.usage_count,
-            reused: true,
-            snapshot_path: identity.snapshot_dir,
-        });
     }
 
     if identity.snapshot_dir.exists() {

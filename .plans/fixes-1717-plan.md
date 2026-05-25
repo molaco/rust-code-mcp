@@ -543,7 +543,7 @@ Adjust test filters to match actual test names.
 
 - [x] Step 1: inspected current snapshot identity logic.
 - [x] Step 2: extracted pure preflight helpers.
-- [ ] Step 3: add fast reuse function.
+- [x] Step 3: added fast reuse function.
 - [ ] Step 4: reorder `build_and_persist`.
 - [ ] Step 5: ensure manifest writes keep preflight fields.
 - [ ] Step 6: add tests.
@@ -562,6 +562,14 @@ Adjust test filters to match actual test names.
 - Added an internal `SnapshotIdentity` helper carrying the workspace root, graph paths, fingerprint, graph id, snapshot dir, and manifest path.
 - Extracted `graph_paths_for_workspace`, `snapshot_identity`, and `compute_snapshot_identity` so graph identity logic is centralized inside `rmc_graph`.
 - Updated `build_and_persist` and `persist_loaded` to use the shared helpers while keeping the existing post-loader reuse behavior.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph` passed with pre-existing warnings.
+
+### Step 3 Implementation Notes
+
+- Added `try_reuse_existing_snapshot`, which returns `Ok(None)` when no manifest exists and returns a reused `BuildResult` from compatible manifest metadata.
+- The helper reads the manifest before any data-file fallback, preserving existing malformed/unreadable manifest errors.
+- The helper no longer reports successful reuse when the snapshot manifest exists but `data.mdb` is missing; that case falls through to rebuild.
+- `build_and_persist` now uses the helper in its existing post-load reuse branch, so this step centralizes reuse logic without yet moving it before `loader::load`.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph` passed with pre-existing warnings.
 
 ### Goal
