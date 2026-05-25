@@ -265,7 +265,7 @@ Adjust test filters to match actual test names.
 
 - [x] Step 1: traced router wiring for `SyncManager`.
 - [x] Step 2: updated cache endpoint dependencies.
-- [ ] Step 3: canonicalize targeted directory inputs.
+- [x] Step 3: canonicalized targeted directory inputs.
 - [ ] Step 4: untrack before deletion.
 - [ ] Step 5: preserve global clear semantics.
 - [ ] Step 6: add tests.
@@ -284,6 +284,14 @@ Adjust test filters to match actual test names.
 - Updated `SearchToolRouter::clear_cache` to pass `self.sync_manager.as_ref()` into the cache endpoint.
 - Updated `endpoints::cache::clear_cache` to accept `Option<&Arc<SyncManager>>`.
 - Existing tests were updated to pass `None`; MCP schema and behavior are unchanged in this step.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 3 Implementation Notes
+
+- Added sync-manager path normalization so `track_directory` and `untrack_directory` both canonicalize existing paths and fall back to the provided path when canonicalization fails.
+- Added targeted cache-directory normalization in `clear_cache`.
+- Targeted clearing now computes the canonical hash first and also checks the raw hash when it differs, preserving compatibility with any existing cache state keyed by the previous raw path form.
+- Hypergraph targeted cleanup now receives the canonical path when canonicalization succeeds.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal

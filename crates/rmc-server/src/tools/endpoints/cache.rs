@@ -10,7 +10,7 @@ use rmcp::{
     schemars, ErrorData as McpError,
 };
 use rmc_graph::graph::{GraphSnapshotCleanupOptions, GraphSnapshotCleanupReport};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::mcp::project_paths::{data_dir, dir_hash};
 
@@ -73,6 +73,25 @@ fn record_graph_cleanup_report(
     errors.extend(report.errors);
 }
 
+#[derive(Debug)]
+struct TargetDirectory {
+    canonical: PathBuf,
+    hashes: Vec<String>,
+}
+
+fn target_directory(directory: &str) -> TargetDirectory {
+    let raw = PathBuf::from(directory);
+    let canonical = std::fs::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+    let canonical_hash = dir_hash(&canonical);
+    let raw_hash = dir_hash(&raw);
+    let mut hashes = vec![canonical_hash];
+    if raw_hash != hashes[0] {
+        hashes.push(raw_hash);
+    }
+
+    TargetDirectory { canonical, hashes }
+}
+
 /// Clear cache, index, and vector store for a project or all projects
 ///
 /// This tool fixes "Failed to open MetadataCache" errors by removing
@@ -93,70 +112,71 @@ pub(crate) async fn clear_cache(
 
     if let Some(ref directory) = params.directory {
         // Clear cache for specific project
-        let dir_path = std::path::Path::new(directory);
-        let dir_hash = dir_hash(dir_path);
-        // The current layout keys vector directories as
-        // `code_chunks_<dirhash[..8]>_<modelfp[..8]>`. The legacy
-        // pre-Step-6 layout used just `code_chunks_<dirhash[..8]>`.
-        // Walk both so a user with stale MiniLM directories on disk can
-        // wipe them with one call.
-        let dir_prefix = format!("code_chunks_{}", &dir_hash[..8]);
-        let legacy_collection_name = dir_prefix.clone();
+        let target = target_directory(directory);
+        for dir_hash in &target.hashes {
+            // The current layout keys vector directories as
+            // `code_chunks_<dirhash[..8]>_<modelfp[..8]>`. The legacy
+            // pre-Step-6 layout used just `code_chunks_<dirhash[..8]>`.
+            // Walk both so a user with stale MiniLM directories on disk can
+            // wipe them with one call.
+            let dir_prefix = format!("code_chunks_{}", &dir_hash[..8]);
+            let legacy_collection_name = dir_prefix.clone();
 
-        // 1. Clear metadata cache (sled database)
-        let cache_path = data_dir.join("cache").join(&dir_hash);
-        clear_existing_dir(
-            "Metadata cache",
-            "metadata cache",
-            &cache_path,
-            dry_run,
-            &mut cleared,
-            &mut errors,
-        );
-
-        // 2. Clear tantivy index
-        let tantivy_path = data_dir.join("index").join(&dir_hash);
-        clear_existing_dir(
-            "Tantivy index",
-            "tantivy index",
-            &tantivy_path,
-            dry_run,
-            &mut cleared,
-            &mut errors,
-        );
-
-        // 3. Clear vector store(s) — both legacy and per-model layouts.
-        let vectors_root = data_dir.join("cache").join("vectors");
-        if vectors_root.exists() {
-            // Pre-Step-6 layout: a single directory named exactly
-            // `code_chunks_<dirhash[..8]>`.
-            let legacy_path = vectors_root.join(&legacy_collection_name);
+            // 1. Clear metadata cache (sled database)
+            let cache_path = data_dir.join("cache").join(dir_hash);
             clear_existing_dir(
-                "Vector store (legacy)",
-                "legacy vector store",
-                &legacy_path,
+                "Metadata cache",
+                "metadata cache",
+                &cache_path,
                 dry_run,
                 &mut cleared,
                 &mut errors,
             );
-            // Current layout: any directory whose name starts with
-            // `code_chunks_<dirhash[..8]>_` (one per embedder model
-            // fingerprint).
-            let entry_prefix = format!("{}_", dir_prefix);
-            if let Ok(read_dir) = std::fs::read_dir(&vectors_root) {
-                for entry in read_dir.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if name_str.starts_with(&entry_prefix) {
-                        let p = entry.path();
-                        clear_existing_dir(
-                            "Vector store",
-                            "vector store",
-                            &p,
-                            dry_run,
-                            &mut cleared,
-                            &mut errors,
-                        );
+
+            // 2. Clear tantivy index
+            let tantivy_path = data_dir.join("index").join(dir_hash);
+            clear_existing_dir(
+                "Tantivy index",
+                "tantivy index",
+                &tantivy_path,
+                dry_run,
+                &mut cleared,
+                &mut errors,
+            );
+
+            // 3. Clear vector store(s) — both legacy and per-model layouts.
+            let vectors_root = data_dir.join("cache").join("vectors");
+            if vectors_root.exists() {
+                // Pre-Step-6 layout: a single directory named exactly
+                // `code_chunks_<dirhash[..8]>`.
+                let legacy_path = vectors_root.join(&legacy_collection_name);
+                clear_existing_dir(
+                    "Vector store (legacy)",
+                    "legacy vector store",
+                    &legacy_path,
+                    dry_run,
+                    &mut cleared,
+                    &mut errors,
+                );
+                // Current layout: any directory whose name starts with
+                // `code_chunks_<dirhash[..8]>_` (one per embedder model
+                // fingerprint).
+                let entry_prefix = format!("{}_", dir_prefix);
+                if let Ok(read_dir) = std::fs::read_dir(&vectors_root) {
+                    for entry in read_dir.flatten() {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with(&entry_prefix) {
+                            let p = entry.path();
+                            clear_existing_dir(
+                                "Vector store",
+                                "vector store",
+                                &p,
+                                dry_run,
+                                &mut cleared,
+                                &mut errors,
+                            );
+                        }
                     }
                 }
             }
@@ -166,7 +186,7 @@ pub(crate) async fn clear_cache(
         // graph-owned cleanup API so graph storage layout stays encapsulated.
         if include_hypergraph {
             let report = rmc_graph::graph::clear_workspace_snapshots(
-                dir_path,
+                &target.canonical,
                 GraphSnapshotCleanupOptions {
                     dry_run,
                     data_dir_override: None,

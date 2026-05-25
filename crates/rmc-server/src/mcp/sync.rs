@@ -15,6 +15,10 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing;
 
+fn normalize_directory(dir: &Path) -> PathBuf {
+    std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
 /// Manages background synchronization of indexed codebases
 pub struct SyncManager {
     /// List of directories being tracked
@@ -49,6 +53,7 @@ impl SyncManager {
     ///
     /// The directory will be automatically synced on the next sync cycle
     pub async fn track_directory(&self, dir: PathBuf) {
+        let dir = normalize_directory(&dir);
         let mut dirs = self.tracked_dirs.write().await;
         if dirs.insert(dir.clone()) {
             tracing::info!("Now tracking directory for sync: {}", dir.display());
@@ -57,8 +62,9 @@ impl SyncManager {
 
     /// Remove a directory from tracking
     pub async fn untrack_directory(&self, dir: &Path) {
+        let dir = normalize_directory(dir);
         let mut dirs = self.tracked_dirs.write().await;
-        if dirs.remove(dir) {
+        if dirs.remove(&dir) {
             tracing::info!("Stopped tracking directory: {}", dir.display());
         }
     }
