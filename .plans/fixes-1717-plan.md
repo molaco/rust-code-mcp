@@ -43,7 +43,7 @@ nix develop ../nix-devshells#cuda-code --command {command}
 
 - [x] Step 1: checked working copy with `jj status`. Current expected dirty files before the step commit were this new plan file and the pre-existing `.plans/mcp-side-by-side-comparison-2.md` change. The pre-existing side-by-side comparison plan change is unrelated and must stay out of fixes-1717 commits.
 - [x] Step 2: recorded current relevant code paths.
-- [ ] Step 3: establish targeted test commands.
+- [x] Step 3: established targeted test commands.
 - [ ] Step 4: record baseline MCP observations.
 
 ### Current Code Path Notes
@@ -57,6 +57,21 @@ nix develop ../nix-devshells#cuda-code --command {command}
 - `crates/rmc-engine/src/embeddings/mod.rs`: `EmbeddingGenerator::with_backend` constructs the runtime embedder; repeated server-side construction is a plausible contributor to warm-search latency variance.
 - `crates/rmc-graph/src/graph/snapshot.rs`: `build_and_persist` calls `loader::load` before computing fingerprint and checking for an existing manifest, so warm reuse still pays the RA workspace load cost.
 - `crates/rmc-graph/src/graph/loader.rs`: `loader::load` canonicalizes the workspace and loads rust-analyzer with dependencies, all targets, all features, tests, and prefilled caches. This is the expensive work Phase 4 should bypass on warm reuse.
+
+### Targeted Test Commands
+
+Use these as the focused command set while implementing the phases. Adjust filters to new test names as they are added.
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-engine lancedb
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server health
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server clear_cache
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server sync
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server query
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph snapshot
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server build_hypergraph
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rmc-indexing -p rmc-graph -p rmc-server
+```
 
 ### Goal
 
