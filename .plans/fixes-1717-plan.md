@@ -261,6 +261,24 @@ Adjust test filters to match actual test names.
 
 ## Phase 2: Clear Cache And Sync Coordination
 
+### Execution Status
+
+- [x] Step 1: traced router wiring for `SyncManager`.
+- [ ] Step 2: update cache endpoint dependencies.
+- [ ] Step 3: canonicalize targeted directory inputs.
+- [ ] Step 4: untrack before deletion.
+- [ ] Step 5: preserve global clear semantics.
+- [ ] Step 6: add tests.
+
+### Step 1 Wiring Notes
+
+- `SearchToolRouter` owns `sync_manager: Option<Arc<crate::mcp::SyncManager>>`.
+- `SearchToolRouter::search` passes `self.sync_manager.as_ref()` to `endpoints::query::search`.
+- `SearchToolRouter::index_codebase` passes `self.sync_manager.as_ref()` to `endpoints::index::index_codebase`.
+- `SearchToolRouter::clear_cache` currently calls `endpoints::cache::clear_cache(params)` without passing the sync manager.
+- `endpoints::cache::clear_cache` currently accepts only `ClearCacheParams`, so the endpoint cannot untrack a targeted workspace before deleting cache/index/vector state.
+- Existing search and index tracking uses the provided directory path form, while `SyncManager::untrack_directory` removes by exact `Path` equality. Later Phase 2 steps must make track and untrack path forms match.
+
 ### Goal
 
 Prevent targeted clears from being immediately rebuilt by background sync.
