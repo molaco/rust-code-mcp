@@ -7,7 +7,7 @@
 **Steps:**
 1. Lazily initializes a global `Mutex<SemanticService>` on first access via `LazyLock`.
 2. Wraps a freshly constructed `SemanticService` (created with `SemanticService::new()`) in a `Mutex` since `AnalysisHost` is not `Sync`.
-3. Provides a single shared semantic service across the process for `symbol_search`, `find_references_by_name`, and `rename_by_name` callers.
+3. Provides a single shared semantic service across the process for `symbol_search`, `find_references_by_name`, `rename_by_name`, and `rename_by_position` callers.
 
 ### `pub use position::Location` / `pub use rename::{RenameEdit, RenameFileMove, RenamePreview}`
 **Call graph:** —
@@ -58,6 +58,13 @@
 2. Re-canonicalizes the path and retrieves the matching `ProjectContext`, erroring if not present.
 3. Delegates to `rename::rename_by_name` with the host, VFS, original name, and replacement name; returns the `RenamePreview` without touching the filesystem.
 
+### `SemanticService::rename_by_position(&mut self, project_path: &Path, file_path: &Path, line: u32, column: u32, symbol_name: &str, new_name: &str) -> Result<RenamePreview>`
+**Call graph:** SemanticService::get_or_load -> Path::canonicalize -> HashMap::get -> rename::rename_by_position
+**Steps:**
+1. Calls `get_or_load` to ensure the project's IDE state is cached for this canonical path.
+2. Re-canonicalizes the project path and retrieves the matching `ProjectContext`, erroring if not present.
+3. Delegates to `rename::rename_by_position` with the host, VFS, file position, expected symbol name, and replacement name; returns the `RenamePreview` without touching the filesystem.
+
 ## Module: loader
 
 ### `load_project(path: &Path) -> Result<(AnalysisHost, Vfs)>`
@@ -75,13 +82,13 @@
 ### `Location` (struct, public fields)
 **Call graph:** —
 **Steps:**
-1. Plain data struct holding `file_path: PathBuf`, 1-based `line: u32`, 1-based `column: u32`, and `name: String`.
+1. Plain data struct holding `file_path: PathBuf`, 1-based `line: u32`, 1-based `column: u32`, `name: String`, and an `exact` flag used by exact-match search responses.
 2. Derives `Debug` and `Clone` for diagnostics and propagation across handler boundaries.
 
 ### `impl std::fmt::Display for Location`
 **Call graph:** write! -> PathBuf::display
 **Steps:**
-1. Formats the location as `"{file_path}:{line}:{column} ({name})"` using `write!` and `Path::display` for portable rendering.
+1. Formats the location as `"{file_path}:{line}:{column} ({name}, exact={exact})"` using `write!` and `Path::display` for portable rendering.
 
 ### `path_to_file_id(vfs: &Vfs, file_path: &Path) -> Result<ra_ap_vfs::FileId>` (private)
 **Call graph:** Path::canonicalize -> anyhow::Context::context -> VfsPath::new_real_path -> Vfs::file_id
@@ -99,6 +106,13 @@
 3. Calls `LineIndex::offset` to translate the line/column into a `TextSize` byte offset.
 4. Returns an error if the position falls outside the file using `anyhow!`.
 
+### `file_position(analysis: &Analysis, vfs: &Vfs, file_path: &Path, line: u32, column: u32) -> Result<FilePosition>` (pub(crate))
+**Call graph:** path_to_file_id -> to_offset -> FilePosition
+**Steps:**
+1. Resolves the real file path to a VFS `FileId`.
+2. Converts the 1-based line/column to a byte `TextSize` offset.
+3. Returns the `FilePosition` consumed by rust-analyzer position-based queries.
+
 ### `nav_target_to_location(vfs: &Vfs, analysis: &Analysis, target: &NavigationTarget) -> Result<Location>` (private)
 **Call graph:** Vfs::file_path -> VfsPath::as_path -> Path::to_path_buf -> Analysis::file_line_index -> Option::unwrap_or -> TextRange::start -> LineIndex::line_col -> NavigationTarget::name::to_string
 **Steps:**
@@ -109,21 +123,20 @@
 5. Constructs a `Location` with 1-based line/column (adding 1 to each component) and the target's `name` as a `String`.
 
 ### `goto_definition(host: &AnalysisHost, vfs: &Vfs, file_path: &Path, line: u32, column: u32) -> Result<Vec<Location>>`
-**Call graph:** AnalysisHost::analysis -> path_to_file_id -> to_offset -> RaFixtureConfig::default -> Analysis::goto_definition -> anyhow::Context::context -> nav_target_to_location
+**Call graph:** AnalysisHost::analysis -> file_position -> RaFixtureConfig::default -> Analysis::goto_definition -> anyhow::Context::context -> nav_target_to_location
 **Steps:**
 1. Acquires an `Analysis` snapshot from the host.
-2. Resolves the file path to a VFS `FileId` via `path_to_file_id`.
-3. Converts the 1-based `(line, column)` to a `TextSize` offset via `to_offset`.
-4. Builds a `FilePosition` and a default `GotoDefinitionConfig` (with a default `RaFixtureConfig`).
-5. Calls `analysis.goto_definition`, attaching the context "goto_definition query failed".
-6. If a `RangeInfo` is returned, maps each `NavigationTarget` in `info` to a `Location` via `nav_target_to_location`, collecting the results.
-7. If no result is returned, returns an empty `Vec`.
+2. Builds a `FilePosition` from the file path and 1-based coordinates via `file_position`.
+3. Builds a default `GotoDefinitionConfig` (with a default `RaFixtureConfig`).
+4. Calls `analysis.goto_definition`, attaching the context "goto_definition query failed".
+5. If a `RangeInfo` is returned, maps each `NavigationTarget` in `info` to a `Location` via `nav_target_to_location`, collecting the results.
+6. If no result is returned, returns an empty `Vec`.
 
 ### `find_references(host: &AnalysisHost, vfs: &Vfs, file_path: &Path, line: u32, column: u32) -> Result<Vec<Location>>`
-**Call graph:** AnalysisHost::analysis -> path_to_file_id -> to_offset -> RaFixtureConfig::default -> Analysis::find_all_refs -> anyhow::Context::context -> nav_target_to_location -> ra_ap_vfs::FileId::from_raw -> Vfs::file_path -> VfsPath::as_path -> Analysis::file_line_index -> LineIndex::line_col -> Vec::push
+**Call graph:** AnalysisHost::analysis -> file_position -> RaFixtureConfig::default -> Analysis::find_all_refs -> anyhow::Context::context -> nav_target_to_location -> ra_ap_vfs::FileId::from_raw -> Vfs::file_path -> VfsPath::as_path -> Analysis::file_line_index -> LineIndex::line_col -> Vec::push
 **Steps:**
-1. Takes an analysis snapshot, resolves the file id, and computes the byte offset from the 1-based line/column.
-2. Builds a `FilePosition` and a `FindAllRefsConfig` that includes imports and tests with no scope restriction.
+1. Takes an analysis snapshot and builds a `FilePosition` from the file path and 1-based coordinates via `file_position`.
+2. Builds a `FindAllRefsConfig` that includes imports and tests with no scope restriction.
 3. Calls `analysis.find_all_refs` with the context "find_all_refs query failed".
 4. Iterates each returned `ReferenceSearchResult`; if it carries a `declaration`, converts its nav target to a `Location` via `nav_target_to_location` and pushes it.
 5. For each `(ref_file_id, refs)` entry in `references`, converts the ide-db `FileId` to a vfs `FileId` via `from_raw(index())`, resolves the path through the VFS, and obtains the file's `LineIndex`.
@@ -186,15 +199,24 @@
 2. Bails with `"No symbol found matching '{symbol_name}'"` when the search returns an empty list.
 3. Filters the candidates down to those whose `name.as_str()` equals `symbol_name` exactly, avoiding substring/fuzzy matches that would otherwise silently rename unrelated items.
 4. Branches on the exact-match list:
-   - **0 matches**: bails with `"No exact match for '{symbol_name}'. Found {N} fuzzy candidates."` so the caller can refine the query.
+   - **0 matches**: bails with `"No exact match for '{symbol_name}'. Found {N} fuzzy candidates."` and includes candidate `file_path:line:column` rerun hints so the caller can refine the query.
    - **1 match**: keeps that `NavigationTarget` as the rename target.
-   - **>1 matches**: collects each candidate's VFS path (falling back to `"<virtual>"` for non-real paths) into `"  - {path} ({name})"` lines and bails with an "Ambiguous symbol" error listing every location — refusing the rename is deliberate because rust-analyzer would otherwise operate on only one of them.
+   - **>1 matches**: collects each candidate's VFS path and 1-based line/column into rerunnable `"file_path", line, column` hints and bails with an "Ambiguous symbol" error listing every location — refusing the rename is deliberate because rust-analyzer would otherwise operate on only one of them.
 5. Computes a `FilePosition` for the chosen target by taking the start of `focus_range` (or `full_range` fallback) on the target's `file_id`.
 6. Builds a `RenameConfig` with `prefer_no_std = false`, `prefer_prelude = true`, `prefer_absolute = false`, and `show_conflicts = true` so rust-analyzer surfaces conflicting edits rather than silently dropping them.
 7. Calls `analysis.rename(position, new_name, &config)`:
    - Cancellation is converted to `Err` via `.context("rename query cancelled")`.
    - The inner `Result<SourceChange, RenameError>` is converted via `map_err` into `"rust-analyzer rename refused: {e}"`, propagating rust-analyzer's textual refusal (e.g. invalid identifier, rename across crate boundary).
 8. Delegates to `source_change_to_preview` to materialize the `SourceChange` into a `RenamePreview` without writing to disk.
+
+### `rename_by_position(host: &AnalysisHost, vfs: &Vfs, file_path: &Path, line: u32, column: u32, expected_symbol_name: &str, new_name: &str) -> Result<RenamePreview>`
+**Call graph:** AnalysisHost::analysis -> position::file_position -> verify_expected_symbol_at_position -> Analysis::rename -> source_change_to_preview
+**Steps:**
+1. Acquires an `Analysis` snapshot.
+2. Converts the input file path and 1-based coordinates into a `FilePosition`.
+3. Reads the source text at that position and verifies that the identifier token under the cursor matches the requested symbol leaf.
+4. Calls `Analysis::rename(position, new_name, &RenameConfig { show_conflicts: true, prefer_prelude: true, .. })`, with the same cancellation/refusal mapping as `rename_by_name`.
+5. Delegates to `source_change_to_preview` to materialize the `SourceChange` into a `RenamePreview` without writing to disk.
 
 ### `source_change_to_preview(vfs: &Vfs, analysis: &Analysis, change: SourceChange) -> Result<RenamePreview>` (private)
 **Call graph:** RenamePreview::default -> Vfs::file_path -> VfsPath::as_path -> Path::to_path_buf -> Analysis::file_line_index -> anyhow::Context::context -> TextEdit::iter -> LineIndex::line_col -> Indel::insert::clone -> Vec::push -> VfsPath::to_path_buf -> PathBuf::new -> Vec::sort_by -> Ord::cmp

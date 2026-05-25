@@ -1,7 +1,7 @@
 //! Position and coordinate utilities
 
 use std::path::{Path, PathBuf};
-use ra_ap_ide::{AnalysisHost, FilePosition, LineCol, NavigationTarget, Query, TextSize};
+use ra_ap_ide::{Analysis, AnalysisHost, FilePosition, LineCol, NavigationTarget, Query, TextSize};
 use ra_ap_vfs::{Vfs, VfsPath};
 use anyhow::{Result, Context};
 
@@ -42,7 +42,7 @@ fn path_to_file_id(vfs: &Vfs, file_path: &Path) -> Result<ra_ap_vfs::FileId> {
 
 /// Convert line/column to byte offset
 fn to_offset(
-    analysis: &ra_ap_ide::Analysis,
+    analysis: &Analysis,
     file_id: ra_ap_vfs::FileId,
     line: u32,
     column: u32,
@@ -58,6 +58,19 @@ fn to_offset(
 
     line_index.offset(line_col)
         .ok_or_else(|| anyhow::anyhow!("Invalid position: line {}, col {}", line, column))
+}
+
+pub(crate) fn file_position(
+    analysis: &Analysis,
+    vfs: &Vfs,
+    file_path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<FilePosition> {
+    let file_id = path_to_file_id(vfs, file_path)?;
+    let offset = to_offset(analysis, file_id, line, column)?;
+
+    Ok(FilePosition { file_id, offset })
 }
 
 /// Convert NavigationTarget to Location
@@ -94,10 +107,7 @@ pub(crate) fn goto_definition(
     column: u32,
 ) -> Result<Vec<Location>> {
     let analysis = host.analysis();
-    let file_id = path_to_file_id(vfs, file_path)?;
-    let offset = to_offset(&analysis, file_id, line, column)?;
-
-    let position = FilePosition { file_id, offset };
+    let position = file_position(&analysis, vfs, file_path, line, column)?;
     let config = ra_ap_ide::GotoDefinitionConfig {
         ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
     };
@@ -125,10 +135,7 @@ pub(crate) fn find_references(
     column: u32,
 ) -> Result<Vec<Location>> {
     let analysis = host.analysis();
-    let file_id = path_to_file_id(vfs, file_path)?;
-    let offset = to_offset(&analysis, file_id, line, column)?;
-
-    let position = FilePosition { file_id, offset };
+    let position = file_position(&analysis, vfs, file_path, line, column)?;
     let config = ra_ap_ide::FindAllRefsConfig {
         ra_fixture: ra_ap_ide_db::ra_fixture::RaFixtureConfig::default(),
         search_scope: None,

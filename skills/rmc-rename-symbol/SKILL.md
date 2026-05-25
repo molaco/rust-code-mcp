@@ -34,11 +34,18 @@ For composing this into a refactor decision → `rmc-refactor-plan`.
 ```
 rename_symbol(symbol_name=<exact_short_name>,
               new_name=<identifier>,
-              directory=<absolute_path>)
+              directory=<absolute_path>,
+              file_path=<optional_path>,
+              line=<optional_1_based_line>,
+              column=<optional_1_based_column>)
 ```
 
 - Resolves the symbol by **exact** name match. Ambiguous names fail with a
-  candidate list — disambiguate via `rmc-find-symbol`.
+  candidate list. Rerun with that candidate's `file_path`, `line`, and
+  `column` to disambiguate.
+- `file_path`, `line`, and `column` are optional but must be provided together.
+  When present, the tool bypasses name search and asks rust-analyzer to rename
+  the symbol at that concrete position.
 - Returns:
   - `edits`: a list of `file:start_line:start_col-end_line:end_col → "new_text"`
     for every textual reference rust-analyzer would touch.
@@ -149,7 +156,7 @@ Useful for verifying that a refactor touched only what was intended.
 
 | Result | Interpretation |
 |---|---|
-| `Ambiguous symbol` error with candidate list | Disambiguate via `rmc-find-symbol`; rerun with the qualified short name confirmed via `find_definition`. |
+| `Ambiguous symbol` error with candidate list | Rerun with the candidate's `file_path`, `line`, and `column`. |
 | `rust-analyzer rename refused: <reason>` | Refactor as proposed is illegal. Read the reason; the right move is often to rename a wrapper, not the inner item. |
 | Edits = 1 (definition site only) | Symbol unreferenced → safe-to-delete candidate. Confirm with `who_uses` and `find_references`. |
 | Edits all inside one crate | Internal refactor — go. |
@@ -196,8 +203,9 @@ the rename edit set").
 
 ## Limitations
 
-- Symbol resolution is **exact short-name** match. Up to 50 fuzzy candidates
-  are listed on bail. For real disambiguation, use `rmc-find-symbol` first.
+- Name-only symbol resolution is **exact short-name** match. Up to 50 fuzzy
+  candidates are listed on bail. For real disambiguation, rerun with
+  `file_path`, `line`, and `column`.
 - Read-only by design — caller applies edits themselves.
 - RA's reference detection covers macro-expanded refs it can resolve, but
   some `proc_macro`-introduced names are invisible.

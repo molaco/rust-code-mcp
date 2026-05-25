@@ -147,7 +147,7 @@ impl SearchToolRouter {
 
     /// Preview a rename of a symbol across the project (read-only, no files modified)
     #[tool(
-        description = "Preview renaming a Rust symbol project-wide using rust-analyzer. Returns the set of edits and file moves WITHOUT modifying any files."
+        description = "Preview renaming a Rust symbol project-wide using rust-analyzer. Returns the set of edits and file moves WITHOUT modifying any files. If symbol_name is ambiguous, rerun with file_path, line, and column from the candidate list."
     )]
     async fn rename_symbol(
         &self,
@@ -155,9 +155,20 @@ impl SearchToolRouter {
             symbol_name,
             new_name,
             directory,
+            file_path,
+            line,
+            column,
         }): Parameters<RenameSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::analysis::rename_symbol(&symbol_name, &new_name, &directory).await
+        crate::tools::endpoints::analysis::rename_symbol(
+            &symbol_name,
+            &new_name,
+            &directory,
+            file_path.as_deref(),
+            line,
+            column,
+        )
+        .await
     }
 
     /// Get dependencies for a file (imports and files that depend on it)

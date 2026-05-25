@@ -214,17 +214,56 @@ pub(crate) async fn rename_symbol(
     symbol_name: &str,
     new_name: &str,
     directory: &str,
+    file_path: Option<&str>,
+    line: Option<u32>,
+    column: Option<u32>,
 ) -> Result<CallToolResult, McpError> {
     let project_path = Path::new(directory);
     validate_cargo_project_directory(project_path)?;
 
     tracing::debug!("Previewing rename '{}' → '{}'", symbol_name, new_name);
 
-    let preview = SEMANTIC
-        .lock()
-        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .rename_by_name(project_path, symbol_name, new_name)
-        .map_err(|e| McpError::internal_error(format!("Rename failed: {}", e), None))?;
+    let preview = match (file_path, line, column) {
+        (Some(file_path), Some(line), Some(column)) => {
+            if line == 0 || column == 0 {
+                return Err(McpError::invalid_params(
+                    "line and column must be 1-based positive integers",
+                    None,
+                ));
+            }
+
+            let input_path = Path::new(file_path);
+            let resolved_file_path = if input_path.is_absolute() {
+                input_path.to_path_buf()
+            } else {
+                project_path.join(input_path)
+            };
+
+            SEMANTIC
+                .lock()
+                .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
+                .rename_by_position(
+                    project_path,
+                    &resolved_file_path,
+                    line,
+                    column,
+                    symbol_name,
+                    new_name,
+                )
+                .map_err(rename_mcp_error)?
+        }
+        (None, None, None) => SEMANTIC
+            .lock()
+            .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
+            .rename_by_name(project_path, symbol_name, new_name)
+            .map_err(rename_mcp_error)?,
+        _ => {
+            return Err(McpError::invalid_params(
+                "file_path, line, and column must be provided together for position-based rename",
+                None,
+            ));
+        }
+    };
 
     if preview.edits.is_empty() && preview.file_moves.is_empty() {
         return Ok(CallToolResult::success(vec![Content::text(format!(
@@ -253,6 +292,27 @@ pub(crate) async fn rename_symbol(
     }
 
     Ok(CallToolResult::success(vec![Content::text(out)]))
+}
+
+fn rename_mcp_error(error: anyhow::Error) -> McpError {
+    let message = format!("Rename failed: {}", error);
+
+    if is_rename_invalid_params(&message) {
+        McpError::invalid_params(message, None)
+    } else {
+        McpError::internal_error(message, None)
+    }
+}
+
+fn is_rename_invalid_params(message: &str) -> bool {
+    message.contains("No symbol found matching")
+        || message.contains("No exact match for")
+        || message.contains("Ambiguous symbol")
+        || message.contains("File not found in VFS")
+        || message.contains("Invalid position")
+        || message.contains("Expected rename position")
+        || message.contains("symbol_name must not be empty")
+        || message.contains("rust-analyzer rename refused")
 }
 
 /// Get dependencies for a file (imports and files that depend on it)
@@ -477,6 +537,7 @@ pub(crate) async fn analyze_complexity(file_path: &str) -> Result<CallToolResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[tokio::test]
     async fn test_find_definition_invalid_project() {
@@ -512,7 +573,77 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_symbol_invalid_project() {
-        let result = rename_symbol("nonexistent_symbol_xyz", "new_name", "/tmp").await;
+        let result = rename_symbol("nonexistent_symbol_xyz", "new_name", "/tmp", None, None, None).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_symbol_position_params_must_be_together() {
+        let project = valid_temp_project();
+        let result = rename_symbol(
+            "Engine",
+            "RenamedEngine",
+            project.path().to_str().unwrap(),
+            Some("src/lib.rs"),
+            Some(1),
+            None,
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_symbol_position_params_are_one_based() {
+        let project = valid_temp_project();
+        let result = rename_symbol(
+            "Engine",
+            "RenamedEngine",
+            project.path().to_str().unwrap(),
+            Some("src/lib.rs"),
+            Some(0),
+            Some(1),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rename_invalid_params_classification() {
+        assert!(is_rename_invalid_params(
+            "Rename failed: Ambiguous symbol 'Engine': 4 exact matches."
+        ));
+        assert!(is_rename_invalid_params(
+            "Rename failed: No exact match for 'crate::Engine'. Found 1 fuzzy candidates."
+        ));
+        assert!(is_rename_invalid_params(
+            "Rename failed: Expected rename position src/lib.rs:1:1 to be on symbol 'Engine'"
+        ));
+        assert!(is_rename_invalid_params(
+            "Rename failed: rust-analyzer rename refused: invalid identifier"
+        ));
+        assert!(!is_rename_invalid_params(
+            "Rename failed: Failed to load workspace"
+        ));
+    }
+
+    fn valid_temp_project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("create temp project");
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "rename_param_test"
+version = "0.1.0"
+edition = "2021"
+"#.trim_start(),
+        )
+        .expect("write manifest");
+        fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub trait Engine {}\n",
+        )
+        .expect("write lib");
+        dir
     }
 }

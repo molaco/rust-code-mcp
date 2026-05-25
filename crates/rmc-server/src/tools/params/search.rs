@@ -44,12 +44,18 @@ pub(crate) struct FindReferencesParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct RenameSymbolParams {
-    #[schemars(description = "Symbol name to rename (must match exactly; ambiguous names are rejected)")]
+    #[schemars(description = "Symbol leaf name to rename. Ambiguous names are rejected unless file_path, line, and column select a concrete position.")]
     pub symbol_name: String,
     #[schemars(description = "New name for the symbol (valid Rust identifier)")]
     pub new_name: String,
     #[schemars(description = "Project root directory containing Cargo.toml")]
     pub directory: String,
+    #[schemars(description = "Optional file path for position-based disambiguation. Provide together with line and column; relative paths are resolved from directory.")]
+    pub file_path: Option<String>,
+    #[schemars(description = "Optional 1-based line for position-based disambiguation. Provide together with file_path and column.")]
+    pub line: Option<u32>,
+    #[schemars(description = "Optional 1-based column for position-based disambiguation. Provide together with file_path and line.")]
+    pub column: Option<u32>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

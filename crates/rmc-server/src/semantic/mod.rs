@@ -120,4 +120,31 @@ impl SemanticService {
 
         rename::rename_by_name(&ctx.host, &ctx.vfs, symbol_name, new_name)
     }
+
+    /// Preview rename of a symbol at a concrete file position. Does not modify any files.
+    pub fn rename_by_position(
+        &mut self,
+        project_path: &Path,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        symbol_name: &str,
+        new_name: &str,
+    ) -> Result<RenamePreview> {
+        self.get_or_load(project_path)?;
+
+        let canonical = project_path.canonicalize()?;
+        let ctx = self.projects.get(&canonical)
+            .ok_or_else(|| anyhow::anyhow!("Project not loaded"))?;
+
+        rename::rename_by_position(
+            &ctx.host,
+            &ctx.vfs,
+            file_path,
+            line,
+            column,
+            symbol_name,
+            new_name,
+        )
+    }
 }

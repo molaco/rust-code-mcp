@@ -217,6 +217,25 @@ nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server semant
 nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server
 ```
 
+### Execution Status
+
+- [x] Phase start guard: ran `jj show --summary` before editing Phase 1.
+- [x] Added shared `file_position` construction and wired
+  `goto_definition` / `find_references` through it.
+- [x] Added `rename_by_position` and candidate rerun hints for ambiguous
+  name-only rename requests.
+- [x] Extended the MCP params, router, endpoint validation, and error
+  classification for optional `file_path`, `line`, and `column`.
+- [x] Updated `TOOLS.md`, `skills/rmc-rename-symbol/SKILL.md`,
+  `.docs/architecture/semantic.md`, and `.docs/logic/semantic.md`.
+- [x] Verified with:
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server rename`
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server semantic`
+  - `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`
+- [x] Result: all Phase 1 checks passed. The commands emitted existing
+  dead-code / unreachable-pub warnings and a dirty `../nix-devshells` warning;
+  no compile or test failures.
+
 ### Commit
 
 ```sh

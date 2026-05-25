@@ -196,7 +196,7 @@ Found 21 reference(s) for 'RustParser':
 
 Preview a project-wide rename of a Rust symbol using rust-analyzer. **Read-only** — returns the set of edits and file moves that *would* be applied, without modifying any files. Apply the edits yourself if the preview looks correct.
 
-The symbol is resolved by exact name. If multiple symbols share the name, the call fails with an "Ambiguous symbol" error and lists the candidates — disambiguate by using a more specific name. rust-analyzer may also refuse the rename (e.g. for keywords, fields of trait impls in foreign crates, or names that would conflict).
+The symbol is resolved by exact leaf name. If multiple symbols share the name, the call fails with an "Ambiguous symbol" error and lists actionable candidates. Rerun with `file_path`, `line`, and `column` from the candidate list to disambiguate. rust-analyzer may also refuse the rename (e.g. for keywords, fields of trait impls in foreign crates, or names that would conflict).
 
 **Also useful as a dry-run probe** (beyond actually renaming):
 
@@ -212,9 +212,12 @@ See `skills/rmc-rename-symbol/SKILL.md` for the full workflow.
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `symbol_name` | string | Yes | Symbol to rename — must match exactly, ambiguous names are rejected |
+| `symbol_name` | string | Yes | Symbol leaf name to rename — must match exactly unless `file_path`/`line`/`column` selects a concrete position |
 | `new_name` | string | Yes | New name (must be a valid Rust identifier) |
 | `directory` | string | Yes | Project root directory containing Cargo.toml |
+| `file_path` | string | No | Optional file path for position-based disambiguation. Relative paths are resolved from `directory`; must be provided with `line` and `column`. |
+| `line` | integer | No | Optional 1-based line for position-based disambiguation; must be provided with `file_path` and `column`. |
+| `column` | integer | No | Optional 1-based column for position-based disambiguation; must be provided with `file_path` and `line`. |
 
 **Example:**
 ```json
@@ -222,6 +225,18 @@ See `skills/rmc-rename-symbol/SKILL.md` for the full workflow.
   "symbol_name": "parse_file",
   "new_name": "parse_source_file",
   "directory": "/path/to/project"
+}
+```
+
+**Disambiguated example:**
+```json
+{
+  "symbol_name": "Engine",
+  "new_name": "ChartEngine",
+  "directory": "/path/to/project",
+  "file_path": "/path/to/project/crates/chart-engine-sdk/src/engine.rs",
+  "line": 26,
+  "column": 11
 }
 ```
 

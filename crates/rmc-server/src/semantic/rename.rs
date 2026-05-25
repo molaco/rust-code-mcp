@@ -1,12 +1,14 @@
 //! Symbol renaming via rust-analyzer
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ra_ap_ide::{
     AnalysisHost, FilePosition, FileSystemEdit, Query, RenameConfig, SourceChange,
 };
 use ra_ap_vfs::Vfs;
+
+use super::position;
 
 /// A single text edit to apply to a file
 #[derive(Debug, Clone)]
@@ -64,7 +66,7 @@ pub(crate) struct RenamePreview {
 /// Rename the symbol at the given symbol-name. Returns a preview without touching disk.
 ///
 /// Resolves the symbol by name first; fails if multiple symbols match (ambiguous rename
-/// is dangerous). Use a fully-qualified name fragment to disambiguate.
+/// is dangerous). Use rename_by_position to disambiguate.
 pub(crate) fn rename_by_name(
     host: &AnalysisHost,
     vfs: &Vfs,
@@ -89,29 +91,24 @@ pub(crate) fn rename_by_name(
         .collect();
 
     let target = match exact.as_slice() {
-        [] => anyhow::bail!(
-            "No exact match for '{}'. Found {} fuzzy candidates.",
-            symbol_name,
-            symbols.len()
-        ),
+        [] => {
+            let fuzzy: Vec<_> = symbols.iter().collect();
+            let locs = format_nav_candidates(vfs, &analysis, &fuzzy);
+            anyhow::bail!(
+                "No exact match for '{}'. Found {} fuzzy candidates. rename_symbol matches the leaf symbol name; use file_path, line, and column to disambiguate a candidate.\n{}",
+                symbol_name,
+                symbols.len(),
+                locs
+            )
+        }
         [single] => *single,
         multiple => {
-            let locs: Vec<String> = multiple
-                .iter()
-                .map(|nav| {
-                    let path = vfs
-                        .file_path(nav.file_id)
-                        .as_path()
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "<virtual>".to_string());
-                    format!("  - {} ({})", path, nav.name)
-                })
-                .collect();
+            let locs = format_nav_candidates(vfs, &analysis, multiple);
             anyhow::bail!(
                 "Ambiguous symbol '{}': {} exact matches.\n{}",
                 symbol_name,
                 multiple.len(),
-                locs.join("\n")
+                locs
             )
         }
     };
@@ -122,6 +119,84 @@ pub(crate) fn rename_by_name(
         offset,
     };
 
+    rename_at_file_position(vfs, &analysis, position, new_name)
+}
+
+fn nav_position(
+    analysis: &ra_ap_ide::Analysis,
+    nav: &ra_ap_ide::NavigationTarget,
+) -> Result<(u32, u32)> {
+    let line_index = analysis.file_line_index(nav.file_id)?;
+    let offset = nav.focus_range.unwrap_or(nav.full_range).start();
+    let line_col = line_index.line_col(offset);
+
+    Ok((line_col.line + 1, line_col.col + 1))
+}
+
+fn format_nav_candidates(
+    vfs: &Vfs,
+    analysis: &ra_ap_ide::Analysis,
+    navs: &[&ra_ap_ide::NavigationTarget],
+) -> String {
+    navs.iter()
+        .map(|nav| format_nav_candidate(vfs, analysis, nav))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_nav_candidate(
+    vfs: &Vfs,
+    analysis: &ra_ap_ide::Analysis,
+    nav: &ra_ap_ide::NavigationTarget,
+) -> String {
+    let path = vfs
+        .file_path(nav.file_id)
+        .as_path()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "<virtual>".to_string());
+    let (line, column) = nav_position(analysis, nav)
+        .map(|(line, column)| (line.to_string(), column.to_string()))
+        .unwrap_or_else(|_| ("?".to_string(), "?".to_string()));
+
+    format!(
+        "  - {}:{}:{} ({}) - rerun with file_path=\"{}\", line={}, column={}",
+        path, line, column, nav.name, path, line, column
+    )
+}
+
+/// Rename the symbol at a concrete file position. Returns a preview without touching disk.
+pub(crate) fn rename_by_position(
+    host: &AnalysisHost,
+    vfs: &Vfs,
+    file_path: &Path,
+    line: u32,
+    column: u32,
+    expected_symbol_name: &str,
+    new_name: &str,
+) -> Result<RenamePreview> {
+    let analysis = host.analysis();
+    let position = position::file_position(&analysis, vfs, file_path, line, column)?;
+
+    verify_expected_symbol_at_position(&analysis, position, expected_symbol_name)
+        .with_context(|| {
+            format!(
+                "Expected rename position {}:{}:{} to be on symbol '{}'",
+                file_path.display(),
+                line,
+                column,
+                expected_symbol_name
+            )
+        })?;
+
+    rename_at_file_position(vfs, &analysis, position, new_name)
+}
+
+fn rename_at_file_position(
+    vfs: &Vfs,
+    analysis: &ra_ap_ide::Analysis,
+    position: FilePosition,
+    new_name: &str,
+) -> Result<RenamePreview> {
     let config = RenameConfig {
         prefer_no_std: false,
         prefer_prelude: true,
@@ -134,7 +209,65 @@ pub(crate) fn rename_by_name(
         .context("rename query cancelled")?
         .map_err(|e| anyhow::anyhow!("rust-analyzer rename refused: {}", e))?;
 
-    source_change_to_preview(vfs, &analysis, source_change)
+    source_change_to_preview(vfs, analysis, source_change)
+}
+
+fn verify_expected_symbol_at_position(
+    analysis: &ra_ap_ide::Analysis,
+    position: FilePosition,
+    expected_symbol_name: &str,
+) -> Result<()> {
+    let expected = expected_symbol_name
+        .rsplit("::")
+        .next()
+        .unwrap_or(expected_symbol_name)
+        .trim();
+
+    if expected.is_empty() {
+        anyhow::bail!("symbol_name must not be empty");
+    }
+
+    let text = analysis
+        .file_text(position.file_id)
+        .context("Failed to read file text for rename position")?;
+    let offset = usize::from(position.offset);
+    let token = identifier_at_offset(&text, offset)
+        .ok_or_else(|| anyhow::anyhow!("position is not on an identifier token"))?;
+
+    if token != expected {
+        anyhow::bail!("position is on '{}', not '{}'", token, expected);
+    }
+
+    Ok(())
+}
+
+fn identifier_at_offset(text: &str, offset: usize) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let probe = if offset < bytes.len() {
+        offset
+    } else {
+        offset.checked_sub(1)?
+    };
+
+    if !is_rust_ident_byte(bytes.get(probe).copied()?) {
+        return None;
+    }
+
+    let mut start = probe;
+    while start > 0 && is_rust_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+
+    let mut end = probe + 1;
+    while end < bytes.len() && is_rust_ident_byte(bytes[end]) {
+        end += 1;
+    }
+
+    text.get(start..end)
+}
+
+fn is_rust_ident_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
 }
 
 fn source_change_to_preview(
