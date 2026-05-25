@@ -1027,6 +1027,30 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rm
    - Add a short implementation report under `.docs/` if useful.
    - Include commands, pass/fail status, and any environment caveats.
 
+### Execution Status
+
+- [x] Step 1: targeted unit and integration tests passed.
+- [ ] Step 2: package checks.
+- [ ] Step 3: MCP behavior checks.
+- [ ] Step 4: MCP tool-surface check.
+- [ ] Step 5: dependency boundary inspection.
+- [ ] Step 6: final result recording.
+
+### Step 1 Test Notes
+
+All commands were run through the configured nix dev shell.
+
+- `cargo test -p rmc-engine open_existing`: passed, 5 tests.
+- `cargo test -p rmc-server health_vector_probe_does_not_create_missing_path`: passed, 1 test.
+- `cargo test -p rmc-server clear_cache`: passed, 3 tests.
+- `cargo test -p rmc-server search_runtime_cache`: passed, 4 tests.
+- `cargo test -p rmc-server workspace_lock`: passed, 4 tests.
+- `cargo test -p rmc-server untrack`: passed, 4 tests.
+- `cargo test -p rmc-server test_search_empty_keyword`: passed, 1 test.
+- `cargo test -p rmc-graph preflight`: passed, 6 tests.
+
+The test runs emitted existing dead-code/unreachable-public warnings plus the external dirty warning for `../nix-devshells`; no new failures were observed.
+
 ### Expected Output
 
 - Passing focused tests.
