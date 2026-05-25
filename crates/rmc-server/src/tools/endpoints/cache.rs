@@ -81,9 +81,11 @@ fn record_graph_cleanup_report(
 /// `build_hypergraph` call performs a full re-index.
 pub(crate) async fn clear_cache(
     params: ClearCacheParams,
+    sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
 ) -> Result<CallToolResult, McpError> {
     let mut cleared = Vec::new();
     let mut errors = Vec::new();
+    let _ = sync_manager;
 
     let data_dir = data_dir();
     let include_hypergraph = params.include_hypergraph.unwrap_or(false);
@@ -281,7 +283,7 @@ mod tests {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
             include_hypergraph: None,
             dry_run: None,
-        })
+        }, None)
         .await;
 
         assert!(result.is_ok());
@@ -296,7 +298,7 @@ mod tests {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
             include_hypergraph: Some(true),
             dry_run: None,
-        })
+        }, None)
         .await;
         assert!(result.is_ok());
     }

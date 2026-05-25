@@ -230,7 +230,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::endpoints::cache::ClearCacheParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::cache::clear_cache(params).await
+        crate::tools::endpoints::cache::clear_cache(params, self.sync_manager.as_ref()).await
     }
 
     // ----- Hypergraph tools (Layer 7) -----

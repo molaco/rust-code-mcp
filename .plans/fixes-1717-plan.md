@@ -264,7 +264,7 @@ Adjust test filters to match actual test names.
 ### Execution Status
 
 - [x] Step 1: traced router wiring for `SyncManager`.
-- [ ] Step 2: update cache endpoint dependencies.
+- [x] Step 2: updated cache endpoint dependencies.
 - [ ] Step 3: canonicalize targeted directory inputs.
 - [ ] Step 4: untrack before deletion.
 - [ ] Step 5: preserve global clear semantics.
@@ -278,6 +278,13 @@ Adjust test filters to match actual test names.
 - `SearchToolRouter::clear_cache` currently calls `endpoints::cache::clear_cache(params)` without passing the sync manager.
 - `endpoints::cache::clear_cache` currently accepts only `ClearCacheParams`, so the endpoint cannot untrack a targeted workspace before deleting cache/index/vector state.
 - Existing search and index tracking uses the provided directory path form, while `SyncManager::untrack_directory` removes by exact `Path` equality. Later Phase 2 steps must make track and untrack path forms match.
+
+### Step 2 Implementation Notes
+
+- Updated `SearchToolRouter::clear_cache` to pass `self.sync_manager.as_ref()` into the cache endpoint.
+- Updated `endpoints::cache::clear_cache` to accept `Option<&Arc<SyncManager>>`.
+- Existing tests were updated to pass `None`; MCP schema and behavior are unchanged in this step.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal
 
