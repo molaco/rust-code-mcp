@@ -47,6 +47,8 @@ pub struct SearchToolRouter {
     sync_manager: Option<std::sync::Arc<crate::mcp::SyncManager>>,
     /// Per-workspace operation locks for cache/index state
     workspace_locks: crate::mcp::WorkspaceLockRegistry,
+    /// Cached runtime objects for warm search paths
+    search_cache: crate::mcp::SearchRuntimeCache,
 }
 
 impl SearchToolRouter {
@@ -55,6 +57,7 @@ impl SearchToolRouter {
             tool_router: Self::tool_router(),
             sync_manager: None,
             workspace_locks: crate::mcp::WorkspaceLockRegistry::new(),
+            search_cache: crate::mcp::SearchRuntimeCache::new(),
         }
     }
 
@@ -65,6 +68,7 @@ impl SearchToolRouter {
             tool_router: Self::tool_router(),
             sync_manager: Some(sync_manager),
             workspace_locks,
+            search_cache: crate::mcp::SearchRuntimeCache::new(),
         }
     }
 }
@@ -98,6 +102,7 @@ impl SearchToolRouter {
             embedding_profile.as_deref(),
             self.sync_manager.as_ref(),
             &self.workspace_locks,
+            Some(&self.search_cache),
         )
         .await
     }
@@ -215,6 +220,7 @@ impl SearchToolRouter {
             &directory,
             limit,
             embedding_profile.as_deref(),
+            Some(&self.search_cache),
         )
         .await
     }
@@ -618,7 +624,7 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::SimilarToItemParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph::similarity::similar_to_item(params).await
+        crate::tools::graph::similarity::similar_to_item(params, Some(&self.search_cache)).await
     }
 
     #[tool(
@@ -693,6 +699,7 @@ workspace.")]
             embedding_policy.as_deref(),
             format.as_deref(),
             include_snippets,
+            Some(&self.search_cache),
         )
         .await
     }

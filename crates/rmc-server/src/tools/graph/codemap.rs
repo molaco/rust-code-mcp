@@ -36,6 +36,7 @@ pub(crate) async fn handle_build_codemap(
     embedding_policy: Option<&str>,
     format: Option<&str>,
     include_snippets: Option<bool>,
+    search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     use rmc_graph::graph::codemap::{
         CodemapOptions, EmbeddingPolicy, build_codemap, render_mermaid, render_outline,
@@ -129,9 +130,11 @@ pub(crate) async fn handle_build_codemap(
         // still a valid seed source.
         let bm25 = open_bm25_search(&paths.tantivy_path).ok();
         let hybrid = crate::tools::endpoints::query::create_hybrid_search(
+            dir_path,
             &paths,
             bm25,
             rmc_engine::embeddings::EmbeddingBackend::default(),
+            search_cache,
         )
         .await?;
         let hits = hybrid

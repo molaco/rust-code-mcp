@@ -14,6 +14,7 @@ use tracing;
 use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use rmc_engine::search::{Bm25Search, HybridSearch};
 use rmc_indexing::indexing::{open_bm25_search, IndexStats, UnifiedIndexer};
+use crate::mcp::{SearchRuntimeCache, SearchRuntimeCacheEntry, SearchRuntimeCacheKey};
 use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend_for_mcp,
 };
@@ -239,12 +240,38 @@ fn resolve_query_backend(
 /// query embeddings in lockstep with the on-disk vectors even when the
 /// indexer was configured with a non-default variant.
 pub(crate) async fn create_hybrid_search(
+    workspace: &Path,
     paths: &ProjectPaths,
     bm25_search: Option<Bm25Search>,
     configured_backend: EmbeddingBackend,
+    search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<HybridSearch, McpError> {
     let resolved = resolve_query_backend(paths, configured_backend)?;
     let backend = resolved.backend;
+    let cache_key = search_cache.map(|_| {
+        SearchRuntimeCacheKey::new(
+            workspace,
+            resolved.vector_identity.clone(),
+            &paths.vector_path,
+            &paths.tantivy_path,
+        )
+    });
+    if let (Some(cache), Some(key)) = (search_cache, cache_key.as_ref()) {
+        if let Some(entry) = cache.get(key) {
+            tracing::debug!(
+                profile = backend.profile.name(),
+                embedder = resolved.vector_identity.as_str(),
+                collection = paths.collection_name,
+                "Reusing cached hybrid search runtime"
+            );
+            return Ok(HybridSearch::with_defaults(
+                entry.embedding_generator,
+                entry.vector_store,
+                bm25_search.or(entry.bm25_search),
+            ));
+        }
+    }
+
     tracing::info!(
         profile = backend.profile.name(),
         embedder = resolved.vector_identity.as_str(),
@@ -270,6 +297,17 @@ pub(crate) async fn create_hybrid_search(
             None,
         )
     })?;
+
+    if let (Some(cache), Some(key)) = (search_cache, cache_key) {
+        cache.insert(
+            key,
+            SearchRuntimeCacheEntry {
+                embedding_generator: embedding_generator.clone(),
+                vector_store: vector_store.clone(),
+                bm25_search: bm25_search.clone(),
+            },
+        );
+    }
 
     Ok(HybridSearch::with_defaults(
         embedding_generator,
@@ -341,6 +379,7 @@ pub(crate) async fn search(
     embedding_profile: Option<&str>,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
+    search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     let dir_path = Path::new(directory);
     if !dir_path.is_dir() {
@@ -396,7 +435,9 @@ pub(crate) async fn search(
         }
     }
 
-    let hybrid_search = create_hybrid_search(&paths, bm25, requested_backend.clone()).await?;
+    let hybrid_search =
+        create_hybrid_search(dir_path, &paths, bm25, requested_backend.clone(), search_cache)
+            .await?;
 
     tracing::info!(
         profile = requested_backend.profile.name(),
@@ -419,6 +460,7 @@ pub(crate) async fn get_similar_code(
     directory: &str,
     limit: usize,
     embedding_profile: Option<&str>,
+    search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     let dir_path = Path::new(directory);
     if !dir_path.is_dir() {
@@ -431,7 +473,8 @@ pub(crate) async fn get_similar_code(
     let requested_backend = resolve_embedding_backend_for_mcp(embedding_profile, dir_path)?;
     let paths = select_index_paths(dir_path, &requested_backend)?;
 
-    let hybrid_search = create_hybrid_search(&paths, None, requested_backend).await?;
+    let hybrid_search =
+        create_hybrid_search(dir_path, &paths, None, requested_backend, search_cache).await?;
 
     let results = hybrid_search
         .vector_only_search(query, limit)
@@ -512,20 +555,20 @@ mod tests {
     #[tokio::test]
     async fn test_search_invalid_directory() {
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let result = search("/nonexistent/directory", "test", None, None, &locks).await;
+        let result = search("/nonexistent/directory", "test", None, None, &locks, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_search_empty_keyword() {
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let result = search("/tmp", "", None, None, &locks).await;
+        let result = search("/tmp", "", None, None, &locks, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_get_similar_code_invalid_directory() {
-        let result = get_similar_code("test query", "/nonexistent/directory", 5, None).await;
+        let result = get_similar_code("test query", "/nonexistent/directory", 5, None, None).await;
         assert!(result.is_err());
     }
 

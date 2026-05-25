@@ -30,6 +30,7 @@ use crate::tools::params::{SemanticOverlapsParams, SimilarToItemParams};
 /// will be returned. A finer span-overlap check is left for v0.2.
 pub(crate) async fn similar_to_item(
     params: SimilarToItemParams,
+    search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     // 1. Resolve seed Item from the hypergraph snapshot.
     let snap = open_workspace_snapshot(&params.directory)?;
@@ -94,8 +95,14 @@ pub(crate) async fn similar_to_item(
         Path::new(&params.directory),
         &backend,
     );
-    let hybrid_search =
-        crate::tools::endpoints::query::create_hybrid_search(&paths, None, backend).await?;
+    let hybrid_search = crate::tools::endpoints::query::create_hybrid_search(
+        Path::new(&params.directory),
+        &paths,
+        None,
+        backend,
+        search_cache,
+    )
+    .await?;
 
     let limit = params.limit.unwrap_or(10);
     let threshold = params.threshold.unwrap_or(0.0);

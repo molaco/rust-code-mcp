@@ -821,7 +821,7 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 
 - [x] Step 1: confirmed object sharing constraints.
 - [x] Step 2: added cache type.
-- [ ] Step 3: wire cache into query path.
+- [x] Step 3: wired cache into query path.
 - [ ] Step 4: add invalidation hooks.
 - [ ] Step 5: add tests.
 - [ ] Step 6: re-run latency sample.
@@ -842,6 +842,15 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - Cache entries can hold an `EmbeddingGenerator`, `VectorStore`, and optional `Bm25Search`.
 - Added targeted workspace invalidation and global invalidation methods.
 - Exported the cache from `mcp` with the other server runtime coordination types.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 3 Implementation Notes
+
+- Added a `SearchRuntimeCache` field to `SearchToolRouter`.
+- Threaded the cache into `search`, `get_similar_code`, `similar_to_item`, and codemap prompt-seeding paths.
+- Updated `create_hybrid_search` to build a cache key from workspace path, resolved vector identity, vector path, and Tantivy path.
+- On cache hit, `create_hybrid_search` reuses cached `EmbeddingGenerator` and `VectorStore` and reconstructs a per-call `HybridSearch`.
+- On cache miss, it preserves existing construction behavior and inserts the created runtime objects into the cache.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal

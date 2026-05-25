@@ -641,6 +641,7 @@ async fn build_codemap_requires_prompt_or_seeds() {
         None,   // embedding_policy
         None,   // format
         None,   // include_snippets
+        None,   // search_cache
     )
     .await;
     let err = result.expect_err("missing prompt and seeds should reject");
@@ -662,6 +663,7 @@ async fn build_codemap_rejects_bad_format() {
         None,
         None,
         Some("weird"),
+        None,
         None,
     )
     .await;
@@ -688,6 +690,7 @@ async fn build_codemap_rejects_bad_embedding_policy() {
         None,
         None,
         Some("turbo"),
+        None,
         None,
         None,
     )
