@@ -822,7 +822,7 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - [x] Step 1: confirmed object sharing constraints.
 - [x] Step 2: added cache type.
 - [x] Step 3: wired cache into query path.
-- [ ] Step 4: add invalidation hooks.
+- [x] Step 4: added invalidation hooks.
 - [ ] Step 5: add tests.
 - [ ] Step 6: re-run latency sample.
 
@@ -851,6 +851,15 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - Updated `create_hybrid_search` to build a cache key from workspace path, resolved vector identity, vector path, and Tantivy path.
 - On cache hit, `create_hybrid_search` reuses cached `EmbeddingGenerator` and `VectorStore` and reconstructs a per-call `HybridSearch`.
 - On cache miss, it preserves existing construction behavior and inserts the created runtime objects into the cache.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 4 Implementation Notes
+
+- Targeted `clear_cache` invalidates cache entries for the targeted canonical workspace when not in dry-run mode.
+- Global `clear_cache` invalidates the whole search runtime cache when not in dry-run mode.
+- `index_codebase(force_reindex=true)` invalidates the targeted workspace before rebuilding index/vector state.
+- Search-triggered stale-index cleanup invalidates the targeted workspace before deleting and rebuilding stale state.
+- Dry-run cache clears do not invalidate runtime entries.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal

@@ -175,6 +175,7 @@ pub async fn index_codebase(
     params: IndexCodebaseParams,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
+    search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     let dir = PathBuf::from(&params.directory);
     let force = params.force_reindex.unwrap_or(false);
@@ -195,6 +196,11 @@ pub async fn index_codebase(
     }
 
     let _workspace_lock = workspace_locks.lock_exclusive(&dir).await;
+    if force {
+        if let Some(search_cache) = search_cache {
+            search_cache.invalidate_workspace(&dir);
+        }
+    }
 
     tracing::info!("Indexing codebase: {} (force: {})", dir.display(), force);
 
@@ -279,7 +285,7 @@ mod tests {
         };
 
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let result = index_codebase(params, None, &locks).await;
+        let result = index_codebase(params, None, &locks, None).await;
         assert!(result.is_err());
     }
 
@@ -297,7 +303,7 @@ mod tests {
         };
 
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let result = index_codebase(params, None, &locks).await;
+        let result = index_codebase(params, None, &locks, None).await;
         assert!(result.is_err());
     }
 
@@ -321,7 +327,7 @@ mod tests {
         };
 
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let result = index_codebase(params, None, &locks).await;
+        let result = index_codebase(params, None, &locks, None).await;
         assert!(result.is_ok());
     }
 
@@ -345,7 +351,7 @@ mod tests {
             embedding_profile: None,
         };
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let result1 = index_codebase(params1, None, &locks).await;
+        let result1 = index_codebase(params1, None, &locks, None).await;
         assert!(result1.is_ok());
 
         // Force reindex
@@ -355,7 +361,7 @@ mod tests {
             model: None,
             embedding_profile: None,
         };
-        let result2 = index_codebase(params2, None, &locks).await;
+        let result2 = index_codebase(params2, None, &locks, None).await;
         assert!(result2.is_ok());
     }
 

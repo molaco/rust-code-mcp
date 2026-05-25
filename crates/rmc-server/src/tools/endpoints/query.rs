@@ -413,6 +413,9 @@ pub(crate) async fn search(
     } else {
         // Corrupt or missing — clean stale caches to force full reindex
         rebuilt = paths.tantivy_path.exists();
+        if let Some(search_cache) = search_cache {
+            search_cache.invalidate_workspace(dir_path);
+        }
         clean_stale_index(&paths);
         let st = ensure_indexed(
             dir_path,

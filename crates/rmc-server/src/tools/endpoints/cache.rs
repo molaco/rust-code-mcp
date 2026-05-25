@@ -102,6 +102,7 @@ pub(crate) async fn clear_cache(
     params: ClearCacheParams,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
+    search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     let mut cleared = Vec::new();
     let mut errors = Vec::new();
@@ -117,6 +118,9 @@ pub(crate) async fn clear_cache(
         if !dry_run {
             if let Some(sync_manager) = sync_manager {
                 sync_manager.untrack_directory(&target.canonical).await;
+            }
+            if let Some(search_cache) = search_cache {
+                search_cache.invalidate_workspace(&target.canonical);
             }
         }
 
@@ -210,6 +214,9 @@ pub(crate) async fn clear_cache(
         if !dry_run {
             if let Some(sync_manager) = sync_manager {
                 sync_manager.untrack_all_directories().await;
+            }
+            if let Some(search_cache) = search_cache {
+                search_cache.invalidate_all();
             }
         }
 
@@ -319,7 +326,7 @@ mod tests {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
             include_hypergraph: None,
             dry_run: None,
-        }, None, &locks)
+        }, None, &locks, None)
         .await;
 
         assert!(result.is_ok());
@@ -335,7 +342,7 @@ mod tests {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
             include_hypergraph: Some(true),
             dry_run: None,
-        }, None, &locks)
+        }, None, &locks, None)
         .await;
         assert!(result.is_ok());
     }
@@ -353,7 +360,7 @@ mod tests {
             directory: Some(project_dir.display().to_string()),
             include_hypergraph: None,
             dry_run: Some(false),
-        }, Some(&sync_manager), &locks)
+        }, Some(&sync_manager), &locks, None)
         .await;
 
         assert!(result.is_ok());
@@ -375,7 +382,7 @@ mod tests {
             directory: Some(project_dir.display().to_string()),
             include_hypergraph: None,
             dry_run: Some(true),
-        }, Some(&sync_manager), &locks)
+        }, Some(&sync_manager), &locks, None)
         .await;
 
         assert!(result.is_ok());
@@ -398,7 +405,7 @@ mod tests {
                 directory: Some(waiter_project.display().to_string()),
                 include_hypergraph: None,
                 dry_run: Some(true),
-            }, None, &waiter_locks)
+            }, None, &waiter_locks, None)
             .await
             .unwrap();
         });

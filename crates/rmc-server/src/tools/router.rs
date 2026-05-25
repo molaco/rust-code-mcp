@@ -237,6 +237,7 @@ impl SearchToolRouter {
             params,
             self.sync_manager.as_ref(),
             &self.workspace_locks,
+            Some(&self.search_cache),
         )
         .await
     }
@@ -251,6 +252,7 @@ impl SearchToolRouter {
             params,
             self.sync_manager.as_ref(),
             &self.workspace_locks,
+            Some(&self.search_cache),
         )
         .await
     }
