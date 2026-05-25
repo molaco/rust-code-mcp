@@ -176,7 +176,6 @@ pub async fn index_codebase(
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
-    let _ = workspace_locks;
     let dir = PathBuf::from(&params.directory);
     let force = params.force_reindex.unwrap_or(false);
 
@@ -194,6 +193,8 @@ pub async fn index_codebase(
             None,
         ));
     }
+
+    let _workspace_lock = workspace_locks.lock_exclusive(&dir).await;
 
     tracing::info!("Indexing codebase: {} (force: {})", dir.display(), force);
 

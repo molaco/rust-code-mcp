@@ -398,7 +398,7 @@ Adjust test filters to match actual test names.
 - [x] Step 1: located existing shared server state.
 - [x] Step 2: added lock registry type.
 - [x] Step 3: wired lock registry into endpoints.
-- [ ] Step 4: apply locking in write paths.
+- [x] Step 4: applied locking in write paths.
 - [ ] Step 5: apply locking around search paths that may trigger indexing.
 - [ ] Step 6: add concurrency tests.
 
@@ -424,6 +424,15 @@ Adjust test filters to match actual test names.
 - `SearchToolRouter` now stores a `WorkspaceLockRegistry`.
 - `SearchToolRouter::new()` creates a standalone registry, while `SearchToolRouter::with_sync_manager(...)` reuses the registry owned by the shared sync manager.
 - The registry is now threaded into `search`, `index_codebase`, and `clear_cache` endpoint signatures. It remains intentionally unused until Steps 4 and 5 apply lock scopes.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 4 Implementation Notes
+
+- Strengthened `WorkspaceLockRegistry` with a global mutex so global cache clears cannot overlap per-workspace operations.
+- `index_codebase` now takes an exclusive workspace lock after validating the directory and before indexing state is derived or written.
+- `SyncManager::sync_directory` now takes an exclusive workspace lock before discovering and incrementally updating indexed profiles.
+- Targeted `clear_cache` now takes an exclusive workspace lock before untracking or deleting workspace-derived state.
+- Global `clear_cache` now takes the global lock before untracking all directories or deleting all cache/index state.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal

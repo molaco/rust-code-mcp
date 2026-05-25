@@ -159,6 +159,8 @@ impl SyncManager {
     async fn sync_directory(&self, dir: &Path) -> Result<()> {
         use crate::mcp::project_paths::ProjectPaths;
 
+        let _workspace_lock = self.workspace_locks.lock_exclusive(dir).await;
+
         let indexes = ProjectPaths::indexed_profiles(dir)
             .map_err(|msg| anyhow::anyhow!(msg))?;
         if indexes.is_empty() {

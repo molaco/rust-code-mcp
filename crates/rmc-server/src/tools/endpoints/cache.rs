@@ -103,7 +103,6 @@ pub(crate) async fn clear_cache(
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
-    let _ = workspace_locks;
     let mut cleared = Vec::new();
     let mut errors = Vec::new();
 
@@ -114,6 +113,7 @@ pub(crate) async fn clear_cache(
     if let Some(ref directory) = params.directory {
         // Clear cache for specific project
         let target = target_directory(directory);
+        let _workspace_lock = workspace_locks.lock_exclusive(&target.canonical).await;
         if !dry_run {
             if let Some(sync_manager) = sync_manager {
                 sync_manager.untrack_directory(&target.canonical).await;
@@ -206,6 +206,7 @@ pub(crate) async fn clear_cache(
             );
         }
     } else {
+        let _workspace_lock = workspace_locks.lock_all().await;
         if !dry_run {
             if let Some(sync_manager) = sync_manager {
                 sync_manager.untrack_all_directories().await;

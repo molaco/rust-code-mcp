@@ -13,6 +13,7 @@ fn workspace_key(dir: &Path) -> PathBuf {
 /// Registry of async locks keyed by canonical workspace directory.
 #[derive(Clone, Default)]
 pub struct WorkspaceLockRegistry {
+    global: Arc<Mutex<()>>,
     locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
 }
 
@@ -35,10 +36,12 @@ impl WorkspaceLockRegistry {
 
     /// Take an exclusive workspace lock.
     pub async fn lock_exclusive(&self, dir: &Path) -> WorkspaceLockGuard {
+        let global_guard = self.global.clone().lock_owned().await;
         let (workspace, lock) = self.lock_for(dir).await;
         let guard = lock.lock_owned().await;
         WorkspaceLockGuard {
             workspace,
+            _global_guard: global_guard,
             _guard: guard,
         }
     }
@@ -51,11 +54,19 @@ impl WorkspaceLockRegistry {
     pub async fn lock_shared(&self, dir: &Path) -> WorkspaceLockGuard {
         self.lock_exclusive(dir).await
     }
+
+    /// Take the global operation lock.
+    pub async fn lock_all(&self) -> WorkspaceGlobalLockGuard {
+        WorkspaceGlobalLockGuard {
+            _global_guard: self.global.clone().lock_owned().await,
+        }
+    }
 }
 
 /// Held workspace operation lock.
 pub struct WorkspaceLockGuard {
     workspace: PathBuf,
+    _global_guard: OwnedMutexGuard<()>,
     _guard: OwnedMutexGuard<()>,
 }
 
@@ -63,4 +74,9 @@ impl WorkspaceLockGuard {
     pub fn workspace(&self) -> &Path {
         &self.workspace
     }
+}
+
+/// Held global operation lock.
+pub struct WorkspaceGlobalLockGuard {
+    _global_guard: OwnedMutexGuard<()>,
 }
