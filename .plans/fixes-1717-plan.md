@@ -696,6 +696,23 @@ Then run a small side-by-side MCP sample:
 
 ## Phase 5: Phase 8 Search Latency Sampling
 
+### Execution Status
+
+- [x] Step 1: defined repeatable warm-search sample.
+- [ ] Step 2: record latency distribution.
+- [ ] Step 3: record setup actions per call.
+- [ ] Step 4: identify cacheable objects.
+- [ ] Step 5: decide whether to proceed with Phase 6.
+
+### Step 1 Sampling Definition
+
+- Workspace: `/home/molaco/Documents/rust-code-mcp-refactor`.
+- Query: `SearchTool`.
+- Result shape: default `search` MCP response, since the current MCP schema does not expose an explicit limit parameter.
+- Embedding profile: omitted/default profile, matching the existing indexed state used in earlier side-by-side checks.
+- Servers: `rust-code-mcp-original` and `rust-code-mcp-refactor`.
+- Sample target: at least 10 warm `search` calls per server when timing can be measured consistently.
+
 ### Goal
 
 Separate stable latency regressions from runtime variance before adding lifecycle-sensitive caching.
