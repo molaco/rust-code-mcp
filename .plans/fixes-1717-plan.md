@@ -133,7 +133,7 @@ Capture the current behavior before changing production code, so regressions can
 
 - [x] Step 1: inspected `VectorStore::new_embedded` and `LanceDbBackend::new`; write side effects are now identified.
 - [x] Step 2: added the read-only opener.
-- [ ] Step 3: refactor shared read-only pieces if useful.
+- [x] Step 3: reviewed shared read-only pieces; no additional refactor needed.
 - [ ] Step 4: update server health.
 - [ ] Step 5: add focused tests.
 
@@ -150,6 +150,11 @@ Capture the current behavior before changing production code, so regressions can
 - Added `VectorStore::open_existing_embedded` as the public engine wrapper for read-side probes.
 - Kept `VectorStore::new_embedded` and `LanceDbBackend::new` unchanged for write-capable indexing paths.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine` passed with pre-existing dead-code warnings.
+
+### Step 3 Refactor Decision
+
+- No extra helper extraction was made in this step. The implementation already reuses `read_metadata` and `create_schema_for_dim`, while the create-only logic remains isolated in `ensure_table_exists` and `write_metadata_if_missing`.
+- Keeping `open_existing` explicit is clearer than abstracting over the create/open split right now because the important safety property is what the read-only path does not call.
 
 ### Goal
 
