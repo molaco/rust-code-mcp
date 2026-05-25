@@ -701,7 +701,7 @@ Then run a small side-by-side MCP sample:
 - [x] Step 1: defined repeatable warm-search sample.
 - [x] Step 2: recorded latency distribution.
 - [x] Step 3: recorded setup actions per call.
-- [ ] Step 4: identify cacheable objects.
+- [x] Step 4: identified cacheable objects.
 - [ ] Step 5: decide whether to proceed with Phase 6.
 
 ### Step 1 Sampling Definition
@@ -738,6 +738,14 @@ Warm `search` still performs these setup actions per MCP call:
 - Executes `HybridSearch::search(keyword, 10)`, which embeds the query and runs BM25/vector search.
 
 The expensive and cache-sensitive setup candidates are the embedding generator, vector store handle, and BM25 opener.
+
+### Step 4 Cacheability Notes
+
+- `EmbeddingGenerator` is `Clone` and internally stores Arc-backed runtime embedders. It is the strongest cache candidate, keyed by canonical workspace plus embedding backend/profile identity.
+- `VectorStore` is `Clone` and wraps `Arc<dyn VectorStoreBackend + Send + Sync>`. It is cacheable when keyed by vector path and embedder identity, but must be invalidated on cache clear, force reindex, or profile mismatch.
+- `Bm25Search` implements `Clone` over Tantivy `Index`, `ChunkSchema`, and `IndexReader`. It can be cached, but stale-reader behavior after writes must be handled with invalidation or reload.
+- `HybridSearch` is cheap to reconstruct once the generator, vector store, and BM25 handle are cached. Caching the wrapper itself adds little value compared with caching its components.
+- Path selection, vector metadata checks, and backend resolution are comparatively cheap and should remain simple unless profiling shows otherwise.
 
 ### Goal
 
