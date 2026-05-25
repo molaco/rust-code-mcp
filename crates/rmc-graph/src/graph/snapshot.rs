@@ -768,6 +768,148 @@ mod tests {
         assert_eq!(report.cleared[0].path, graphs_root);
     }
 
+    fn create_non_cargo_workspace(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn marker() {}\n").unwrap();
+    }
+
+    fn write_fake_snapshot(
+        workspace: &Path,
+        data_dir: &Path,
+        schema_version: u32,
+        write_data_file: bool,
+    ) -> (String, PathBuf) {
+        let paths = GraphPaths::for_workspace_in(data_dir, workspace);
+        let fingerprint = compute_fingerprint(workspace).unwrap();
+        let graph_id = graph_id_for(&paths.workspace_hash, &fingerprint);
+        let snapshot_dir = paths.snapshot_dir(&graph_id);
+        fs::create_dir_all(&snapshot_dir).unwrap();
+        if write_data_file {
+            fs::write(snapshot_dir.join("data.mdb"), b"stub").unwrap();
+        }
+        let manifest = GraphManifest {
+            graph_id: graph_id.clone(),
+            workspace_root: workspace.display().to_string(),
+            workspace_hash: paths.workspace_hash.clone(),
+            fingerprint,
+            schema_version,
+            created_at_unix: now_unix().unwrap(),
+            node_count: 11,
+            binding_count: 7,
+            usage_count: 5,
+        };
+        write_manifest(&paths.manifest_path(&graph_id), &manifest).unwrap();
+        (graph_id, snapshot_dir)
+    }
+
+    #[test]
+    fn preflight_reuse_returns_without_loading_workspace() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("not-cargo");
+        let data_dir = td.path().join("graphs");
+        create_non_cargo_workspace(&workspace);
+        let (graph_id, snapshot_dir) =
+            write_fake_snapshot(&workspace, &data_dir, SCHEMA_VERSION, true);
+
+        let result = build_and_persist(&workspace, BuildOptions {
+            data_dir_override: Some(data_dir),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert!(result.reused);
+        assert_eq!(result.graph_id, graph_id);
+        assert_eq!(result.node_count, 11);
+        assert_eq!(result.binding_count, 7);
+        assert_eq!(result.usage_count, 5);
+        assert_eq!(result.snapshot_path, snapshot_dir);
+    }
+
+    #[test]
+    fn preflight_force_rebuild_calls_loader() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("not-cargo");
+        let data_dir = td.path().join("graphs");
+        create_non_cargo_workspace(&workspace);
+        write_fake_snapshot(&workspace, &data_dir, SCHEMA_VERSION, true);
+
+        let error = build_and_persist(&workspace, BuildOptions {
+            force_rebuild: true,
+            data_dir_override: Some(data_dir),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("failed to load workspace"));
+    }
+
+    #[test]
+    fn preflight_missing_manifest_calls_loader() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("not-cargo");
+        create_non_cargo_workspace(&workspace);
+
+        let error = build_and_persist(&workspace, BuildOptions {
+            data_dir_override: Some(td.path().join("graphs")),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("failed to load workspace"));
+    }
+
+    #[test]
+    fn preflight_fingerprint_change_calls_loader() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("not-cargo");
+        let data_dir = td.path().join("graphs");
+        create_non_cargo_workspace(&workspace);
+        write_fake_snapshot(&workspace, &data_dir, SCHEMA_VERSION, true);
+        fs::write(workspace.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+
+        let error = build_and_persist(&workspace, BuildOptions {
+            data_dir_override: Some(data_dir),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("failed to load workspace"));
+    }
+
+    #[test]
+    fn preflight_incompatible_manifest_errors_before_loader() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("not-cargo");
+        let data_dir = td.path().join("graphs");
+        create_non_cargo_workspace(&workspace);
+        write_fake_snapshot(&workspace, &data_dir, SCHEMA_VERSION - 1, true);
+
+        let error = build_and_persist(&workspace, BuildOptions {
+            data_dir_override: Some(data_dir),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("schema_version"));
+    }
+
+    #[test]
+    fn preflight_missing_data_file_calls_loader() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("not-cargo");
+        let data_dir = td.path().join("graphs");
+        create_non_cargo_workspace(&workspace);
+        write_fake_snapshot(&workspace, &data_dir, SCHEMA_VERSION, false);
+
+        let error = build_and_persist(&workspace, BuildOptions {
+            data_dir_override: Some(data_dir),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("failed to load workspace"));
+    }
+
     #[test]
     fn build_and_open_self_workspace() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");

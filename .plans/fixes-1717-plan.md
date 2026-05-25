@@ -546,7 +546,7 @@ Adjust test filters to match actual test names.
 - [x] Step 3: added fast reuse function.
 - [x] Step 4: reordered `build_and_persist`.
 - [x] Step 5: confirmed manifest writes keep preflight fields.
-- [ ] Step 6: add tests.
+- [x] Step 6: added tests.
 
 ### Step 1 Inspection Notes
 
@@ -586,6 +586,16 @@ Adjust test filters to match actual test names.
 - Both manifest write sites in `build_and_persist` and `persist_loaded` still populate the same fields from `SnapshotIdentity` and current extraction counts.
 - `usage_count` remains `#[serde(default)]`, preserving compatibility with older manifests that predate that field.
 - No production code change was required for this step.
+
+### Step 6 Test Notes
+
+- Added preflight tests using a deliberately non-Cargo workspace. The warm reuse test can only pass if `build_and_persist(force_rebuild=false)` returns before `loader::load`.
+- Covered forced rebuild, missing manifest, changed fingerprint, incompatible manifest schema, and missing `data.mdb` fallback behavior.
+- Verification passed:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph preflight
+```
 
 ### Goal
 
