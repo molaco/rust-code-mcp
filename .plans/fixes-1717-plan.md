@@ -1032,7 +1032,7 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rm
 - [x] Step 1: targeted unit and integration tests passed.
 - [x] Step 2: package checks passed.
 - [x] Step 3: MCP behavior checks passed.
-- [ ] Step 4: MCP tool-surface check.
+- [x] Step 4: MCP tool-surface check passed.
 - [ ] Step 5: dependency boundary inspection.
 - [ ] Step 6: final result recording.
 
@@ -1068,6 +1068,17 @@ MCP checks were run against `/home/molaco/Documents/rust-code-mcp-refactor` with
 - `build_hypergraph(force_rebuild=false)`: first run rebuilt because the workspace fingerprint changed after plan-document edits; second run returned the same `graph_id` and `fingerprint` with `reused: true`.
 - Three repeated warm `search` calls for `WorkspaceLockRegistry`: returned consistent top results and completed in 0.3931s, 0.3463s, and 0.4676s.
 - Follow-up `health_check`: remained overall `healthy`.
+
+### Step 4 MCP Tool-Surface Notes
+
+Tool metadata was checked through the available MCP discovery surface for both `mcp__rust_code_mcp_refactor__` and `mcp__rust_code_mcp_original__`.
+
+- Touched tools retained the same public parameters in the refactor and original namespaces:
+  `health_check`, `clear_cache`, `search`, and `build_hypergraph`.
+- Related graph/search tools exposed in discovery also matched on parameter shape, including `build_codemap`, `similar_to_item`, `semantic_overlaps`, `get_similar_code`, `index_codebase`, and dependency/query helpers.
+- The behavior changes from these fixes are internal coordination/readiness/performance semantics: read-only vector health probing, cache/sync coordination, workspace operation locking, graph reuse preflight, and server-side search runtime caching.
+- No new public parameter was added for the new lock registry or search runtime cache.
+- Limitation: this check used the tool metadata exposed to the session, not a raw generated-schema artifact on disk.
 
 ### Expected Output
 
