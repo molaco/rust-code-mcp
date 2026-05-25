@@ -823,7 +823,7 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - [x] Step 2: added cache type.
 - [x] Step 3: wired cache into query path.
 - [x] Step 4: added invalidation hooks.
-- [ ] Step 5: add tests.
+- [x] Step 5: added tests.
 - [ ] Step 6: re-run latency sample.
 
 ### Step 1 Sharing Constraints
@@ -861,6 +861,19 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - Search-triggered stale-index cleanup invalidates the targeted workspace before deleting and rebuilding stale state.
 - Dry-run cache clears do not invalidate runtime entries.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 5 Test Notes
+
+- Added cache-key tests covering canonical path normalization, missing-path preservation, and canonical workspace matching used by invalidation.
+- Added an empty-cache invalidation safety test.
+- Ran a focused query endpoint test to cover the updated `search` signature.
+- Model-backed cache reuse is not unit-tested because constructing `EmbeddingGenerator` would load external embedding runtimes; Step 6 verifies the behavior through the MCP search path.
+- Verification passed:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server search_runtime_cache
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server test_search_empty_keyword
+```
 
 ### Goal
 
