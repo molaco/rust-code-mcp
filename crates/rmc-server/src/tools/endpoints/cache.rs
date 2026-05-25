@@ -383,6 +383,33 @@ mod tests {
         assert_eq!(tracked, vec![canonical]);
     }
 
+    #[tokio::test]
+    async fn targeted_clear_waits_for_workspace_lock() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let guard = locks.lock_exclusive(&project_dir).await;
+        let waiter_locks = locks.clone();
+        let waiter_project = project_dir.clone();
+
+        let waiter = tokio::spawn(async move {
+            clear_cache(ClearCacheParams {
+                directory: Some(waiter_project.display().to_string()),
+                include_hypergraph: None,
+                dry_run: Some(true),
+            }, None, &waiter_locks)
+            .await
+            .unwrap();
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+
+        drop(guard);
+        waiter.await.unwrap();
+    }
+
     #[test]
     fn dry_run_reports_existing_dir_without_removing_it() {
         let temp = tempfile::tempdir().unwrap();

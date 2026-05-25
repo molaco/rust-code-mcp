@@ -80,3 +80,64 @@ impl WorkspaceLockGuard {
 pub struct WorkspaceGlobalLockGuard {
     _global_guard: OwnedMutexGuard<()>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn workspace_lock_blocks_same_workspace() {
+        let registry = WorkspaceLockRegistry::new();
+        let temp_dir = TempDir::new().unwrap();
+        let workspace = temp_dir.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+
+        let guard = registry.lock_exclusive(&workspace).await;
+        let waiter_registry = registry.clone();
+        let waiter_workspace = workspace.clone();
+        let waiter = tokio::spawn(async move {
+            let _guard = waiter_registry.lock_exclusive(&waiter_workspace).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+
+        drop(guard);
+        waiter.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn global_lock_blocks_workspace_lock() {
+        let registry = WorkspaceLockRegistry::new();
+        let temp_dir = TempDir::new().unwrap();
+        let workspace = temp_dir.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+
+        let guard = registry.lock_all().await;
+        let waiter_registry = registry.clone();
+        let waiter_workspace = workspace.clone();
+        let waiter = tokio::spawn(async move {
+            let _guard = waiter_registry.lock_exclusive(&waiter_workspace).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+
+        drop(guard);
+        waiter.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_lock_reports_canonical_workspace() {
+        let registry = WorkspaceLockRegistry::new();
+        let temp_dir = TempDir::new().unwrap();
+        let workspace = temp_dir.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+
+        let guard = registry.lock_exclusive(&workspace.join(".")).await;
+
+        assert_eq!(guard.workspace(), std::fs::canonicalize(&workspace).unwrap());
+    }
+}

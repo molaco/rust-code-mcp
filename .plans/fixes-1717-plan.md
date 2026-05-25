@@ -400,7 +400,7 @@ Adjust test filters to match actual test names.
 - [x] Step 3: wired lock registry into endpoints.
 - [x] Step 4: applied locking in write paths.
 - [x] Step 5: applied locking around search paths that may trigger indexing.
-- [ ] Step 6: add concurrency tests.
+- [x] Step 6: added concurrency tests.
 
 ### Step 1 State Notes
 
@@ -441,6 +441,17 @@ Adjust test filters to match actual test names.
 - The lock covers both warm read-side search and the cold/corrupt fallback path that calls `ensure_indexed`.
 - The current registry maps shared and exclusive locks to the same mutex, so this intentionally serializes search with index, clear, and sync for the same workspace.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 6 Test Notes
+
+- Added lock-registry tests for same-workspace blocking, global-lock blocking, and canonical workspace reporting.
+- Added targeted cache-clear coverage proving `clear_cache` waits for the workspace lock before completing.
+- Verification passed:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server workspace_lock
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server targeted_clear_waits_for_workspace_lock
+```
 
 ### Goal
 
