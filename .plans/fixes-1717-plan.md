@@ -699,7 +699,7 @@ Then run a small side-by-side MCP sample:
 ### Execution Status
 
 - [x] Step 1: defined repeatable warm-search sample.
-- [ ] Step 2: record latency distribution.
+- [x] Step 2: recorded latency distribution.
 - [ ] Step 3: record setup actions per call.
 - [ ] Step 4: identify cacheable objects.
 - [ ] Step 5: decide whether to proceed with Phase 6.
@@ -712,6 +712,17 @@ Then run a small side-by-side MCP sample:
 - Embedding profile: omitted/default profile, matching the existing indexed state used in earlier side-by-side checks.
 - Servers: `rust-code-mcp-original` and `rust-code-mcp-refactor`.
 - Sample target: at least 10 warm `search` calls per server when timing can be measured consistently.
+
+### Step 2 Sampling Results
+
+MCP tool wall-time samples for `search(directory=/home/molaco/Documents/rust-code-mcp-refactor, keyword=SearchTool)`:
+
+- Original samples, seconds: `0.6069, 0.5788, 0.4059, 0.4030, 0.4815, 1.0272, 0.3521, 0.7486, 0.6712, 0.4734, 0.3448`.
+- Original distribution: n=11, min=0.3448s, median=0.4815s, p90=0.7486s, max=1.0272s, mean=0.5539s.
+- Refactor samples, seconds: `0.9032, 0.4113, 1.1660, 0.3850, 0.4547, 0.5161, 0.7158, 0.4927, 0.4045, 0.3425`.
+- Refactor distribution: n=10, min=0.3425s, median=0.4737s, p90=0.9032s, max=1.1660s, mean=0.5792s.
+- Result sets stayed equivalent at the 10-result level. Equal-score ordering still varies, but ordering changes remain out of scope for this plan.
+- Interpretation: no confirmed stable refactor regression. Refactor median was slightly lower; refactor mean and p90 were slightly higher because of two outliers.
 
 ### Goal
 
