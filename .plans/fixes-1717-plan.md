@@ -129,6 +129,21 @@ Capture the current behavior before changing production code, so regressions can
 
 ## Phase 1: Read-Only Vector Store Opener
 
+### Execution Status
+
+- [x] Step 1: inspected `VectorStore::new_embedded` and `LanceDbBackend::new`; write side effects are now identified.
+- [ ] Step 2: add the read-only opener.
+- [ ] Step 3: refactor shared read-only pieces if useful.
+- [ ] Step 4: update server health.
+- [ ] Step 5: add focused tests.
+
+### Step 1 Inspection Notes
+
+- `VectorStore::new_embedded` is only a wrapper around `LanceDbBackend::new`, so the public engine API can add `VectorStore::open_existing_embedded` without changing existing write-capable construction paths.
+- `LanceDbBackend::new` writes by calling `std::fs::create_dir_all`, then connects to LanceDB, calls `ensure_table_exists`, creates the table and BTree indexes when missing, and writes `metadata.json` when absent.
+- The read-only opener must validate the database path and metadata file before connecting, open the existing table instead of ensuring it, and keep the existing embedder identity mismatch behavior.
+- Existing `VectorStoreError::NotFound` is suitable for missing path, missing metadata, and missing table errors; no new error type is required unless implementation details make messages ambiguous.
+
 ### Goal
 
 Make health checks read existing vector-store state without creating missing LanceDB directories, tables, indexes, or metadata.
