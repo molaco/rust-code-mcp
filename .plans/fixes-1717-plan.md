@@ -1033,7 +1033,7 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rm
 - [x] Step 2: package checks passed.
 - [x] Step 3: MCP behavior checks passed.
 - [x] Step 4: MCP tool-surface check passed.
-- [ ] Step 5: dependency boundary inspection.
+- [x] Step 5: dependency boundary inspection passed.
 - [ ] Step 6: final result recording.
 
 ### Step 1 Test Notes
@@ -1079,6 +1079,23 @@ Tool metadata was checked through the available MCP discovery surface for both `
 - The behavior changes from these fixes are internal coordination/readiness/performance semantics: read-only vector health probing, cache/sync coordination, workspace operation locking, graph reuse preflight, and server-side search runtime caching.
 - No new public parameter was added for the new lock registry or search runtime cache.
 - Limitation: this check used the tool metadata exposed to the session, not a raw generated-schema artifact on disk.
+
+### Step 5 Dependency Boundary Notes
+
+Boundary checks used both source inspection and MCP dependency analysis.
+
+- Cargo dependency edges remain aligned with the documented layering:
+  `rmc-server -> rmc-engine, rmc-graph, rmc-config, rmc-indexing`;
+  `rmc-graph -> rmc-engine`;
+  `rmc-indexing -> rmc-engine, rmc-config`;
+  `rmc-engine -> no rmc_* crates`.
+- MCP `forbidden_dependency_check` with the documented five-rule set returned `rule_count=5`, `violation_count=0`, and `total_match_count=0`.
+- Source search found `rmc_server` strings inside `rmc-graph` test fixtures only; no production `rmc_graph -> rmc_server` edge was found.
+- MCP `module_dependencies` confirmed touched modules stayed within intended ownership:
+  `rmc_server::tools::endpoints::{health,query,cache}` depend on server coordination modules plus allowed engine/indexing/graph facades;
+  `rmc_indexing::indexing::search` depends only on `rmc_engine` plus external crates;
+  `rmc_graph::graph::snapshot` depends on graph internals plus external crates;
+  `rmc_engine::vector_store` depends only on engine internals plus external crates.
 
 ### Expected Output
 
