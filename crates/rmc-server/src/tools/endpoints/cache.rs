@@ -104,7 +104,6 @@ pub(crate) async fn clear_cache(
 ) -> Result<CallToolResult, McpError> {
     let mut cleared = Vec::new();
     let mut errors = Vec::new();
-    let _ = sync_manager;
 
     let data_dir = data_dir();
     let include_hypergraph = params.include_hypergraph.unwrap_or(false);
@@ -113,6 +112,12 @@ pub(crate) async fn clear_cache(
     if let Some(ref directory) = params.directory {
         // Clear cache for specific project
         let target = target_directory(directory);
+        if !dry_run {
+            if let Some(sync_manager) = sync_manager {
+                sync_manager.untrack_directory(&target.canonical).await;
+            }
+        }
+
         for dir_hash in &target.hashes {
             // The current layout keys vector directories as
             // `code_chunks_<dirhash[..8]>_<modelfp[..8]>`. The legacy
