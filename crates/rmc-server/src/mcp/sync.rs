@@ -15,6 +15,8 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing;
 
+use super::workspace_locks::WorkspaceLockRegistry;
+
 fn normalize_directory(dir: &Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
@@ -25,6 +27,8 @@ pub struct SyncManager {
     tracked_dirs: Arc<RwLock<HashSet<PathBuf>>>,
     /// Sync interval (default: 5 minutes)
     interval: Duration,
+    /// Per-workspace operation locks shared with tool endpoints
+    workspace_locks: WorkspaceLockRegistry,
 }
 
 impl SyncManager {
@@ -36,6 +40,7 @@ impl SyncManager {
         Self {
             tracked_dirs: Arc::new(RwLock::new(HashSet::new())),
             interval: Duration::from_secs(interval_secs),
+            workspace_locks: WorkspaceLockRegistry::new(),
         }
     }
 
@@ -46,7 +51,13 @@ impl SyncManager {
         Self {
             tracked_dirs: Arc::new(RwLock::new(HashSet::new())),
             interval: Duration::from_secs(interval_secs),
+            workspace_locks: WorkspaceLockRegistry::new(),
         }
+    }
+
+    /// Get the workspace lock registry shared with this sync manager.
+    pub fn workspace_locks(&self) -> WorkspaceLockRegistry {
+        self.workspace_locks.clone()
     }
 
     /// Add a directory to track

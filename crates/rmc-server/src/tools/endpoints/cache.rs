@@ -101,7 +101,9 @@ fn target_directory(directory: &str) -> TargetDirectory {
 pub(crate) async fn clear_cache(
     params: ClearCacheParams,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
+    workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
+    let _ = workspace_locks;
     let mut cleared = Vec::new();
     let mut errors = Vec::new();
 
@@ -311,11 +313,12 @@ mod tests {
     #[tokio::test]
     async fn test_clear_cache_nonexistent() {
         // Clearing a non-existent directory should succeed with "nothing to clear"
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
         let result = clear_cache(ClearCacheParams {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
             include_hypergraph: None,
             dry_run: None,
-        }, None)
+        }, None, &locks)
         .await;
 
         assert!(result.is_ok());
@@ -326,11 +329,12 @@ mod tests {
         // Smoke: the new flag deserializes via the public schema and
         // reaches the body without panicking. We use a path that doesn't
         // exist so no real state is touched.
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
         let result = clear_cache(ClearCacheParams {
             directory: Some("/nonexistent/path/that/does/not/exist".to_string()),
             include_hypergraph: Some(true),
             dry_run: None,
-        }, None)
+        }, None, &locks)
         .await;
         assert!(result.is_ok());
     }
@@ -343,11 +347,12 @@ mod tests {
         let sync_manager = Arc::new(crate::mcp::SyncManager::with_defaults(300));
         sync_manager.track_directory(project_dir.join(".")).await;
 
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
         let result = clear_cache(ClearCacheParams {
             directory: Some(project_dir.display().to_string()),
             include_hypergraph: None,
             dry_run: Some(false),
-        }, Some(&sync_manager))
+        }, Some(&sync_manager), &locks)
         .await;
 
         assert!(result.is_ok());
@@ -364,11 +369,12 @@ mod tests {
         let sync_manager = Arc::new(crate::mcp::SyncManager::with_defaults(300));
         sync_manager.track_directory(project_dir.clone()).await;
 
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
         let result = clear_cache(ClearCacheParams {
             directory: Some(project_dir.display().to_string()),
             include_hypergraph: None,
             dry_run: Some(true),
-        }, Some(&sync_manager))
+        }, Some(&sync_manager), &locks)
         .await;
 
         assert!(result.is_ok());

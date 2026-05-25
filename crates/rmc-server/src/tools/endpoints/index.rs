@@ -174,7 +174,9 @@ fn indexing_error_to_mcp(error: anyhow::Error, dir: &std::path::Path) -> McpErro
 pub async fn index_codebase(
     params: IndexCodebaseParams,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
+    workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
+    let _ = workspace_locks;
     let dir = PathBuf::from(&params.directory);
     let force = params.force_reindex.unwrap_or(false);
 
@@ -275,7 +277,8 @@ mod tests {
             embedding_profile: None,
         };
 
-        let result = index_codebase(params, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result = index_codebase(params, None, &locks).await;
         assert!(result.is_err());
     }
 
@@ -292,7 +295,8 @@ mod tests {
             embedding_profile: None,
         };
 
-        let result = index_codebase(params, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result = index_codebase(params, None, &locks).await;
         assert!(result.is_err());
     }
 
@@ -315,7 +319,8 @@ mod tests {
             embedding_profile: None,
         };
 
-        let result = index_codebase(params, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result = index_codebase(params, None, &locks).await;
         assert!(result.is_ok());
     }
 
@@ -338,7 +343,8 @@ mod tests {
             model: None,
             embedding_profile: None,
         };
-        let result1 = index_codebase(params1, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result1 = index_codebase(params1, None, &locks).await;
         assert!(result1.is_ok());
 
         // Force reindex
@@ -348,7 +354,7 @@ mod tests {
             model: None,
             embedding_profile: None,
         };
-        let result2 = index_codebase(params2, None).await;
+        let result2 = index_codebase(params2, None, &locks).await;
         assert!(result2.is_ok());
     }
 

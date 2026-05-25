@@ -397,7 +397,7 @@ Adjust test filters to match actual test names.
 
 - [x] Step 1: located existing shared server state.
 - [x] Step 2: added lock registry type.
-- [ ] Step 3: wire lock registry into endpoints.
+- [x] Step 3: wired lock registry into endpoints.
 - [ ] Step 4: apply locking in write paths.
 - [ ] Step 5: apply locking around search paths that may trigger indexing.
 - [ ] Step 6: add concurrency tests.
@@ -416,6 +416,14 @@ Adjust test filters to match actual test names.
 - The first implementation uses a conservative per-workspace async mutex for both `lock_exclusive` and `lock_shared`.
 - The registry avoids holding the global lock map while awaiting the per-workspace lock.
 - Added `mcp::WorkspaceLockGuard` to hold the owned async mutex guard and expose the normalized workspace path for diagnostics/tests.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 3 Implementation Notes
+
+- `SyncManager` now owns a `WorkspaceLockRegistry` and exposes it through `workspace_locks()`.
+- `SearchToolRouter` now stores a `WorkspaceLockRegistry`.
+- `SearchToolRouter::new()` creates a standalone registry, while `SearchToolRouter::with_sync_manager(...)` reuses the registry owned by the shared sync manager.
+- The registry is now threaded into `search`, `index_codebase`, and `clear_cache` endpoint signatures. It remains intentionally unused until Steps 4 and 5 apply lock scopes.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal

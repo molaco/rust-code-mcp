@@ -340,7 +340,9 @@ pub(crate) async fn search(
     keyword: &str,
     embedding_profile: Option<&str>,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
+    workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
+    let _ = workspace_locks;
     let dir_path = Path::new(directory);
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
@@ -508,13 +510,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_invalid_directory() {
-        let result = search("/nonexistent/directory", "test", None, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result = search("/nonexistent/directory", "test", None, None, &locks).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_search_empty_keyword() {
-        let result = search("/tmp", "", None, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result = search("/tmp", "", None, None, &locks).await;
         assert!(result.is_err());
     }
 

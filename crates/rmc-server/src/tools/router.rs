@@ -45,6 +45,8 @@ pub struct SearchToolRouter {
     tool_router: ToolRouter<Self>,
     /// Optional sync manager for automatic directory tracking
     sync_manager: Option<std::sync::Arc<crate::mcp::SyncManager>>,
+    /// Per-workspace operation locks for cache/index state
+    workspace_locks: crate::mcp::WorkspaceLockRegistry,
 }
 
 impl SearchToolRouter {
@@ -52,14 +54,17 @@ impl SearchToolRouter {
         Self {
             tool_router: Self::tool_router(),
             sync_manager: None,
+            workspace_locks: crate::mcp::WorkspaceLockRegistry::new(),
         }
     }
 
     /// Create a new SearchToolRouter with background sync manager
     pub fn with_sync_manager(sync_manager: std::sync::Arc<crate::mcp::SyncManager>) -> Self {
+        let workspace_locks = sync_manager.workspace_locks();
         Self {
             tool_router: Self::tool_router(),
             sync_manager: Some(sync_manager),
+            workspace_locks,
         }
     }
 }
@@ -92,6 +97,7 @@ impl SearchToolRouter {
             &keyword,
             embedding_profile.as_deref(),
             self.sync_manager.as_ref(),
+            &self.workspace_locks,
         )
         .await
     }
@@ -221,7 +227,12 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::endpoints::index::IndexCodebaseParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::index::index_codebase(params, self.sync_manager.as_ref()).await
+        crate::tools::endpoints::index::index_codebase(
+            params,
+            self.sync_manager.as_ref(),
+            &self.workspace_locks,
+        )
+        .await
     }
 
     /// Clear corrupted cache, index, and vector store files
@@ -230,7 +241,12 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::endpoints::cache::ClearCacheParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::cache::clear_cache(params, self.sync_manager.as_ref()).await
+        crate::tools::endpoints::cache::clear_cache(
+            params,
+            self.sync_manager.as_ref(),
+            &self.workspace_locks,
+        )
+        .await
     }
 
     // ----- Hypergraph tools (Layer 7) -----
