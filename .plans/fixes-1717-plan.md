@@ -42,9 +42,21 @@ nix develop ../nix-devshells#cuda-code --command {command}
 ### Execution Status
 
 - [x] Step 1: checked working copy with `jj status`. Current expected dirty files before the step commit were this new plan file and the pre-existing `.plans/mcp-side-by-side-comparison-2.md` change. The pre-existing side-by-side comparison plan change is unrelated and must stay out of fixes-1717 commits.
-- [ ] Step 2: record current relevant code paths.
+- [x] Step 2: recorded current relevant code paths.
 - [ ] Step 3: establish targeted test commands.
 - [ ] Step 4: record baseline MCP observations.
+
+### Current Code Path Notes
+
+- `crates/rmc-server/src/tools/endpoints/health.rs`: BM25 already uses read-only `open_bm25_search`, but vector health still calls `VectorStore::new_embedded`, which can create LanceDB state during a probe.
+- `crates/rmc-server/src/tools/endpoints/cache.rs`: `clear_cache` directly deletes cache/index/vector directories and graph snapshots, but it is not passed `SyncManager`, so it cannot untrack a targeted workspace before deletion.
+- `crates/rmc-server/src/tools/endpoints/query.rs`: search tracks successful indexed workspaces in `SyncManager`; missing/corrupt indexes are cleaned and rebuilt through `ensure_indexed`; `create_hybrid_search` constructs a fresh `EmbeddingGenerator` and `VectorStore` per call.
+- `crates/rmc-server/src/mcp/sync.rs`: `SyncManager` already supports `track_directory`, `untrack_directory`, and listing tracked directories, but it has no global untrack API and no shared per-workspace operation lock.
+- `crates/rmc-engine/src/vector_store/lancedb.rs`: `LanceDbBackend::new` creates the database directory, ensures the table exists, creates indexes, and writes metadata when absent. A separate read-only opener is needed for health.
+- `crates/rmc-engine/src/search/mod.rs`: hybrid search owns `EmbeddingGenerator` and `VectorStore`; repeated query setup happens above this layer in server query construction. Result ordering changes are intentionally out of scope for this plan.
+- `crates/rmc-engine/src/embeddings/mod.rs`: `EmbeddingGenerator::with_backend` constructs the runtime embedder; repeated server-side construction is a plausible contributor to warm-search latency variance.
+- `crates/rmc-graph/src/graph/snapshot.rs`: `build_and_persist` calls `loader::load` before computing fingerprint and checking for an existing manifest, so warm reuse still pays the RA workspace load cost.
+- `crates/rmc-graph/src/graph/loader.rs`: `loader::load` canonicalizes the workspace and loads rust-analyzer with dependencies, all targets, all features, tests, and prefilled caches. This is the expensive work Phase 4 should bypass on warm reuse.
 
 ### Goal
 
