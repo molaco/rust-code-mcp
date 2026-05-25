@@ -702,7 +702,7 @@ Then run a small side-by-side MCP sample:
 - [x] Step 2: recorded latency distribution.
 - [x] Step 3: recorded setup actions per call.
 - [x] Step 4: identified cacheable objects.
-- [ ] Step 5: decide whether to proceed with Phase 6.
+- [x] Step 5: decided to proceed with conservative Phase 6 caching.
 
 ### Step 1 Sampling Definition
 
@@ -746,6 +746,16 @@ The expensive and cache-sensitive setup candidates are the embedding generator, 
 - `Bm25Search` implements `Clone` over Tantivy `Index`, `ChunkSchema`, and `IndexReader`. It can be cached, but stale-reader behavior after writes must be handled with invalidation or reload.
 - `HybridSearch` is cheap to reconstruct once the generator, vector store, and BM25 handle are cached. Caching the wrapper itself adds little value compared with caching its components.
 - Path selection, vector metadata checks, and backend resolution are comparatively cheap and should remain simple unless profiling shows otherwise.
+
+### Step 5 Decision
+
+Proceed with Phase 6, but keep the scope conservative:
+
+- Cache `EmbeddingGenerator` and `VectorStore` first, because they are cloneable Arc-backed wrappers and represent the clearest repeated setup cost.
+- Cache `Bm25Search` only if invalidation remains straightforward; otherwise leave BM25 as a read-only opener in this pass.
+- Do not cache `HybridSearch` itself; reconstructing it from cached components is cheap and keeps lifecycle boundaries simpler.
+- Treat this as variance/overhead reduction, not a fix for a confirmed stable refactor slowdown.
+- Require explicit invalidation on targeted clear, global clear, force reindex, and any path that recreates index/vector state.
 
 ### Goal
 
