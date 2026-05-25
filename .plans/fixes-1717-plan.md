@@ -544,7 +544,7 @@ Adjust test filters to match actual test names.
 - [x] Step 1: inspected current snapshot identity logic.
 - [x] Step 2: extracted pure preflight helpers.
 - [x] Step 3: added fast reuse function.
-- [ ] Step 4: reorder `build_and_persist`.
+- [x] Step 4: reordered `build_and_persist`.
 - [ ] Step 5: ensure manifest writes keep preflight fields.
 - [ ] Step 6: add tests.
 
@@ -570,6 +570,14 @@ Adjust test filters to match actual test names.
 - The helper reads the manifest before any data-file fallback, preserving existing malformed/unreadable manifest errors.
 - The helper no longer reports successful reuse when the snapshot manifest exists but `data.mdb` is missing; that case falls through to rebuild.
 - `build_and_persist` now uses the helper in its existing post-load reuse branch, so this step centralizes reuse logic without yet moving it before `loader::load`.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph` passed with pre-existing warnings.
+
+### Step 4 Implementation Notes
+
+- `build_and_persist` now canonicalizes the requested directory, computes snapshot identity, and checks reusable manifest state before calling `loader::load` when `force_rebuild=false`.
+- Warm compatible reuse returns before rust-analyzer workspace loading.
+- `force_rebuild=true`, missing manifests, changed fingerprints, and unusable snapshot data fall through to the existing load/extract/write path.
+- The write path creates graph directories only after preflight misses, so warm reuse remains read-side except for filesystem metadata reads.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph` passed with pre-existing warnings.
 
 ### Goal

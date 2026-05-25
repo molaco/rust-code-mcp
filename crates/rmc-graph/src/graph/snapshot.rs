@@ -164,6 +164,12 @@ fn graph_paths_for_workspace(workspace_root: &Path, options: &BuildOptions) -> G
     }
 }
 
+fn canonical_workspace_root(directory: &Path) -> Result<PathBuf> {
+    directory
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", directory.display()))
+}
+
 fn snapshot_identity(
     workspace_root: PathBuf,
     paths: GraphPaths,
@@ -191,6 +197,24 @@ fn compute_snapshot_identity(
     Ok(snapshot_identity(workspace_root, paths, fingerprint))
 }
 
+fn compute_snapshot_identity_timed(
+    workspace_root: PathBuf,
+    paths: GraphPaths,
+    timing: bool,
+) -> Result<SnapshotIdentity> {
+    if !timing {
+        return compute_snapshot_identity(workspace_root, paths);
+    }
+
+    let t = std::time::Instant::now();
+    let fingerprint = compute_fingerprint(&workspace_root)?;
+    eprintln!(
+        "build:   compute_fingerprint          {:>9.2?}",
+        t.elapsed()
+    );
+    Ok(snapshot_identity(workspace_root, paths, fingerprint))
+}
+
 fn try_reuse_existing_snapshot(identity: &SnapshotIdentity) -> Result<Option<BuildResult>> {
     if !identity.manifest_path.exists() {
         return Ok(None);
@@ -215,9 +239,24 @@ fn try_reuse_existing_snapshot(identity: &SnapshotIdentity) -> Result<Option<Bui
 
 pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<BuildResult> {
     let timing = std::env::var_os("EXTRACT_TIMING").is_some();
+    let workspace_root = canonical_workspace_root(directory)?;
+
+    let preflight_identity = if options.force_rebuild {
+        None
+    } else {
+        let paths = graph_paths_for_workspace(&workspace_root, &options);
+        let identity = compute_snapshot_identity_timed(workspace_root.clone(), paths, timing)?;
+        if let Some(result) = try_reuse_existing_snapshot(&identity)? {
+            if timing {
+                eprintln!("build:   reused existing snapshot");
+            }
+            return Ok(result);
+        }
+        Some(identity)
+    };
 
     let t = std::time::Instant::now();
-    let loaded = loader::load(directory)?;
+    let loaded = loader::load(&workspace_root)?;
     if timing {
         eprintln!(
             "build:   loader::load                 {:>9.2?}  ({} local crates)",
@@ -226,29 +265,13 @@ pub fn build_and_persist(directory: &Path, options: BuildOptions) -> Result<Buil
         );
     }
 
-    let paths = graph_paths_for_workspace(&loaded.workspace_root, &options);
-    paths.ensure_dirs()?;
-
-    let identity = if timing {
-        let t = std::time::Instant::now();
-        let fingerprint = compute_fingerprint(&loaded.workspace_root)?;
-        eprintln!(
-            "build:   compute_fingerprint          {:>9.2?}",
-            t.elapsed()
-        );
-        snapshot_identity(loaded.workspace_root.clone(), paths, fingerprint)
+    let identity = if let Some(identity) = preflight_identity {
+        identity
     } else {
-        compute_snapshot_identity(loaded.workspace_root.clone(), paths)?
+        let paths = graph_paths_for_workspace(&loaded.workspace_root, &options);
+        compute_snapshot_identity_timed(loaded.workspace_root.clone(), paths, timing)?
     };
-
-    if !options.force_rebuild {
-        if let Some(result) = try_reuse_existing_snapshot(&identity)? {
-            if timing {
-                eprintln!("build:   reused existing snapshot");
-            }
-            return Ok(result);
-        }
-    }
+    identity.paths.ensure_dirs()?;
 
     if identity.snapshot_dir.exists() {
         fs::remove_dir_all(&identity.snapshot_dir)
