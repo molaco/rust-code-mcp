@@ -267,7 +267,7 @@ Adjust test filters to match actual test names.
 - [x] Step 2: updated cache endpoint dependencies.
 - [x] Step 3: canonicalized targeted directory inputs.
 - [x] Step 4: untracked targeted directories before deletion.
-- [ ] Step 5: preserve global clear semantics.
+- [x] Step 5: preserved global clear semantics with explicit untracking.
 - [ ] Step 6: add tests.
 
 ### Step 1 Wiring Notes
@@ -299,6 +299,14 @@ Adjust test filters to match actual test names.
 - Targeted `clear_cache` now calls `SyncManager::untrack_directory` before deleting cache, index, vector, or hypergraph state.
 - Dry runs do not untrack, because they do not delete anything.
 - The untrack path uses the canonical target computed in Step 3, and `SyncManager` normalizes internally as a second safety net.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 5 Implementation Notes
+
+- Added `SyncManager::untrack_all_directories`.
+- Global non-dry-run `clear_cache` now clears sync tracking before deleting all cache and index state.
+- Global dry runs preserve sync tracking because no state is deleted.
+- This keeps the user-facing global clear semantics while preventing the sync loop from rebuilding globally cleared indexes from stale tracked-directory state.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal

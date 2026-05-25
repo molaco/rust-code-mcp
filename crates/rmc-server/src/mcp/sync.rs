@@ -69,6 +69,17 @@ impl SyncManager {
         }
     }
 
+    /// Remove all directories from tracking
+    pub async fn untrack_all_directories(&self) -> usize {
+        let mut dirs = self.tracked_dirs.write().await;
+        let count = dirs.len();
+        dirs.clear();
+        if count > 0 {
+            tracing::info!("Stopped tracking all directories: {}", count);
+        }
+        count
+    }
+
     /// Get list of tracked directories
     pub async fn get_tracked_directories(&self) -> Vec<PathBuf> {
         let dirs = self.tracked_dirs.read().await;

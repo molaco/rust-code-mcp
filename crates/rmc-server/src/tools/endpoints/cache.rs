@@ -204,6 +204,12 @@ pub(crate) async fn clear_cache(
             );
         }
     } else {
+        if !dry_run {
+            if let Some(sync_manager) = sync_manager {
+                sync_manager.untrack_all_directories().await;
+            }
+        }
+
         // Clear all caches
         let cache_dir = data_dir.join("cache");
         clear_existing_dir(
