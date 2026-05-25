@@ -393,6 +393,23 @@ Adjust test filters to match actual test names.
 
 ## Phase 3: Per-Workspace Operation Lock
 
+### Execution Status
+
+- [x] Step 1: located existing shared server state.
+- [ ] Step 2: add lock registry type.
+- [ ] Step 3: wire lock registry into endpoints.
+- [ ] Step 4: apply locking in write paths.
+- [ ] Step 5: apply locking around search paths that may trigger indexing.
+- [ ] Step 6: add concurrency tests.
+
+### Step 1 State Notes
+
+- `crates/rust-code-mcp/src/main.rs` constructs one `Arc<SyncManager>` and passes it to `SearchTool::with_sync_manager`.
+- `SearchToolRouter` is the only current tool-level shared-state holder, with `sync_manager: Option<Arc<crate::mcp::SyncManager>>`.
+- Search, index, and cache endpoint functions already receive the sync manager from the router. That makes the router the right place to also own and pass an operation lock registry.
+- The lock registry should live in `crates/rmc-server/src/mcp/` next to `SyncManager`, because it is server runtime coordination rather than engine, indexing, or graph business logic.
+- `SearchToolRouter::new()` should keep working by constructing its own lock registry without a sync manager; `SearchToolRouter::with_sync_manager(...)` should share one registry with the background sync loop.
+
 ### Goal
 
 Coordinate operations that can read, write, or delete workspace-derived index state.
