@@ -342,7 +342,6 @@ pub(crate) async fn search(
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
-    let _ = workspace_locks;
     let dir_path = Path::new(directory);
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
@@ -357,6 +356,8 @@ pub(crate) async fn search(
             None,
         ));
     }
+
+    let _workspace_lock = workspace_locks.lock_shared(dir_path).await;
 
     let requested_backend = resolve_embedding_backend_for_mcp(embedding_profile, dir_path)?;
     let paths = select_index_paths(dir_path, &requested_backend)?;

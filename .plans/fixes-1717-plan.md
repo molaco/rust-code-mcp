@@ -399,7 +399,7 @@ Adjust test filters to match actual test names.
 - [x] Step 2: added lock registry type.
 - [x] Step 3: wired lock registry into endpoints.
 - [x] Step 4: applied locking in write paths.
-- [ ] Step 5: apply locking around search paths that may trigger indexing.
+- [x] Step 5: applied locking around search paths that may trigger indexing.
 - [ ] Step 6: add concurrency tests.
 
 ### Step 1 State Notes
@@ -433,6 +433,13 @@ Adjust test filters to match actual test names.
 - `SyncManager::sync_directory` now takes an exclusive workspace lock before discovering and incrementally updating indexed profiles.
 - Targeted `clear_cache` now takes an exclusive workspace lock before untracking or deleting workspace-derived state.
 - Global `clear_cache` now takes the global lock before untracking all directories or deleting all cache/index state.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 5 Implementation Notes
+
+- `search` now takes a workspace lock after validating inputs and before probing BM25/vector state.
+- The lock covers both warm read-side search and the cold/corrupt fallback path that calls `ensure_indexed`.
+- The current registry maps shared and exclusive locks to the same mutex, so this intentionally serializes search with index, clear, and sync for the same workspace.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal
