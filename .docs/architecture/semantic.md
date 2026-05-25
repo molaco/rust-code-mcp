@@ -26,7 +26,8 @@ graph TD
     end
 
     subgraph Loader["loader.rs — workspace bootstrap"]
-        LOAD["load_project(path)<br/>no_deps + cache prefill"]
+        LOAD["load_project(path)<br/>no_deps=true + cache prefill"]
+        LOADFULL["load_project_full(path)<br/>no_deps=false + all targets"]
     end
 
     subgraph Position["position.rs — coordinate + query layer"]
@@ -69,8 +70,10 @@ graph TD
     SVC --> SVC_RBN
     SVC --> SVC_RBP
 
-    GETLOAD -->|cache miss| LOAD
+    GETLOAD -->|fast cache miss| LOAD
+    GETLOAD -->|rename full miss/upgrade| LOADFULL
     LOAD --> LOADWS
+    LOADFULL --> LOADWS
     LOADWS --> RDB
     RDB --> AH
     LOADWS --> VFS
@@ -133,7 +136,7 @@ graph TD
 | Module | Role | Key types |
 |--------|------|-----------|
 | `mod` | Owns the process-wide `SEMANTIC` singleton and the `SemanticService` cache; routes name-based queries (search, references, rename) and position-based rename through `position` / `rename` after ensuring the project's IDE state is loaded. | `SEMANTIC: LazyLock<Mutex<SemanticService>>`, `SemanticService`, `ProjectContext` (= `(AnalysisHost, Vfs)`) |
-| `loader` | Bootstraps a rust-analyzer workspace with `no_deps = true`, no proc-macro server, and prefilled caches for ~120ms cold loads; produces the `(AnalysisHost, Vfs)` pair stored in the cache. | `CargoConfig`, `LoadCargoConfig`, `AnalysisHost`, `Vfs` |
+| `loader` | Bootstraps rust-analyzer workspaces in either fast local-project mode (`no_deps = true`) or full workspace mode (`no_deps = false`, sysroot discovery, all features, all targets, test cfg) for rename previews; produces the `(AnalysisHost, Vfs)` pair stored in the cache. | `CargoConfig`, `CargoFeatures`, `RustLibSource`, `LoadCargoConfig`, `AnalysisHost`, `Vfs` |
 | `position` | Converts between real file paths and VFS `FileId`s, between 1-based `line`/`column` and `TextSize` offsets, and between rust-analyzer `NavigationTarget`s and the public `Location` record; implements `goto_definition`, `find_references`, `symbol_search`, `find_references_by_name`, and shared `FilePosition` construction. | `Location`, `FileId`, `FilePosition`, `TextSize`, `LineIndex`, `NavigationTarget`, `ReferenceSearchResult` |
 | `rename` | Disambiguates a symbol by exact name or concrete file position, invokes `Analysis::rename`, and materializes the resulting `SourceChange` into a deterministic `RenamePreview` (text edits + file moves) without touching the filesystem. | `RenameEdit`, `RenameFileMove`, `RenamePreview`, `RenameConfig`, `SourceChange`, `FileSystemEdit` |
 
@@ -141,12 +144,12 @@ graph TD
 
 A query of the form `(project_path, symbol_name [, new_name])` or `(project_path, file_path, line, column)` flows through the module as follows:
 
-1. **Lock & cache lookup.** The MCP handler acquires the `SEMANTIC` mutex. `SemanticService::get_or_load` canonicalizes `project_path` and checks `self.projects`. On a hit, it reuses the cached `(AnalysisHost, Vfs)`; on a miss it logs an info trace and calls `loader::load_project`.
-2. **Workspace load (cold path only).** `load_project` builds a `CargoConfig { sysroot: None, no_deps: true, .. }` and a `LoadCargoConfig` with cache prefill enabled and `num_cpus::get_physical()` worker threads, then calls `ra_ap_load_cargo::load_workspace_at` to produce a `RootDatabase` + `Vfs`. The database is wrapped in `AnalysisHost::with_database` and the pair is inserted into the cache under the canonical project path.
+1. **Lock & cache lookup.** The MCP handler acquires the `SEMANTIC` mutex. `SemanticService::get_or_load_kind` canonicalizes `project_path` and checks `self.projects`. On a suitable hit, it reuses the cached `(AnalysisHost, Vfs)`; if a rename requests `Full` and the cache only has `Fast`, it reloads and replaces the entry.
+2. **Workspace load (cold path or full upgrade).** `load_project` builds a fast `CargoConfig { sysroot: None, no_deps: true, .. }`; `load_project_full` builds `CargoConfig { sysroot: Some(Discover), no_deps: false, features: All, all_targets: true, set_test: true, .. }`. Both use a `LoadCargoConfig` with cache prefill enabled and `num_cpus::get_physical()` worker threads, then call `ra_ap_load_cargo::load_workspace_at` to produce a `RootDatabase` + `Vfs`. The database is wrapped in `AnalysisHost::with_database` and the pair is inserted into the cache under the canonical project path.
 3. **Snapshot.** The chosen `position::*` / `rename::*` function calls `host.analysis()` to obtain an immutable `Analysis` snapshot over the shared `RootDatabase`.
 4. **Coordinate / symbol resolution.**
    - Position-based verbs use `file_position` (`path_to_file_id` + `to_offset`) to compose a `FilePosition` from the input path and 1-based coordinates.
-   - Name-based verbs (`symbol_search`, `find_references_by_name`, `rename_by_name`) run `Analysis::symbol_search(Query, limit)` and select target(s) from the returned `NavigationTarget`s; rename additionally filters by exact `name.as_str() == symbol_name` to refuse fuzzy or ambiguous matches. `rename_by_position` bypasses `symbol_search` and validates that the selected token matches the requested symbol leaf.
+   - Name-based verbs (`symbol_search`, `find_references_by_name`, `rename_by_name`) run `Analysis::symbol_search(Query, limit)` and select target(s) from the returned `NavigationTarget`s; rename additionally filters by exact `name.as_str() == symbol_name` to refuse fuzzy or ambiguous matches. `rename_by_name` and `rename_by_position` both use full workspace loading; `rename_by_position` bypasses `symbol_search` and validates that the selected token matches the requested symbol leaf.
 5. **Query.** Depending on the verb:
    - `goto_definition` calls `Analysis::goto_definition`.
    - `find_references` / `find_references_by_name` call `Analysis::find_all_refs` (imports + tests included, no scope) and walk the declaration plus per-file `(range, _category)` entries.
@@ -161,8 +164,8 @@ A query of the form `(project_path, symbol_name [, new_name])` or `(project_path
 
 - **Process-wide singleton.** `SEMANTIC: LazyLock<Mutex<SemanticService>>` is the sole entry point; it is initialized on first access and survives for the life of the process. `AnalysisHost` is not `Sync`, which forces the outer `Mutex` rather than an `RwLock`.
 - **Coarse-grained locking.** Every public verb (`get_or_load`, `symbol_search`, `find_references_by_name`, `rename_by_name`, `rename_by_position`, plus handler-level `goto_definition` / `find_references` paths) takes the same mutex for the full duration of the query. There is no per-project lock — concurrent MCP requests targeting different workspaces still serialize through the global mutex. Rename queries, which can fan out across many files inside rust-analyzer, hold the mutex for the entire `Analysis::rename` + `source_change_to_preview` span.
-- **Per-project IDE cache.** `SemanticService::projects: HashMap<PathBuf, ProjectContext>` is keyed by `Path::canonicalize`'d project paths so relative-path callers hit the same entry. Once inserted, an entry is never invalidated within the module — cache invalidation, if any, is the caller's responsibility (e.g. via the surrounding `clear_cache` MCP tool).
-- **Internal parallelism.** The cold-load path inside `load_project` is the only place that fans out: `LoadCargoConfig` is given `num_cpus::get_physical()` worker threads and `with_proc_macro_server` is set to one process. `prefill_caches = true` warms common queries up-front so subsequent `Analysis` snapshots are fast and lock-free.
+- **Per-project IDE cache.** `SemanticService::projects: HashMap<PathBuf, ProjectContext>` is keyed by `Path::canonicalize`'d project paths so relative-path callers hit the same entry. Each entry records `LoadKind`; a fast entry can be upgraded to full for rename, while full entries are reused for later fast or full calls. Once inserted, an entry is never invalidated within the module — cache invalidation, if any, is the caller's responsibility (e.g. via the surrounding `clear_cache` MCP tool).
+- **Internal parallelism.** The cold-load paths inside `load_project` and `load_project_full` are the only places that fan out: `LoadCargoConfig` is given `num_cpus::get_physical()` worker threads and `with_proc_macro_server` is set to one process. `prefill_caches = true` warms common queries up-front so subsequent `Analysis` snapshots are fast and lock-free.
 - **Snapshot isolation & cancellation.** Each query calls `host.analysis()` to get an immutable `Analysis` snapshot rooted in the shared `RootDatabase`; rust-analyzer queries may return cancellation errors when a newer snapshot would invalidate them — rename converts that case via `.context("rename query cancelled")`, and the inner `Result<SourceChange, RenameError>` surfaces refusals (invalid identifier, cross-crate rename) as `"rust-analyzer rename refused: {e}"`.
 - **Side-effect boundary.** No code in the module writes to the filesystem. `RenamePreview` is pure data; the caller — typically an MCP tool handler — decides whether to materialize it. This keeps the semantic layer deterministic and testable.
 - **External boundaries.** Inbound: MCP tool handlers (`find_definition`, `find_references`, `symbol_search`, `find_references_by_name`, `rename_by_name`, `rename_by_position`), each holding `&mut self` on the locked `SemanticService`. Outbound: `ra_ap_load_cargo::load_workspace_at`; `ra_ap_ide::{AnalysisHost, Analysis, FilePosition, NavigationTarget, Query, GotoDefinitionConfig, FindAllRefsConfig, RenameConfig, SourceChange, FileSystemEdit}`; `ra_ap_vfs::{Vfs, VfsPath, FileId}`; `ra_ap_ide_db::base_db::FileId` (bridged via `FileId::from_raw(index())`); `Path::canonicalize` for project/file paths (never `write`); `tracing::info` traces around the cold-load path.

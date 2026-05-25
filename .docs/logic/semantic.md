@@ -18,8 +18,14 @@
 ### `ProjectContext` (private struct)
 **Call graph:** —
 **Steps:**
-1. Bundles the `AnalysisHost` and `Vfs` returned by `loader::load_project` for a single canonical project root.
+1. Bundles the `AnalysisHost`, `Vfs`, and `LoadKind` returned by the semantic loader for a single canonical project root.
 2. Stored as the value type in `SemanticService::projects`, keyed by the canonical project path.
+
+### `LoadKind` (private enum)
+**Call graph:** —
+**Steps:**
+1. Distinguishes `Fast` local-project semantic loads from `Full` workspace semantic loads.
+2. Allows `SemanticService` to upgrade a cached fast context before rename previews without downgrading an already-full context.
 
 ### `SemanticService::new() -> Self`
 **Call graph:** HashMap::new
@@ -27,14 +33,23 @@
 1. Constructs a new `SemanticService` with an empty `HashMap` of cached `ProjectContext` entries keyed by canonical project paths.
 
 ### `SemanticService::get_or_load(&mut self, project_path: &Path) -> Result<()>` (private)
-**Call graph:** Path::canonicalize -> HashMap::contains_key -> tracing::info -> loader::load_project -> HashMap::insert
+**Call graph:** SemanticService::get_or_load_kind
+**Steps:**
+1. Requests `LoadKind::Fast` through `get_or_load_kind`.
+
+### `SemanticService::get_or_load_full(&mut self, project_path: &Path) -> Result<()>` (private)
+**Call graph:** SemanticService::get_or_load_kind
+**Steps:**
+1. Requests `LoadKind::Full` through `get_or_load_kind`.
+
+### `SemanticService::get_or_load_kind(&mut self, project_path: &Path, requested: LoadKind) -> Result<()>` (private)
+**Call graph:** Path::canonicalize -> HashMap::get -> tracing::info -> loader::load_project / loader::load_project_full -> HashMap::insert
 **Steps:**
 1. Canonicalizes the input project path so cache lookups are independent of relative paths.
-2. Checks if `self.projects` already has a `ProjectContext` for this canonical path; if so, returns `Ok(())` immediately.
-3. Logs an informational trace announcing that an IDE is being loaded for the project.
-4. Calls `loader::load_project` to construct an `AnalysisHost` plus a `Vfs` for the workspace.
-5. Inserts the resulting `(host, vfs)` into the `projects` map under the canonical key, wrapped in `ProjectContext`.
-6. Logs a follow-up trace confirming successful IDE load.
+2. Reuses an existing cache entry when no load is needed.
+3. Reloads when there is no entry or when a `Full` request finds a cached `Fast` entry.
+4. Calls `loader::load_project` for `Fast` requests or `loader::load_project_full` for `Full` requests.
+5. Inserts the resulting `(host, vfs, load_kind)` into the `projects` map under the canonical key.
 
 ### `SemanticService::symbol_search(&mut self, project_path: &Path, symbol_name: &str, limit: usize) -> Result<Vec<Location>>`
 **Call graph:** SemanticService::get_or_load -> Path::canonicalize -> HashMap::get -> position::symbol_search
@@ -52,16 +67,16 @@
 3. Forwards the request to `position::find_references_by_name`, which searches by symbol name then resolves references for each match.
 
 ### `SemanticService::rename_by_name(&mut self, project_path: &Path, symbol_name: &str, new_name: &str) -> Result<RenamePreview>`
-**Call graph:** SemanticService::get_or_load -> Path::canonicalize -> HashMap::get -> rename::rename_by_name
+**Call graph:** SemanticService::get_or_load_full -> Path::canonicalize -> HashMap::get -> rename::rename_by_name
 **Steps:**
-1. Calls `get_or_load` to ensure the project's IDE state is cached for this canonical path.
+1. Calls `get_or_load_full` to ensure the project's IDE state is cached with full workspace dependency edges.
 2. Re-canonicalizes the path and retrieves the matching `ProjectContext`, erroring if not present.
 3. Delegates to `rename::rename_by_name` with the host, VFS, original name, and replacement name; returns the `RenamePreview` without touching the filesystem.
 
 ### `SemanticService::rename_by_position(&mut self, project_path: &Path, file_path: &Path, line: u32, column: u32, symbol_name: &str, new_name: &str) -> Result<RenamePreview>`
-**Call graph:** SemanticService::get_or_load -> Path::canonicalize -> HashMap::get -> rename::rename_by_position
+**Call graph:** SemanticService::get_or_load_full -> Path::canonicalize -> HashMap::get -> rename::rename_by_position
 **Steps:**
-1. Calls `get_or_load` to ensure the project's IDE state is cached for this canonical path.
+1. Calls `get_or_load_full` to ensure the project's IDE state is cached with full workspace dependency edges.
 2. Re-canonicalizes the project path and retrieves the matching `ProjectContext`, erroring if not present.
 3. Delegates to `rename::rename_by_position` with the host, VFS, file position, expected symbol name, and replacement name; returns the `RenamePreview` without touching the filesystem.
 
@@ -73,6 +88,16 @@
 1. Builds a `CargoConfig` with `sysroot = None` and `no_deps = true` to skip dependency analysis (~120ms loads); other fields fall through to `Default::default()`.
 2. Builds a `LoadCargoConfig` that disables `OUT_DIR` and the proc-macro server (`ProcMacroServerChoice::None`), enables `prefill_caches`, sets `num_worker_threads = num_cpus::get_physical()`, and uses one proc-macro process.
 3. Calls `load_workspace_at` with the path, configs, and a no-op progress callback to load the workspace database and VFS.
+4. Wraps any load error with the context message "Failed to load workspace".
+5. Constructs an `AnalysisHost` from the returned database via `AnalysisHost::with_database`.
+6. Returns the `(AnalysisHost, Vfs)` tuple, dropping the third tuple element from `load_workspace_at`.
+
+### `load_project_full(path: &Path) -> Result<(AnalysisHost, Vfs)>`
+**Call graph:** CargoConfig::default -> num_cpus::get_physical -> ra_ap_load_cargo::load_workspace_at -> anyhow::Context::context -> AnalysisHost::with_database
+**Steps:**
+1. Builds a `CargoConfig` with `sysroot = Some(RustLibSource::Discover)`, `no_deps = false`, `features = CargoFeatures::All`, `all_targets = true`, and `set_test = true`.
+2. Reuses the same `LoadCargoConfig` shape as the fast loader: no proc-macro server, cache prefill enabled, physical CPU worker count, and one proc-macro process.
+3. Calls `load_workspace_at` to load the full workspace database and VFS so rename previews can include downstream workspace reverse dependencies.
 4. Wraps any load error with the context message "Failed to load workspace".
 5. Constructs an `AnalysisHost` from the returned database via `AnalysisHost::with_database`.
 6. Returns the `(AnalysisHost, Vfs)` tuple, dropping the third tuple element from `load_workspace_at`.

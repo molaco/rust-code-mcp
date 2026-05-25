@@ -500,6 +500,31 @@ nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server rename
 nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server
 ```
 
+### Execution Status
+
+- [x] Phase start guard: ran `jj show --summary` before editing Phase 3.
+- [x] Added `load_project_full(...)` in `rmc-server` semantic loading with
+  `sysroot=Discover`, `no_deps=false`, all features, all targets, and test cfg.
+- [x] Added `LoadKind` tracking in the semantic cache. Fast contexts are
+  upgraded to full for rename; full contexts are not downgraded by later fast
+  calls.
+- [x] Changed `rename_by_name` and `rename_by_position` to request full
+  workspace semantic loading.
+- [x] Updated `build_hypergraph` wording in both router docs and `TOOLS.md`
+  from `no_deps=true` to the graph implementation's current `no_deps=false`.
+- [x] Updated semantic architecture/logic docs for fast vs full load behavior.
+- [x] Added and passed
+  `rename_preview_includes_workspace_reverse_dependencies`, proving a rename
+  preview for a trait declaration includes edits in a downstream workspace
+  crate.
+- [x] Verified with:
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server rename_preview_includes_workspace_reverse_dependencies`
+  - `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server rename`
+  - `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server`
+- [x] Result: all Phase 3 checks passed. The commands emitted existing
+  dead-code / unreachable-pub warnings and a dirty `../nix-devshells` warning;
+  no compile or test failures.
+
 ### Commit
 
 ```sh

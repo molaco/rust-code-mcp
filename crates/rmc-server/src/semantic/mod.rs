@@ -24,6 +24,13 @@ pub(crate) static SEMANTIC: LazyLock<Mutex<SemanticService>> = LazyLock::new(|| 
 struct ProjectContext {
     host: AnalysisHost,
     vfs: Vfs,
+    load_kind: LoadKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoadKind {
+    Fast,
+    Full,
 }
 
 /// Service for semantic code queries
@@ -40,12 +47,40 @@ impl SemanticService {
 
     /// Get or load project (lazy loading)
     fn get_or_load(&mut self, project_path: &Path) -> Result<()> {
+        self.get_or_load_kind(project_path, LoadKind::Fast)
+    }
+
+    /// Get or load project with full workspace dependency edges.
+    fn get_or_load_full(&mut self, project_path: &Path) -> Result<()> {
+        self.get_or_load_kind(project_path, LoadKind::Full)
+    }
+
+    fn get_or_load_kind(&mut self, project_path: &Path, requested: LoadKind) -> Result<()> {
         let canonical = project_path.canonicalize()?;
 
-        if !self.projects.contains_key(&canonical) {
-            tracing::info!("Loading IDE for project: {}", canonical.display());
-            let (host, vfs) = loader::load_project(&canonical)?;
-            self.projects.insert(canonical, ProjectContext { host, vfs });
+        let needs_load = match self.projects.get(&canonical) {
+            Some(ctx) => requested == LoadKind::Full && ctx.load_kind == LoadKind::Fast,
+            None => true,
+        };
+
+        if needs_load {
+            tracing::info!(
+                "Loading {:?} IDE for project: {}",
+                requested,
+                canonical.display()
+            );
+            let (host, vfs) = match requested {
+                LoadKind::Fast => loader::load_project(&canonical)?,
+                LoadKind::Full => loader::load_project_full(&canonical)?,
+            };
+            self.projects.insert(
+                canonical,
+                ProjectContext {
+                    host,
+                    vfs,
+                    load_kind: requested,
+                },
+            );
             tracing::info!("IDE loaded successfully");
         }
 
@@ -112,7 +147,7 @@ impl SemanticService {
         symbol_name: &str,
         new_name: &str,
     ) -> Result<RenamePreview> {
-        self.get_or_load(project_path)?;
+        self.get_or_load_full(project_path)?;
 
         let canonical = project_path.canonicalize()?;
         let ctx = self.projects.get(&canonical)
@@ -131,7 +166,7 @@ impl SemanticService {
         symbol_name: &str,
         new_name: &str,
     ) -> Result<RenamePreview> {
-        self.get_or_load(project_path)?;
+        self.get_or_load_full(project_path)?;
 
         let canonical = project_path.canonicalize()?;
         let ctx = self.projects.get(&canonical)
@@ -146,5 +181,112 @@ impl SemanticService {
             symbol_name,
             new_name,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn rename_preview_includes_workspace_reverse_dependencies() {
+        let workspace = tempfile::tempdir().expect("create workspace tempdir");
+        let workspace_path = workspace.path();
+
+        write_file(
+            &workspace_path.join("Cargo.toml"),
+            r#"
+[workspace]
+members = ["engine_sdk", "engine_consumer"]
+resolver = "2"
+"#,
+        );
+        write_file(
+            &workspace_path.join("engine_sdk/Cargo.toml"),
+            r#"
+[package]
+name = "engine_sdk"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"#,
+        );
+        let sdk_lib = workspace_path.join("engine_sdk/src/lib.rs");
+        write_file(
+            &sdk_lib,
+            r#"pub trait Engine {
+    fn tick(&self);
+}
+"#,
+        );
+        write_file(
+            &workspace_path.join("engine_consumer/Cargo.toml"),
+            r#"
+[package]
+name = "engine_consumer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+engine_sdk = { path = "../engine_sdk" }
+"#,
+        );
+        write_file(
+            &workspace_path.join("engine_consumer/src/lib.rs"),
+            r#"use engine_sdk::Engine;
+
+pub struct Candle;
+
+impl Engine for Candle {
+    fn tick(&self) {}
+}
+
+pub fn run(engine: &dyn Engine) {
+    engine.tick();
+}
+"#,
+        );
+
+        let mut service = SemanticService::new();
+        let preview = service
+            .rename_by_position(
+                workspace_path,
+                &sdk_lib,
+                1,
+                11,
+                "Engine",
+                "RenamedEngine",
+            )
+            .expect("rename preview");
+
+        assert!(
+            preview
+                .edits
+                .iter()
+                .any(|edit| edit.file_path.ends_with("engine_sdk/src/lib.rs")),
+            "expected declaration edit in engine_sdk, got {:?}",
+            preview.edits
+        );
+        assert!(
+            preview
+                .edits
+                .iter()
+                .any(|edit| edit.file_path.ends_with("engine_consumer/src/lib.rs")),
+            "expected downstream edit in engine_consumer, got {:?}",
+            preview.edits
+        );
+    }
+
+    fn write_file(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent dir");
+        }
+        fs::write(path, contents.trim_start()).expect("write fixture file");
     }
 }

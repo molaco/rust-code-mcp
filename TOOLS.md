@@ -482,7 +482,7 @@ The hypergraph layer is a separate read-side query system backed by an LMDB snap
 
 #### build_hypergraph
 
-Build or reuse a persisted workspace hypergraph snapshot (HIR-driven, `no_deps=true`). Cold rebuild is roughly 5-18s depending on workspace size; reuse of an existing snapshot is essentially free.
+Build or reuse a persisted workspace hypergraph snapshot (HIR-driven, `no_deps=false`). Cold rebuild is roughly 5-18s depending on workspace size; reuse of an existing snapshot is essentially free.
 
 **Parameters:**
 | Name | Type | Required | Description |

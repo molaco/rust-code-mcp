@@ -271,7 +271,7 @@ impl SearchToolRouter {
     // ----- Hypergraph tools (Layer 7) -----
 
     #[tool(
-        description = "Build or reuse a persisted workspace hypergraph snapshot (HIR-driven, no_deps=true)"
+        description = "Build or reuse a persisted workspace hypergraph snapshot (HIR-driven, no_deps=false)"
     )]
     async fn build_hypergraph(
         &self,
