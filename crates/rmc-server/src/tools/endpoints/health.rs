@@ -97,7 +97,7 @@ pub(crate) async fn health_check(
             .and_then(|s| EmbeddingBackend::from_identity(s).ok())
             .map(|b| b.dim())
             .unwrap_or_else(|| backend.dim());
-        VectorStore::new_embedded(vector_path, probe_dim, &probe_identity)
+        VectorStore::open_existing_embedded(vector_path, probe_dim, &probe_identity)
             .await
             .ok()
             .map(std::sync::Arc::new)

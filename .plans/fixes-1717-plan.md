@@ -134,7 +134,7 @@ Capture the current behavior before changing production code, so regressions can
 - [x] Step 1: inspected `VectorStore::new_embedded` and `LanceDbBackend::new`; write side effects are now identified.
 - [x] Step 2: added the read-only opener.
 - [x] Step 3: reviewed shared read-only pieces; no additional refactor needed.
-- [ ] Step 4: update server health.
+- [x] Step 4: updated server health.
 - [ ] Step 5: add focused tests.
 
 ### Step 1 Inspection Notes
@@ -155,6 +155,13 @@ Capture the current behavior before changing production code, so regressions can
 
 - No extra helper extraction was made in this step. The implementation already reuses `read_metadata` and `create_schema_for_dim`, while the create-only logic remains isolated in `ensure_table_exists` and `write_metadata_if_missing`.
 - Keeping `open_existing` explicit is clearer than abstracting over the create/open split right now because the important safety property is what the read-only path does not call.
+
+### Step 4 Implementation Notes
+
+- Updated `crates/rmc-server/src/tools/endpoints/health.rs` to use `VectorStore::open_existing_embedded` instead of `VectorStore::new_embedded`.
+- Health keeps the same response shape and still uses the on-disk embedder identity when metadata exists.
+- Missing vector-store state now produces `None` for the vector component instead of creating a missing LanceDB store during the probe.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal
 
