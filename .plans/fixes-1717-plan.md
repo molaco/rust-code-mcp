@@ -700,7 +700,7 @@ Then run a small side-by-side MCP sample:
 
 - [x] Step 1: defined repeatable warm-search sample.
 - [x] Step 2: recorded latency distribution.
-- [ ] Step 3: record setup actions per call.
+- [x] Step 3: recorded setup actions per call.
 - [ ] Step 4: identify cacheable objects.
 - [ ] Step 5: decide whether to proceed with Phase 6.
 
@@ -723,6 +723,21 @@ MCP tool wall-time samples for `search(directory=/home/molaco/Documents/rust-cod
 - Refactor distribution: n=10, min=0.3425s, median=0.4737s, p90=0.9032s, max=1.1660s, mean=0.5792s.
 - Result sets stayed equivalent at the 10-result level. Equal-score ordering still varies, but ordering changes remain out of scope for this plan.
 - Interpretation: no confirmed stable refactor regression. Refactor median was slightly lower; refactor mean and p90 were slightly higher because of two outliers.
+
+### Step 3 Setup Actions
+
+Warm `search` still performs these setup actions per MCP call:
+
+- Takes the workspace operation lock and resolves the requested embedding backend/profile.
+- Selects profile-specific index paths and checks vector metadata existence.
+- Opens BM25 through `open_bm25_search`; if BM25 or vector metadata is missing, it cleans stale index state and runs `ensure_indexed`.
+- Calls `create_hybrid_search`, which resolves the query backend from vector metadata.
+- Constructs a fresh `EmbeddingGenerator` with `EmbeddingGenerator::with_backend`.
+- Opens/creates a LanceDB vector handle through `VectorStore::new_embedded`.
+- Constructs a fresh `HybridSearch` wrapper around the generator, vector store, and BM25 handle.
+- Executes `HybridSearch::search(keyword, 10)`, which embeds the query and runs BM25/vector search.
+
+The expensive and cache-sensitive setup candidates are the embedding generator, vector store handle, and BM25 opener.
 
 ### Goal
 
