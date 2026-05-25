@@ -135,7 +135,7 @@ Capture the current behavior before changing production code, so regressions can
 - [x] Step 2: added the read-only opener.
 - [x] Step 3: reviewed shared read-only pieces; no additional refactor needed.
 - [x] Step 4: updated server health.
-- [ ] Step 5: add focused tests.
+- [x] Step 5: added focused tests.
 
 ### Step 1 Inspection Notes
 
@@ -162,6 +162,17 @@ Capture the current behavior before changing production code, so regressions can
 - Health keeps the same response shape and still uses the on-disk embedder identity when metadata exists.
 - Missing vector-store state now produces `None` for the vector component instead of creating a missing LanceDB store during the probe.
 - Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
+
+### Step 5 Test Notes
+
+- Added engine coverage for missing path, missing metadata, missing table, valid backend open, and the public `VectorStore::open_existing_embedded` wrapper.
+- Added server health coverage through `open_vector_store_for_health` to prove a missing vector path is not created by a health probe.
+- Verification passed:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-engine open_existing
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server health_vector_probe_does_not_create_missing_path
+```
 
 ### Goal
 

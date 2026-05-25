@@ -25,6 +25,29 @@ pub(crate) struct HealthCheckParams {
     pub embedding_profile: Option<String>,
 }
 
+async fn open_vector_store_for_health(
+    vector_path: std::path::PathBuf,
+    backend: &EmbeddingBackend,
+    embedder_identity: &str,
+    on_disk_identity: Option<String>,
+) -> Option<std::sync::Arc<VectorStore>> {
+    // Use the on-disk identity when probing, so we don't trip the
+    // VersionMismatch check just to read health info. Fall back to
+    // the configured default if the metadata file is absent.
+    let probe_identity = on_disk_identity
+        .clone()
+        .unwrap_or_else(|| embedder_identity.to_string());
+    let probe_dim = on_disk_identity
+        .as_deref()
+        .and_then(|s| EmbeddingBackend::from_identity(s).ok())
+        .map(|b| b.dim())
+        .unwrap_or_else(|| backend.dim());
+    VectorStore::open_existing_embedded(vector_path, probe_dim, &probe_identity)
+        .await
+        .ok()
+        .map(std::sync::Arc::new)
+}
+
 /// Check system health status
 #[tool(description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)")]
 pub(crate) async fn health_check(
@@ -85,23 +108,13 @@ pub(crate) async fn health_check(
     // default) when the user picked a variant at index time.
     let on_disk_identity = read_embedder_identity(&vector_path).ok().flatten();
 
-    let vector_store = {
-        // Use the on-disk identity when probing, so we don't trip the
-        // VersionMismatch check just to read health info. Fall back to
-        // the configured default if the metadata file is absent.
-        let probe_identity = on_disk_identity
-            .clone()
-            .unwrap_or_else(|| embedder_identity.clone());
-        let probe_dim = on_disk_identity
-            .as_deref()
-            .and_then(|s| EmbeddingBackend::from_identity(s).ok())
-            .map(|b| b.dim())
-            .unwrap_or_else(|| backend.dim());
-        VectorStore::open_existing_embedded(vector_path, probe_dim, &probe_identity)
-            .await
-            .ok()
-            .map(std::sync::Arc::new)
-    };
+    let vector_store = open_vector_store_for_health(
+        vector_path,
+        &backend,
+        &embedder_identity,
+        on_disk_identity.clone(),
+    )
+    .await;
 
     // Create health monitor
     let monitor = HealthMonitor::new(bm25, vector_store, merkle_path);
@@ -170,4 +183,29 @@ pub(crate) async fn health_check(
     }
 
     Ok(CallToolResult::success(vec![Content::text(response)]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn health_vector_probe_does_not_create_missing_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let vector_path = temp_dir.path().join("missing-vector-store");
+        let backend = EmbeddingBackend::default();
+        let embedder_identity = backend.identity();
+
+        let vector_store = open_vector_store_for_health(
+            vector_path.clone(),
+            &backend,
+            &embedder_identity,
+            None,
+        )
+        .await;
+
+        assert!(vector_store.is_none());
+        assert!(!vector_path.exists());
+    }
 }

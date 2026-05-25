@@ -231,6 +231,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_open_existing_embedded_vector_store() {
+        let temp_dir = TempDir::new().unwrap();
+        VectorStore::new_embedded(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
+            .await
+            .unwrap();
+
+        let store =
+            VectorStore::open_existing_embedded(
+                temp_dir.path().to_path_buf(),
+                4,
+                "test-embedder:v1",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(store.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn test_default_config() {
         let config = VectorStoreConfig::default();
         match config {

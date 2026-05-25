@@ -631,6 +631,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_lancedb_open_existing_missing_path_does_not_create() {
+        let temp_dir = TempDir::new().unwrap();
+        let vector_path = temp_dir.path().join("missing");
+
+        let result =
+            LanceDbBackend::open_existing(vector_path.clone(), 4, "test-embedder:v1").await;
+
+        assert!(matches!(result, Err(VectorStoreError::NotFound(_))));
+        assert!(!vector_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_lancedb_open_existing_missing_metadata_does_not_create_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+        let vector_path = temp_dir.path().join("vectors");
+        std::fs::create_dir(&vector_path).unwrap();
+
+        let result =
+            LanceDbBackend::open_existing(vector_path.clone(), 4, "test-embedder:v1").await;
+
+        assert!(matches!(result, Err(VectorStoreError::NotFound(_))));
+        assert!(!vector_path.join(METADATA_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn test_lancedb_open_existing_missing_table_does_not_create_table() {
+        let temp_dir = TempDir::new().unwrap();
+        let vector_path = temp_dir.path().join("vectors");
+        std::fs::create_dir(&vector_path).unwrap();
+        std::fs::write(
+            vector_path.join(METADATA_FILE),
+            serde_json::json!({
+                "embedder_version": "test-embedder:v1",
+                "created_at": "test",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let result =
+            LanceDbBackend::open_existing(vector_path.clone(), 4, "test-embedder:v1").await;
+
+        assert!(matches!(result, Err(VectorStoreError::NotFound(_))));
+        let db = connect(vector_path.to_string_lossy().as_ref())
+            .execute()
+            .await
+            .unwrap();
+        let tables = db.table_names().execute().await.unwrap();
+        assert!(!tables.iter().any(|name| name == TABLE_NAME));
+    }
+
+    #[tokio::test]
+    async fn test_lancedb_open_existing_valid_store() {
+        let temp_dir = TempDir::new().unwrap();
+        LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
+            .await
+            .unwrap();
+
+        let backend =
+            LanceDbBackend::open_existing(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
+                .await
+                .unwrap();
+
+        assert_eq!(backend.count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn test_lancedb_upsert_and_count() {
         let temp_dir = TempDir::new().unwrap();
         let backend = LanceDbBackend::new(temp_dir.path().to_path_buf(), 4, "test-embedder:v1")
