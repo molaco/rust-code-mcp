@@ -1030,7 +1030,7 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-engine -p rm
 ### Execution Status
 
 - [x] Step 1: targeted unit and integration tests passed.
-- [ ] Step 2: package checks.
+- [x] Step 2: package checks passed.
 - [ ] Step 3: MCP behavior checks.
 - [ ] Step 4: MCP tool-surface check.
 - [ ] Step 5: dependency boundary inspection.
@@ -1050,6 +1050,14 @@ All commands were run through the configured nix dev shell.
 - `cargo test -p rmc-graph preflight`: passed, 6 tests.
 
 The test runs emitted existing dead-code/unreachable-public warnings plus the external dirty warning for `../nix-devshells`; no new failures were observed.
+
+### Step 2 Check Notes
+
+Command run through the configured nix dev shell:
+
+- `cargo check -p rmc-engine -p rmc-indexing -p rmc-graph -p rmc-server`: passed.
+
+The check emitted the same class of existing dead-code/unreachable-public warnings plus the external dirty warning for `../nix-devshells`; no build failures were observed.
 
 ### Expected Output
 
