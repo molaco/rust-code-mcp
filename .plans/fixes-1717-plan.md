@@ -820,7 +820,7 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 ### Execution Status
 
 - [x] Step 1: confirmed object sharing constraints.
-- [ ] Step 2: add cache type.
+- [x] Step 2: added cache type.
 - [ ] Step 3: wire cache into query path.
 - [ ] Step 4: add invalidation hooks.
 - [ ] Step 5: add tests.
@@ -834,6 +834,15 @@ Run MCP side-by-side samples or focused local benchmarks through the normal serv
 - `Bm25Search` is cloneable, but its Tantivy reader can become stale after writes. Cache it only if invalidation is explicit on every clear/reindex/recreate path.
 - `HybridSearch` should remain per-call because it is just a wrapper around cached components plus the current BM25 option/config.
 - Router-created state must also be shared with graph codemap/similarity paths that call `create_hybrid_search`, otherwise those paths keep paying cold setup costs.
+
+### Step 2 Implementation Notes
+
+- Added `mcp::SearchRuntimeCache`, `SearchRuntimeCacheKey`, and `SearchRuntimeCacheEntry`.
+- Cache keys normalize workspace, vector, and Tantivy paths and include the embedding identity.
+- Cache entries can hold an `EmbeddingGenerator`, `VectorStore`, and optional `Bm25Search`.
+- Added targeted workspace invalidation and global invalidation methods.
+- Exported the cache from `mcp` with the other server runtime coordination types.
+- Verification: `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server` passed with pre-existing warnings.
 
 ### Goal
 
