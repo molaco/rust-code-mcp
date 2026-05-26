@@ -1,6 +1,6 @@
 # Plan: `crate_skeleton` for the refactored workspace
 
-Status: ready to implement after review. Written against
+Status: ready to implement as a narrowed item-file v1. Written against
 `/home/molaco/Documents/rust-code-mcp-refactor` on 2026-05-26.
 
 This plan supersedes the single-crate `strip-code-plan.md` shape for this
@@ -15,11 +15,17 @@ codebase's Rust source layout: for a source file such as
 `crates/rmc-graph/src/graph/model.rs`, the skeleton file is written to
 `.skeleton/crates/rmc-graph/src/graph/model.rs`.
 
-Each generated `.rs` file keeps the items that belong to the matching source
-file: attributes, doc comments, type declarations, trait declarations,
-functions, methods, associated items, const/static/type declarations, and
-declared re-exports. Function bodies and value initializers are replaced with
+Each generated `.rs` file keeps item declarations that belong to the matching
+source file: item-level attributes, doc comments, type declarations, trait
+declarations, functions, methods, associated items, and const/static/type
+declarations. Function bodies and value initializers are replaced with
 placeholders.
+
+V1 is intentionally **item-file only**. It does not promise source-accurate
+`mod ...;`, inline module wrappers, crate-root/module attributes, or `pub use`
+re-export declarations, because the current snapshot does not persist module
+source locations or binding source spans. Those can be added after a module/use
+source-recovery phase.
 
 The first implementation target is **mirrored file granularity only**:
 
@@ -72,6 +78,9 @@ original plan assumed.
 - Module nodes currently do not carry visibility in `Node.visibility`.
   Module visibility must be recovered from declared `Binding` rows, the same
   way item visibility is recovered for `module_tree`.
+- Module nodes are also persisted without `Node.file` or `Node.span`, and
+  `Binding` records do not carry source file/span. V1 cannot source-accurately
+  place module declarations or `pub use` declarations from snapshot data alone.
 - Type generics, where-clauses, struct fields, enum payload fields, type alias
   RHS, const types, ABI, `unsafe`, `const fn`, and other exact declaration
   syntax are **not** fully represented in the snapshot model.
@@ -118,7 +127,6 @@ Reuse requirements:
   - `find_root_module_of`
   - `lookup_by_qualified_name`
   - `node`
-  - `declared_reexports_of`
   - `bindings_for_from_module`
   - `bindings_for_target`
   - `children_by_parent`
@@ -145,7 +153,10 @@ Reuse requirements:
   - `Node.attributes`
   - `FunctionSignature`
   - `StaticMetadata`
-  - `Binding` visibility/re-export information
+  - `Binding` visibility information
+- Defer `declared_reexports_of`/`Binding.is_explicit_pub_use` output until a
+  module/use source-recovery phase can place re-export declarations in the
+  correct mirrored file.
 - Do not load a full `LoadedWorkspace` or `Semantics` stack for v1 skeleton
   rendering. Existing audit tools use that for semantic resolution; skeleton
   only needs syntax-level body stripping from `Node.file` + `Node.span`.
@@ -181,13 +192,13 @@ pub(crate) struct CrateSkeletonParams {
     #[serde(default)]
     pub include_impls: Option<bool>,
     #[serde(default)]
-    pub include_reexports: Option<bool>,
-    #[serde(default)]
-    pub exclude_tests: Option<bool>,
+    pub skip_test_items: Option<bool>,
     #[serde(default)]
     pub exclude_vendor: Option<bool>,
     #[serde(default)]
     pub clean: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
 }
 ```
 
@@ -198,12 +209,21 @@ Defaults:
 - `include_docs = true`.
 - `include_attrs = true`.
 - `include_impls = true`.
-- `include_reexports = true`.
-- `exclude_tests = true`.
+- `skip_test_items = true`.
 - `exclude_vendor = true`.
 - `clean = true`, meaning the tool removes the existing `<directory>/.skeleton`
   tree before writing the fresh mirror. The implementation must only ever remove
   that exact hidden generated directory.
+- File summaries are paginated with existing graph-list defaults:
+  `limit = 50`, `offset = 0`, `summary = false`.
+
+`skip_test_items=true` v1 contract:
+
+- Drop items whose qualified name contains `::tests::`.
+- Drop item declarations carrying item-level `#[test]` or `#[cfg(test)]` in
+  `Node.attributes`.
+- It does **not** detect all items inside `#[cfg(test)] mod spec { ... }`
+  because module attributes are not persisted in the current snapshot.
 
 Supported `include` values:
 
@@ -213,12 +233,16 @@ Supported `include` values:
 - `"private"`: private module-local declarations.
 - `"all"`: all visibility buckets.
 
+Visibility filtering applies to module traversal and item retention. Module
+declarations themselves are not emitted in v1.
+
 Response:
 
 ```rust
 pub(crate) struct CrateSkeletonResponse {
     pub skeleton_dir: String,
     pub snapshot_id: String,
+    pub page: ListMeta,
     pub files_written: Vec<CrateSkeletonFileSummary>,
     pub total_files: usize,
     pub total_items: usize,
@@ -234,6 +258,11 @@ pub(crate) struct CrateSkeletonFileSummary {
     pub items: usize,
 }
 ```
+
+`files_written` contains only the requested page. `total_files`,
+`total_items`, and `total_bytes` describe the full write, not just the returned
+page. When `summary=true`, omit per-file summaries and return only totals,
+page metadata, and diagnostics.
 
 ## Target Module Layout
 
@@ -262,9 +291,9 @@ crates/rmc-server/src/tools/graph/skeleton.rs
 ## Rendering Model
 
 The renderer should not produce one giant file. It should build a
-skeleton-specific tree from `children_by_parent`, then bucket retained items by
-their `Node.file` so each output file mirrors the source file that declared the
-items.
+skeleton-specific tree from `children_by_parent` for filtering/traversal, then
+bucket retained item nodes by their `Node.file` so each output file mirrors the
+source file that declared the items.
 
 Do not use `ModuleTreeNode` directly. It lacks NodeIds, files, spans, and module
 visibility.
@@ -293,10 +322,8 @@ struct SkeletonSourceFile {
     crate_name: String,
     source_path: String,
     skeleton_path: String,
-    modules: Vec<SkeletonModuleInFile>,
     items: Vec<SkeletonItem>,
     synthetic_impls: Vec<SkeletonImplBlock>,
-    reexports: Vec<SkeletonReexport>,
 }
 ```
 
@@ -314,12 +341,14 @@ File layout rule:
 
 - `Node.file = "crates/rmc-graph/src/graph/model.rs"` maps to
   `.skeleton/crates/rmc-graph/src/graph/model.rs`.
-- Only Rust files represented by retained items/modules are generated.
+- Only Rust files represented by retained item nodes are generated in v1.
 - Non-Rust files are not copied.
 - Deleted/stale skeleton files are removed when `clean=true`.
-- Inline modules stay in the same mirrored file as their source.
-- File modules produce normal skeleton content in their own mirrored `.rs`
-  files.
+- Module nodes do not have `file`/`span` today, so v1 does not emit `mod foo;`
+  declarations, inline module wrappers, or files that contain only modules or
+  re-exports.
+- If a module's file contains retained item declarations, that file is emitted
+  because of those item nodes, not because the module node itself is placed.
 
 For inherent associated items, `parent_id` points at the host type item. These
 items are not inside the type declaration source, so render them in synthetic
@@ -333,6 +362,11 @@ impl TypeName {
 
 Do not attempt to reconstruct original impl generics, where-clauses, trait
 impls, negative impls, unsafe impls, or blanket impls in v1.
+
+Only synthesize inherent impl blocks for associated children whose parent item
+is an ADT host (`Struct`, `Enum`, or `Union`). If the parent item is a `Trait`,
+skip the child for synthetic impl rendering because the trait declaration source
+already contains trait-associated items.
 
 ## Source Stripping Rules
 
@@ -374,6 +408,8 @@ Attribute/doc filtering:
   - `include_docs`
   - `include_attrs`
 - This avoids duplicating attrs and allows options to work consistently.
+- `Node.attributes` is item-only today. V1 preserves item attrs/docs, but not
+  crate-root inner attrs or module attrs/docs.
 
 Fallback rendering:
 
@@ -523,7 +559,7 @@ Implementation steps:
    - Resolve the root module with `find_root_module_of`.
    - Walk `children_by_parent`.
    - Attach declared visibility for modules and items.
-   - Apply visibility and test filters.
+   - Apply visibility and `skip_test_items` filters.
    - Prune empty modules after filtering.
 
 7. Stub renderer:
@@ -542,7 +578,8 @@ Implementation steps:
 
    - `include=["pub"]` excludes `pub(crate)` and private items.
    - `include=["all"]` keeps private items.
-   - `exclude_tests=true` prunes `::tests::`.
+   - `skip_test_items=true` prunes `::tests::`, item-level `#[test]`, and
+     item-level `#[cfg(test)]`.
    - Module visibility is recovered from bindings.
    - The shared crate-scope helper matches existing overlaps behavior for
      local, example, and vendor crates.
@@ -601,18 +638,18 @@ Implementation steps:
    - Do not re-extract attrs from source unless `Node.attributes` is missing;
      the build-time `attributes.rs` pass is the source of truth.
 
-5. Render module blocks:
+5. Render v1 item files:
 
-   - Each mirrored file renders the items declared in the matching source
-     file.
-   - Inline modules render as `{vis} mod {name} { ... }` inside that same
-     file.
-   - File modules do not get wrapped in parent module blocks in their own file;
-     their path already supplies the context.
-   - Convert `visibility == "pub(self)"` to no prefix.
+   - Each mirrored file renders the retained item declarations whose
+     `Node.file` matches that source file.
+   - Do not wrap items in reconstructed module blocks.
+   - Do not emit `mod foo;` declarations, inline module wrappers, crate-root
+     inner attrs, module attrs/docs, or re-exports in v1.
+   - Convert `visibility == "pub(self)"` to no prefix when fallback rendering
+     needs a visibility prefix.
    - Keep `pub`, `pub(crate)`, and `pub(in path)` as emitted visibility.
 
-6. Render direct module items:
+6. Render direct item declarations:
 
    - Functions: stripped source.
    - Structs/enums/unions/traits/type aliases/consts/statics: stripped source.
@@ -622,6 +659,9 @@ Implementation steps:
 7. Render synthetic inherent impl blocks:
 
    - Group `Method`, `AssocConst`, and `AssocType` children by parent type.
+   - Only synthesize when the parent item kind is `Struct`, `Enum`, or
+     `Union`.
+   - Never synthesize a block for a `Trait` parent.
    - Include only groups whose host type is retained by filters.
    - Sort methods by `(file, span.start, qualified_name)`.
    - Render:
@@ -638,21 +678,14 @@ Implementation steps:
      // inherent impl facades; original impl generics/where clauses are not reconstructed
      ```
 
-8. Render declared re-exports:
+8. Defer declared re-exports:
 
-   - For each module, call `declared_reexports_of`.
-   - Write each rendered re-export to the mirrored file that owns the module.
-   - Filter by re-export binding visibility.
-   - Render simple canonical paths:
-
-     ```rust
-     pub use crate::graph::loader::load;
-     pub(crate) use crate::foo::Bar as Baz;
-     ```
-
-   - Do not try to reproduce original use-tree grouping in v1.
-   - Do not add a second exports/re-exports query path; use the existing
-     `Binding` output and enrichment conventions where possible.
+   - Do not render `declared_reexports_of` output in v1.
+   - `Binding` records have `from_module`, `visible_name`, target, visibility,
+     and `is_explicit_pub_use`, but no file/span for the source `use`.
+   - Module nodes also lack file/span, so placing a `pub use` in the right
+     mirrored file would be guesswork.
+   - Re-export rendering moves to the module/use source-recovery phase.
 
 Tests:
 
@@ -663,6 +696,7 @@ Tests:
 - An enum with tuple/record variants is preserved.
 - A const/static initializer is replaced.
 - Attribute/doc toggles work.
+- Trait-associated items are not duplicated in synthetic impl blocks.
 - Each generated mirrored file parses with `ra_ap_syntax::SourceFile::parse`.
 
 Validation:
@@ -709,6 +743,8 @@ Implementation steps:
    - Create parent directories under `.skeleton` for every mirrored source
      path.
    - Write one file per `SkeletonFile`.
+   - Page `files_written` with existing `list_page` / `page_list` helpers.
+   - If `summary=true`, return no per-file summaries.
    - Return `CrateSkeletonResponse`.
 
 4. Use `tokio::task::spawn_blocking` around the synchronous render + file IO.
@@ -733,6 +769,9 @@ Implementation steps:
    - Assert `clean=true` removes stale files under `.skeleton`.
    - Assert a sibling directory with a similar name, such as
      `.skeleton-backup`, is never removed.
+   - Assert file-summary pagination caps `files_written` while totals still
+     report the full write.
+   - Assert `summary=true` omits per-file summaries.
 
 Validation:
 
@@ -773,10 +812,15 @@ Required limitation notes:
   fingerprint/staleness source walks.
 - Output is intended to be parseable Rust-like facade source, not type-checking
   source.
+- V1 is item-file only: it does not emit `mod ...;`, inline module wrappers,
+  crate-root/module attributes, or `pub use` re-export declarations.
 - Trait impl blocks are not reconstructed in v1.
 - Synthetic inherent impl blocks do not preserve original impl generics or
   where-clauses.
-- Re-export use-tree grouping is normalized, not source-exact.
+- Synthetic inherent impl blocks are emitted only for ADT hosts, not trait
+  declarations.
+- `skip_test_items` is a name/item-attribute heuristic, not full cfg-aware
+  test-module analysis.
 - Output is selected from the snapshot but declaration text is read from source;
   stale snapshots can produce diagnostics.
 
@@ -795,10 +839,8 @@ Implementation steps:
 1. Add deterministic ordering assertions:
 
    - crates by crate name
-   - modules by qualified name when no source span exists
    - items by `(file, span.start, qualified_name)`
    - synthetic impl members by `(file, span.start, qualified_name)`
-   - re-exports by `(visibility, rendered_path, alias)`
 
 2. Add parse checks:
 
@@ -831,7 +873,48 @@ nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib s
 nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib crate_skeleton
 ```
 
-## Phase 6: Optional Skeleton Manifest
+## Phase 6: Optional Module/Re-Export Source Recovery
+
+Do this only after the item-file v1 is useful. This phase is required before
+the tool can honestly emit module declarations, inline module wrappers,
+module/crate-root attrs, or re-export declarations.
+
+Goal:
+
+- Recover a source location for every retained module declaration.
+- Recover a source location for explicit `pub use` declarations.
+- Add `include_reexports` only after placement is source-backed.
+
+Possible implementation paths:
+
+1. Query-time source scan without a schema bump:
+
+   - Start from crate root files.
+   - Parse source files with `ra_ap_syntax`.
+   - Walk `ast::Module` declarations to map module qualified names to source
+     files and declaration ranges.
+   - Handle both `mod foo;` file modules and `mod foo { ... }` inline modules.
+   - Parse `ast::Use` items with public visibility and match them back to
+     `Binding` rows by `(from_module, visible_name, namespace,
+     is_explicit_pub_use)`.
+   - Preserve source-exact use-tree text where matched.
+
+2. Persisted source-location schema:
+
+   - Add module `file`/`span` during extraction.
+   - Add binding source `file`/`span` or a parallel source-location table.
+   - Use the persisted data for placement instead of query-time scanning.
+
+This phase must include tests for:
+
+- `mod child;` placement.
+- inline `mod child { ... }` wrapper rendering.
+- a file/module that contains only re-exports.
+- source-exact `pub use` with grouped use trees.
+- module/crate attrs when preserved.
+- ambiguity diagnostics when a `Binding` cannot be matched to a source `use`.
+
+## Phase 7: Optional Skeleton Manifest
 
 Do this only after the mirrored `.skeleton/` tree is useful.
 
@@ -861,12 +944,12 @@ Validation:
 - Re-running with identical snapshot/options produces stable generated Rust
   file bytes; only manifest generation timestamp is allowed to differ.
 
-## Phase 7: Optional Pure-Snapshot Metadata
+## Phase 8: Optional Pure-Snapshot Metadata
 
 This is deferred. Add it only if query-time source IO/staleness becomes a real
 problem.
 
-Possible schema v13 additions:
+Possible schema additions:
 
 ```rust
 pub struct DeclarationHeader {
@@ -928,29 +1011,44 @@ Do not mix this schema bump into the first MCP landing.
    Mitigation: generalize declared visibility lookup from item-only to
    module/item targets.
 
-2. **Trait impl blocks are absent by design.**
+2. **Module and re-export source placement is not available in the current
+   snapshot.**
+   Mitigation: v1 is item-file only. Do not emit module declarations, inline
+   module wrappers, module/crate attrs, or re-exports until Phase 6 adds
+   module/use source recovery.
+
+3. **Trait associated items can look like inherent impl children.**
+   Mitigation: synthesize impl blocks only when the parent item kind is
+   `Struct`, `Enum`, or `Union`; skip `Trait` parents.
+
+4. **Trait impl blocks are absent by design.**
    Mitigation: do not render them in v1; document the limitation.
 
-3. **Synthetic inherent impls lose original impl generics/where-clauses.**
+5. **Synthetic inherent impls lose original impl generics/where-clauses.**
    Mitigation: mark them as facades and keep the goal parseability, not
    typeability.
 
-4. **Source can be newer than the snapshot.**
+6. **Source can be newer than the snapshot.**
    Mitigation: reuse the codemap-style newest `.rs` mtime check and emit a
    diagnostic suggesting `build_hypergraph(force_rebuild=true)`.
 
-5. **Generated `.skeleton/*.rs` files can perturb graph fingerprints or stale
+7. **Generated `.skeleton/*.rs` files can perturb graph fingerprints or stale
    source diagnostics.**
    Mitigation: add a shared workspace-walk exclusion helper and make both
    `compute_fingerprint` and `codemap::newest_source_mtime` skip `.skeleton/`;
    add regression tests before the MCP endpoint writes files.
 
-6. **Raw source attrs/docs conflict with option toggles.**
-   Mitigation: strip leading attrs/docs and re-emit filtered `Node.attributes`.
+8. **Raw source attrs/docs conflict with option toggles.**
+   Mitigation: strip leading item attrs/docs and re-emit filtered
+   `Node.attributes`. Document that module/crate attrs are not preserved in v1.
 
-7. **Generated output can be syntactically valid but semantically invalid.**
+9. **Generated output can be syntactically valid but semantically invalid.**
    Mitigation: document that the output is for API/context reading and parsing,
    not compiling.
+
+10. **`skip_test_items` cannot be fully cfg-aware in v1.**
+    Mitigation: document the exact heuristic and defer complete cfg-module
+    handling to module source recovery.
 
 ## Suggested PR Slicing
 
@@ -958,8 +1056,9 @@ Do not mix this schema bump into the first MCP landing.
 2. `rmc-graph`: source-slice stripping renderer.
 3. `rmc-server`: MCP endpoint + file writing.
 4. Docs/tests polish.
-5. Optional `.skeleton/manifest.json`.
-6. Optional schema v13 metadata.
+5. Optional module/re-export source recovery.
+6. Optional `.skeleton/manifest.json`.
+7. Optional schema metadata.
 
 Each PR should end with the relevant nix-wrapped `cargo check` command. Never
 run `cargo fmt`.
@@ -974,11 +1073,12 @@ help review and PR slicing.
 | 0 Preflight | 0 | 0 | 0 | 0 | 0 |
 | 1 Graph collector + stub renderer | 1 dir, 4 files | 7 files | 0 | ~800-1050 | ~320-520 |
 | 2 Source stripping renderer | 1 file | 2-3 files | 0 | ~600-900 | ~350-550 |
-| 3 MCP endpoint + `.skeleton/` writing | 1 file | 4 files | 0 | ~250-400 | ~150-250 |
+| 3 MCP endpoint + `.skeleton/` writing | 1 file | 4 files | 0 | ~300-450 | ~200-300 |
 | 4 Docs | 0 | 2 files | 0 | 0 | 0 |
 | 5 Quality pass | 0 | 2-4 files | 0 | ~100-200 | ~250-450 |
-| 6 Optional manifest | 0-1 file | 2-3 files | 0 | ~150-250 | ~100-200 |
-| 7 Optional schema metadata | 1 file maybe | 5-7 files | 0 | ~600-1000 | ~300-600 |
+| 6 Optional module/re-export source recovery | 0-1 file | 3-5 files | 0 | ~500-900 | ~300-600 |
+| 7 Optional manifest | 0-1 file | 2-3 files | 0 | ~150-250 | ~100-200 |
+| 8 Optional schema metadata | 1 file maybe | 5-7 files | 0 | ~600-1000 | ~300-600 |
 
 ### Phase 1 Impact
 
@@ -1051,7 +1151,7 @@ New functions:
 - attr/doc filtering
 - fallback declaration rendering
 - synthetic inherent impl rendering
-- re-export rendering
+- ADT-only synthetic impl gating
 
 ### Phase 3 Impact
 
@@ -1071,12 +1171,14 @@ New types:
 - `CrateSkeletonParams`
 - `CrateSkeletonResponse`
 - `CrateSkeletonFileSummary`
+- existing `ListPaginationParams` / `ListMeta` reused for file summaries
 
 New functions/methods:
 
 - `tools::graph::skeleton::crate_skeleton`
 - router method `crate_skeleton`
 - `.skeleton/` clean/write helpers
+- file-summary paging/summary handling
 
 ### Phase 4 Impact
 
@@ -1107,6 +1209,35 @@ No new modules are expected.
 
 Possible new file/module:
 
+- `crates/rmc-graph/src/graph/skeleton/module_source.rs`
+
+Possible modified files:
+
+- `crates/rmc-graph/src/graph/skeleton/model.rs`
+- `crates/rmc-graph/src/graph/skeleton/collect.rs`
+- `crates/rmc-graph/src/graph/skeleton/source.rs`
+- `crates/rmc-graph/src/graph/skeleton/render.rs`
+- `crates/rmc-server/src/tools/graph/skeleton.rs`
+- `crates/rmc-server/src/tools/params/graph.rs`
+- docs/tests
+
+New types:
+
+- `ModuleSourceLocation`
+- `UseSourceLocation`
+- `ModuleSourceMap`
+
+New functions:
+
+- module declaration source scanning
+- explicit pub-use source matching
+- source-backed module/re-export rendering
+- `include_reexports` parameter handling
+
+### Phase 7 Impact
+
+Possible new file/module:
+
 - `crates/rmc-graph/src/graph/skeleton/manifest.rs`
 
 Possible modified files:
@@ -1120,7 +1251,7 @@ New types:
 - `SkeletonManifest`
 - `SkeletonManifestFile`
 
-### Phase 7 Impact
+### Phase 8 Impact
 
 Possible new file/module:
 
