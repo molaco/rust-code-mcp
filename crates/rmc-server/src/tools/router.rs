@@ -541,7 +541,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Write a stripped Rust skeleton tree under `<directory>/.skeleton/`, mirroring the workspace source layout. Uses the persisted hypergraph snapshot to select local crate items, slices current source files, strips function bodies and value initializers, and writes parseable facade files for codebase context. Requires build_hypergraph to have created a snapshot first."
+        description = "Write stripped Rust skeleton files under `<directory>/.skeleton/`, mirroring the workspace source layout and adding aggregate `<package>.rs` files that concatenate each package's skeleton sources. Uses the persisted hypergraph snapshot to select local crate items, slices current source files, strips function bodies and value initializers, and writes parseable facade files for codebase context. Requires build_hypergraph to have created a snapshot first."
     )]
     async fn crate_skeleton(
         &self,

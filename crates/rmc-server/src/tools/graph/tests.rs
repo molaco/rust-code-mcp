@@ -788,6 +788,26 @@ async fn crate_skeleton_round_trip() {
     let server_router_text = fs::read_to_string(&server_router).expect("read server router skeleton");
     assert!(server_router_text.contains("fn crate_skeleton"));
     assert_generated_skeleton_rust_file_parses(&server_router);
+    let server_aggregate = skeleton_dir.join("rmc-server.rs");
+    assert!(
+        server_aggregate.exists(),
+        "expected server aggregate skeleton at {}",
+        server_aggregate.display()
+    );
+    let server_aggregate_text =
+        fs::read_to_string(&server_aggregate).expect("read server aggregate skeleton");
+    assert!(server_aggregate_text.contains("source: crates/rmc-server/src/tools/router.rs"));
+    assert!(server_aggregate_text.contains("fn crate_skeleton"));
+    assert_generated_skeleton_rust_file_parses(&server_aggregate);
+    assert_eq!(v["total_aggregate_files"].as_u64(), Some(1), "{body}");
+    let aggregate = v["aggregate_files_written"]
+        .as_array()
+        .and_then(|files| files.first())
+        .expect("one aggregate file summary");
+    assert_eq!(
+        aggregate["skeleton_path"].as_str(),
+        Some(".skeleton/rmc-server.rs")
+    );
     assert!(!stale_file.exists(), "clean=true should remove stale skeleton files");
     assert!(
         backup_file.exists(),
@@ -818,6 +838,14 @@ async fn crate_skeleton_round_trip() {
     assert_eq!(v["page"]["summary"].as_bool(), Some(true));
     assert_eq!(v["page"]["returned_match_count"].as_u64(), Some(0));
     assert!(
+        v["aggregate_files_written"]
+            .as_array()
+            .map(|files| files.is_empty())
+            .unwrap_or(false),
+        "summary=true should omit aggregate file summaries: {body}"
+    );
+    assert_eq!(v["total_aggregate_files"].as_u64(), Some(1), "{body}");
+    assert!(
         v["files_written"]
             .as_array()
             .map(|files| files.is_empty())
@@ -833,6 +861,17 @@ async fn crate_skeleton_round_trip() {
     let graph_model_text = fs::read_to_string(&graph_model).expect("read graph model skeleton");
     assert!(graph_model_text.contains("pub struct Node"));
     assert_generated_skeleton_rust_file_parses(&graph_model);
+    let graph_aggregate = skeleton_dir.join("rmc-graph.rs");
+    assert!(
+        graph_aggregate.exists(),
+        "expected graph aggregate skeleton at {}",
+        graph_aggregate.display()
+    );
+    let graph_aggregate_text =
+        fs::read_to_string(&graph_aggregate).expect("read graph aggregate skeleton");
+    assert!(graph_aggregate_text.contains("source: crates/rmc-graph/src/graph/model.rs"));
+    assert!(graph_aggregate_text.contains("pub struct Node"));
+    assert_generated_skeleton_rust_file_parses(&graph_aggregate);
 
     workspace_skeleton_paths.restore();
 }

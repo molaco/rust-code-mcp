@@ -1,6 +1,7 @@
 //! `crate_skeleton` endpoint and filesystem writer.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs, io,
     path::{Component, Path, PathBuf},
@@ -9,7 +10,7 @@ use std::{
 use serde::Serialize;
 
 use rmc_graph::graph::{
-    SkeletonOptions, render_crate_skeletons,
+    SkeletonFile, SkeletonOptions, render_crate_skeletons,
 };
 use crate::tools::graph::response::*;
 use crate::tools::params::CrateSkeletonParams;
@@ -50,11 +51,14 @@ pub(crate) async fn crate_skeleton(
         }
         let output = render_crate_skeletons(&snap, &opts)
             .map_err(internal_error("render_crate_skeletons"))?;
+        let snapshot_id = output.snapshot_id.clone();
 
         let mut summaries = Vec::new();
+        let mut aggregates: BTreeMap<String, CrateSkeletonAggregateBuilder> = BTreeMap::new();
         for file in output.files {
             let relative = safe_relative_source_path(&file.source_path)?;
             write_skeleton_file(&skeleton_dir, relative, file.content.as_bytes())?;
+            push_aggregate_file(&mut aggregates, &file)?;
             summaries.push(CrateSkeletonFileSummary {
                 crate_name: file.crate_name,
                 source_path: file.source_path,
@@ -63,6 +67,13 @@ pub(crate) async fn crate_skeleton(
                 items: file.items,
             });
         }
+        let aggregate_summaries =
+            write_aggregate_files(&skeleton_dir, &snapshot_id, aggregates)?;
+        let total_aggregate_files = aggregate_summaries.len();
+        let total_aggregate_bytes = aggregate_summaries
+            .iter()
+            .map(|summary| summary.bytes)
+            .sum();
 
         let (page, files_written) = if page_req.summary {
             (
@@ -78,15 +89,23 @@ pub(crate) async fn crate_skeleton(
         } else {
             page_list(summaries, page_req)
         };
+        let aggregate_files_written = if page_req.summary {
+            Vec::new()
+        } else {
+            aggregate_summaries
+        };
 
         Ok(CrateSkeletonResponse {
             skeleton_dir: skeleton_dir_for_response,
-            snapshot_id: output.snapshot_id,
+            snapshot_id,
             page,
             files_written,
+            aggregate_files_written,
             total_files: output.total_files,
             total_items: output.total_items,
             total_bytes: output.total_bytes,
+            total_aggregate_files,
+            total_aggregate_bytes,
             diagnostics: output
                 .diagnostics
                 .into_iter()
@@ -106,9 +125,12 @@ pub(crate) struct CrateSkeletonResponse {
     pub(crate) snapshot_id: String,
     pub(crate) page: ListMeta,
     pub(crate) files_written: Vec<CrateSkeletonFileSummary>,
+    pub(crate) aggregate_files_written: Vec<CrateSkeletonAggregateFileSummary>,
     pub(crate) total_files: usize,
     pub(crate) total_items: usize,
     pub(crate) total_bytes: usize,
+    pub(crate) total_aggregate_files: usize,
+    pub(crate) total_aggregate_bytes: usize,
     pub(crate) diagnostics: Vec<String>,
 }
 
@@ -119,6 +141,29 @@ pub(crate) struct CrateSkeletonFileSummary {
     pub(crate) skeleton_path: String,
     pub(crate) bytes: usize,
     pub(crate) items: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CrateSkeletonAggregateFileSummary {
+    pub(crate) crate_names: Vec<String>,
+    pub(crate) skeleton_path: String,
+    pub(crate) source_files: usize,
+    pub(crate) bytes: usize,
+    pub(crate) items: usize,
+}
+
+#[derive(Debug)]
+struct CrateSkeletonAggregateBuilder {
+    file_name: String,
+    crate_names: BTreeSet<String>,
+    source_files: Vec<CrateSkeletonAggregateSource>,
+    items: usize,
+}
+
+#[derive(Debug)]
+struct CrateSkeletonAggregateSource {
+    source_path: String,
+    content: String,
 }
 
 fn graph_options(params: &CrateSkeletonParams) -> SkeletonOptions {
@@ -186,6 +231,115 @@ fn safe_relative_source_path(source_path: &str) -> Result<&Path, McpError> {
         ));
     }
     Ok(path)
+}
+
+fn push_aggregate_file(
+    aggregates: &mut BTreeMap<String, CrateSkeletonAggregateBuilder>,
+    file: &SkeletonFile,
+) -> Result<(), McpError> {
+    let file_name = aggregate_file_name(&file.crate_name, &file.source_path)?;
+    let entry = aggregates
+        .entry(file_name.clone())
+        .or_insert_with(|| CrateSkeletonAggregateBuilder {
+            file_name,
+            crate_names: BTreeSet::new(),
+            source_files: Vec::new(),
+            items: 0,
+        });
+    entry.crate_names.insert(file.crate_name.clone());
+    entry.items += file.items;
+    entry.source_files.push(CrateSkeletonAggregateSource {
+        source_path: file.source_path.clone(),
+        content: file.content.clone(),
+    });
+    Ok(())
+}
+
+fn aggregate_file_name(crate_name: &str, source_path: &str) -> Result<String, McpError> {
+    let stem = package_name_from_source_path(source_path).unwrap_or(crate_name);
+    if stem.is_empty()
+        || stem == "."
+        || stem == ".."
+        || stem.contains('/')
+        || stem.contains('\\')
+        || stem.contains('\0')
+    {
+        return Err(McpError::internal_error(
+            format!("unsafe aggregate skeleton file stem `{stem}`"),
+            None,
+        ));
+    }
+    Ok(format!("{stem}.rs"))
+}
+
+fn package_name_from_source_path(source_path: &str) -> Option<&str> {
+    let mut components = Path::new(source_path).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(root)), Some(Component::Normal(package))) => {
+            if root == OsStr::new("crates") {
+                package.to_str()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn write_aggregate_files(
+    skeleton_dir: &Path,
+    snapshot_id: &str,
+    aggregates: BTreeMap<String, CrateSkeletonAggregateBuilder>,
+) -> Result<Vec<CrateSkeletonAggregateFileSummary>, McpError> {
+    let mut summaries = Vec::new();
+    for (_file_name, aggregate) in aggregates {
+        let content = render_aggregate_file(snapshot_id, &aggregate);
+        let bytes = content.len();
+        let source_files = aggregate.source_files.len();
+        let items = aggregate.items;
+        let crate_names = aggregate.crate_names.into_iter().collect();
+        write_skeleton_file(
+            skeleton_dir,
+            Path::new(&aggregate.file_name),
+            content.as_bytes(),
+        )?;
+        summaries.push(CrateSkeletonAggregateFileSummary {
+            crate_names,
+            skeleton_path: format!(".skeleton/{}", aggregate.file_name),
+            source_files,
+            bytes,
+            items,
+        });
+    }
+    Ok(summaries)
+}
+
+fn render_aggregate_file(
+    snapshot_id: &str,
+    aggregate: &CrateSkeletonAggregateBuilder,
+) -> String {
+    let mut content = String::new();
+    content.push_str("// @generated by rust-code-mcp crate_skeleton\n");
+    content.push_str(&format!("// snapshot: {snapshot_id}\n"));
+    content.push_str(&format!("// aggregate: {}\n", aggregate.file_name));
+    content.push_str(&format!(
+        "// crates: {}\n",
+        aggregate
+            .crate_names
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
+    content.push('\n');
+
+    for source in &aggregate.source_files {
+        content.push_str(&format!("// ---- source: {} ----\n", source.source_path));
+        content.push_str(source.content.trim_end());
+        content.push_str("\n\n");
+    }
+
+    content
 }
 
 fn write_skeleton_file(
@@ -324,6 +478,52 @@ mod tests {
         assert!(safe_relative_source_path("crates/rmc-server/src/lib.rs").is_ok());
         assert!(safe_relative_source_path("../src/lib.rs").is_err());
         assert!(safe_relative_source_path("/tmp/lib.rs").is_err());
+    }
+
+    #[test]
+    fn aggregate_file_name_prefers_package_directory_name() {
+        assert_eq!(
+            aggregate_file_name("rmc_config", "crates/rmc-config/src/config.rs")
+                .expect("aggregate file name"),
+            "rmc-config.rs"
+        );
+        assert_eq!(
+            aggregate_file_name("rmc_config", "src/config.rs")
+                .expect("aggregate file name"),
+            "rmc_config.rs"
+        );
+    }
+
+    #[test]
+    fn write_aggregate_files_concatenates_by_package_name() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let skeleton_dir = temp_dir.path().join("workspace/.skeleton");
+        let content = "pub struct Demo;\n".to_string();
+        let file = SkeletonFile {
+            crate_name: "rmc_server".to_string(),
+            source_path: "crates/rmc-server/src/lib.rs".to_string(),
+            skeleton_path: ".skeleton/crates/rmc-server/src/lib.rs".to_string(),
+            bytes: content.len(),
+            content,
+            items: 1,
+        };
+        let mut aggregates = BTreeMap::new();
+        push_aggregate_file(&mut aggregates, &file).expect("push aggregate file");
+
+        let summaries =
+            write_aggregate_files(&skeleton_dir, "snapshot-id", aggregates)
+                .expect("write aggregate files");
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].skeleton_path, ".skeleton/rmc-server.rs");
+        assert_eq!(summaries[0].crate_names, vec!["rmc_server".to_string()]);
+        assert_eq!(summaries[0].source_files, 1);
+        assert_eq!(summaries[0].items, 1);
+        let written = skeleton_dir.join("rmc-server.rs");
+        let generated = fs::read_to_string(&written).expect("read aggregate file");
+        assert!(generated.contains("// aggregate: rmc-server.rs"));
+        assert!(generated.contains("// ---- source: crates/rmc-server/src/lib.rs ----"));
+        assert!(generated.contains("pub struct Demo;"));
     }
 
     #[test]
