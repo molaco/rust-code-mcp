@@ -463,6 +463,7 @@ pub(crate) async fn get_similar_code(
     directory: &str,
     limit: usize,
     embedding_profile: Option<&str>,
+    workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     let dir_path = Path::new(directory);
@@ -472,6 +473,8 @@ pub(crate) async fn get_similar_code(
             None,
         ));
     }
+
+    let _workspace_lock = workspace_locks.lock_shared(dir_path).await;
 
     let requested_backend = resolve_embedding_backend_for_mcp(embedding_profile, dir_path)?;
     let paths = select_index_paths(dir_path, &requested_backend)?;
@@ -571,8 +574,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_similar_code_invalid_directory() {
-        let result = get_similar_code("test query", "/nonexistent/directory", 5, None, None).await;
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let result =
+            get_similar_code("test query", "/nonexistent/directory", 5, None, &locks, None).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_similar_code_waits_for_workspace_lock() {
+        let temp_dir = TempDir::new().unwrap();
+        let locks = crate::mcp::WorkspaceLockRegistry::new();
+        let guard = locks.lock_exclusive(temp_dir.path()).await;
+        let call_locks = locks.clone();
+        let directory = temp_dir.path().display().to_string();
+
+        let task = tokio::spawn(async move {
+            get_similar_code("test query", &directory, 5, None, &call_locks, None).await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            !task.is_finished(),
+            "similar-code queries should participate in workspace lifecycle locks"
+        );
+
+        task.abort();
+        drop(guard);
     }
 
     #[test]

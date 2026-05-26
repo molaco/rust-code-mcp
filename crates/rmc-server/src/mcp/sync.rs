@@ -8,17 +8,24 @@
 
 use rmc_indexing::indexing::{index_project_incrementally, IncrementalIndexRequest};
 use anyhow::Result;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{watch, RwLock};
 use tracing;
 
 use super::workspace_locks::WorkspaceLockRegistry;
 
 fn normalize_directory(dir: &Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SyncManagerStatus {
+    pub tracked_count: usize,
+    pub tracked_directories: Vec<String>,
 }
 
 /// Manages background synchronization of indexed codebases
@@ -72,11 +79,14 @@ impl SyncManager {
     }
 
     /// Remove a directory from tracking
-    pub async fn untrack_directory(&self, dir: &Path) {
+    pub async fn untrack_directory(&self, dir: &Path) -> bool {
         let dir = normalize_directory(dir);
         let mut dirs = self.tracked_dirs.write().await;
         if dirs.remove(&dir) {
             tracing::info!("Stopped tracking directory: {}", dir.display());
+            true
+        } else {
+            false
         }
     }
 
@@ -94,7 +104,26 @@ impl SyncManager {
     /// Get list of tracked directories
     pub async fn get_tracked_directories(&self) -> Vec<PathBuf> {
         let dirs = self.tracked_dirs.read().await;
-        dirs.iter().cloned().collect()
+        let mut dirs = dirs.iter().cloned().collect::<Vec<_>>();
+        dirs.sort();
+        dirs
+    }
+
+    pub async fn tracked_count(&self) -> usize {
+        self.tracked_dirs.read().await.len()
+    }
+
+    pub async fn status(&self) -> SyncManagerStatus {
+        let tracked_directories = self
+            .get_tracked_directories()
+            .await
+            .into_iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>();
+        SyncManagerStatus {
+            tracked_count: tracked_directories.len(),
+            tracked_directories,
+        }
     }
 
     /// Run background sync loop
@@ -112,20 +141,50 @@ impl SyncManager {
     /// });
     /// ```
     pub async fn run(self: Arc<Self>) {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.run_until_shutdown(shutdown_rx).await;
+    }
+
+    /// Run background sync loop until shutdown is requested.
+    ///
+    /// Cancellation is checked before the initial delayed sync and between
+    /// periodic sync cycles. An in-flight workspace sync is allowed to finish.
+    pub async fn run_until_shutdown(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         tracing::info!(
             "Starting background sync with {}s interval",
             self.interval.as_secs()
         );
 
+        if *shutdown.borrow() {
+            tracing::info!("Background sync shutdown requested before start");
+            return;
+        }
+
         // Initial sync after 5 seconds (give system time to start)
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        self.handle_sync_all().await;
+        let initial_delay = tokio::time::sleep(Duration::from_secs(5));
+        tokio::pin!(initial_delay);
+        tokio::select! {
+            _ = &mut initial_delay => self.handle_sync_all().await,
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    tracing::info!("Background sync shutdown requested");
+                    return;
+                }
+            }
+        }
 
         // Periodic sync
         let mut interval = tokio::time::interval(self.interval);
         loop {
-            interval.tick().await;
-            self.handle_sync_all().await;
+            tokio::select! {
+                _ = interval.tick() => self.handle_sync_all().await,
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        tracing::info!("Background sync shutdown requested");
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -301,6 +360,25 @@ mod tests {
         assert_eq!(count, 2);
         let tracked = sync_manager.get_tracked_directories().await;
         assert!(tracked.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_sync_status_reports_tracked_directories() {
+        let sync_manager = SyncManager::with_defaults(300);
+        let temp_dir = TempDir::new().unwrap();
+        let dir1 = temp_dir.path().join("test1");
+        let dir2 = temp_dir.path().join("test2");
+        sync_manager.track_directory(dir2.clone()).await;
+        sync_manager.track_directory(dir1.clone()).await;
+
+        let status = sync_manager.status().await;
+
+        assert_eq!(status.tracked_count, 2);
+        assert_eq!(
+            status.tracked_directories,
+            vec![dir1.display().to_string(), dir2.display().to_string()]
+        );
+        assert_eq!(sync_manager.tracked_count().await, 2);
     }
 
     #[tokio::test]

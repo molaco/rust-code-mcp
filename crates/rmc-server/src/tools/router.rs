@@ -43,32 +43,31 @@ use crate::tools::params::{
 #[derive(Clone)]
 pub struct SearchToolRouter {
     tool_router: ToolRouter<Self>,
-    /// Optional sync manager for automatic directory tracking
-    sync_manager: Option<std::sync::Arc<crate::mcp::SyncManager>>,
-    /// Per-workspace operation locks for cache/index state
-    workspace_locks: crate::mcp::WorkspaceLockRegistry,
-    /// Cached runtime objects for warm search paths
-    search_cache: crate::mcp::SearchRuntimeCache,
+    /// Runtime-owned sync, cache, semantic, and lifecycle state.
+    runtime: crate::mcp::RuntimeState,
 }
 
 impl SearchToolRouter {
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
-            sync_manager: None,
-            workspace_locks: crate::mcp::WorkspaceLockRegistry::new(),
-            search_cache: crate::mcp::SearchRuntimeCache::new(),
+            runtime: crate::mcp::RuntimeState::standalone(),
         }
     }
 
     /// Create a new SearchToolRouter with background sync manager
     pub fn with_sync_manager(sync_manager: std::sync::Arc<crate::mcp::SyncManager>) -> Self {
-        let workspace_locks = sync_manager.workspace_locks();
+        Self::with_runtime_state(crate::mcp::RuntimeState::with_sync_manager(sync_manager))
+    }
+
+    pub fn with_server_runtime(runtime: &crate::mcp::ServerRuntime) -> Self {
+        Self::with_runtime_state(runtime.state())
+    }
+
+    pub fn with_runtime_state(runtime: crate::mcp::RuntimeState) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            sync_manager: Some(sync_manager),
-            workspace_locks,
-            search_cache: crate::mcp::SearchRuntimeCache::new(),
+            runtime,
         }
     }
 }
@@ -100,9 +99,9 @@ impl SearchToolRouter {
             &directory,
             &keyword,
             embedding_profile.as_deref(),
-            self.sync_manager.as_ref(),
-            &self.workspace_locks,
-            Some(&self.search_cache),
+            self.runtime.sync_manager(),
+            self.runtime.workspace_locks(),
+            Some(self.runtime.search_cache()),
         )
         .await
     }
@@ -119,7 +118,9 @@ impl SearchToolRouter {
             exact,
         }): Parameters<FindDefinitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::analysis::find_definition_with_options(
+        let semantic = self.runtime.semantic();
+        crate::tools::endpoints::analysis::find_definition_with_semantic(
+            &semantic,
             &symbol_name,
             &directory,
             exact.unwrap_or(false),
@@ -137,7 +138,9 @@ impl SearchToolRouter {
             exact,
         }): Parameters<FindReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::analysis::find_references_with_options(
+        let semantic = self.runtime.semantic();
+        crate::tools::endpoints::analysis::find_references_with_semantic(
+            &semantic,
             &symbol_name,
             &directory,
             exact.unwrap_or(false),
@@ -160,7 +163,9 @@ impl SearchToolRouter {
             column,
         }): Parameters<RenameSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::endpoints::analysis::rename_symbol(
+        let semantic = self.runtime.semantic();
+        crate::tools::endpoints::analysis::rename_symbol_with_semantic(
+            &semantic,
             &symbol_name,
             &new_name,
             &directory,
@@ -231,7 +236,8 @@ impl SearchToolRouter {
             &directory,
             limit,
             embedding_profile.as_deref(),
-            Some(&self.search_cache),
+            self.runtime.workspace_locks(),
+            Some(self.runtime.search_cache()),
         )
         .await
     }
@@ -246,9 +252,9 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::endpoints::index::index_codebase(
             params,
-            self.sync_manager.as_ref(),
-            &self.workspace_locks,
-            Some(&self.search_cache),
+            self.runtime.sync_manager(),
+            self.runtime.workspace_locks(),
+            Some(self.runtime.search_cache()),
         )
         .await
     }
@@ -261,11 +267,33 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::endpoints::cache::clear_cache(
             params,
-            self.sync_manager.as_ref(),
-            &self.workspace_locks,
-            Some(&self.search_cache),
+            self.runtime.sync_manager(),
+            self.runtime.workspace_locks(),
+            Some(self.runtime.search_cache()),
         )
         .await
+    }
+
+    /// Report runtime-owned background task, sync, cache, semantic, and process state
+    #[tool(
+        description = "Report MCP server runtime state: tracked sync directories, search cache keys, semantic project cache, background sync task status, PID, and RSS."
+    )]
+    async fn runtime_status(
+        &self,
+        Parameters(params): Parameters<crate::tools::endpoints::runtime::RuntimeStatusParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::endpoints::runtime::runtime_status(&self.runtime, params).await
+    }
+
+    /// Clear runtime-owned in-memory caches and sync tracking
+    #[tool(
+        description = "Clear MCP runtime caches and sync tracking. scope values: all, workspace, semantic_only, search_cache_only, sync_tracking_only. Pass workspace to target one workspace. This does not stop the background sync task; process shutdown cancels tasks through ServerRuntime."
+    )]
+    async fn clear_runtime(
+        &self,
+        Parameters(params): Parameters<crate::tools::endpoints::runtime::ClearRuntimeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::endpoints::runtime::clear_runtime(&self.runtime, params).await
     }
 
     // ----- Hypergraph tools (Layer 7) -----
@@ -657,7 +685,12 @@ impl SearchToolRouter {
         &self,
         Parameters(params): Parameters<crate::tools::params::SimilarToItemParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph::similarity::similar_to_item(params, Some(&self.search_cache)).await
+        crate::tools::graph::similarity::similar_to_item(
+            params,
+            self.runtime.workspace_locks(),
+            Some(self.runtime.search_cache()),
+        )
+        .await
     }
 
     #[tool(
@@ -732,7 +765,8 @@ workspace.")]
             embedding_policy.as_deref(),
             format.as_deref(),
             include_snippets,
-            Some(&self.search_cache),
+            self.runtime.workspace_locks(),
+            Some(self.runtime.search_cache()),
         )
         .await
     }
@@ -772,6 +806,6 @@ mod tests {
         use std::sync::Arc;
         let sync_mgr = Arc::new(crate::mcp::SyncManager::new(300));
         let _router = SearchToolRouter::with_sync_manager(sync_mgr);
-        assert!(_router.sync_manager.is_some());
+        assert!(_router.runtime.sync_manager().is_some());
     }
 }

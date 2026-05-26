@@ -4,10 +4,10 @@
 // compile-time inference budget, not a runtime cost.
 #![recursion_limit = "512"]
 
-use rmc_server::mcp::SyncManager;
+use rmc_server::mcp::ServerRuntime;
 use rmc_server::tools::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
-use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::{self, EnvFilter};
 
 #[tokio::main]
@@ -30,26 +30,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Starting MCP Server...");
 
-    // Create background sync manager
-    // Syncs every 5 minutes (300 seconds)
-    let sync_manager = Arc::new(SyncManager::with_defaults(300));
-    tracing::info!("Created background sync manager (5-minute interval)");
+    // Syncs every 5 minutes (300 seconds).
+    let runtime = ServerRuntime::new(300);
+    tracing::info!("Created MCP server runtime (5-minute sync interval)");
 
-    // Start background sync task
-    let sync_manager_clone = Arc::clone(&sync_manager);
-    tokio::spawn(async move {
-        sync_manager_clone.run().await;
-    });
+    runtime.start_background_sync();
     tracing::info!("Started background sync task");
 
-    // Start MCP server with sync manager integration
-    let service = SearchTool::with_sync_manager(Arc::clone(&sync_manager))
-        .serve(stdio())
-        .await
-        .inspect_err(|e| {
+    let service = match SearchTool::with_server_runtime(&runtime).serve(stdio()).await {
+        Ok(service) => service,
+        Err(e) => {
             tracing::error!("serving error: {:?}", e);
-        })?;
+            let shutdown = runtime.shutdown_gracefully(Duration::from_secs(10)).await;
+            tracing::info!("Runtime shutdown after serve error: {:?}", shutdown);
+            return Err(e.into());
+        }
+    };
 
-    service.waiting().await?;
+    let service_result = service.waiting().await;
+    if let Err(e) = &service_result {
+        tracing::error!("service wait error: {:?}", e);
+    }
+
+    let shutdown = runtime.shutdown_gracefully(Duration::from_secs(10)).await;
+    tracing::info!("Runtime shutdown complete: {:?}", shutdown);
+
+    service_result?;
     Ok(())
 }

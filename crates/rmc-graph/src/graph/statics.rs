@@ -69,8 +69,161 @@ pub(crate) fn extract_statics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::test_support::shared_snapshot;
+    use crate::graph::ids::NodeId;
+    use crate::graph::model::{ItemKind, Node, NodeKind};
     use crate::graph::query::audits::classify_metadata;
+    use crate::graph::snapshot::{OpenedSnapshot, persist_test_model};
+    use crate::graph::storage::GraphEnvOptions;
+    use std::collections::BTreeMap;
+    use std::sync::OnceLock;
+
+    struct StaticFixtureSnap {
+        _workspace_td: tempfile::TempDir,
+        _data_td: tempfile::TempDir,
+        snap: OpenedSnapshot,
+    }
+
+    fn static_fixture_snapshot() -> &'static OpenedSnapshot {
+        static CACHE: OnceLock<StaticFixtureSnap> = OnceLock::new();
+        &CACHE
+            .get_or_init(|| {
+                let workspace_td = tempfile::tempdir().expect("create workspace tempdir");
+                let data_td = tempfile::tempdir().expect("create graph data tempdir");
+                let workspace_id = NodeId::from_components(&["static-fixture", "workspace"]);
+                let crate_id = NodeId::from_components(&["static-fixture", "crate"]);
+                let module_id = NodeId::from_components(&["static-fixture", "module"]);
+                let global_count_id =
+                    NodeId::from_components(&["static-fixture", "GLOBAL_COUNT"]);
+                let name_cache_id = NodeId::from_components(&["static-fixture", "NAME_CACHE"]);
+                let values_id = NodeId::from_components(&["static-fixture", "VALUES"]);
+                let mut nodes = BTreeMap::new();
+                nodes.insert(
+                    workspace_id,
+                    Node {
+                        id: workspace_id,
+                        kind: NodeKind::Workspace,
+                        display_name: "static fixture".into(),
+                        qualified_name: "static_fixture_crate".into(),
+                        crate_id: None,
+                        parent_id: None,
+                        item_kind: None,
+                        file: None,
+                        span: None,
+                        visibility: None,
+                        attributes: Vec::new(),
+                        crate_target_kind: None,
+                    },
+                );
+                nodes.insert(
+                    crate_id,
+                    Node {
+                        id: crate_id,
+                        kind: NodeKind::Crate,
+                        display_name: "static_fixture_crate".into(),
+                        qualified_name: "static_fixture_crate".into(),
+                        crate_id: Some(crate_id),
+                        parent_id: Some(workspace_id),
+                        item_kind: None,
+                        file: None,
+                        span: None,
+                        visibility: None,
+                        attributes: Vec::new(),
+                        crate_target_kind: Some("lib".into()),
+                    },
+                );
+                nodes.insert(
+                    module_id,
+                    Node {
+                        id: module_id,
+                        kind: NodeKind::Module,
+                        display_name: "static_fixture_crate".into(),
+                        qualified_name: "static_fixture_crate".into(),
+                        crate_id: Some(crate_id),
+                        parent_id: Some(crate_id),
+                        item_kind: None,
+                        file: Some("src/lib.rs".into()),
+                        span: None,
+                        visibility: Some("pub".into()),
+                        attributes: Vec::new(),
+                        crate_target_kind: None,
+                    },
+                );
+                for (id, name) in [
+                    (global_count_id, "GLOBAL_COUNT"),
+                    (name_cache_id, "NAME_CACHE"),
+                    (values_id, "VALUES"),
+                ] {
+                    nodes.insert(
+                        id,
+                        Node {
+                            id,
+                            kind: NodeKind::Item,
+                            display_name: name.into(),
+                            qualified_name: format!("static_fixture_crate::{name}"),
+                            crate_id: Some(crate_id),
+                            parent_id: Some(module_id),
+                            item_kind: Some(ItemKind::Static),
+                            file: Some("src/lib.rs".into()),
+                            span: Some((0, 1)),
+                            visibility: Some("pub".into()),
+                            attributes: Vec::new(),
+                            crate_target_kind: None,
+                        },
+                    );
+                }
+                let model = ExtractionModel {
+                    workspace_root: workspace_td.path().to_path_buf(),
+                    workspace_hash: "static-fixture".into(),
+                    workspace_id,
+                    nodes,
+                    bindings: Vec::new(),
+                    usages: Vec::new(),
+                    contains: vec![
+                        (workspace_id, crate_id),
+                        (crate_id, module_id),
+                        (module_id, global_count_id),
+                        (module_id, name_cache_id),
+                        (module_id, values_id),
+                    ],
+                    signatures: Vec::new(),
+                    statics: vec![
+                        (
+                            global_count_id,
+                            StaticMetadata {
+                                type_string: "usize".into(),
+                                is_mut: true,
+                            },
+                        ),
+                        (
+                            name_cache_id,
+                            StaticMetadata {
+                                type_string: "OnceLock<String>".into(),
+                                is_mut: false,
+                            },
+                        ),
+                        (
+                            values_id,
+                            StaticMetadata {
+                                type_string: "LazyLock<Vec<usize>>".into(),
+                                is_mut: false,
+                            },
+                        ),
+                    ],
+                };
+                let env_opts = GraphEnvOptions {
+                    map_size: 16 << 20,
+                    ..Default::default()
+                };
+                let snap = persist_test_model(data_td.path(), &model, env_opts)
+                    .expect("persist static fixture graph");
+                StaticFixtureSnap {
+                    _workspace_td: workspace_td,
+                    _data_td: data_td,
+                    snap,
+                }
+            })
+            .snap
+    }
 
     #[test]
     fn classifier_detects_lazy_lock() {
@@ -129,13 +282,10 @@ mod tests {
 
     #[test]
     fn audit_smoke_does_not_error() {
-        let snap = shared_snapshot();
+        let snap = static_fixture_snapshot();
         let findings = snap
             .mut_static_audit()
             .expect("mut_static_audit should not error");
-        // We expect at least the SEMANTIC LazyLock present in src/semantic/mod.rs.
-        // Don't assert exact count — just that the call succeeded and we can
-        // iterate findings.
         for f in &findings {
             assert!(!f.qualified_name.is_empty());
             assert!(!f.matched_pattern.is_empty());
@@ -143,18 +293,18 @@ mod tests {
     }
 
     #[test]
-    fn audit_detects_known_lazy_lock() {
-        let snap = shared_snapshot();
+    fn audit_detects_known_static_mut() {
+        let snap = static_fixture_snapshot();
         let findings = snap
             .mut_static_audit()
             .expect("mut_static_audit should not error");
-        let semantic = findings.iter().find(|f| {
-            f.qualified_name == "rmc_server::semantic::SEMANTIC"
-                && f.matched_pattern == "LazyLock"
+        let global_count = findings.iter().find(|f| {
+            f.qualified_name == "static_fixture_crate::GLOBAL_COUNT"
+                && f.matched_pattern == "static mut"
         });
         assert!(
-            semantic.is_some(),
-            "expected `rmc_server::semantic::SEMANTIC` to surface as LazyLock; found: {:?}",
+            global_count.is_some(),
+            "expected `static_fixture_crate::GLOBAL_COUNT` to surface as static mut; found: {:?}",
             findings
                 .iter()
                 .map(|f| (&f.qualified_name, &f.matched_pattern))
@@ -163,25 +313,25 @@ mod tests {
     }
 
     #[test]
-    fn static_metadata_round_trip_for_semantic() {
-        let snap = shared_snapshot();
+    fn static_metadata_round_trip_for_static_mut_fixture() {
+        let snap = static_fixture_snapshot();
         let (id, _node) = snap
-            .lookup_by_qualified_name("rmc_server::semantic::SEMANTIC")
+            .lookup_by_qualified_name("static_fixture_crate::GLOBAL_COUNT")
             .expect("lookup_by_qualified_name failed")
-            .expect("rmc_server::semantic::SEMANTIC not in snapshot");
+            .expect("GLOBAL_COUNT not in snapshot");
         let meta = snap
             .static_metadata(id)
             .expect("static_metadata failed")
-            .expect("expected metadata for SEMANTIC");
+            .expect("expected metadata for GLOBAL_COUNT");
         assert!(
             !meta.type_string.is_empty(),
             "type_string should be populated"
         );
         assert!(
-            meta.type_string.contains("LazyLock"),
-            "expected `LazyLock` in type_string, got `{}`",
+            meta.type_string.contains("usize"),
+            "expected `usize` in type_string, got `{}`",
             meta.type_string
         );
-        assert!(!meta.is_mut, "SEMANTIC is not declared `static mut`");
+        assert!(meta.is_mut, "GLOBAL_COUNT is declared `static mut`");
     }
 }

@@ -9,6 +9,7 @@ use super::codemap::*;
 use super::core::*;
 use super::crates::*;
 use super::response::*;
+use super::similarity::*;
 use super::skeleton::*;
 use super::surface::*;
 
@@ -19,7 +20,7 @@ use ra_ap_syntax::SourceFile;
 use crate::tools::params::{
     BuildHypergraphParams, CrateSkeletonParams, CrateTypesParams, DeadPubParams, GraphExportsParams,
     GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
-    WhoUsesParams,
+    WhoUsesParams, SimilarToItemParams,
 };
 use rmcp::model::{CallToolResult, ErrorCode};
 use std::{
@@ -1016,6 +1017,7 @@ fn call_site_summary_omits_navigation_fields() {
 
 #[tokio::test]
 async fn build_codemap_requires_prompt_or_seeds() {
+    let locks = crate::mcp::WorkspaceLockRegistry::new();
     let result = handle_build_codemap(
         "/tmp", // never opened — validation fails first
         None,   // task_prompt
@@ -1026,6 +1028,7 @@ async fn build_codemap_requires_prompt_or_seeds() {
         None,   // embedding_policy
         None,   // format
         None,   // include_snippets
+        &locks, // workspace_locks
         None,   // search_cache
     )
     .await;
@@ -1039,6 +1042,7 @@ async fn build_codemap_requires_prompt_or_seeds() {
 
 #[tokio::test]
 async fn build_codemap_rejects_bad_format() {
+    let locks = crate::mcp::WorkspaceLockRegistry::new();
     let result = handle_build_codemap(
         "/tmp",
         Some("anything"),
@@ -1049,6 +1053,7 @@ async fn build_codemap_rejects_bad_format() {
         None,
         Some("weird"),
         None,
+        &locks,
         None,
     )
     .await;
@@ -1067,6 +1072,7 @@ async fn build_codemap_rejects_bad_format() {
 
 #[tokio::test]
 async fn build_codemap_rejects_bad_embedding_policy() {
+    let locks = crate::mcp::WorkspaceLockRegistry::new();
     let result = handle_build_codemap(
         "/tmp",
         Some("anything"),
@@ -1077,6 +1083,7 @@ async fn build_codemap_rejects_bad_embedding_policy() {
         Some("turbo"),
         None,
         None,
+        &locks,
         None,
     )
     .await;
@@ -1099,4 +1106,73 @@ async fn build_codemap_rejects_bad_embedding_policy() {
         msg.contains("compute_missing"),
         "message should list valid options: {msg}"
     );
+}
+
+#[tokio::test]
+async fn similar_to_item_waits_for_workspace_lock() {
+    let temp_dir = TempDir::new().unwrap();
+    let locks = crate::mcp::WorkspaceLockRegistry::new();
+    let guard = locks.lock_exclusive(temp_dir.path()).await;
+    let call_locks = locks.clone();
+    let directory = temp_dir.path().display().to_string();
+
+    let task = tokio::spawn(async move {
+        similar_to_item(
+            SimilarToItemParams {
+                directory,
+                target: "static_fixture_crate::GLOBAL_COUNT".into(),
+                limit: None,
+                threshold: None,
+                item_kind: None,
+                embedding_profile: None,
+            },
+            &call_locks,
+            None,
+        )
+        .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(
+        !task.is_finished(),
+        "similar_to_item should participate in workspace lifecycle locks"
+    );
+
+    task.abort();
+    drop(guard);
+}
+
+#[tokio::test]
+async fn build_codemap_waits_for_workspace_lock_before_search_cache_use() {
+    let temp_dir = TempDir::new().unwrap();
+    let locks = crate::mcp::WorkspaceLockRegistry::new();
+    let guard = locks.lock_exclusive(temp_dir.path()).await;
+    let call_locks = locks.clone();
+    let directory = temp_dir.path().display().to_string();
+
+    let task = tokio::spawn(async move {
+        handle_build_codemap(
+            &directory,
+            Some("anything"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &call_locks,
+            None,
+        )
+        .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(
+        !task.is_finished(),
+        "codemap search seeding should participate in workspace lifecycle locks"
+    );
+
+    task.abort();
+    drop(guard);
 }

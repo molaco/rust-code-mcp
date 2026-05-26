@@ -486,6 +486,54 @@ fn write_model(
     Ok((node_count, binding_count, usage_count))
 }
 
+#[cfg(test)]
+pub(crate) fn persist_test_model(
+    data_dir: &Path,
+    model: &ExtractionModel,
+    env_opts: GraphEnvOptions,
+) -> Result<OpenedSnapshot> {
+    let paths = GraphPaths::for_workspace_in(data_dir, &model.workspace_root);
+    paths.ensure_dirs()
+        .with_context(|| format!("create graph dirs under {}", paths.root_dir.display()))?;
+    let identity = snapshot_identity(
+        model.workspace_root.clone(),
+        paths,
+        "test-fingerprint".to_string(),
+    );
+    fs::create_dir_all(&identity.snapshot_dir)
+        .with_context(|| format!("create snapshot dir {}", identity.snapshot_dir.display()))?;
+    {
+        let env = unsafe {
+            env_opts
+                .to_open_options()
+                .open(&identity.snapshot_dir)
+                .with_context(|| format!("open heed env at {}", identity.snapshot_dir.display()))?
+        };
+        let (node_count, binding_count, usage_count) = write_model(
+            &env,
+            env_opts,
+            model,
+            &identity.paths.workspace_hash,
+            &identity.fingerprint,
+            &identity.graph_id,
+        )?;
+        let manifest = GraphManifest {
+            graph_id: identity.graph_id.clone(),
+            workspace_root: model.workspace_root.display().to_string(),
+            workspace_hash: identity.paths.workspace_hash.clone(),
+            fingerprint: identity.fingerprint.clone(),
+            schema_version: SCHEMA_VERSION,
+            created_at_unix: now_unix()?,
+            node_count,
+            binding_count,
+            usage_count,
+        };
+        write_manifest(&identity.manifest_path, &manifest)?;
+    }
+    publish_current(&identity.paths, &identity.graph_id)?;
+    open_current(&identity.paths, env_opts)?.context("test snapshot was not published")
+}
+
 pub(crate) fn binding_id_for(binding: &Binding) -> BindingId {
     let ns = match binding.namespace {
         Namespace::Type => "T",

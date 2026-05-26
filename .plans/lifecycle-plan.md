@@ -15,6 +15,11 @@ Progress:
 - Phase 3 completed on 2026-05-26. Incremental no-change detection now runs the
   Merkle fast path before constructing `UnifiedIndexer`, `VectorStore`, or
   embedding/model resources.
+- Phase 4 completed on 2026-05-26. The MCP server now has an explicit
+  runtime owner for background sync, search cache, semantic state, shutdown,
+  and runtime status/cleanup tools. The graph static metadata tests now use a
+  manual persisted graph fixture instead of the removed semantic singleton or a
+  rust-analyzer workspace load.
 
 This plan addresses the stuck D-state process class observed while agents run
 MCP tools and focused Rust tests. The latest live incident was:
@@ -375,7 +380,74 @@ Goal: the long-running MCP server should own all background tasks and heavy
 caches explicitly, and it should be able to shut them down or clear them
 gracefully.
 
-Current problem:
+Status: completed on 2026-05-26.
+
+Completed implementation:
+
+- Added `mcp::ServerRuntime` and `mcp::RuntimeState` to own sync manager,
+  workspace locks, search runtime cache, semantic service state, shutdown
+  signaling, and background task handles.
+- Added `SyncManager::run_until_shutdown` using a `tokio::sync::watch`
+  shutdown signal. Existing `run` remains as a compatibility wrapper.
+- Updated `rust-code-mcp` main to create `ServerRuntime`, start background sync
+  through it, serve MCP with runtime-owned state, and on service exit request
+  shutdown, wait up to 10 seconds for tasks, abort timed-out tasks, and clear
+  runtime caches/tracking.
+- Removed the global semantic singleton from router-owned paths. Analysis and
+  rename endpoints now receive the runtime-owned
+  `Arc<Mutex<SemanticService>>`.
+- Added search-cache status/key reporting and count-returning invalidation.
+- Added semantic status plus `clear_all` / `clear_project`.
+- Added sync tracking status/count and sorted tracked directory reporting.
+- Added `runtime_status` and `clear_runtime` MCP tools.
+- Made cache-producing read tools (`get_similar_code`, `similar_to_item`, and
+  prompt-seeded `build_codemap`) participate in workspace lifecycle locks
+  before constructing or inserting runtime search-cache entries.
+- Retargeted graph static metadata regression tests from the removed
+  `rmc_server::semantic::SEMANTIC` singleton to a manually persisted graph
+  fixture so the static metadata tests continue to cover persistence/query
+  behavior without loading rust-analyzer.
+- Added a test-only `persist_test_model` helper for graph query tests that need
+  LMDB round-trip coverage without starting a full rust-analyzer workspace
+  load.
+
+Validation performed:
+
+```bash
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph --lib --tests
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib statics::tests -- --test-threads=1
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib static_metadata_round_trip_for_static_mut_fixture -- --test-threads=1
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib audit_detects_known_static_mut -- --test-threads=1
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib get_similar_code_waits_for_workspace_lock
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib similar_to_item_waits_for_workspace_lock
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib build_codemap_waits_for_workspace_lock_before_search_cache_use
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib runtime
+nix develop ../nix-devshells#cuda-code --command cargo check -p rust-code-mcp
+```
+
+Result: all listed checks passed. The runtime test filter ran 13 tests covering
+status, clear behavior, sync cancellation, semantic cleanup, cache status, RSS
+parsing, and whole-runtime clear serialization with workspace operations.
+Focused lock-participation tests also cover the cache-producing read endpoints
+that can construct `HybridSearch` runtime entries.
+During review-fix validation, a temporary rust-analyzer-backed static fixture
+reproduced the D-state failure in `rmc_graph-c878c` at `do_exit`; that fixture
+was replaced by the manual persisted graph fixture above, whose focused tests
+complete immediately.
+
+Review gate:
+
+- Reviewer score: 8.8/10 on 2026-05-26.
+- Gate result: pass (`> 8.5`).
+- Residual note: an already-active background sync cycle may have copied the
+  tracked-directory list before `clear_runtime` untracks directories. That can
+  allow one in-flight cycle to finish work after a clear while the server keeps
+  serving, but it does not reintroduce the runtime search-cache race fixed in
+  this phase. Full task cancellation remains owned by
+  `ServerRuntime::shutdown_gracefully`.
+
+Original problem addressed by this phase:
 
 - `main.rs` spawns sync and never keeps the task handle.
 - `SyncManager::run` loops forever.
@@ -383,86 +455,85 @@ Current problem:
 - search runtime cache stores `EmbeddingGenerator` and `VectorStore` entries
   that can keep GPU/vector resources alive.
 
-Implementation shape:
+Implemented shape:
 
-1. Introduce a runtime owner:
+1. `ServerRuntime` owns the long-lived server resources:
 
    ```rust
    pub struct ServerRuntime {
-       shutdown: CancellationToken,
-       sync_manager: Arc<SyncManager>,
-       search_cache: SearchRuntimeCache,
-       semantic: Arc<Mutex<SemanticService>>,
-       tasks: Mutex<JoinSet<()>>,
+       state: RuntimeState,
+       shutdown_tx: watch::Sender<bool>,
+       tasks: Mutex<Vec<JoinHandle<()>>>,
    }
    ```
 
-   `tokio-util` can provide `CancellationToken`, or a `watch` channel can be
-   used to avoid a new dependency.
+   `RuntimeState` contains the shared sync manager, workspace lock registry,
+   search runtime cache, semantic service, and background-sync status flags.
 
-2. Change `SyncManager::run` to accept cancellation:
+2. `SyncManager::run_until_shutdown` accepts a `watch::Receiver<bool>` and
+   exits when shutdown is requested:
 
    ```rust
-   pub async fn run_until_shutdown(self: Arc<Self>, shutdown: CancellationToken) {
+   pub async fn run_until_shutdown(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
        loop {
            tokio::select! {
-               _ = shutdown.cancelled() => break,
+               changed = shutdown.changed() => { ... }
                _ = interval.tick() => self.handle_sync_all().await,
            }
        }
    }
    ```
 
-3. Change `main.rs` to:
+3. `main.rs` now creates `ServerRuntime`, starts background sync through it,
+   serves MCP with `SearchToolRouter::with_server_runtime`, and calls
+   `shutdown_gracefully(Duration::from_secs(10))` after the MCP service exits.
+   Graceful shutdown requests cancellation, waits for task completion, aborts
+   timed-out tasks, and clears runtime-owned caches/tracking.
 
-   - create `ServerRuntime`
-   - start background tasks through it
-   - serve MCP
-   - request shutdown after `service.waiting().await`
-   - await task completion with a timeout
-   - clear caches before process exit
-
-4. Move semantic service ownership out of the global:
-
-   Current:
-
-   ```rust
-   static SEMANTIC: LazyLock<Mutex<SemanticService>>
-   ```
-
-   Proposed:
+4. Semantic service ownership moved out of the global singleton. Router methods
+   receive the runtime-owned `Arc<Mutex<SemanticService>>` through
+   `RuntimeState`:
 
    ```rust
    SearchToolRouter {
-       semantic: Arc<Mutex<SemanticService>>,
-       search_cache: SearchRuntimeCache,
-       sync_manager: Option<Arc<SyncManager>>,
-       ...
+       runtime: RuntimeState,
    }
    ```
 
-5. Add explicit cleanup APIs:
+5. Cleanup/status APIs were added for the owned resources:
 
    - `SearchRuntimeCache::invalidate_all`
    - `SearchRuntimeCache::invalidate_workspace`
+   - `SearchRuntimeCache::status`
    - `SemanticService::clear_all`
    - `SemanticService::clear_project`
+   - `SemanticService::status`
    - `SyncManager::untrack_all_directories`
+   - `SyncManager::status`
 
-6. Add MCP tools:
+6. MCP lifecycle tools were added:
 
    - `runtime_status`
    - `clear_runtime`
 
-   `runtime_status` should report:
+   `runtime_status` reports:
 
    - tracked sync directories
    - search cache entry count and keys
    - semantic project count, paths, and load kind
    - whether background sync is enabled
-   - optionally, current process PID and memory RSS
+   - current process PID and RSS when available
 
-   `clear_runtime` should support:
+   `clear_runtime` supports in-memory cache and sync-tracking cleanup only. It
+   does not stop the background sync task while the server is still serving MCP
+   requests. Background task cancellation and joining is handled by
+   `ServerRuntime::shutdown_gracefully` during process shutdown. Whole-runtime
+   clears take the global workspace lock, and cache-producing read endpoints
+   take workspace locks before runtime search-cache use, so clears serialize
+   with in-flight workspace operations such as `index_codebase`,
+   `get_similar_code`, `similar_to_item`, and prompt-seeded `build_codemap`.
+
+   `clear_runtime` supports:
 
    - all caches
    - one workspace

@@ -11,3 +11,4 @@ pub(super) mod cache;
 pub(super) mod health;
 pub(super) mod index;
 pub(super) mod query;
+pub(super) mod runtime;

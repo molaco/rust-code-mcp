@@ -6,19 +6,14 @@ mod rename;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
 
 use ra_ap_ide::AnalysisHost;
 use ra_ap_vfs::Vfs;
 use anyhow::Result;
+use serde::Serialize;
 
 pub(crate) use position::Location;
 pub(crate) use rename::RenamePreview;
-
-/// Global semantic service instance (Mutex because AnalysisHost is not Sync)
-pub(crate) static SEMANTIC: LazyLock<Mutex<SemanticService>> = LazyLock::new(|| {
-    Mutex::new(SemanticService::new())
-});
 
 /// Cached project context
 struct ProjectContext {
@@ -33,15 +28,76 @@ enum LoadKind {
     Full,
 }
 
+impl LoadKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            LoadKind::Fast => "fast",
+            LoadKind::Full => "full",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SemanticProjectStatus {
+    pub path: String,
+    pub load_kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SemanticServiceStatus {
+    pub project_count: usize,
+    pub projects: Vec<SemanticProjectStatus>,
+}
+
 /// Service for semantic code queries
 pub(crate) struct SemanticService {
     projects: HashMap<PathBuf, ProjectContext>,
 }
 
 impl SemanticService {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             projects: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn project_count(&self) -> usize {
+        self.projects.len()
+    }
+
+    pub(crate) fn status(&self) -> SemanticServiceStatus {
+        let mut projects = self
+            .projects
+            .iter()
+            .map(|(path, ctx)| SemanticProjectStatus {
+                path: path.display().to_string(),
+                load_kind: ctx.load_kind.as_str().to_string(),
+            })
+            .collect::<Vec<_>>();
+        projects.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.load_kind.cmp(&b.load_kind))
+        });
+        SemanticServiceStatus {
+            project_count: projects.len(),
+            projects,
+        }
+    }
+
+    pub(crate) fn clear_all(&mut self) -> usize {
+        let count = self.projects.len();
+        self.projects.clear();
+        count
+    }
+
+    pub(crate) fn clear_project(&mut self, project_path: &Path) -> usize {
+        let canonical =
+            std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
+        if self.projects.remove(&canonical).is_some() {
+            1
+        } else {
+            0
         }
     }
 
@@ -88,7 +144,7 @@ impl SemanticService {
     }
 
     /// Search for symbols by name (for find_definition)
-    pub fn symbol_search(
+    pub(crate) fn symbol_search(
         &mut self,
         project_path: &Path,
         symbol_name: &str,
@@ -98,7 +154,7 @@ impl SemanticService {
     }
 
     /// Search for symbols by name with optional full-name filtering.
-    pub fn symbol_search_with_exact(
+    pub(crate) fn symbol_search_with_exact(
         &mut self,
         project_path: &Path,
         symbol_name: &str,
@@ -116,7 +172,7 @@ impl SemanticService {
 
     /// Find all references to symbols matching a name
     /// First finds all symbols matching the name, then finds references for each
-    pub fn find_references_by_name(
+    pub(crate) fn find_references_by_name(
         &mut self,
         project_path: &Path,
         symbol_name: &str,
@@ -125,7 +181,7 @@ impl SemanticService {
     }
 
     /// Find all references to symbols matching a name with optional exact filtering.
-    pub fn find_references_by_name_with_exact(
+    pub(crate) fn find_references_by_name_with_exact(
         &mut self,
         project_path: &Path,
         symbol_name: &str,
@@ -141,7 +197,7 @@ impl SemanticService {
     }
 
     /// Preview rename of a symbol by name. Does not modify any files.
-    pub fn rename_by_name(
+    pub(crate) fn rename_by_name(
         &mut self,
         project_path: &Path,
         symbol_name: &str,
@@ -157,7 +213,7 @@ impl SemanticService {
     }
 
     /// Preview rename of a symbol at a concrete file position. Does not modify any files.
-    pub fn rename_by_position(
+    pub(crate) fn rename_by_position(
         &mut self,
         project_path: &Path,
         file_path: &Path,
@@ -181,6 +237,20 @@ impl SemanticService {
             symbol_name,
             new_name,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_project_fast(&mut self, project_path: PathBuf) {
+        let canonical =
+            std::fs::canonicalize(&project_path).unwrap_or(project_path);
+        self.projects.insert(
+            canonical,
+            ProjectContext {
+                host: AnalysisHost::new(None),
+                vfs: Vfs::default(),
+                load_kind: LoadKind::Fast,
+            },
+        );
     }
 }
 
@@ -281,6 +351,21 @@ pub fn run(engine: &dyn Engine) {
             "expected downstream edit in engine_consumer, got {:?}",
             preview.edits
         );
+    }
+
+    #[test]
+    fn runtime_semantic_status_and_clear_are_workspace_scoped() {
+        let workspace = tempfile::tempdir().expect("create workspace tempdir");
+        let mut service = SemanticService::new();
+        service.insert_test_project_fast(workspace.path().join("."));
+
+        let status = service.status();
+        assert_eq!(status.project_count, 1);
+        assert_eq!(status.projects[0].load_kind, "fast");
+
+        assert_eq!(service.clear_project(workspace.path()), 1);
+        assert_eq!(service.project_count(), 0);
+        assert_eq!(service.clear_all(), 0);
     }
 
     fn write_file(path: &Path, contents: &str) {

@@ -86,11 +86,12 @@ use rmcp::{
 };
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tracing;
 
 use rmc_engine::parser::RustParser;
 
-use crate::semantic::SEMANTIC;
+use crate::semantic::SemanticService;
 
 fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError> {
     if !project_path.exists() {
@@ -117,16 +118,9 @@ fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError>
     Ok(())
 }
 
-/// Find the definition of a symbol by name
-pub(crate) async fn find_definition(
-    symbol_name: &str,
-    directory: &str,
-) -> Result<CallToolResult, McpError> {
-    find_definition_with_options(symbol_name, directory, false).await
-}
-
-/// Find the definition of a symbol by name with exact-match control.
-pub(crate) async fn find_definition_with_options(
+/// Find the definition of a symbol using an explicit semantic service.
+pub(crate) async fn find_definition_with_semantic(
+    semantic: &Arc<Mutex<SemanticService>>,
     symbol_name: &str,
     directory: &str,
     exact: bool,
@@ -136,7 +130,7 @@ pub(crate) async fn find_definition_with_options(
 
     tracing::debug!("Searching for definition of '{}' (exact={})", symbol_name, exact);
 
-    let locations = SEMANTIC
+    let locations = semantic
         .lock()
         .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
         .symbol_search_with_exact(project_path, symbol_name, 50, exact)
@@ -163,16 +157,9 @@ pub(crate) async fn find_definition_with_options(
     }
 }
 
-/// Find all references to a symbol by name
-pub(crate) async fn find_references(
-    symbol_name: &str,
-    directory: &str,
-) -> Result<CallToolResult, McpError> {
-    find_references_with_options(symbol_name, directory, false).await
-}
-
-/// Find all references to a symbol by name with exact-match control.
-pub(crate) async fn find_references_with_options(
+/// Find all references to a symbol using an explicit semantic service.
+pub(crate) async fn find_references_with_semantic(
+    semantic: &Arc<Mutex<SemanticService>>,
     symbol_name: &str,
     directory: &str,
     exact: bool,
@@ -182,7 +169,7 @@ pub(crate) async fn find_references_with_options(
 
     tracing::debug!("Searching for references to '{}' (exact={})", symbol_name, exact);
 
-    let locations = SEMANTIC
+    let locations = semantic
         .lock()
         .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
         .find_references_by_name_with_exact(project_path, symbol_name, exact)
@@ -209,8 +196,9 @@ pub(crate) async fn find_references_with_options(
     }
 }
 
-/// Preview a rename of a symbol across the project (does not modify files).
-pub(crate) async fn rename_symbol(
+/// Preview a rename using an explicit semantic service.
+pub(crate) async fn rename_symbol_with_semantic(
+    semantic: &Arc<Mutex<SemanticService>>,
     symbol_name: &str,
     new_name: &str,
     directory: &str,
@@ -239,7 +227,7 @@ pub(crate) async fn rename_symbol(
                 project_path.join(input_path)
             };
 
-            SEMANTIC
+            semantic
                 .lock()
                 .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
                 .rename_by_position(
@@ -252,7 +240,7 @@ pub(crate) async fn rename_symbol(
                 )
                 .map_err(rename_mcp_error)?
         }
-        (None, None, None) => SEMANTIC
+        (None, None, None) => semantic
             .lock()
             .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
             .rename_by_name(project_path, symbol_name, new_name)
@@ -538,18 +526,23 @@ pub(crate) async fn analyze_complexity(file_path: &str) -> Result<CallToolResult
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Arc, Mutex};
 
     #[tokio::test]
     async fn test_find_definition_invalid_project() {
         // /tmp is not a valid Cargo project, should return an error
-        let result = find_definition("nonexistent_symbol_xyz", "/tmp").await;
+        let semantic = test_semantic();
+        let result =
+            find_definition_with_semantic(&semantic, "nonexistent_symbol_xyz", "/tmp", false).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_find_references_invalid_project() {
         // /tmp is not a valid Cargo project, should return an error
-        let result = find_references("nonexistent_symbol_xyz", "/tmp").await;
+        let semantic = test_semantic();
+        let result =
+            find_references_with_semantic(&semantic, "nonexistent_symbol_xyz", "/tmp", false).await;
         assert!(result.is_err());
     }
 
@@ -573,14 +566,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_symbol_invalid_project() {
-        let result = rename_symbol("nonexistent_symbol_xyz", "new_name", "/tmp", None, None, None).await;
+        let semantic = test_semantic();
+        let result = rename_symbol_with_semantic(
+            &semantic,
+            "nonexistent_symbol_xyz",
+            "new_name",
+            "/tmp",
+            None,
+            None,
+            None,
+        )
+        .await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_rename_symbol_position_params_must_be_together() {
         let project = valid_temp_project();
-        let result = rename_symbol(
+        let semantic = test_semantic();
+        let result = rename_symbol_with_semantic(
+            &semantic,
             "Engine",
             "RenamedEngine",
             project.path().to_str().unwrap(),
@@ -595,7 +600,9 @@ mod tests {
     #[tokio::test]
     async fn test_rename_symbol_position_params_are_one_based() {
         let project = valid_temp_project();
-        let result = rename_symbol(
+        let semantic = test_semantic();
+        let result = rename_symbol_with_semantic(
+            &semantic,
             "Engine",
             "RenamedEngine",
             project.path().to_str().unwrap(),
@@ -645,5 +652,9 @@ edition = "2021"
         )
         .expect("write lib");
         dir
+    }
+
+    fn test_semantic() -> Arc<Mutex<SemanticService>> {
+        Arc::new(Mutex::new(SemanticService::new()))
     }
 }

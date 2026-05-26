@@ -36,6 +36,7 @@ pub(crate) async fn handle_build_codemap(
     embedding_policy: Option<&str>,
     format: Option<&str>,
     include_snippets: Option<bool>,
+    workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
     use rmc_graph::graph::codemap::{
@@ -80,6 +81,10 @@ pub(crate) async fn handle_build_codemap(
     let depth = depth.unwrap_or(3).min(5);
     let max_incoming_per_node = max_incoming_per_node.unwrap_or(8);
     let include_snippets = include_snippets.unwrap_or(false);
+
+    let _workspace_lock = workspace_locks
+        .lock_shared(std::path::Path::new(directory))
+        .await;
 
     let opts = CodemapOptions {
         max_nodes,

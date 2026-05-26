@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use rmc_engine::embeddings::EmbeddingGenerator;
 use rmc_engine::search::Bm25Search;
 use rmc_engine::vector_store::VectorStore;
+use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SearchRuntimeCacheKey {
@@ -28,6 +29,31 @@ impl SearchRuntimeCacheKey {
             tantivy_path: normalize_path(tantivy_path),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SearchRuntimeCacheKeyStatus {
+    pub workspace: String,
+    pub embedding_identity: String,
+    pub vector_path: String,
+    pub tantivy_path: String,
+}
+
+impl From<&SearchRuntimeCacheKey> for SearchRuntimeCacheKeyStatus {
+    fn from(key: &SearchRuntimeCacheKey) -> Self {
+        Self {
+            workspace: key.workspace.display().to_string(),
+            embedding_identity: key.embedding_identity.clone(),
+            vector_path: key.vector_path.display().to_string(),
+            tantivy_path: key.tantivy_path.display().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SearchRuntimeCacheStatus {
+    pub entry_count: usize,
+    pub keys: Vec<SearchRuntimeCacheKeyStatus>,
 }
 
 #[derive(Clone)]
@@ -62,18 +88,24 @@ impl SearchRuntimeCache {
             .insert(key, entry);
     }
 
-    pub fn invalidate_workspace(&self, workspace: &Path) {
-        self.entries
+    pub fn invalidate_workspace(&self, workspace: &Path) -> usize {
+        let mut entries = self
+            .entries
             .lock()
-            .expect("search runtime cache mutex poisoned")
-            .retain(|key, _| !key_matches_workspace(key, workspace));
+            .expect("search runtime cache mutex poisoned");
+        let before = entries.len();
+        entries.retain(|key, _| !key_matches_workspace(key, workspace));
+        before - entries.len()
     }
 
-    pub fn invalidate_all(&self) {
-        self.entries
+    pub fn invalidate_all(&self) -> usize {
+        let mut entries = self
+            .entries
             .lock()
-            .expect("search runtime cache mutex poisoned")
-            .clear();
+            .expect("search runtime cache mutex poisoned");
+        let count = entries.len();
+        entries.clear();
+        count
     }
 
     pub fn len(&self) -> usize {
@@ -85,6 +117,36 @@ impl SearchRuntimeCache {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn keys(&self) -> Vec<SearchRuntimeCacheKey> {
+        let mut keys = self
+            .entries
+            .lock()
+            .expect("search runtime cache mutex poisoned")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort_by(|a, b| {
+            a.workspace
+                .cmp(&b.workspace)
+                .then_with(|| a.embedding_identity.cmp(&b.embedding_identity))
+                .then_with(|| a.vector_path.cmp(&b.vector_path))
+                .then_with(|| a.tantivy_path.cmp(&b.tantivy_path))
+        });
+        keys
+    }
+
+    pub fn status(&self) -> SearchRuntimeCacheStatus {
+        let keys = self
+            .keys()
+            .iter()
+            .map(SearchRuntimeCacheKeyStatus::from)
+            .collect::<Vec<_>>();
+        SearchRuntimeCacheStatus {
+            entry_count: keys.len(),
+            keys,
+        }
     }
 }
 
@@ -166,9 +228,19 @@ mod tests {
         let cache = SearchRuntimeCache::new();
         let temp_dir = tempfile::tempdir().unwrap();
 
-        cache.invalidate_workspace(temp_dir.path());
-        cache.invalidate_all();
+        assert_eq!(cache.invalidate_workspace(temp_dir.path()), 0);
+        assert_eq!(cache.invalidate_all(), 0);
 
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn runtime_search_cache_status_reports_empty_keys() {
+        let cache = SearchRuntimeCache::new();
+        let status = cache.status();
+
+        assert_eq!(status.entry_count, 0);
+        assert!(status.keys.is_empty());
+        assert!(cache.keys().is_empty());
     }
 }
