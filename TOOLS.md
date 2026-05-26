@@ -37,6 +37,7 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`overlaps`](#overlaps) | Graph: Structure | Workspace name-collision/shadow report |
 | [`module_tree`](#module_tree) | Graph: Structure | Recursive module/item tree dump |
 | [`crate_types`](#crate_types) | Graph: Structure | Crate-owned type items with filters |
+| [`crate_skeleton`](#crate_skeleton) | Graph: Structure | Write a stripped mirrored facade tree under `.skeleton/` |
 | [`workspace_stats`](#workspace_stats) | Graph: Structure | Workspace counters (nodes/items/bindings) |
 | [`forbidden_dependency_check`](#forbidden_dependency_check) | Graph: Audit | Architectural-rule check over crate edges |
 | [`enum_variants`](#enum_variants) | Graph: Audit | Enumerate variants of an enum |
@@ -989,6 +990,81 @@ List crate-owned type items from the current hypergraph snapshot. Defaults to `S
 ```
 
 **Returns:** `{ krate, type_count, total_match_count, offset, limit, summary, returned_match_count, types }`, where each type carries `target`, `qualified_name`, `display_name`, `item_kind`, `visibility`, `file`, and `span`.
+
+---
+
+#### crate_skeleton
+
+Write a stripped Rust facade tree to `<workspace>/.skeleton/`, mirroring the real source layout. The tool selects items from the persisted hypergraph snapshot, reads declaration text from current source files, strips function bodies and value initializers, and writes one generated `.rs` file per mirrored source file.
+
+Run `build_hypergraph` first for the same workspace root.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `directory` | string | Yes | Workspace root |
+| `crates` | string[] | No | Local crate names to render. Default: all selected local lib/bin crates |
+| `include` | string[] | No | Visibility buckets: `pub`, `pub(crate)`, `restricted`, `private`, or `all`. Default: `pub`, `pub(crate)` |
+| `include_docs` | boolean | No | Preserve item doc comments from the snapshot. Default true |
+| `include_attrs` | boolean | No | Preserve item attributes from the snapshot. Default true |
+| `include_impls` | boolean | No | Emit synthetic inherent impl facades for retained associated items. Default true |
+| `skip_test_items` | boolean | No | Drop test items by v1 heuristics. Default true |
+| `exclude_vendor` | boolean | No | Exclude vendor crates from local crate selection. Default true |
+| `clean` | boolean | No | Remove the existing `<workspace>/.skeleton` tree before writing. Default true |
+| `limit` | integer | No | Max returned file summaries. Default 50 |
+| `offset` | integer | No | Offset into sorted file summaries. Default 0 |
+| `summary` | boolean | No | Omit per-file summaries and return only totals/page metadata. Default false |
+
+**Example:**
+```json
+{
+  "directory": "/path/to/workspace",
+  "crates": ["my_crate"],
+  "include": ["pub", "pub(crate)"],
+  "clean": true,
+  "limit": 25
+}
+```
+
+**Returns:**
+```json
+{
+  "skeleton_dir": "/path/to/workspace/.skeleton",
+  "snapshot_id": "<graph-id>",
+  "page": {
+    "total_match_count": 12,
+    "offset": 0,
+    "limit": 25,
+    "summary": false,
+    "returned_match_count": 12
+  },
+  "files_written": [
+    {
+      "crate_name": "my_crate",
+      "source_path": "crates/my-crate/src/lib.rs",
+      "skeleton_path": ".skeleton/crates/my-crate/src/lib.rs",
+      "bytes": 1200,
+      "items": 8
+    }
+  ],
+  "total_files": 12,
+  "total_items": 64,
+  "total_bytes": 18420,
+  "diagnostics": []
+}
+```
+
+**Notes and limitations:**
+
+- Files are always written under `<workspace>/.skeleton/` using source-relative paths mirrored from the real codebase.
+- `.skeleton/` is generated output: it is git-ignored and excluded from graph fingerprint and source-staleness walks.
+- Output is intended to be parseable Rust-like facade source for codebase context, not type-checking source.
+- V1 is item-file only: it does not emit `mod ...;`, inline module wrappers, crate-root/module attributes, or `pub use` re-export declarations.
+- Trait impl blocks are not reconstructed in v1.
+- Synthetic inherent impl blocks do not preserve original impl generics or where clauses.
+- Synthetic inherent impl blocks are emitted only for ADT hosts, not trait declarations.
+- `skip_test_items` is a name/item-attribute heuristic, not full cfg-aware test-module analysis.
+- Output selection comes from the snapshot, while declaration text is read from source; stale snapshots can produce diagnostics.
 
 ---
 

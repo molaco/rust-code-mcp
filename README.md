@@ -38,7 +38,7 @@ See [.docs/ARCHITECTURE.md](.docs/ARCHITECTURE.md) for the per-module breakdown,
 | Imports / exports | `get_imports`, `get_exports`, `get_reexports`, `get_declared_reexports` |
 | Reverse lookup | `who_imports`, `who_uses`, `who_uses_summary` |
 | Call graph | `who_calls`, `calls_from`, `call_graph`, `callers_in_crate`, `recursive_callers_count` |
-| Workspace structure | `dead_pub_in_crate`, `dead_pub_report`, `crate_edges`, `overlaps`, `module_tree`, `workspace_stats` |
+| Workspace structure | `dead_pub_in_crate`, `dead_pub_report`, `crate_edges`, `overlaps`, `module_tree`, `crate_types`, `crate_skeleton`, `workspace_stats` |
 | Architecture rules | `forbidden_dependency_check`, `crate_dependency_metric` |
 | Signatures & attributes | `function_signature`, `functions_with_filter`, `enum_variants`, `item_attributes`, `items_with_attribute` |
 | Safety & quality audits | `unsafe_audit`, `mut_static_audit`, `recursion_check`, `channel_capacity_audit`, `fn_body_audit` |
@@ -157,11 +157,12 @@ All tools accept a `directory` parameter pointing to your project root. Examples
 - **Find references**: `find_references` to see all usages of a symbol
 - **Preview a rename**: `rename_symbol` returns the full edit set without touching files
 - **Call graph**: `get_call_graph` or `who_calls` / `calls_from` to trace function relationships
+- **Skeleton facade**: `crate_skeleton` writes a stripped mirrored source tree under `.skeleton/`
 - **Similar code**: `get_similar_code` for semantic similarity search
 
-For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses a fingerprinted snapshot on subsequent calls), then run audits like `unsafe_audit`, `dead_pub_report`, `overlaps`, `crate_dependency_metric`, or `semantic_overlaps`. The codemap tool (`build_codemap`) produces a Mermaid-renderable subgraph seeded by symbols of interest.
+For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses a fingerprinted snapshot on subsequent calls), then run audits like `unsafe_audit`, `dead_pub_report`, `overlaps`, `crate_dependency_metric`, or `semantic_overlaps`. The codemap tool (`build_codemap`) produces a Mermaid-renderable subgraph seeded by symbols of interest. The skeleton tool (`crate_skeleton`) writes generated facade files to `<workspace>/.skeleton/`, mirroring source-relative paths.
 
-Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path **and the active embedding profile** — so different profiles get independent indexes, and it never writes to your project directory. The persisted hypergraph lives alongside it (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
+Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path **and the active embedding profile** — so different profiles get independent indexes. It does not write index/cache data to your project directory; `crate_skeleton` is the explicit exception and writes generated files under `.skeleton/`. The persisted hypergraph lives alongside the index data (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
 
 ## Embedding Models
 

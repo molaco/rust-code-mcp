@@ -69,6 +69,16 @@ refactored workspace. The current codebase is split into `rmc-graph` and
   - Validated focused tests with
     `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib crate_skeleton`.
 
+- 2026-05-26 Phase 4 complete:
+  - Ran `jj show --summary` before phase work.
+  - Added `crate_skeleton` to the public `TOOLS.md` overview and documented
+    parameters, defaults, example invocation, response shape, and v1
+    limitations.
+  - Updated `README.md` tool categories and usage notes, including the
+    explicit `.skeleton/` project-write exception.
+  - Validated with
+    `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib`.
+
 ## Goal
 
 Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree
