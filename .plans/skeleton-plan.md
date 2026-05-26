@@ -75,6 +75,11 @@ original plan assumed.
 - Type generics, where-clauses, struct fields, enum payload fields, type alias
   RHS, const types, ABI, `unsafe`, `const fn`, and other exact declaration
   syntax are **not** fully represented in the snapshot model.
+- `compute_fingerprint` in `crates/rmc-graph/src/graph/storage.rs` and
+  `codemap::newest_source_mtime` currently skip `target/` and `.git/`, but not
+  `.skeleton/`. Since this tool writes generated `.rs` files under the
+  workspace root, `.skeleton/` must be excluded from both walkers before the
+  endpoint lands.
 
 ## Key Design Decision
 
@@ -100,6 +105,63 @@ This is a better fit for the current codebase than immediately adding
 The tradeoff is that the renderer depends on source files still existing and
 matching the snapshot. Handle that with a freshness diagnostic and graceful
 fallback rendering.
+
+## MCP-Verified Reuse Audit
+
+Verified against the current codebase with the `rust-code-mcp-refactor` tools
+(`build_hypergraph`, `module_tree`, `find_definition`, `search`,
+`get_declared_reexports`, `get_exports`, and `get_similar_code`).
+
+Reuse requirements:
+
+- Reuse `OpenedSnapshot` and its existing read-side data/helpers:
+  - `find_root_module_of`
+  - `lookup_by_qualified_name`
+  - `node`
+  - `declared_reexports_of`
+  - `bindings_for_from_module`
+  - `bindings_for_target`
+  - `children_by_parent`
+- Move shared visibility logic instead of copying it. The current
+  `query/modules.rs` helpers `declared_item_visibility_map` and
+  `format_binding_visibility` should become shared graph-query helpers, and
+  `module_tree` should call the shared helper too.
+- Move shared crate-scope logic instead of copying it. The target-kind/vendor
+  selection logic currently embedded in `query/overlaps.rs` should become a
+  shared helper that both `overlaps_with_scope` and skeleton collection use.
+  `exclude_vendor=true` maps to `OverlapScope::LocalNoVendor`; false maps to
+  `OverlapScope::Local`.
+- Reuse the codemap freshness infrastructure. Do not add a second
+  `newest_source_mtime` walker. Instead, extend the shared workspace-walk
+  exclusion rule so both `compute_fingerprint` and
+  `codemap::newest_source_mtime` skip `.skeleton/`.
+- Reuse server graph response helpers:
+  - `open_workspace_snapshot`
+  - `json_result`
+  - `internal_error`
+  - the existing `tokio::task::spawn_blocking` pattern from `core.rs` and
+    `audits.rs`
+- Reuse existing persisted surface data:
+  - `Node.attributes`
+  - `FunctionSignature`
+  - `StaticMetadata`
+  - `Binding` visibility/re-export information
+- Do not load a full `LoadedWorkspace` or `Semantics` stack for v1 skeleton
+  rendering. Existing audit tools use that for semantic resolution; skeleton
+  only needs syntax-level body stripping from `Node.file` + `Node.span`.
+- Keep `skeleton::source::SourceCache` local in v1 because existing caches are
+  snippet-specific (`codemap::extract_snippet`) or audit-specific (`FileId`
+  text caches). If a later feature needs the same parsed-source cache, extract
+  it into a shared graph module then.
+
+Generated-output hygiene:
+
+- Add `/.skeleton/` to `.gitignore`.
+- Add a shared workspace-walk exclusion helper for `target/`, `.git/`, and
+  `.skeleton/`.
+- Use that helper from `compute_fingerprint` and `codemap::newest_source_mtime`.
+- Add tests proving `.skeleton/*.rs` does not change the graph fingerprint and
+  does not trigger stale-source diagnostics.
 
 ## Tool Surface
 
@@ -357,10 +419,15 @@ Exit gate:
 
 ## Phase 1: Graph Skeleton Core With Stub Output
 
-Purpose: add the `rmc-graph` API and collector without source stripping.
+Purpose: add the `rmc-graph` API and collector without source stripping, while
+first making `.skeleton/` a proper generated directory that existing graph
+infrastructure ignores.
 
 Files:
 
+- `.gitignore`
+- `crates/rmc-graph/src/graph/storage.rs`
+- `crates/rmc-graph/src/graph/codemap/build.rs`
 - `crates/rmc-graph/src/graph/skeleton/mod.rs`
 - `crates/rmc-graph/src/graph/skeleton/model.rs`
 - `crates/rmc-graph/src/graph/skeleton/collect.rs`
@@ -368,12 +435,26 @@ Files:
 - `crates/rmc-graph/src/graph/mod.rs`
 - `crates/rmc-graph/src/graph/query/shared.rs`
 - `crates/rmc-graph/src/graph/query/modules.rs`
+- `crates/rmc-graph/src/graph/query/overlaps.rs`
 
 Implementation steps:
 
-1. Add `mod skeleton;` to `graph/mod.rs`.
+1. Add generated-directory hygiene before the endpoint exists:
 
-2. Add public graph-facing types:
+   - Add `/.skeleton/` to `.gitignore`.
+   - Add a shared workspace-walk exclusion helper in `storage.rs`, scoped for
+     graph-internal reuse, covering `target/`, `.git/`, and `.skeleton/`.
+   - Replace the ad hoc component filters in `compute_fingerprint` and
+     `codemap::newest_source_mtime` with that helper.
+   - Add `fingerprint_stable_when_skeleton_dir_grows`.
+   - Add `newest_source_mtime_skips_skeleton_dir`.
+
+   This avoids generated skeleton files becoming graph input on the next
+   `build_hypergraph` run and avoids false stale-source warnings.
+
+2. Add `mod skeleton;` to `graph/mod.rs`.
+
+3. Add public graph-facing types:
 
    ```rust
    pub struct SkeletonOptions { ... }
@@ -386,8 +467,8 @@ Implementation steps:
    ) -> anyhow::Result<SkeletonOutput>
    ```
 
-3. Generalize the visibility helper currently private to
-   `query/modules.rs`.
+4. Generalize the visibility helper currently private to `query/modules.rs`.
+   Move the implementation; do not copy it.
 
    Current helper:
 
@@ -407,20 +488,45 @@ Implementation steps:
    It must work for both Item and Module targets. This is required because
    module `Node.visibility` is currently `None`.
 
-4. Collector logic:
+5. Generalize crate selection currently embedded in `query/overlaps.rs`.
+
+   Current logic:
+
+   - crate target kind defaults from `Node.crate_target_kind`
+   - local targets are `lib` and `bin`
+   - vendor crates are detected from any local node whose file starts with
+     `vendor/`
+   - `OverlapScope::LocalNoVendor` excludes those vendor crates
+
+   New shared shape:
+
+   ```rust
+   pub(in crate::graph) fn crate_scope_allows(
+       scope: OverlapScope,
+       crate_id: NodeId,
+       crate_target_kind_for: &HashMap<NodeId, String>,
+       vendor_crates: &HashSet<NodeId>,
+   ) -> bool
+   ```
+
+   `overlaps_with_scope` and skeleton collection both use this helper so the
+   definition of "local crate" cannot drift.
+
+6. Collector logic:
 
    - Scan `nodes_by_id` for crate nodes.
    - Keep only local target kinds `lib` and `bin` by default.
-   - If `exclude_vendor=true`, mark vendor crates using the same heuristic as
-     `overlaps_with_scope`: any local node in the crate whose file starts with
-     `vendor/`.
+   - If `exclude_vendor=true`, use the shared crate-scope helper with
+     `OverlapScope::LocalNoVendor`.
+   - If `exclude_vendor=false`, use the shared crate-scope helper with
+     `OverlapScope::Local`.
    - Resolve the root module with `find_root_module_of`.
    - Walk `children_by_parent`.
    - Attach declared visibility for modules and items.
    - Apply visibility and test filters.
    - Prune empty modules after filtering.
 
-5. Stub renderer:
+7. Stub renderer:
 
    - Emit one `SkeletonFile` per mirrored source path, not one per crate.
    - Prefix each generated file with a short banner naming the source file,
@@ -432,12 +538,14 @@ Implementation steps:
      // item: rmc_graph::graph::model::Node [Struct]
      ```
 
-6. Add unit tests for:
+8. Add unit tests for:
 
    - `include=["pub"]` excludes `pub(crate)` and private items.
    - `include=["all"]` keeps private items.
    - `exclude_tests=true` prunes `::tests::`.
    - Module visibility is recovered from bindings.
+   - The shared crate-scope helper matches existing overlaps behavior for
+     local, example, and vendor crates.
 
 Validation:
 
@@ -469,6 +577,10 @@ Implementation steps:
    - keyed by workspace-relative file path
    - stores source text and parsed `SourceFile`
    - records diagnostics for read/parse failures
+   - uses `snap.manifest.workspace_root` + `Node.file`; do not add a second
+     VFS or `LoadedWorkspace` path
+   - remains skeleton-local in v1 because it stores parsed full files and AST
+     lookup state, unlike the existing codemap snippet cache
 
 2. Add range lookup:
 
@@ -486,6 +598,8 @@ Implementation steps:
 
    - Remove leading outer attrs/docs from source item text.
    - Re-emit filtered `Node.attributes`.
+   - Do not re-extract attrs from source unless `Node.attributes` is missing;
+     the build-time `attributes.rs` pass is the source of truth.
 
 5. Render module blocks:
 
@@ -537,6 +651,8 @@ Implementation steps:
      ```
 
    - Do not try to reproduce original use-tree grouping in v1.
+   - Do not add a second exports/re-exports query path; use the existing
+     `Binding` output and enrichment conventions where possible.
 
 Tests:
 
@@ -582,6 +698,9 @@ Implementation steps:
 3. Endpoint behavior:
 
    - Open snapshot with `open_workspace_snapshot`.
+   - Serialize responses with `json_result`.
+   - Map graph errors with `internal_error` unless they are user parameter
+     errors.
    - Canonicalize `directory`.
    - Set `skeleton_dir = <canonical directory>/.skeleton`.
    - If `clean=true`, remove only `skeleton_dir` after verifying the final path
@@ -593,8 +712,8 @@ Implementation steps:
    - Return `CrateSkeletonResponse`.
 
 4. Use `tokio::task::spawn_blocking` around the synchronous render + file IO.
-   This follows the `build_hypergraph` pattern and avoids blocking the async
-   runtime worker.
+   This follows the `build_hypergraph` and graph-audit endpoint patterns and
+   avoids blocking the async runtime worker.
 
 5. Add router method in `tools/router.rs` near the structure/surface tools:
 
@@ -612,6 +731,8 @@ Implementation steps:
    - Assert a generated file mirrors a real source-relative path.
    - Assert the file exists and contains a banner.
    - Assert `clean=true` removes stale files under `.skeleton`.
+   - Assert a sibling directory with a similar name, such as
+     `.skeleton-backup`, is never removed.
 
 Validation:
 
@@ -648,6 +769,8 @@ Required limitation notes:
 
 - Files are always written under `<workspace>/.skeleton/` with source-relative
   paths mirrored from the real codebase.
+- `.skeleton/` is generated output: it is git-ignored and excluded from graph
+  fingerprint/staleness source walks.
 - Output is intended to be parseable Rust-like facade source, not type-checking
   source.
 - Trait impl blocks are not reconstructed in v1.
@@ -816,16 +939,22 @@ Do not mix this schema bump into the first MCP landing.
    Mitigation: reuse the codemap-style newest `.rs` mtime check and emit a
    diagnostic suggesting `build_hypergraph(force_rebuild=true)`.
 
-5. **Raw source attrs/docs conflict with option toggles.**
+5. **Generated `.skeleton/*.rs` files can perturb graph fingerprints or stale
+   source diagnostics.**
+   Mitigation: add a shared workspace-walk exclusion helper and make both
+   `compute_fingerprint` and `codemap::newest_source_mtime` skip `.skeleton/`;
+   add regression tests before the MCP endpoint writes files.
+
+6. **Raw source attrs/docs conflict with option toggles.**
    Mitigation: strip leading attrs/docs and re-emit filtered `Node.attributes`.
 
-6. **Generated output can be syntactically valid but semantically invalid.**
+7. **Generated output can be syntactically valid but semantically invalid.**
    Mitigation: document that the output is for API/context reading and parsing,
    not compiling.
 
 ## Suggested PR Slicing
 
-1. `rmc-graph`: skeleton collector + stub renderer.
+1. `rmc-graph`: generated-dir hygiene + skeleton collector + stub renderer.
 2. `rmc-graph`: source-slice stripping renderer.
 3. `rmc-server`: MCP endpoint + file writing.
 4. Docs/tests polish.
@@ -843,7 +972,7 @@ help review and PR slicing.
 | Phase | New | Modified | Deleted | Prod LOC | Test LOC |
 |---|---:|---:|---:|---:|---:|
 | 0 Preflight | 0 | 0 | 0 | 0 | 0 |
-| 1 Graph collector + stub renderer | 1 dir, 4 files | 3 files | 0 | ~700-950 | ~250-400 |
+| 1 Graph collector + stub renderer | 1 dir, 4 files | 7 files | 0 | ~800-1050 | ~320-520 |
 | 2 Source stripping renderer | 1 file | 2-3 files | 0 | ~600-900 | ~350-550 |
 | 3 MCP endpoint + `.skeleton/` writing | 1 file | 4 files | 0 | ~250-400 | ~150-250 |
 | 4 Docs | 0 | 2 files | 0 | 0 | 0 |
@@ -866,9 +995,13 @@ New files/modules:
 
 Modified files:
 
+- `.gitignore`
+- `crates/rmc-graph/src/graph/storage.rs`
+- `crates/rmc-graph/src/graph/codemap/build.rs`
 - `crates/rmc-graph/src/graph/mod.rs`
 - `crates/rmc-graph/src/graph/query/shared.rs`
 - `crates/rmc-graph/src/graph/query/modules.rs`
+- `crates/rmc-graph/src/graph/query/overlaps.rs`
 
 New types:
 
@@ -888,6 +1021,8 @@ New functions:
 - visibility filter helpers
 - stub file renderer
 - generalized `declared_visibility_map`
+- shared workspace-walk exclusion helper for `target/`, `.git/`, `.skeleton/`
+- shared crate-scope/vendor helper reused by overlaps and skeleton collection
 
 ### Phase 2 Impact
 
