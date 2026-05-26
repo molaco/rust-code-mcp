@@ -15,13 +15,19 @@ use super::surface::*;
 use super::audits::graph_audit_error;
 
 use rmc_graph::graph::{EnrichedUsage, GraphAuditError};
+use ra_ap_syntax::SourceFile;
 use crate::tools::params::{
     BuildHypergraphParams, CrateSkeletonParams, CrateTypesParams, DeadPubParams, GraphExportsParams,
     GraphImportsParams, ListPaginationParams, ModuleDependenciesParams, WhoImportsParams,
     WhoUsesParams,
 };
 use rmcp::model::{CallToolResult, ErrorCode};
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
+use tempfile::{Builder, TempDir};
 
 // Default-snapshot cases share `~/.local/share/search/graphs/...`. heed forbids
 // opening the same env twice in the same process, so one async test runs those
@@ -38,6 +44,117 @@ fn test_workspace_root() -> PathBuf {
         .and_then(|path| path.parent())
         .expect("workspace root")
         .to_path_buf()
+}
+
+struct WorkspaceSkeletonPathGuard {
+    entries: Vec<WorkspaceSkeletonPath>,
+    restored: bool,
+    _temp_dir: TempDir,
+}
+
+struct WorkspaceSkeletonPath {
+    original_path: PathBuf,
+    preserved_path: Option<PathBuf>,
+}
+
+impl WorkspaceSkeletonPathGuard {
+    fn new(workspace_root: &Path) -> Self {
+        let preserve_root = workspace_root
+            .parent()
+            .expect("workspace root has a parent for preservation");
+        let temp_dir = Builder::new()
+            .prefix(".crate-skeleton-test-preserve-")
+            .tempdir_in(preserve_root)
+            .expect("create crate_skeleton preservation dir");
+        let mut guard = Self {
+            entries: Vec::new(),
+            restored: false,
+            _temp_dir: temp_dir,
+        };
+        guard
+            .preserve(workspace_root, ".skeleton")
+            .expect("preserve existing .skeleton");
+        guard
+            .preserve(workspace_root, ".skeleton-backup")
+            .expect("preserve existing .skeleton-backup");
+        guard
+    }
+
+    fn preserve(&mut self, workspace_root: &Path, name: &str) -> io::Result<()> {
+        let original_path = workspace_root.join(name);
+        let preserved_path = match fs::symlink_metadata(&original_path) {
+            Ok(_) => {
+                let preserved_path = self
+                    ._temp_dir
+                    .path()
+                    .join(name.strip_prefix('.').unwrap_or(name));
+                fs::rename(&original_path, &preserved_path)?;
+                Some(preserved_path)
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
+        self.entries.push(WorkspaceSkeletonPath {
+            original_path,
+            preserved_path,
+        });
+        Ok(())
+    }
+
+    fn restore(mut self) {
+        self.restore_all()
+            .expect("restore pre-existing workspace .skeleton paths");
+        self.restored = true;
+    }
+
+    fn restore_all(&mut self) -> io::Result<()> {
+        for entry in self.entries.iter().rev() {
+            remove_path_if_exists(&entry.original_path)?;
+            if let Some(preserved_path) = &entry.preserved_path {
+                fs::rename(preserved_path, &entry.original_path)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WorkspaceSkeletonPathGuard {
+    fn drop(&mut self) {
+        if self.restored {
+            return;
+        }
+        if let Err(err) = self.restore_all() {
+            eprintln!("failed to restore crate_skeleton test workspace paths: {err}");
+        }
+    }
+}
+
+fn remove_path_if_exists(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(path)
+        }
+        Ok(_) => fs::remove_file(path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn assert_generated_skeleton_rust_file_parses(path: &Path) {
+    let source = fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!(
+            "read generated skeleton Rust file {}: {err}",
+            path.display()
+        )
+    });
+    let parsed = SourceFile::parse(&source, ra_ap_syntax::Edition::Edition2024);
+    assert!(
+        parsed.errors().is_empty(),
+        "{} parse errors: {:?}\n{}",
+        path.display(),
+        parsed.errors(),
+        source
+    );
 }
 
 async fn ensure_default_snapshot(directory: &str) {
@@ -598,6 +715,7 @@ async fn crate_types_round_trip() {
 
 async fn crate_skeleton_round_trip() {
     let workspace_root = test_workspace_root();
+    let workspace_skeleton_paths = WorkspaceSkeletonPathGuard::new(&workspace_root);
     let workspace = workspace_root.display().to_string();
     build_hypergraph(BuildHypergraphParams {
         directory: workspace.clone(),
@@ -669,6 +787,7 @@ async fn crate_skeleton_round_trip() {
     );
     let server_router_text = fs::read_to_string(&server_router).expect("read server router skeleton");
     assert!(server_router_text.contains("fn crate_skeleton"));
+    assert_generated_skeleton_rust_file_parses(&server_router);
     assert!(!stale_file.exists(), "clean=true should remove stale skeleton files");
     assert!(
         backup_file.exists(),
@@ -713,9 +832,9 @@ async fn crate_skeleton_round_trip() {
     );
     let graph_model_text = fs::read_to_string(&graph_model).expect("read graph model skeleton");
     assert!(graph_model_text.contains("pub struct Node"));
+    assert_generated_skeleton_rust_file_parses(&graph_model);
 
-    let _ = fs::remove_dir_all(&skeleton_dir);
-    let _ = fs::remove_dir_all(&backup_dir);
+    workspace_skeleton_paths.restore();
 }
 
 #[test]

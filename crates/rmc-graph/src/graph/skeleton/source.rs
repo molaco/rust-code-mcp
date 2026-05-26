@@ -2,9 +2,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use ra_ap_syntax::{AstNode, SourceFile, SyntaxNode, TextRange, TextSize, ast};
+use ra_ap_syntax::{
+    AstNode, SourceFile, SyntaxNode, TextRange, TextSize,
+    ast::{self, HasName},
+};
 
-use crate::graph::model::{ItemKind, Node};
+use crate::graph::model::{
+    FunctionSignature, ItemKind, Node, SelfKind, StaticMetadata,
+};
+use crate::graph::snapshot::OpenedSnapshot;
 
 use super::model::{SkeletonDiagnostic, SkeletonItem, SkeletonOptions};
 
@@ -34,6 +40,7 @@ impl SourceCache {
 
     pub(super) fn render_item(
         &mut self,
+        snap: &OpenedSnapshot,
         item: &SkeletonItem,
         opts: &SkeletonOptions,
         diagnostics: &mut Vec<SkeletonDiagnostic>,
@@ -45,10 +52,10 @@ impl SourceCache {
                     item.node.qualified_name,
                 ),
             });
-            return fallback_declaration(item);
+            return fallback_declaration(item, &fallback_metadata(snap, item, diagnostics));
         };
         let Some(source) = self.source(file, diagnostics) else {
-            return fallback_declaration(item);
+            return fallback_declaration(item, &fallback_metadata(snap, item, diagnostics));
         };
         let Some(syntax) = find_item_syntax(&source.parsed, &item.node) else {
             diagnostics.push(SkeletonDiagnostic {
@@ -57,7 +64,44 @@ impl SourceCache {
                     item.node.qualified_name, file,
                 ),
             });
-            return fallback_declaration(item);
+            return fallback_declaration(item, &fallback_metadata(snap, item, diagnostics));
+        };
+        render_source_item_text(
+            &source.text,
+            &syntax,
+            &item.node.attributes,
+            opts,
+        )
+    }
+
+    #[cfg(test)]
+    fn render_item_with_metadata(
+        &mut self,
+        item: &SkeletonItem,
+        opts: &SkeletonOptions,
+        diagnostics: &mut Vec<SkeletonDiagnostic>,
+        fallback: &FallbackMetadata,
+    ) -> String {
+        let Some(file) = item.node.file.as_deref() else {
+            diagnostics.push(SkeletonDiagnostic {
+                message: format!(
+                    "item `{}` has no source file; rendered fallback declaration",
+                    item.node.qualified_name,
+                ),
+            });
+            return fallback_declaration(item, fallback);
+        };
+        let Some(source) = self.source(file, diagnostics) else {
+            return fallback_declaration(item, fallback);
+        };
+        let Some(syntax) = find_item_syntax(&source.parsed, &item.node) else {
+            diagnostics.push(SkeletonDiagnostic {
+                message: format!(
+                    "could not find source syntax for `{}` in `{}`; rendered fallback declaration",
+                    item.node.qualified_name, file,
+                ),
+            });
+            return fallback_declaration(item, fallback);
         };
         render_source_item_text(
             &source.text,
@@ -81,15 +125,17 @@ impl SourceCache {
                         ra_ap_syntax::Edition::Edition2024,
                     );
                     let parsed_errors = parse.errors().len();
-                    let parsed = parse.tree();
                     if parsed_errors > 0 {
                         diagnostics.push(SkeletonDiagnostic {
                             message: format!(
-                                "source `{file}` parsed with {parsed_errors} syntax errors",
+                                "source `{file}` parsed with {parsed_errors} syntax errors; rendered fallback declarations",
                             ),
                         });
+                        Err(())
+                    } else {
+                        let parsed = parse.tree();
+                        Ok(CachedSource { text, parsed })
                     }
-                    Ok(CachedSource { text, parsed })
                 }
                 Err(err) => {
                     diagnostics.push(SkeletonDiagnostic {
@@ -145,6 +191,9 @@ pub(super) fn find_item_syntax(parsed: &SourceFile, node: &Node) -> Option<Synta
         if !is_expected_item_syntax(item_kind, &syntax) {
             continue;
         }
+        if !matches_node_name(item_kind, &syntax, node) {
+            continue;
+        }
         let range = syntax.text_range();
         if range == wanted {
             return Some(syntax);
@@ -168,6 +217,31 @@ pub(super) fn find_item_syntax(parsed: &SourceFile, node: &Node) -> Option<Synta
     }
 
     best_covering.or(best_inside)
+}
+
+fn matches_node_name(item_kind: ItemKind, syntax: &SyntaxNode, node: &Node) -> bool {
+    declaration_name(item_kind, syntax)
+        .map(|name| name == node.display_name.as_str())
+        .unwrap_or(true)
+}
+
+fn declaration_name(item_kind: ItemKind, syntax: &SyntaxNode) -> Option<String> {
+    match item_kind {
+        ItemKind::Function | ItemKind::Method | ItemKind::AssocFunction => {
+            ast::Fn::cast(syntax.clone())?.name()
+        }
+        ItemKind::Struct => ast::Struct::cast(syntax.clone())?.name(),
+        ItemKind::Enum => ast::Enum::cast(syntax.clone())?.name(),
+        ItemKind::Union => ast::Union::cast(syntax.clone())?.name(),
+        ItemKind::Trait => ast::Trait::cast(syntax.clone())?.name(),
+        ItemKind::TypeAlias | ItemKind::AssocType => {
+            ast::TypeAlias::cast(syntax.clone())?.name()
+        }
+        ItemKind::Const | ItemKind::AssocConst => ast::Const::cast(syntax.clone())?.name(),
+        ItemKind::Static => ast::Static::cast(syntax.clone())?.name(),
+        ItemKind::EnumVariant => ast::Variant::cast(syntax.clone())?.name(),
+    }
+    .map(|name| name.text().to_string())
 }
 
 fn is_expected_item_syntax(item_kind: ItemKind, syntax: &SyntaxNode) -> bool {
@@ -321,12 +395,64 @@ fn outer_attr_len(text: &str) -> Option<usize> {
     None
 }
 
-fn fallback_declaration(item: &SkeletonItem) -> String {
+#[derive(Default)]
+struct FallbackMetadata {
+    signature: Option<FunctionSignature>,
+    static_metadata: Option<StaticMetadata>,
+}
+
+fn fallback_metadata(
+    snap: &OpenedSnapshot,
+    item: &SkeletonItem,
+    diagnostics: &mut Vec<SkeletonDiagnostic>,
+) -> FallbackMetadata {
+    match item.node.item_kind {
+        Some(ItemKind::Function | ItemKind::Method | ItemKind::AssocFunction) => {
+            match snap.function_signature(item.id) {
+                Ok(signature) => FallbackMetadata {
+                    signature,
+                    static_metadata: None,
+                },
+                Err(err) => {
+                    diagnostics.push(SkeletonDiagnostic {
+                        message: format!(
+                            "could not load persisted signature for `{}`: {err}",
+                            item.node.qualified_name,
+                        ),
+                    });
+                    FallbackMetadata::default()
+                }
+            }
+        }
+        Some(ItemKind::Static) => match snap.static_metadata(item.id) {
+            Ok(static_metadata) => FallbackMetadata {
+                signature: None,
+                static_metadata,
+            },
+            Err(err) => {
+                diagnostics.push(SkeletonDiagnostic {
+                    message: format!(
+                        "could not load persisted static metadata for `{}`: {err}",
+                        item.node.qualified_name,
+                    ),
+                });
+                FallbackMetadata::default()
+            }
+        },
+        _ => FallbackMetadata::default(),
+    }
+}
+
+fn fallback_declaration(item: &SkeletonItem, metadata: &FallbackMetadata) -> String {
     let vis = visibility_prefix(item.visibility.as_deref());
     let name = item.node.display_name.as_str();
     match item.node.item_kind {
         Some(ItemKind::Function | ItemKind::Method | ItemKind::AssocFunction) => {
-            format!("{vis}fn {name}() {{ /* ... */ }}")
+            if let Some(signature) = &metadata.signature {
+                fallback_function_declaration(&vis, name, signature)
+            } else {
+                format!("{vis}fn {name}() {{ /* ... */ }}")
+            }
         }
         Some(ItemKind::Struct) => format!("{vis}struct {name};"),
         Some(ItemKind::Enum) => format!("{vis}enum {name} {{}}"),
@@ -338,11 +464,105 @@ fn fallback_declaration(item: &SkeletonItem) -> String {
         Some(ItemKind::Const | ItemKind::AssocConst) => {
             format!("{vis}const {name}: () = ();")
         }
-        Some(ItemKind::Static) => format!("{vis}static {name}: () = ();"),
+        Some(ItemKind::Static) => {
+            if let Some(metadata) = &metadata.static_metadata {
+                fallback_static_declaration(&vis, name, metadata)
+            } else {
+                format!("{vis}static {name}: () = ();")
+            }
+        }
         Some(ItemKind::EnumVariant) | None => {
             format!("// item `{}` could not be rendered", item.node.qualified_name)
         }
     }
+}
+
+fn fallback_function_declaration(
+    vis: &str,
+    name: &str,
+    signature: &FunctionSignature,
+) -> String {
+    let async_prefix = if signature.is_async { "async " } else { "" };
+    let generics = render_generics(&signature.generics);
+    let params = render_function_params(signature);
+    let return_type = render_return_type(&signature.return_type);
+    format!(
+        "{vis}{async_prefix}fn {name}{generics}({params}){return_type} {{ /* ... */ }}"
+    )
+}
+
+fn render_generics(generics: &[crate::graph::model::GenericBound]) -> String {
+    if generics.is_empty() {
+        return String::new();
+    }
+    let rendered = generics
+        .iter()
+        .map(|generic| {
+            if generic.bounds.is_empty() {
+                generic.name.clone()
+            } else {
+                format!("{}: {}", generic.name, generic.bounds.join(" + "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("<{rendered}>")
+}
+
+fn render_function_params(signature: &FunctionSignature) -> String {
+    let mut params = Vec::new();
+    if let Some(self_param) = signature.self_param {
+        params.push(match self_param {
+            SelfKind::Owned => "self".to_string(),
+            SelfKind::Ref => "&self".to_string(),
+            SelfKind::RefMut => "&mut self".to_string(),
+        });
+    }
+    params.extend(
+        signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(idx, param)| render_param(idx, param)),
+    );
+    params.join(", ")
+}
+
+fn render_param(idx: usize, param: &crate::graph::model::Param) -> String {
+    let name = if param.name.is_empty() {
+        format!("_arg{idx}")
+    } else {
+        param.name.clone()
+    };
+    let ty = if param.ty.is_empty() {
+        "()"
+    } else {
+        param.ty.as_str()
+    };
+    format!("{name}: {ty}")
+}
+
+fn render_return_type(return_type: &str) -> String {
+    let trimmed = return_type.trim();
+    if trimmed.is_empty() || trimmed == "()" {
+        String::new()
+    } else {
+        format!(" -> {trimmed}")
+    }
+}
+
+fn fallback_static_declaration(
+    vis: &str,
+    name: &str,
+    metadata: &StaticMetadata,
+) -> String {
+    let mutability = if metadata.is_mut { "mut " } else { "" };
+    let ty = if metadata.type_string.is_empty() {
+        "()"
+    } else {
+        metadata.type_string.as_str()
+    };
+    format!("{vis}static {mutability}{name}: {ty} = todo!();")
 }
 
 fn visibility_prefix(visibility: Option<&str>) -> String {
@@ -356,7 +576,7 @@ fn visibility_prefix(visibility: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::graph::ids::NodeId;
-    use crate::graph::model::{Node, NodeKind};
+    use crate::graph::model::{GenericBound, Node, NodeKind, Param};
 
     fn first_syntax(src: &str, kind: ItemKind) -> SyntaxNode {
         let parsed = SourceFile::parse(src, ra_ap_syntax::Edition::Edition2024).tree();
@@ -371,6 +591,20 @@ mod tests {
         let syntax = first_syntax(src, kind);
         let attrs: Vec<String> = attrs.iter().map(|attr| attr.to_string()).collect();
         render_source_item_text(src, &syntax, &attrs, &opts)
+    }
+
+    fn item_syntax_range(src: &str, kind: ItemKind, name: &str) -> (u32, u32) {
+        let parsed = SourceFile::parse(src, ra_ap_syntax::Edition::Edition2024).tree();
+        let syntax = parsed
+            .syntax()
+            .descendants()
+            .find(|syntax| {
+                is_expected_item_syntax(kind, syntax)
+                    && declaration_name(kind, syntax).as_deref() == Some(name)
+            })
+            .expect("expected named item syntax");
+        let range = syntax.text_range();
+        (u32::from(range.start()), u32::from(range.end()))
     }
 
     fn item_with_source(file: Option<&str>, span: Option<(u32, u32)>) -> SkeletonItem {
@@ -448,10 +682,11 @@ mod tests {
         let td = tempfile::tempdir().expect("tempdir");
         let mut cache = SourceCache::new(td.path());
         let mut diagnostics = Vec::new();
-        let rendered = cache.render_item(
+        let rendered = cache.render_item_with_metadata(
             &item_with_source(Some("src/lib.rs"), Some((0, 10))),
             &SkeletonOptions::default(),
             &mut diagnostics,
+            &FallbackMetadata::default(),
         );
         assert_eq!(rendered, "pub fn f() { /* ... */ }");
         assert!(
@@ -472,10 +707,11 @@ mod tests {
 
         let mut cache = SourceCache::new(td.path());
         let mut diagnostics = Vec::new();
-        let rendered = cache.render_item(
+        let rendered = cache.render_item_with_metadata(
             &item_with_source(Some("src/lib.rs"), None),
             &SkeletonOptions::default(),
             &mut diagnostics,
+            &FallbackMetadata::default(),
         );
         assert_eq!(rendered, "pub fn f() { /* ... */ }");
         assert!(
@@ -484,5 +720,147 @@ mod tests {
                 .any(|diagnostic| diagnostic.message.contains("could not find source syntax")),
             "expected missing-span fallback diagnostic, got {diagnostics:?}",
         );
+    }
+
+    #[test]
+    fn stale_span_name_mismatch_reports_diagnostic_and_falls_back() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let src_dir = td.path().join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src dir");
+        let src = "pub fn g() -> i32 { 1 }\n\npub fn f() -> i32 { 2 }\n";
+        std::fs::write(src_dir.join("lib.rs"), src).expect("write source");
+        let (start, end) = item_syntax_range(src, ItemKind::Function, "g");
+
+        let mut cache = SourceCache::new(td.path());
+        let mut diagnostics = Vec::new();
+        let rendered = cache.render_item_with_metadata(
+            &item_with_source(Some("src/lib.rs"), Some((start, end + 1))),
+            &SkeletonOptions::default(),
+            &mut diagnostics,
+            &FallbackMetadata::default(),
+        );
+        assert_eq!(rendered, "pub fn f() { /* ... */ }");
+        assert!(!rendered.contains("pub fn g"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("could not find source syntax")),
+            "expected stale-span fallback diagnostic, got {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn parse_error_source_reports_diagnostic_and_falls_back() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let src_dir = td.path().join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src dir");
+        let src = "pub fn f() -> i32 { 1\n";
+        std::fs::write(src_dir.join("lib.rs"), src).expect("write source");
+
+        let mut cache = SourceCache::new(td.path());
+        let mut diagnostics = Vec::new();
+        let rendered = cache.render_item_with_metadata(
+            &item_with_source(Some("src/lib.rs"), Some((0, src.len() as u32))),
+            &SkeletonOptions::default(),
+            &mut diagnostics,
+            &FallbackMetadata::default(),
+        );
+        assert_eq!(rendered, "pub fn f() { /* ... */ }");
+        assert!(!rendered.contains("-> i32"));
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.message.contains("parsed with")
+                    && diagnostic.message.contains("syntax errors")
+            }),
+            "expected parse-error fallback diagnostic, got {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn fallback_function_uses_signature_shape() {
+        let item = item_with_source(None, None);
+        let metadata = FallbackMetadata {
+            signature: Some(FunctionSignature {
+                is_async: true,
+                self_param: None,
+                params: vec![
+                    Param {
+                        name: "path".to_string(),
+                        ty: "&Path".to_string(),
+                        by_ref: true,
+                        mutability: false,
+                    },
+                    Param {
+                        name: "value".to_string(),
+                        ty: "T".to_string(),
+                        by_ref: false,
+                        mutability: false,
+                    },
+                ],
+                return_type: "Result<T>".to_string(),
+                generics: vec![GenericBound {
+                    name: "T".to_string(),
+                    bounds: vec!["Send".to_string(), "Sync".to_string()],
+                }],
+            }),
+            static_metadata: None,
+        };
+        let rendered = fallback_declaration(&item, &metadata);
+        assert_eq!(
+            rendered,
+            "pub async fn f<T: Send + Sync>(path: &Path, value: T) -> Result<T> { /* ... */ }",
+        );
+        let parsed = SourceFile::parse(&rendered, ra_ap_syntax::Edition::Edition2024);
+        assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    }
+
+    #[test]
+    fn fallback_method_uses_self_receiver() {
+        let mut item = item_with_source(None, None);
+        item.node.item_kind = Some(ItemKind::Method);
+        item.node.display_name = "update".to_string();
+        let metadata = FallbackMetadata {
+            signature: Some(FunctionSignature {
+                is_async: false,
+                self_param: Some(SelfKind::RefMut),
+                params: vec![Param {
+                    name: "next".to_string(),
+                    ty: "State".to_string(),
+                    by_ref: false,
+                    mutability: false,
+                }],
+                return_type: "bool".to_string(),
+                generics: Vec::new(),
+            }),
+            static_metadata: None,
+        };
+        let rendered = fallback_declaration(&item, &metadata);
+        assert_eq!(
+            rendered,
+            "pub fn update(&mut self, next: State) -> bool { /* ... */ }",
+        );
+        let parsed = SourceFile::parse(
+            &format!("struct Host;\nimpl Host {{ {rendered} }}"),
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    }
+
+    #[test]
+    fn fallback_static_uses_static_metadata() {
+        let mut item = item_with_source(None, None);
+        item.node.item_kind = Some(ItemKind::Static);
+        item.node.display_name = "CACHE".to_string();
+        let metadata = FallbackMetadata {
+            signature: None,
+            static_metadata: Some(StaticMetadata {
+                type_string: "OnceLock<String>".to_string(),
+                is_mut: true,
+            }),
+        };
+        let rendered = fallback_declaration(&item, &metadata);
+        assert_eq!(rendered, "pub static mut CACHE: OnceLock<String> = todo!();");
+        let parsed = SourceFile::parse(&rendered, ra_ap_syntax::Edition::Edition2024);
+        assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
     }
 }

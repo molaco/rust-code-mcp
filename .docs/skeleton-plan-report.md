@@ -318,3 +318,168 @@ Phase 8 remains optional:
 
 - Persist additional pure-snapshot metadata if source IO becomes a practical
   problem.
+
+## Independent Review
+
+Date: 2026-05-26
+
+Method:
+
+- Spawned three read-only `gpt-5.5` subagents with `xhigh` reasoning.
+- Split review by phase group:
+  - Phases 1-2: `rmc-graph` skeleton collection/rendering.
+  - Phase 3: `rmc-server` endpoint and filesystem writer.
+  - Phases 0, 4, and 5: preflight, docs, and coverage/report accuracy.
+- Parent pass inspected the same implementation and consolidated findings.
+- No formatting commands were run.
+
+Scores:
+
+| Phase | Score | Review summary |
+|-------|-------|----------------|
+| Phase 0 | 9/10 | Preflight bookkeeping is sound and records the project rules. |
+| Phase 1 | 8/10 | Core graph API, shared helpers, `.skeleton/` exclusion, and collector shape mostly match the plan. |
+| Phase 2 | 6/10 | Source-sliced rendering works for happy paths, but important fallback and associated-item cases are incomplete. |
+| Phase 3 | 7/10 | Endpoint surface and writer are mostly present; test isolation and symlink-hardening need work. |
+| Phase 4 | 9/10 | Public docs are complete and honest about the v1 contract. |
+| Phase 5 | 8/10 | Focused coverage improved substantially, but some planned deterministic/parseability checks are still indirect. |
+
+Overall: 7.8/10. The feature is usable as an item-file v1 facade generator, but Phase 2 has correctness gaps that should be fixed before treating the skeleton output as dependable API context under stale-source or default-filter conditions.
+
+### Review Findings
+
+1. Phase 2: public inherent impl items can be omitted by default.
+
+   Associated items are retained through the same visibility filter as
+   module-level items. The impl extraction currently records methods,
+   associated consts, and associated types with `visibility: None`, and those
+   associated items do not have module-scope declared bindings. With the
+   default `include = ["pub", "pub(crate)"]`, they bucket as private and can
+   be dropped unless callers request `include = ["all"]`.
+
+   References:
+
+   - `crates/rmc-graph/src/graph/impls.rs:253`
+   - `crates/rmc-graph/src/graph/skeleton/collect.rs:257`
+   - `crates/rmc-graph/src/graph/skeleton/collect.rs:279`
+   - `crates/rmc-graph/src/graph/query/shared.rs:36`
+
+2. Phase 2: fallback rendering does not use persisted signature/static metadata.
+
+   The plan requires fallback functions to use `FunctionSignature` and
+   fallback statics to use `StaticMetadata`. The implementation currently falls
+   back to hardcoded declarations such as `fn name()` and `static name: ()`,
+   losing arguments, return types, generics, and static types when source is
+   missing or spans are stale.
+
+   References:
+
+   - `crates/rmc-graph/src/graph/skeleton/source.rs:35`
+   - `crates/rmc-graph/src/graph/skeleton/source.rs:48`
+   - `crates/rmc-graph/src/graph/skeleton/source.rs:324`
+
+3. Phase 2: stale/unparseable source handling is too permissive.
+
+   Parse errors are diagnosed but the parsed tree is still used. Span lookup can
+   also select an expected-kind item inside the persisted span without checking
+   the item name. After source drift, that can silently render the wrong
+   declaration instead of falling back with a stale-span diagnostic.
+
+   References:
+
+   - `crates/rmc-graph/src/graph/skeleton/source.rs:79`
+   - `crates/rmc-graph/src/graph/skeleton/source.rs:152`
+   - `crates/rmc-graph/src/graph/skeleton/source.rs:160`
+
+4. Phase 3: endpoint tests are not isolated from the real workspace.
+
+   The endpoint smoke test builds against the real workspace root, creates
+   `.skeleton/` and `.skeleton-backup`, runs `clean=true`, then removes both
+   directories. Because `.skeleton/` is ignored generated output, this can
+   delete a developer's pre-existing local skeleton tree or a real
+   `.skeleton-backup` directory. The plan called for a temp fixture workspace.
+
+   References:
+
+   - `crates/rmc-server/src/tools/graph/tests.rs:600`
+   - `crates/rmc-server/src/tools/graph/tests.rs:609`
+   - `crates/rmc-server/src/tools/graph/tests.rs:619`
+   - `crates/rmc-server/src/tools/graph/tests.rs:717`
+
+5. Phase 3: writer path validation is lexical only.
+
+   `safe_relative_source_path` rejects absolute paths and `..`, which is good,
+   but `clean=false` can still write outside `.skeleton/` through pre-existing
+   symlinked directories or symlinked output files because `fs::write` follows
+   symlinks.
+
+   References:
+
+   - `crates/rmc-server/src/tools/graph/skeleton.rs:35`
+   - `crates/rmc-server/src/tools/graph/skeleton.rs:55`
+   - `crates/rmc-server/src/tools/graph/skeleton.rs:64`
+   - `crates/rmc-server/src/tools/graph/skeleton.rs:188`
+
+6. Phase 5: deterministic crate ordering is implemented but not directly tested.
+
+   The collector sorts selected crates by crate name before traversal, but the
+   added deterministic-order test only asserts sorted file paths and per-file
+   item order. It does not directly lock down crate-order behavior.
+
+   References:
+
+   - `crates/rmc-graph/src/graph/skeleton/collect.rs:80`
+   - `crates/rmc-graph/src/graph/skeleton/collect.rs:496`
+
+7. Phase 5: current-workspace parseability is not checked end to end.
+
+   Graph-level tests parse generated files from the shared snapshot, but the
+   endpoint smoke test that writes real current-workspace `.skeleton/` files
+   only checks file existence and selected substrings.
+
+   References:
+
+   - `crates/rmc-graph/src/graph/skeleton/render.rs:199`
+   - `crates/rmc-server/src/tools/graph/tests.rs:599`
+
+### Review Verification
+
+Subagent verification:
+
+```sh
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph --lib
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib overlap_scope_filters_examples_and_vendor
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib crate_skeleton
+```
+
+Results reported by subagents:
+
+- `rmc-graph` check passed.
+- `rmc-graph` skeleton tests passed, 13 tests.
+- `rmc-graph` overlap scope focused test passed.
+- `rmc-server` `crate_skeleton` focused test passed when run alone, 1 test.
+
+Parent verification notes:
+
+- `jj status` was clean before the review.
+- A parent duplicate `rmc-server` focused test run failed while another graph
+  test was running concurrently, with `open_current_for_workspace: snapshot
+  exists but databases not initialized` in a pre-skeleton shared graph test
+  path. The same `rmc-server` focused test passed in the isolated subagent run.
+  Treat this as additional evidence that graph endpoint tests share fragile
+  workspace snapshot state, not as a direct `crate_skeleton` endpoint failure.
+
+### Recommended Follow-Up
+
+1. Fix associated-item visibility for skeleton rendering so public inherent
+   methods/assoc items survive the default include filter.
+2. Make fallback rendering consult `FunctionSignature` and `StaticMetadata`.
+3. Tighten source-slice lookup with name validation and stronger stale-span
+   fallback behavior.
+4. Move endpoint tests to an isolated fixture or preserve/restore any
+   pre-existing `.skeleton/` and `.skeleton-backup` paths.
+5. Harden writer behavior around symlinked `.skeleton/` contents, especially
+   for `clean=false`.
+6. Add direct tests for crate ordering and parse the real endpoint-generated
+   files in the smoke path.

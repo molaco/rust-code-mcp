@@ -1,8 +1,10 @@
 //! `crate_skeleton` endpoint and filesystem writer.
 
-use std::fs;
-use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    fs, io,
+    path::{Component, Path, PathBuf},
+};
 
 use serde::Serialize;
 
@@ -52,21 +54,7 @@ pub(crate) async fn crate_skeleton(
         let mut summaries = Vec::new();
         for file in output.files {
             let relative = safe_relative_source_path(&file.source_path)?;
-            let output_path = skeleton_dir.join(relative);
-            if let Some(parent) = output_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    McpError::internal_error(
-                        format!("create directory {}: {e}", parent.display()),
-                        None,
-                    )
-                })?;
-            }
-            fs::write(&output_path, file.content.as_bytes()).map_err(|e| {
-                McpError::internal_error(
-                    format!("write {}: {e}", output_path.display()),
-                    None,
-                )
-            })?;
+            write_skeleton_file(&skeleton_dir, relative, file.content.as_bytes())?;
             summaries.push(CrateSkeletonFileSummary {
                 crate_name: file.crate_name,
                 source_path: file.source_path,
@@ -200,6 +188,133 @@ fn safe_relative_source_path(source_path: &str) -> Result<&Path, McpError> {
     Ok(path)
 }
 
+fn write_skeleton_file(
+    skeleton_dir: &Path,
+    relative: &Path,
+    content: &[u8],
+) -> Result<(), McpError> {
+    let output_path = skeleton_dir.join(relative);
+    let parent = output_path
+        .parent()
+        .filter(|parent| parent.starts_with(skeleton_dir))
+        .ok_or_else(|| {
+            McpError::internal_error(
+                format!(
+                    "refusing to write skeleton outside exact generated directory: {}",
+                    output_path.display()
+                ),
+                None,
+            )
+        })?;
+
+    create_skeleton_parent_dirs(skeleton_dir, parent)?;
+    ensure_output_file_is_not_symlink(&output_path)?;
+    fs::write(&output_path, content).map_err(|e| {
+        McpError::internal_error(
+            format!("write {}: {e}", output_path.display()),
+            None,
+        )
+    })
+}
+
+fn create_skeleton_parent_dirs(skeleton_dir: &Path, parent: &Path) -> Result<(), McpError> {
+    ensure_existing_skeleton_ancestors_not_symlinks(skeleton_dir, parent)?;
+    fs::create_dir_all(parent).map_err(|e| {
+        McpError::internal_error(
+            format!("create directory {}: {e}", parent.display()),
+            None,
+        )
+    })?;
+    ensure_existing_skeleton_ancestors_not_symlinks(skeleton_dir, parent)
+}
+
+fn ensure_existing_skeleton_ancestors_not_symlinks(
+    skeleton_dir: &Path,
+    parent: &Path,
+) -> Result<(), McpError> {
+    let relative_parent = parent.strip_prefix(skeleton_dir).map_err(|_| {
+        McpError::internal_error(
+            format!(
+                "refusing to inspect skeleton ancestor outside generated directory: {}",
+                parent.display()
+            ),
+            None,
+        )
+    })?;
+
+    let mut current = skeleton_dir.to_path_buf();
+    inspect_existing_skeleton_ancestor(&current)?;
+    for component in relative_parent.components() {
+        match component {
+            Component::Normal(name) => {
+                current.push(name);
+                inspect_existing_skeleton_ancestor(&current)?;
+            }
+            Component::CurDir => {}
+            _ => {
+                return Err(McpError::internal_error(
+                    format!(
+                        "refusing to inspect unsafe skeleton ancestor: {}",
+                        parent.display()
+                    ),
+                    None,
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn inspect_existing_skeleton_ancestor(path: &Path) -> Result<(), McpError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(McpError::internal_error(
+                format!(
+                    "refusing to write through symlinked skeleton path: {}",
+                    path.display()
+                ),
+                None,
+            ))
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            Err(McpError::internal_error(
+                format!(
+                    "refusing to write through non-directory skeleton path: {}",
+                    path.display()
+                ),
+                None,
+            ))
+        }
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(McpError::internal_error(
+            format!("inspect skeleton path {}: {err}", path.display()),
+            None,
+        )),
+    }
+}
+
+fn ensure_output_file_is_not_symlink(output_path: &Path) -> Result<(), McpError> {
+    match fs::symlink_metadata(output_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(McpError::internal_error(
+                format!(
+                    "refusing to overwrite symlinked skeleton file: {}",
+                    output_path.display()
+                ),
+                None,
+            ))
+        }
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(McpError::internal_error(
+            format!("inspect skeleton file {}: {err}", output_path.display()),
+            None,
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +324,121 @@ mod tests {
         assert!(safe_relative_source_path("crates/rmc-server/src/lib.rs").is_ok());
         assert!(safe_relative_source_path("../src/lib.rs").is_err());
         assert!(safe_relative_source_path("/tmp/lib.rs").is_err());
+    }
+
+    #[test]
+    fn write_skeleton_file_creates_normal_paths() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace dir");
+        let skeleton_dir = workspace.join(".skeleton");
+
+        write_skeleton_file(
+            &skeleton_dir,
+            Path::new("crates/demo/src/lib.rs"),
+            b"pub struct Demo;\n",
+        )
+        .expect("write skeleton file");
+
+        let written = skeleton_dir.join("crates/demo/src/lib.rs");
+        assert_eq!(
+            fs::read_to_string(&written).expect("read skeleton file"),
+            "pub struct Demo;\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_skeleton_file_rejects_symlinked_skeleton_root() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let escaped = temp_dir.path().join("escaped");
+        fs::create_dir_all(&workspace).expect("workspace dir");
+        fs::create_dir_all(&escaped).expect("escaped dir");
+        let skeleton_dir = workspace.join(".skeleton");
+        symlink(&escaped, &skeleton_dir).expect("skeleton root symlink");
+
+        let err = write_skeleton_file(
+            &skeleton_dir,
+            Path::new("crates/demo/src/lib.rs"),
+            b"pub struct Demo;\n",
+        )
+        .expect_err("symlinked skeleton root should be rejected");
+
+        assert!(
+            err.message.contains("symlinked skeleton path"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert!(!escaped.join("crates/demo/src/lib.rs").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_skeleton_file_rejects_symlinked_existing_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let escaped = temp_dir.path().join("escaped");
+        fs::create_dir_all(workspace.join(".skeleton")).expect("skeleton dir");
+        fs::create_dir_all(&escaped).expect("escaped dir");
+        let skeleton_dir = workspace.join(".skeleton");
+        symlink(&escaped, skeleton_dir.join("crates")).expect("ancestor symlink");
+
+        let err = write_skeleton_file(
+            &skeleton_dir,
+            Path::new("crates/demo/src/lib.rs"),
+            b"pub struct Demo;\n",
+        )
+        .expect_err("symlinked skeleton ancestor should be rejected");
+
+        assert!(
+            err.message.contains("symlinked skeleton path"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert!(!escaped.join("demo/src/lib.rs").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_skeleton_file_rejects_symlink_output_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let skeleton_dir = workspace.join(".skeleton");
+        let parent = skeleton_dir.join("crates/demo/src");
+        let outside_file = temp_dir.path().join("outside.rs");
+        let output_file = parent.join("lib.rs");
+        fs::create_dir_all(&parent).expect("skeleton parent dir");
+        fs::write(&outside_file, "outside\n").expect("outside file");
+        symlink(&outside_file, &output_file).expect("output file symlink");
+
+        let err = write_skeleton_file(
+            &skeleton_dir,
+            Path::new("crates/demo/src/lib.rs"),
+            b"pub struct Demo;\n",
+        )
+        .expect_err("symlinked output file should be rejected");
+
+        assert!(
+            err.message.contains("symlinked skeleton file"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert_eq!(
+            fs::read_to_string(&outside_file).expect("read outside file"),
+            "outside\n"
+        );
+        assert!(
+            fs::symlink_metadata(&output_file)
+                .expect("output symlink metadata")
+                .file_type()
+                .is_symlink()
+        );
     }
 }

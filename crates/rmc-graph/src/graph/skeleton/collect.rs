@@ -77,13 +77,7 @@ pub(super) fn collect_skeleton(
     let mut retained_items: BTreeMap<NodeId, SkeletonItem> = BTreeMap::new();
     let mut retained_hosts: HashSet<NodeId> = HashSet::new();
 
-    let mut selected: Vec<NodeId> = selected_crates.iter().copied().collect();
-    selected.sort_by(|a, b| {
-        crate_names
-            .get(a)
-            .cmp(&crate_names.get(b))
-            .then_with(|| a.as_bytes().cmp(b.as_bytes()))
-    });
+    let selected = sorted_selected_crates(&selected_crates, &crate_names);
 
     for crate_id in selected {
         let Some(root_id) = snap.find_root_module_of(crate_id)? else {
@@ -254,6 +248,20 @@ fn selected_crates(
         .collect()
 }
 
+fn sorted_selected_crates(
+    selected_crates: &HashSet<NodeId>,
+    crate_names: &HashMap<NodeId, String>,
+) -> Vec<NodeId> {
+    let mut selected: Vec<NodeId> = selected_crates.iter().copied().collect();
+    selected.sort_by(|a, b| {
+        crate_names
+            .get(a)
+            .cmp(&crate_names.get(b))
+            .then_with(|| a.as_bytes().cmp(b.as_bytes()))
+    });
+    selected
+}
+
 fn retain_item(
     id: NodeId,
     node: &Node,
@@ -261,10 +269,25 @@ fn retain_item(
     include: &IncludeFilter,
     opts: &SkeletonOptions,
 ) -> Option<SkeletonItem> {
+    retain_item_with_visibility(
+        id,
+        node,
+        visibility.get(&id).cloned(),
+        include,
+        opts,
+    )
+}
+
+fn retain_item_with_visibility(
+    id: NodeId,
+    node: &Node,
+    item_visibility: Option<String>,
+    include: &IncludeFilter,
+    opts: &SkeletonOptions,
+) -> Option<SkeletonItem> {
     if opts.skip_test_items && is_test_item(node) {
         return None;
     }
-    let item_visibility = visibility.get(&id).cloned();
     if !include.allows(item_visibility.as_deref()) {
         return None;
     }
@@ -297,7 +320,14 @@ fn collect_inherent_assoc_items(
         ) {
             continue;
         }
-        if let Some(mut item) = retain_item(*id, node, visibility, include, opts) {
+        let item_visibility = visibility.get(id).cloned().or_else(|| {
+            retained_items
+                .get(&parent_id)
+                .and_then(|parent| parent.visibility.clone())
+        });
+        if let Some(mut item) =
+            retain_item_with_visibility(*id, node, item_visibility, include, opts)
+        {
             item.parent = nodes.get(&parent_id).cloned();
             retained_items.insert(*id, item);
         }
@@ -449,6 +479,131 @@ mod tests {
 
     fn render(opts: SkeletonOptions) -> CollectedSkeleton {
         collect_skeleton(shared_snapshot(), &opts).expect("collect skeleton")
+    }
+
+    fn test_item(id_label: &str, item_kind: ItemKind, parent_id: Option<NodeId>) -> (NodeId, Node) {
+        let id = NodeId::from_components(&["skeleton-retain", id_label]);
+        let display_name = id_label.to_string();
+        let qualified_name = parent_id
+            .map(|_| format!("test_crate::Host::{display_name}"))
+            .unwrap_or_else(|| format!("test_crate::{display_name}"));
+        (
+            id,
+            Node {
+                id,
+                kind: NodeKind::Item,
+                display_name,
+                qualified_name,
+                crate_id: None,
+                parent_id,
+                item_kind: Some(item_kind),
+                file: Some("src/lib.rs".to_string()),
+                span: Some((0, 10)),
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+        )
+    }
+
+    fn test_node_id(last_byte: u8) -> NodeId {
+        let mut bytes = [0; 32];
+        bytes[31] = last_byte;
+        NodeId(bytes)
+    }
+
+    #[test]
+    fn selected_crates_are_ordered_by_name_then_id() {
+        let alpha_low = test_node_id(1);
+        let alpha_high = test_node_id(2);
+        let beta_low_id = test_node_id(0);
+        let zeta = test_node_id(3);
+        let selected_crates = HashSet::from([zeta, beta_low_id, alpha_high, alpha_low]);
+        let crate_names = HashMap::from([
+            (zeta, "zeta".to_string()),
+            (beta_low_id, "beta".to_string()),
+            (alpha_high, "alpha".to_string()),
+            (alpha_low, "alpha".to_string()),
+        ]);
+
+        let selected = sorted_selected_crates(&selected_crates, &crate_names);
+
+        assert_eq!(selected, vec![alpha_low, alpha_high, beta_low_id, zeta]);
+    }
+
+    #[test]
+    fn inherent_assoc_items_fall_back_to_retained_host_visibility() {
+        let include = IncludeFilter::parse(&SkeletonOptions::default().include)
+            .expect("default include filter");
+        let opts = SkeletonOptions::default();
+        let (host_id, host) = test_item("Host", ItemKind::Struct, None);
+        let (trait_id, trait_) = test_item("Trait", ItemKind::Trait, None);
+        let (public_method_id, public_method) =
+            test_item("visible", ItemKind::Method, Some(host_id));
+        let (private_method_id, private_method) =
+            test_item("hidden", ItemKind::Method, Some(host_id));
+        let (trait_method_id, trait_method) =
+            test_item("trait_method", ItemKind::Method, Some(trait_id));
+
+        let nodes = HashMap::from([
+            (host_id, host.clone()),
+            (trait_id, trait_.clone()),
+            (public_method_id, public_method),
+            (private_method_id, private_method),
+            (trait_method_id, trait_method),
+        ]);
+        let visibility = HashMap::from([
+            (host_id, "pub".to_string()),
+            (trait_id, "pub".to_string()),
+            (private_method_id, "pub(self)".to_string()),
+        ]);
+        let retained_hosts = HashSet::from([host_id]);
+        let mut retained_items = BTreeMap::from([
+            (
+                host_id,
+                SkeletonItem {
+                    id: host_id,
+                    node: host,
+                    parent: None,
+                    visibility: Some("pub".to_string()),
+                },
+            ),
+            (
+                trait_id,
+                SkeletonItem {
+                    id: trait_id,
+                    node: trait_,
+                    parent: None,
+                    visibility: Some("pub".to_string()),
+                },
+            ),
+        ]);
+
+        collect_inherent_assoc_items(
+            &nodes,
+            &visibility,
+            &include,
+            &opts,
+            &retained_hosts,
+            &mut retained_items,
+        );
+
+        let retained_method = retained_items
+            .get(&public_method_id)
+            .expect("inherent method should inherit retained host visibility");
+        assert_eq!(retained_method.visibility.as_deref(), Some("pub"));
+        assert_eq!(
+            retained_method.parent.as_ref().map(|node| node.id),
+            Some(host_id),
+        );
+        assert!(
+            !retained_items.contains_key(&private_method_id),
+            "declared private associated items must not be widened by the host fallback",
+        );
+        assert!(
+            !retained_items.contains_key(&trait_method_id),
+            "trait associated items must not be collected as inherent impl facades",
+        );
     }
 
     #[test]

@@ -26,7 +26,7 @@ pub(super) fn render_source_skeleton(
         write_banner(&mut content, snap, opts, &source.crate_name, &source.source_path);
 
         for item in source.items.iter().filter(|item| item.parent.is_none()) {
-            let rendered = cache.render_item(item, opts, &mut collected.diagnostics);
+            let rendered = cache.render_item(snap, item, opts, &mut collected.diagnostics);
             append_item(&mut content, &rendered);
         }
 
@@ -36,7 +36,7 @@ pub(super) fn render_source_skeleton(
             for (_parent_id, (parent, items)) in assoc_groups {
                 content.push_str(&format!("impl {} {{\n", parent.display_name));
                 for item in items {
-                    let rendered = cache.render_item(item, opts, &mut collected.diagnostics);
+                    let rendered = cache.render_item(snap, item, opts, &mut collected.diagnostics);
                     append_impl_item(&mut content, &rendered);
                 }
                 content.push_str("}\n\n");
@@ -160,6 +160,7 @@ mod tests {
     use super::*;
     use crate::graph::ids::NodeId;
     use crate::graph::model::{Node, NodeKind};
+    use super::super::model::SkeletonSourceFile;
     use crate::graph::test_support::shared_snapshot;
     use ra_ap_syntax::SourceFile;
 
@@ -196,6 +197,50 @@ mod tests {
         }
     }
 
+    fn missing_source_item(
+        qualified: &str,
+        visibility: &str,
+        source_path: &str,
+    ) -> SkeletonItem {
+        let snap = shared_snapshot();
+        let (id, mut node) = snap
+            .lookup_by_qualified_name(qualified)
+            .expect("lookup_by_qualified_name failed")
+            .unwrap_or_else(|| panic!("`{qualified}` not in snapshot"));
+        node.file = Some(source_path.to_string());
+        node.span = Some((0, 1));
+        SkeletonItem {
+            id,
+            node,
+            parent: None,
+            visibility: Some(visibility.to_string()),
+        }
+    }
+
+    fn render_missing_source(item: SkeletonItem, source_path: &str) -> SkeletonOutput {
+        let crate_name = item
+            .node
+            .qualified_name
+            .split("::")
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        render_source_skeleton(
+            shared_snapshot(),
+            &SkeletonOptions::default(),
+            CollectedSkeleton {
+                files: vec![SkeletonSourceFile {
+                    crate_name,
+                    source_path: source_path.to_string(),
+                    skeleton_path: format!(".skeleton/{source_path}"),
+                    items: vec![item],
+                }],
+                diagnostics: Vec::new(),
+            },
+        )
+        .expect("render skeleton")
+    }
+
     #[test]
     fn source_renderer_emits_parseable_files() {
         let output = render(SkeletonOptions {
@@ -218,6 +263,65 @@ mod tests {
             );
             assert_eq!(file.bytes, file.content.len());
         }
+    }
+
+    #[test]
+    fn missing_source_function_fallback_uses_persisted_signature() {
+        let source_path = "src/__missing_signature_fallback.rs";
+        let item = missing_source_item(
+            "rmc_graph::graph::loader::load",
+            "pub",
+            source_path,
+        );
+        let output = render_missing_source(item, source_path);
+        let file = output.files.first().expect("rendered file");
+        assert!(
+            file.content.contains(
+                "pub fn load(directory: &Path) -> Result<LoadedWorkspace, Error> { /* ... */ }"
+            ),
+            "{}",
+            file.content,
+        );
+        assert!(!file.content.contains("pub fn load()"));
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("could not read source")),
+            "expected missing source diagnostic, got {:?}",
+            output.diagnostics,
+        );
+        let parsed = SourceFile::parse(
+            &file.content,
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
+    }
+
+    #[test]
+    fn missing_source_static_fallback_uses_persisted_metadata() {
+        let source_path = "src/__missing_static_fallback.rs";
+        let qualified = "rmc_server::semantic::SEMANTIC";
+        let item = missing_source_item(qualified, "pub(crate)", source_path);
+        let snap = shared_snapshot();
+        let metadata = snap
+            .static_metadata(item.id)
+            .expect("static_metadata failed")
+            .expect("expected static metadata");
+        let output = render_missing_source(item, source_path);
+        let file = output.files.first().expect("rendered file");
+        let mutability = if metadata.is_mut { "mut " } else { "" };
+        let expected = format!(
+            "pub(crate) static {mutability}SEMANTIC: {} = todo!();",
+            metadata.type_string,
+        );
+        assert!(file.content.contains(&expected), "{}", file.content);
+        assert!(!file.content.contains("static SEMANTIC: () = ();"));
+        let parsed = SourceFile::parse(
+            &file.content,
+            ra_ap_syntax::Edition::Edition2024,
+        );
+        assert!(parsed.errors().is_empty(), "{:?}", parsed.errors());
     }
 
     #[test]

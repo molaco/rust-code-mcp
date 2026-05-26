@@ -44,4 +44,5 @@ ra_ap_project_model = { workspace = true }
 ra_ap_vfs           = { workspace = true }
 
 [dev-dependencies]
+ra_ap_syntax = { workspace = true }
 tempfile = "3"
