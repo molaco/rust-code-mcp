@@ -7,6 +7,8 @@ mod collect;
 mod model;
 mod render;
 mod source;
+#[cfg(test)]
+mod test_support;
 
 pub use model::{
     SkeletonDiagnostic, SkeletonFile, SkeletonOptions, SkeletonOutput,

@@ -9,6 +9,9 @@ Progress:
   are now feature-gated out of default `rmc-graph` builds, and the focused
   skeleton test binary built with default graph features has no CUDA dynamic
   dependencies.
+- Phase 2 completed on 2026-05-26. Skeleton collect/render unit tests now use a
+  synthetic temp Cargo package instead of loading the real `rmc-graph`
+  workspace through rust-analyzer.
 
 This plan addresses the stuck D-state process class observed while agents run
 MCP tools and focused Rust tests. The latest live incident was:
@@ -180,6 +183,29 @@ binary. Use a precise test binary path if multiple old binaries exist.
 
 Goal: skeleton unit tests should not load the whole repository through
 rust-analyzer.
+
+Status: completed on 2026-05-26.
+
+Completed implementation:
+
+- Added `graph::skeleton::test_support`, a skeleton-specific synthetic Cargo
+  package fixture stored in temp directories for both workspace source and
+  graph data.
+- The fixture covers functions with bodies, inherent impl methods, trait
+  associated items, constants/statics, attributes/docs, nested modules, and
+  `#[cfg(test)]` / `#[test]` cases.
+- Updated skeleton collect/render tests to use the synthetic fixture instead of
+  `graph::test_support::shared_snapshot()`.
+- Retargeted missing-source fallback tests to function/static items in the
+  synthetic fixture.
+
+Validation performed:
+
+```bash
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton
+```
+
+Result: `22 passed; 0 failed; 202 filtered out`, finishing in about 14 seconds.
 
 Current problem:
 

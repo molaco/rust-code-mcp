@@ -158,10 +158,12 @@ fn group_assoc_items<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::model::SkeletonSourceFile;
+    use super::super::test_support::{
+        FALLBACK_FUNCTION, FALLBACK_STATIC, shared_snapshot,
+    };
     use crate::graph::ids::NodeId;
     use crate::graph::model::{Node, NodeKind};
-    use super::super::model::SkeletonSourceFile;
-    use crate::graph::test_support::shared_snapshot;
     use ra_ap_syntax::SourceFile;
 
     fn render(opts: SkeletonOptions) -> SkeletonOutput {
@@ -269,7 +271,7 @@ mod tests {
     fn missing_source_function_fallback_uses_persisted_signature() {
         let source_path = "src/__missing_signature_fallback.rs";
         let item = missing_source_item(
-            "rmc_graph::graph::loader::load",
+            FALLBACK_FUNCTION,
             "pub",
             source_path,
         );
@@ -277,12 +279,12 @@ mod tests {
         let file = output.files.first().expect("rendered file");
         assert!(
             file.content.contains(
-                "pub fn load(directory: &Path) -> Result<LoadedWorkspace, Error> { /* ... */ }"
+                "pub fn public_function(input: usize) -> usize { /* ... */ }"
             ),
             "{}",
             file.content,
         );
-        assert!(!file.content.contains("pub fn load()"));
+        assert!(!file.content.contains("pub fn public_function()"));
         assert!(
             output
                 .diagnostics
@@ -301,8 +303,8 @@ mod tests {
     #[test]
     fn missing_source_static_fallback_uses_persisted_metadata() {
         let source_path = "src/__missing_static_fallback.rs";
-        let qualified = "rmc_server::semantic::SEMANTIC";
-        let item = missing_source_item(qualified, "pub(crate)", source_path);
+        let item = missing_source_item(FALLBACK_STATIC, "pub(crate)", source_path);
+        let item_name = item.node.display_name.clone();
         let snap = shared_snapshot();
         let metadata = snap
             .static_metadata(item.id)
@@ -312,11 +314,12 @@ mod tests {
         let file = output.files.first().expect("rendered file");
         let mutability = if metadata.is_mut { "mut " } else { "" };
         let expected = format!(
-            "pub(crate) static {mutability}SEMANTIC: {} = todo!();",
+            "pub(crate) static {mutability}{}: {} = todo!();",
+            item_name,
             metadata.type_string,
         );
         assert!(file.content.contains(&expected), "{}", file.content);
-        assert!(!file.content.contains("static SEMANTIC: () = ();"));
+        assert!(!file.content.contains("static GLOBAL_COUNT: () = ();"));
         let parsed = SourceFile::parse(
             &file.content,
             ra_ap_syntax::Edition::Edition2024,

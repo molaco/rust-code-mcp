@@ -475,7 +475,7 @@ fn visibility_bucket(visibility: Option<&str>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::test_support::shared_snapshot;
+    use super::super::test_support::shared_snapshot;
 
     fn render(opts: SkeletonOptions) -> CollectedSkeleton {
         collect_skeleton(shared_snapshot(), &opts).expect("collect skeleton")
