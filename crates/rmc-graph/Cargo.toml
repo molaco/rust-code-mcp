@@ -3,9 +3,13 @@ name    = "rmc-graph"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+semantic-embeddings = ["dep:rmc-engine", "rmc-engine/embeddings"]
+
 [dependencies]
 # In-workspace engine crate (embeddings backend/generator)
-rmc-engine = { path = "../rmc-engine" }
+rmc-engine = { path = "../rmc-engine", default-features = false, optional = true }
 
 # Persisted hypergraph store
 heed = { workspace = true }

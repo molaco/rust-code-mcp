@@ -1,7 +1,14 @@
 # Plan: resource lifecycle and CUDA isolation for MCP/test stability
 
-Status: proposal. Written against `/home/molaco/Documents/rust-code-mcp-refactor`
+Status: in progress. Written against `/home/molaco/Documents/rust-code-mcp-refactor`
 on 2026-05-26.
+
+Progress:
+
+- Phase 1 completed on 2026-05-26. CUDA-capable embedding/vector dependencies
+  are now feature-gated out of default `rmc-graph` builds, and the focused
+  skeleton test binary built with default graph features has no CUDA dynamic
+  dependencies.
 
 This plan addresses the stuck D-state process class observed while agents run
 MCP tools and focused Rust tests. The latest live incident was:
@@ -42,16 +49,46 @@ The primary fix is therefore dependency and execution isolation:
 Goal: `cargo test -p rmc-graph --lib skeleton` should not produce a test binary
 with `NEEDED libcuda.so.1`.
 
-Current problem:
+Status: completed on 2026-05-26.
 
-- Workspace `fastembed` is globally configured with the `cuda` feature.
-- `rmc-engine` unconditionally depends on `fastembed` and `candle-core`.
-- `rmc-graph` depends on all of `rmc-engine`, mostly for embedding-adjacent
+Completed implementation:
+
+- Made workspace `fastembed` feature-neutral by default.
+- Added `rmc-engine` feature gates for `embeddings`, `embeddings-cuda`,
+  `vector-store`, and `hybrid-search`.
+- Made `rmc-engine` embedding/vector dependencies optional.
+- Kept default `rmc-graph` independent of `rmc-engine`; graph semantic
+  embedding paths are behind the `semantic-embeddings` feature.
+- Gated graph embedding cache, semantic overlap exports, and codemap
+  embedding rerank/cache access behind `semantic-embeddings`.
+- Updated `rmc-config`, `rmc-indexing`, and `rmc-server` to request the
+  explicit engine/graph features they need.
+
+Validation performed:
+
+```bash
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph --lib
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph --lib --features semantic-embeddings
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton --no-run
+readelf -d target/debug/deps/rmc_graph-c878c3b05c79b3a8 | rg 'libcuda|libcublas|libcudart|libnvrtc'
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib
+nix develop ../nix-devshells#cuda-code --command cargo tree -p rmc-graph --no-default-features --depth 1
+```
+
+The CUDA `readelf` check returned no matches. The `NEEDED` entries for the
+default skeleton test binary were limited to standard system libraries:
+`libgcc_s`, `libm`, `libc`, and `ld-linux`.
+
+Original problem addressed by this phase:
+
+- Workspace `fastembed` was globally configured with the `cuda` feature.
+- `rmc-engine` unconditionally depended on `fastembed` and `candle-core`.
+- `rmc-graph` depended on all of `rmc-engine`, mostly for embedding-adjacent
   types and optional graph similarity paths.
-- As a result, graph tests that only exercise skeleton rendering are still
+- As a result, graph tests that only exercised skeleton rendering were still
   CUDA-linked.
 
-Implementation shape:
+Implemented shape:
 
 1. Convert workspace `fastembed` to a feature-neutral dependency.
 
@@ -59,7 +96,7 @@ Implementation shape:
    fastembed = { version = "5.13.4", default-features = false }
    ```
 
-2. Add `rmc-engine` features.
+2. Added `rmc-engine` features.
 
    ```toml
    [features]
@@ -69,29 +106,40 @@ Implementation shape:
      "dep:reqwest",
      "dep:hf-hub",
      "dep:fastembed",
-     "dep:candle-core",
      "dep:tokenizers",
      "dep:futures",
      "dep:tokio",
+     "dep:toml",
+     "fastembed/hf-hub-native-tls",
+     "fastembed/ort-load-dynamic",
    ]
    embeddings-cuda = [
      "embeddings",
-     "fastembed/hf-hub-native-tls",
-     "fastembed/ort-load-dynamic",
+     "dep:candle-core",
      "fastembed/qwen3",
      "fastembed/cuda",
    ]
    vector-store = [
+     "embeddings",
      "dep:lancedb",
      "dep:arrow-array",
      "dep:arrow-schema",
      "dep:async-trait",
+     "dep:directories",
+     "dep:futures",
+     "dep:tokio",
+   ]
+   hybrid-search = [
+     "embeddings",
+     "vector-store",
+     "dep:anyhow",
+     "dep:tokio",
    ]
    ```
 
-3. Mark embedding/vector dependencies optional in `rmc-engine`.
+3. Marked embedding/vector dependencies optional in `rmc-engine`.
 
-4. Gate modules in `rmc-engine`:
+4. Gated modules in `rmc-engine`:
 
    - Always available: parser, chunker, schema, IDs/basic data types.
    - `embeddings` feature: embedding backend/generator/profile/token counter.
@@ -99,7 +147,7 @@ Implementation shape:
    - Search code should either be split into BM25-only and hybrid/vector
      pieces, or gated behind the right feature combination.
 
-5. Change `rmc-graph` to avoid a default dependency on CUDA-capable
+5. Changed `rmc-graph` to avoid a default dependency on CUDA-capable
    embedding code.
 
    Graph-only modules should build without `rmc-engine/embeddings-cuda`.
@@ -109,12 +157,12 @@ Implementation shape:
    - `graph/query/similarity.rs`
    - codemap embedding rerank / compute-missing paths
 
-6. Enable the heavy features only where they are really needed.
+6. Enabled the heavy features only where they are really needed.
 
    `rmc-server` should depend on:
 
    ```toml
-   rmc-engine = { path = "../rmc-engine", features = ["embeddings-cuda", "vector-store"] }
+   rmc-engine = { path = "../rmc-engine", features = ["embeddings-cuda", "vector-store", "hybrid-search"] }
    rmc-graph = { path = "../rmc-graph", features = ["semantic-embeddings"] }
    ```
 

@@ -183,9 +183,14 @@ pub async fn build_codemap(
         .fold(0.0_f32, f32::max);
     let mut bm25_norm: HashMap<NodeId, f32> = HashMap::with_capacity(retained.len());
     let mut graph_prox: HashMap<NodeId, f32> = HashMap::with_capacity(retained.len());
+    #[cfg(feature = "semantic-embeddings")]
     let mut cached: HashMap<NodeId, Vec<f32>> = HashMap::new();
+    #[cfg(not(feature = "semantic-embeddings"))]
+    let cached: HashMap<NodeId, Vec<f32>> = HashMap::new();
+    #[cfg(feature = "semantic-embeddings")]
     let mut missing: Vec<NodeId> = Vec::new();
     {
+        #[cfg(feature = "semantic-embeddings")]
         let rtxn = snap.read_txn()?;
         for &nid in &retained {
             let raw = bm25_by_node.get(&nid).copied().unwrap_or(0.0);
@@ -208,73 +213,99 @@ pub async fn build_codemap(
         }
 
         if opts.embedding_policy != EmbeddingPolicy::NoRerank {
-            // Order the retained set deterministically so `missing` is
-            // stable across runs.
-            let mut ordered: Vec<NodeId> = retained.iter().copied().collect();
-            ordered.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
-            // Compute the active embedder identity once (same default the
-            // generator below picks up).
-            //
-            // TODO(step7+): when build_codemap learns to accept an
-            // `&EmbeddingBackend` from its caller, replace this default
-            // with the caller's choice so non-default Qwen3 variants
-            // invalidate stale cache rows correctly.
-            let active_version = rmc_engine::embeddings::EmbeddingBackend::default().identity();
-            for nid in ordered {
-                let rec = snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())?;
-                let fresh = rec
-                    .as_ref()
-                    .map(|r| r.embedder_version == active_version);
-                match (rec, fresh) {
-                    (Some(rec), Some(true)) => {
-                        cached.insert(nid, rec.vector);
-                    }
-                    _ => {
-                        missing.push(nid);
+            #[cfg(feature = "semantic-embeddings")]
+            {
+                // Order the retained set deterministically so `missing` is
+                // stable across runs.
+                let mut ordered: Vec<NodeId> = retained.iter().copied().collect();
+                ordered.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
+                // Compute the active embedder identity once (same default the
+                // generator below picks up).
+                //
+                // TODO(step7+): when build_codemap learns to accept an
+                // `&EmbeddingBackend` from its caller, replace this default
+                // with the caller's choice so non-default Qwen3 variants
+                // invalidate stale cache rows correctly.
+                let active_version =
+                    rmc_engine::embeddings::EmbeddingBackend::default().identity();
+                for nid in ordered {
+                    let rec = snap.dbs.embeddings_by_target.get(&rtxn, nid.as_bytes())?;
+                    let fresh = rec
+                        .as_ref()
+                        .map(|r| r.embedder_version == active_version);
+                    match (rec, fresh) {
+                        (Some(rec), Some(true)) => {
+                            cached.insert(nid, rec.vector);
+                        }
+                        _ => {
+                            missing.push(nid);
+                        }
                     }
                 }
+            }
+            #[cfg(not(feature = "semantic-embeddings"))]
+            {
+                diagnostics.push(
+                    "embedding rerank requested, but rmc-graph was built without the `semantic-embeddings` feature; using graph/BM25 scoring only".to_string(),
+                );
             }
         }
         // Drop rtxn before any await.
     }
 
     // PHASE B — async, no txn.
-    let prompt_emb: Option<Vec<f32>> =
-        if opts.embedding_policy == EmbeddingPolicy::NoRerank || prompt.unwrap_or("").is_empty() {
-            None
-        } else {
-            let generator = rmc_engine::embeddings::EmbeddingGenerator::new()
-                .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
-            // Query-side: the prompt is a retrieval query scored against
-            // cached document vectors — apply the instruction prefix.
-            let v = generator
-                .embed_queries(vec![prompt.unwrap().to_owned()])
-                .await
-                .map_err(|e| anyhow::anyhow!("embed_queries: {e}"))?
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("embed_queries returned no vector"))?;
-            Some(v)
-        };
-
-    let embeddings_computed: usize =
-        if opts.embedding_policy == EmbeddingPolicy::ComputeMissing && !missing.is_empty() {
-            // Codemap is not profile-parameterized; embed with the default
-            // backend, matching the prompt embedder constructed above.
-            let resolved = crate::graph::embedding_cache::ensure_embeddings_for(
-                snap,
-                &missing,
-                &rmc_engine::embeddings::EmbeddingBackend::default(),
-            )
-            .await?;
-            let added = resolved.len();
-            for (nid, re) in resolved {
-                cached.insert(nid, re.vector);
+    let prompt_emb: Option<Vec<f32>> = {
+        #[cfg(feature = "semantic-embeddings")]
+        {
+            if opts.embedding_policy == EmbeddingPolicy::NoRerank || prompt.unwrap_or("").is_empty() {
+                None
+            } else {
+                let generator = rmc_engine::embeddings::EmbeddingGenerator::new()
+                    .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
+                // Query-side: the prompt is a retrieval query scored against
+                // cached document vectors — apply the instruction prefix.
+                let v = generator
+                    .embed_queries(vec![prompt.unwrap().to_owned()])
+                    .await
+                    .map_err(|e| anyhow::anyhow!("embed_queries: {e}"))?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("embed_queries returned no vector"))?;
+                Some(v)
             }
-            added
-        } else {
+        }
+        #[cfg(not(feature = "semantic-embeddings"))]
+        {
+            None
+        }
+    };
+
+    let embeddings_computed: usize = {
+        #[cfg(feature = "semantic-embeddings")]
+        {
+            if opts.embedding_policy == EmbeddingPolicy::ComputeMissing && !missing.is_empty() {
+                // Codemap is not profile-parameterized; embed with the default
+                // backend, matching the prompt embedder constructed above.
+                let resolved = crate::graph::embedding_cache::ensure_embeddings_for(
+                    snap,
+                    &missing,
+                    &rmc_engine::embeddings::EmbeddingBackend::default(),
+                )
+                .await?;
+                let added = resolved.len();
+                for (nid, re) in resolved {
+                    cached.insert(nid, re.vector);
+                }
+                added
+            } else {
+                0
+            }
+        }
+        #[cfg(not(feature = "semantic-embeddings"))]
+        {
             0
-        };
+        }
+    };
 
     // PHASE C — sync, no txn needed for scoring.
     let mut relevance: HashMap<NodeId, f32> = HashMap::with_capacity(retained.len());

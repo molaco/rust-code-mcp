@@ -3,6 +3,43 @@ name    = "rmc-engine"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["core"]
+core = []
+embeddings = [
+  "dep:reqwest",
+  "dep:hf-hub",
+  "dep:fastembed",
+  "dep:tokenizers",
+  "dep:tokio",
+  "dep:futures",
+  "dep:toml",
+  "fastembed/hf-hub-native-tls",
+  "fastembed/ort-load-dynamic",
+]
+embeddings-cuda = [
+  "embeddings",
+  "dep:candle-core",
+  "fastembed/qwen3",
+  "fastembed/cuda",
+]
+vector-store = [
+  "embeddings",
+  "dep:lancedb",
+  "dep:arrow-array",
+  "dep:arrow-schema",
+  "dep:async-trait",
+  "dep:directories",
+  "dep:futures",
+  "dep:tokio",
+]
+hybrid-search = [
+  "embeddings",
+  "vector-store",
+  "dep:anyhow",
+  "dep:tokio",
+]
+
 [dependencies]
 # parser/ — rust-analyzer syntax
 ra_ap_syntax = { workspace = true }
@@ -15,27 +52,27 @@ serde = { workspace = true }
 uuid  = { workspace = true }
 
 # embeddings/ — providers, backends, profiles
-reqwest     = { workspace = true }
-hf-hub      = { workspace = true }
-fastembed   = { workspace = true }
-candle-core = { workspace = true }
-tokenizers  = { workspace = true }
+reqwest     = { workspace = true, optional = true }
+hf-hub      = { workspace = true, optional = true }
+fastembed   = { workspace = true, optional = true }
+candle-core = { workspace = true, optional = true }
+tokenizers  = { workspace = true, optional = true }
 serde_json  = { workspace = true }
 thiserror   = { workspace = true }
 tracing     = { workspace = true }
-tokio       = { workspace = true }
-futures     = { workspace = true }
-toml        = { workspace = true }
+tokio       = { workspace = true, optional = true }
+futures     = { workspace = true, optional = true }
+toml        = { workspace = true, optional = true }
 
 # vector_store/ — LanceDB-backed vector storage
-lancedb      = { workspace = true }
-arrow-array  = { workspace = true }
-arrow-schema = { workspace = true }
-async-trait  = { workspace = true }
-directories  = { workspace = true }
+lancedb      = { workspace = true, optional = true }
+arrow-array  = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
+async-trait  = { workspace = true, optional = true }
+directories  = { workspace = true, optional = true }
 
 # search/ — Tantivy BM25 + hybrid search
-anyhow = { workspace = true }
+anyhow = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

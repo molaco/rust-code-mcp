@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # In-workspace engine crate (EmbeddingProfile)
-rmc-engine = { path = "../rmc-engine" }
+rmc-engine = { path = "../rmc-engine", default-features = false, features = ["embeddings"] }
 
 # Error handling
 anyhow = { workspace = true }

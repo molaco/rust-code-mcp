@@ -34,6 +34,7 @@ pub use openrouter::{
     openrouter_runtime_config, OpenRouterEncodingFormat, OpenRouterProviderPreferences,
     OpenRouterProviderSort, OpenRouterRuntimeConfig,
 };
+#[cfg(feature = "embeddings-cuda")]
 mod qwen3;
 
 mod token_lengths;
@@ -62,6 +63,7 @@ pub struct EmbeddingGenerator {
 
 #[derive(Clone)]
 enum EmbeddingGeneratorInner {
+    #[cfg(feature = "embeddings-cuda")]
     Qwen3(Arc<qwen3::Qwen3Embedder>),
     FastembedCpu(Arc<fastembed_cpu::FastembedCpuEmbedder>),
     OpenRouter(Arc<openrouter::OpenRouterEmbedder>),
@@ -78,7 +80,16 @@ impl EmbeddingGenerator {
     pub fn with_backend(backend: EmbeddingBackend) -> Result<Self, EmbeddingError> {
         let inner = match backend.runtime {
             EmbeddingRuntime::LocalQwen3CandleCuda => {
+                #[cfg(feature = "embeddings-cuda")]
+                {
                 EmbeddingGeneratorInner::Qwen3(Arc::new(qwen3::Qwen3Embedder::new(&backend)?))
+                }
+                #[cfg(not(feature = "embeddings-cuda"))]
+                {
+                    return Err(EmbeddingError::gpu_required(
+                        "rmc-engine was built without the `embeddings-cuda` feature",
+                    ));
+                }
             }
             EmbeddingRuntime::OpenRouter => EmbeddingGeneratorInner::OpenRouter(Arc::new(
                 openrouter::OpenRouterEmbedder::new(&backend)?,
@@ -95,6 +106,7 @@ impl EmbeddingGenerator {
     /// Output vector dimension for the active backend.
     pub fn dimensions(&self) -> usize {
         match &self.inner {
+            #[cfg(feature = "embeddings-cuda")]
             EmbeddingGeneratorInner::Qwen3(inner) => inner.dim(),
             EmbeddingGeneratorInner::FastembedCpu(inner) => inner.dim(),
             EmbeddingGeneratorInner::OpenRouter(inner) => inner.dim(),
@@ -113,6 +125,7 @@ impl EmbeddingGenerator {
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
         match &self.inner {
+            #[cfg(feature = "embeddings-cuda")]
             EmbeddingGeneratorInner::Qwen3(inner) => {
                 let inner = inner.clone();
                 tokio::task::spawn_blocking(move || {
@@ -144,6 +157,7 @@ impl EmbeddingGenerator {
         texts: Vec<String>,
     ) -> Result<Vec<Embedding>, EmbeddingError> {
         match &self.inner {
+            #[cfg(feature = "embeddings-cuda")]
             EmbeddingGeneratorInner::Qwen3(inner) => {
                 let inner = inner.clone();
                 tokio::task::spawn_blocking(move || {

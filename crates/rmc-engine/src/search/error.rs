@@ -2,17 +2,21 @@
 
 use thiserror::Error;
 
+#[cfg(feature = "embeddings")]
 use crate::embeddings::EmbeddingError;
+#[cfg(feature = "vector-store")]
 use crate::vector_store::VectorStoreError;
 
 /// Errors that can occur during search operations
 #[derive(Error, Debug)]
 pub enum SearchError {
     /// Embedding generation failed
+    #[cfg(feature = "embeddings")]
     #[error("Embedding error: {0}")]
     Embedding(#[from] EmbeddingError),
 
     /// Vector store operation failed
+    #[cfg(feature = "vector-store")]
     #[error("Vector store error: {0}")]
     VectorStore(#[from] VectorStoreError),
 

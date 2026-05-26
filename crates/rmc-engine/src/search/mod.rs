@@ -4,17 +4,23 @@
 
 mod bm25;
 mod error;
+#[cfg(feature = "hybrid-search")]
 mod resilient;
+#[cfg(feature = "hybrid-search")]
 mod rrf_tuner;
 
 pub use bm25::Bm25Search;
 pub use error::SearchError;
+#[cfg(feature = "hybrid-search")]
 pub use resilient::ResilientHybridSearch;
 
 use crate::chunker::{ChunkId, CodeChunk};
+#[cfg(feature = "hybrid-search")]
 use crate::embeddings::EmbeddingGenerator;
+#[cfg(feature = "hybrid-search")]
 use crate::vector_store::{VectorStore, VectorSearchResult};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "hybrid-search")]
 use std::collections::HashMap;
 
 /// Configuration for hybrid search
@@ -61,11 +67,13 @@ pub struct SearchResult {
 }
 
 /// Vector search wrapper that generates embeddings and queries the vector store
+#[cfg(feature = "hybrid-search")]
 pub(crate) struct VectorSearch {
     embedding_generator: EmbeddingGenerator,
     vector_store: VectorStore,
 }
 
+#[cfg(feature = "hybrid-search")]
 impl VectorSearch {
     /// Create a new vector search instance
     pub fn new(
@@ -102,12 +110,14 @@ impl VectorSearch {
 }
 
 /// Hybrid search combining BM25 and vector search with RRF
+#[cfg(feature = "hybrid-search")]
 pub struct HybridSearch {
     vector_search: VectorSearch,
     bm25_search: Option<Bm25Search>,
     config: HybridSearchConfig,
 }
 
+#[cfg(feature = "hybrid-search")]
 impl HybridSearch {
     /// Create a new hybrid search instance
     pub fn new(
@@ -247,6 +257,7 @@ impl HybridSearch {
 /// Fuses two ranked result lists using the RRF formula `1/(k + rank)`.
 /// Each entry is `(ChunkId, raw_score, CodeChunk)`; the two lists are
 /// processed independently and their weighted contributions are summed.
+#[cfg(feature = "hybrid-search")]
 fn reciprocal_rank_fusion_core(
     vector_results: &[(ChunkId, f32, CodeChunk)],
     bm25_results: &[(ChunkId, f32, CodeChunk)],
@@ -306,6 +317,7 @@ fn reciprocal_rank_fusion_core(
 }
 
 /// Internal structure for RRF score calculation
+#[cfg(feature = "hybrid-search")]
 struct RrfScore {
     chunk_id: ChunkId,
     rrf_score: f32,

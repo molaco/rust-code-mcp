@@ -11,6 +11,7 @@ mod channel_audit;
 pub mod codemap;
 mod derive_audit;
 mod docs_audit;
+#[cfg(feature = "semantic-embeddings")]
 mod embedding_cache;
 mod extract;
 mod fn_body_audit;
@@ -41,6 +42,7 @@ pub use model::{
     Binding, BindingVisibility, ExtractionModel, FunctionSignature, ItemKind, Namespace, Node,
     NodeKind, Usage,
 };
+#[cfg(feature = "semantic-embeddings")]
 pub(crate) use model::EmbeddingRecord;
 pub use query::audits::{
     ChannelCapacityAuditOptions, DeriveAuditOptions, FnBodyAuditOptions, GraphAuditError,
@@ -60,6 +62,7 @@ pub use query::model::{
     SimilarityCluster, SimilarityItem, SimilarityPair, UnsafeAuditFinding, UsageSummaryRow,
     WorkspaceStats,
 };
+#[cfg(feature = "semantic-embeddings")]
 pub use query::similarity::{
     GraphSimilarityError, SemanticOverlapOptions, run_semantic_overlaps,
 };

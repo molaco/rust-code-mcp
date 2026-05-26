@@ -71,12 +71,7 @@ heed = "0.22.1"
 text-splitter = "0.13"  # Semantic text chunking
 
 # Phase 4: Embedding Generation
-fastembed = { version = "5.13.4", default-features = false, features = [
-  "hf-hub-native-tls",
-  "ort-load-dynamic",
-  "qwen3",
-  "cuda",
-] }
+fastembed = { version = "5.13.4", default-features = false }
 candle-core = "0.10.2"
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "native-tls"] }
 

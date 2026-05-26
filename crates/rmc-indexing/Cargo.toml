@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # In-workspace dependencies
-rmc-engine = { path = "../rmc-engine" }
+rmc-engine = { path = "../rmc-engine", features = ["embeddings-cuda", "vector-store", "hybrid-search"] }
 rmc-config = { path = "../rmc-config" }
 
 # Search and indexing
