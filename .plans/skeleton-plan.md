@@ -834,3 +834,183 @@ Do not mix this schema bump into the first MCP landing.
 
 Each PR should end with the relevant nix-wrapped `cargo check` command. Never
 run `cargo fmt`.
+
+## Change Impact Estimate
+
+These are rough implementation-size estimates, not exact counts. They exist to
+help review and PR slicing.
+
+| Phase | New | Modified | Deleted | Prod LOC | Test LOC |
+|---|---:|---:|---:|---:|---:|
+| 0 Preflight | 0 | 0 | 0 | 0 | 0 |
+| 1 Graph collector + stub renderer | 1 dir, 4 files | 3 files | 0 | ~700-950 | ~250-400 |
+| 2 Source stripping renderer | 1 file | 2-3 files | 0 | ~600-900 | ~350-550 |
+| 3 MCP endpoint + `.skeleton/` writing | 1 file | 4 files | 0 | ~250-400 | ~150-250 |
+| 4 Docs | 0 | 2 files | 0 | 0 | 0 |
+| 5 Quality pass | 0 | 2-4 files | 0 | ~100-200 | ~250-450 |
+| 6 Optional manifest | 0-1 file | 2-3 files | 0 | ~150-250 | ~100-200 |
+| 7 Optional schema metadata | 1 file maybe | 5-7 files | 0 | ~600-1000 | ~300-600 |
+
+### Phase 1 Impact
+
+New directory:
+
+- `crates/rmc-graph/src/graph/skeleton/`
+
+New files/modules:
+
+- `crates/rmc-graph/src/graph/skeleton/mod.rs`
+- `crates/rmc-graph/src/graph/skeleton/model.rs`
+- `crates/rmc-graph/src/graph/skeleton/collect.rs`
+- `crates/rmc-graph/src/graph/skeleton/render.rs`
+
+Modified files:
+
+- `crates/rmc-graph/src/graph/mod.rs`
+- `crates/rmc-graph/src/graph/query/shared.rs`
+- `crates/rmc-graph/src/graph/query/modules.rs`
+
+New types:
+
+- `SkeletonOptions`
+- `SkeletonOutput`
+- `SkeletonFile`
+- `SkeletonDiagnostic`
+- `SkeletonTreeNode`
+- `SkeletonItem`
+- `SkeletonSourceFile`
+- visibility/filter helper enums
+
+New functions:
+
+- `render_crate_skeletons`
+- collector/tree-walk helpers
+- visibility filter helpers
+- stub file renderer
+- generalized `declared_visibility_map`
+
+### Phase 2 Impact
+
+New file/module:
+
+- `crates/rmc-graph/src/graph/skeleton/source.rs`
+
+Modified files:
+
+- `crates/rmc-graph/src/graph/skeleton/render.rs`
+- `crates/rmc-graph/src/graph/skeleton/model.rs`
+- possibly `crates/rmc-graph/src/graph/skeleton/mod.rs`
+
+New types:
+
+- `SourceCache`
+- `RenderedDecl`
+- `Replacement`
+- source/range diagnostic variants
+
+New functions:
+
+- source file loading/cache helpers
+- syntax-node range lookup
+- body/initializer stripping
+- attr/doc filtering
+- fallback declaration rendering
+- synthetic inherent impl rendering
+- re-export rendering
+
+### Phase 3 Impact
+
+New file/module:
+
+- `crates/rmc-server/src/tools/graph/skeleton.rs`
+
+Modified files:
+
+- `crates/rmc-server/src/tools/params/graph.rs`
+- `crates/rmc-server/src/tools/graph/mod.rs`
+- `crates/rmc-server/src/tools/router.rs`
+- `crates/rmc-server/src/tools/graph/tests.rs`
+
+New types:
+
+- `CrateSkeletonParams`
+- `CrateSkeletonResponse`
+- `CrateSkeletonFileSummary`
+
+New functions/methods:
+
+- `tools::graph::skeleton::crate_skeleton`
+- router method `crate_skeleton`
+- `.skeleton/` clean/write helpers
+
+### Phase 4 Impact
+
+Modified docs:
+
+- `TOOLS.md`
+- `README.md`
+
+No production or test Rust LOC is expected unless examples are added.
+
+### Phase 5 Impact
+
+Likely modified files:
+
+- `crates/rmc-graph/src/graph/skeleton/*`
+- `crates/rmc-server/src/tools/graph/tests.rs`
+
+Likely additions:
+
+- deterministic ordering assertions
+- parse checks for every generated mirrored file
+- stale/missing source diagnostics
+- self-workspace or fixture smoke tests
+
+No new modules are expected.
+
+### Phase 6 Impact
+
+Possible new file/module:
+
+- `crates/rmc-graph/src/graph/skeleton/manifest.rs`
+
+Possible modified files:
+
+- `crates/rmc-graph/src/graph/skeleton/model.rs`
+- `crates/rmc-server/src/tools/graph/skeleton.rs`
+- docs/tests
+
+New types:
+
+- `SkeletonManifest`
+- `SkeletonManifestFile`
+
+### Phase 7 Impact
+
+Possible new file/module:
+
+- `crates/rmc-graph/src/graph/declarations.rs`
+- or `crates/rmc-graph/src/graph/field_types.rs`
+
+Modified files:
+
+- `crates/rmc-graph/src/graph/model.rs`
+- `crates/rmc-graph/src/graph/extract.rs`
+- `crates/rmc-graph/src/graph/storage.rs`
+- `crates/rmc-graph/src/graph/snapshot.rs`
+- query accessor module(s) under `crates/rmc-graph/src/graph/query/`
+- `crates/rmc-graph/src/graph/mod.rs`
+- tests
+
+New persisted types:
+
+- `DeclarationHeader`
+- `FieldRecord`
+- `StructFields`
+- `StructShape`
+- `VariantPayload`
+- possible `ConstMetadata`
+- possible `TypeAliasMetadata`
+
+This is the expensive phase and should stay deferred unless source-based
+rendering proves insufficient.
