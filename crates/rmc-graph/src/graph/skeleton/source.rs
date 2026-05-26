@@ -355,6 +355,8 @@ fn visibility_prefix(visibility: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::ids::NodeId;
+    use crate::graph::model::{Node, NodeKind};
 
     fn first_syntax(src: &str, kind: ItemKind) -> SyntaxNode {
         let parsed = SourceFile::parse(src, ra_ap_syntax::Edition::Edition2024).tree();
@@ -369,6 +371,28 @@ mod tests {
         let syntax = first_syntax(src, kind);
         let attrs: Vec<String> = attrs.iter().map(|attr| attr.to_string()).collect();
         render_source_item_text(src, &syntax, &attrs, &opts)
+    }
+
+    fn item_with_source(file: Option<&str>, span: Option<(u32, u32)>) -> SkeletonItem {
+        SkeletonItem {
+            id: NodeId::from_components(&["skeleton-test", "f"]),
+            node: Node {
+                id: NodeId::from_components(&["skeleton-test", "f"]),
+                kind: NodeKind::Item,
+                display_name: "f".to_string(),
+                qualified_name: "test_crate::f".to_string(),
+                crate_id: None,
+                parent_id: None,
+                item_kind: Some(ItemKind::Function),
+                file: file.map(str::to_string),
+                span,
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+            parent: None,
+            visibility: Some("pub".to_string()),
+        }
     }
 
     #[test]
@@ -417,5 +441,48 @@ mod tests {
         );
         assert_eq!(rendered_const, "pub const X: usize = todo!();");
         assert_eq!(rendered_static, "pub static Y: usize = todo!();");
+    }
+
+    #[test]
+    fn missing_source_file_reports_diagnostic_and_falls_back() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let mut cache = SourceCache::new(td.path());
+        let mut diagnostics = Vec::new();
+        let rendered = cache.render_item(
+            &item_with_source(Some("src/lib.rs"), Some((0, 10))),
+            &SkeletonOptions::default(),
+            &mut diagnostics,
+        );
+        assert_eq!(rendered, "pub fn f() { /* ... */ }");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("could not read source")),
+            "expected missing-source diagnostic, got {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn missing_span_reports_diagnostic_and_falls_back() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let src_dir = td.path().join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src dir");
+        std::fs::write(src_dir.join("lib.rs"), "pub fn f() { 1 }\n")
+            .expect("write source");
+
+        let mut cache = SourceCache::new(td.path());
+        let mut diagnostics = Vec::new();
+        let rendered = cache.render_item(
+            &item_with_source(Some("src/lib.rs"), None),
+            &SkeletonOptions::default(),
+            &mut diagnostics,
+        );
+        assert_eq!(rendered, "pub fn f() { /* ... */ }");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("could not find source syntax")),
+            "expected missing-span fallback diagnostic, got {diagnostics:?}",
+        );
     }
 }

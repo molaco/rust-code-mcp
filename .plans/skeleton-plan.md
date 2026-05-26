@@ -79,6 +79,21 @@ refactored workspace. The current codebase is split into `rmc-graph` and
   - Validated with
     `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib`.
 
+- 2026-05-26 Phase 5 complete:
+  - Ran `jj show --summary` before phase work.
+  - Added graph-level tests for deterministic file/item ordering, synthetic
+    impl member ordering, missing-source diagnostics, and missing-span
+    fallback rendering.
+  - Strengthened the server endpoint smoke test to generate real current
+    workspace skeleton files for `rmc_server` and `rmc_graph`, assert expected
+    generated contents, and verify `.skeleton/` cleanup.
+  - Validated focused tests with
+    `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton`
+    and
+    `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib crate_skeleton`.
+  - Validated the workspace library check with
+    `nix develop ../nix-devshells#cuda-code --command cargo check --workspace --lib`.
+
 ## Goal
 
 Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree
@@ -906,7 +921,7 @@ nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib
 
 Purpose: harden parseability and deterministic output.
 
-Implementation steps:
+Completed implementation:
 
 1. Add deterministic ordering assertions:
 
@@ -927,9 +942,9 @@ Implementation steps:
 
 4. Manual smoke:
 
-   - Build current workspace snapshot.
-   - Run `crate_skeleton`.
-   - Inspect `.skeleton/crates/rmc-graph/src/graph/model.rs` and
+   - Built a current workspace snapshot from the endpoint test.
+   - Ran `crate_skeleton` for `rmc_server` and `rmc_graph`.
+   - Asserted `.skeleton/crates/rmc-graph/src/graph/model.rs` and
      `.skeleton/crates/rmc-server/src/tools/router.rs`.
 
 Validation:
@@ -938,7 +953,7 @@ Validation:
 nix develop ../nix-devshells#cuda-code --command cargo check --workspace --lib
 ```
 
-If running tests for this feature:
+Feature tests run:
 
 ```sh
 nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton
@@ -1263,12 +1278,14 @@ No production or test Rust LOC is expected unless examples are added.
 
 ### Phase 5 Impact
 
-Likely modified files:
+Modified test files:
 
-- `crates/rmc-graph/src/graph/skeleton/*`
+- `crates/rmc-graph/src/graph/skeleton/collect.rs`
+- `crates/rmc-graph/src/graph/skeleton/render.rs`
+- `crates/rmc-graph/src/graph/skeleton/source.rs`
 - `crates/rmc-server/src/tools/graph/tests.rs`
 
-Likely additions:
+Additions:
 
 - deterministic ordering assertions
 - parse checks for every generated mirrored file

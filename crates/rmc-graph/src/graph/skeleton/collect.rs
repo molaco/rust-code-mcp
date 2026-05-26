@@ -491,4 +491,40 @@ mod tests {
         assert!(skipped_names.iter().all(|name| !name.contains("::tests::")));
         assert!(kept_names.iter().any(|name| name.contains("::tests::")));
     }
+
+    #[test]
+    fn collected_files_and_items_are_deterministically_ordered() {
+        let collected = render(SkeletonOptions {
+            include: vec!["all".to_string()],
+            ..Default::default()
+        });
+        let paths: Vec<&str> = collected
+            .files
+            .iter()
+            .map(|file| file.source_path.as_str())
+            .collect();
+        let mut sorted_paths = paths.clone();
+        sorted_paths.sort();
+        assert_eq!(paths, sorted_paths);
+
+        for file in collected.files {
+            let keys: Vec<(u32, &str)> = file
+                .items
+                .iter()
+                .map(|item| {
+                    (
+                        item.node.span.map(|span| span.0).unwrap_or(u32::MAX),
+                        item.node.qualified_name.as_str(),
+                    )
+                })
+                .collect();
+            let mut sorted_keys = keys.clone();
+            sorted_keys.sort();
+            assert_eq!(
+                keys, sorted_keys,
+                "items not sorted in {}",
+                file.source_path,
+            );
+        }
+    }
 }

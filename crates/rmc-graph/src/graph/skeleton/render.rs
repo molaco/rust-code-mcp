@@ -158,6 +158,8 @@ fn group_assoc_items<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::ids::NodeId;
+    use crate::graph::model::{Node, NodeKind};
     use crate::graph::test_support::shared_snapshot;
     use ra_ap_syntax::SourceFile;
 
@@ -169,6 +171,29 @@ mod tests {
         .expect("collect skeleton");
         render_source_skeleton(shared_snapshot(), &opts, collected)
             .expect("render skeleton")
+    }
+
+    fn item(id_label: &str, parent: &Node, file: &str, start: u32, qualified: &str) -> SkeletonItem {
+        let id = NodeId::from_components(&["skeleton-order", id_label]);
+        SkeletonItem {
+            id,
+            node: Node {
+                id,
+                kind: NodeKind::Item,
+                display_name: qualified.rsplit("::").next().unwrap_or(qualified).to_string(),
+                qualified_name: qualified.to_string(),
+                crate_id: None,
+                parent_id: Some(parent.id),
+                item_kind: Some(ItemKind::Method),
+                file: Some(file.to_string()),
+                span: Some((start, start + 10)),
+                visibility: None,
+                attributes: Vec::new(),
+                crate_target_kind: None,
+            },
+            parent: Some(parent.clone()),
+            visibility: Some("pub".to_string()),
+        }
     }
 
     #[test]
@@ -210,5 +235,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn synthetic_impl_members_are_deterministically_ordered() {
+        let parent_id = NodeId::from_components(&["skeleton-order", "Host"]);
+        let parent = Node {
+            id: parent_id,
+            kind: NodeKind::Item,
+            display_name: "Host".to_string(),
+            qualified_name: "test_crate::Host".to_string(),
+            crate_id: None,
+            parent_id: None,
+            item_kind: Some(ItemKind::Struct),
+            file: Some("src/lib.rs".to_string()),
+            span: Some((0, 10)),
+            visibility: None,
+            attributes: Vec::new(),
+            crate_target_kind: None,
+        };
+        let unsorted = vec![
+            item("c", &parent, "src/z.rs", 30, "test_crate::Host::c"),
+            item("a", &parent, "src/a.rs", 20, "test_crate::Host::a"),
+            item("b", &parent, "src/a.rs", 10, "test_crate::Host::b"),
+        ];
+        let groups = group_assoc_items(&unsorted);
+        let group = &groups.get(&parent_id).expect("host group").1;
+        let names: Vec<&str> = group
+            .iter()
+            .map(|item| item.node.qualified_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "test_crate::Host::b",
+                "test_crate::Host::a",
+                "test_crate::Host::c",
+            ],
+        );
     }
 }
