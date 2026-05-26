@@ -20,6 +20,10 @@ Progress:
   and runtime status/cleanup tools. The graph static metadata tests now use a
   manual persisted graph fixture instead of the removed semantic singleton or a
   rust-analyzer workspace load.
+- Phase 5 completed on 2026-05-26. Added a stuck-process diagnostics runbook
+  under `.docs` with safe `/proc` collection commands, candidate discovery that
+  avoids command-line reads, PID/process-group kill guidance, hibernation
+  blocker triage, and NVIDIA-specific `wchan` notes.
 
 This plan addresses the stuck D-state process class observed while agents run
 MCP tools and focused Rust tests. The latest live incident was:
@@ -554,6 +558,58 @@ Do not run `cargo fmt`.
 
 Goal: avoid diagnostic commands that themselves get stuck once a target process
 is wedged.
+
+Status: completed on 2026-05-26.
+
+Completed implementation:
+
+- Added `.docs/stuck-process-diagnostics.md`.
+- Documented safe-ish known-PID collection using only:
+
+  ```bash
+  cat /proc/$pid/status
+  cat /proc/$pid/stat
+  cat /proc/$pid/wchan
+  readlink /proc/$pid/exe
+  readlink /proc/$pid/cwd
+  ```
+
+- Added `/proc` loops for finding candidate PIDs by `Name`/`State` from
+  `/proc/$pid/status`, without `ps ... cmd`, `pgrep -af`, `pkill -f`, or raw
+  `/proc/$pid/cmdline` reads.
+- Added a `stuck_proc_snapshot PID` shell function that records
+  `status`, `stat`, parsed state/parent/process-group fields, `wchan`, `exe`,
+  and `cwd`.
+- Added a decision tree for `S`, `D`, and `Z` states, including hibernation and
+  suspend blocker handling.
+- Added NVIDIA-specific notes for `D` state in `do_exit`,
+  `do_mprotect_pkey`, `__vma_start_write`, and `__access_remote_vm`, including
+  what those waits suggest and what diagnostics to avoid.
+- Documented exact-PID and process-group termination using the process group
+  parsed from `/proc/$pid/stat`, including a `/proc/*/stat` group-member
+  preview and typed process-group confirmation before sending a group signal.
+  The runbook warns that `D`-state processes may keep signals pending until
+  the kernel wait resolves.
+
+Validation performed:
+
+```bash
+sed -n '1,260p' .docs/stuck-process-diagnostics.md
+rg -n 'cmdline|pgrep -af|pkill -f|do_exit|do_mprotect_pkey|__vma_start_write|__access_remote_vm|hibernate|hibernation' .docs/stuck-process-diagnostics.md .plans/lifecycle-plan.md
+rg -n 'process group members|Type the process group number' .docs/stuck-process-diagnostics.md .plans/lifecycle-plan.md
+jj diff --stat
+```
+
+No cargo tests were run; Phase 5 is documentation/runbook-only. Operational
+review remains pending for the next incident where the runbook can be followed
+without probing a live `D`-state process beyond the safe reads.
+
+Review gate:
+
+- Reviewer score: 9.5/10 on 2026-05-26.
+- Gate result: pass (`> 8.5`).
+- Reviewer findings: none after adding the process-group member preview and
+  typed confirmation guard.
 
 Observed collateral:
 
