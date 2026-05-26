@@ -9,23 +9,39 @@ refactored workspace. The current codebase is split into `rmc-graph` and
 
 ## Goal
 
-Add an MCP tool named `crate_skeleton` that emits one stripped Rust facade file
-per selected local crate. The output keeps the module hierarchy, attributes,
-doc comments, type declarations, trait declarations, functions, methods,
-associated items, const/static/type declarations, and declared re-exports, but
-replaces function bodies and value initializers with placeholders.
+Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree
+under the project root at `.skeleton/`. The generated files mirror the regular
+codebase's Rust source layout: for a source file such as
+`crates/rmc-graph/src/graph/model.rs`, the skeleton file is written to
+`.skeleton/crates/rmc-graph/src/graph/model.rs`.
 
-The first implementation target is **crate granularity only**:
+Each generated `.rs` file keeps the items that belong to the matching source
+file: attributes, doc comments, type declarations, trait declarations,
+functions, methods, associated items, const/static/type declarations, and
+declared re-exports. Function bodies and value initializers are replaced with
+placeholders.
+
+The first implementation target is **mirrored file granularity only**:
 
 ```text
-<output_dir>/
-  rmc_graph.rs
-  rmc_server.rs
-  ...
+.skeleton/
+  crates/
+    rmc-graph/
+      src/
+        graph/
+          model.rs
+          snapshot.rs
+          query/
+            modules.rs
+    rmc-server/
+      src/
+        tools/
+          graph/
+            core.rs
 ```
 
-Module granularity and markdown output are useful, but should wait until the
-crate-level Rust output is stable.
+The MCP response is only a summary of what was written. It does not return the
+full skeleton text inline.
 
 ## Current Codebase Findings
 
@@ -92,7 +108,6 @@ MCP params in `crates/rmc-server/src/tools/params/graph.rs`:
 ```rust
 pub(crate) struct CrateSkeletonParams {
     pub directory: String,
-    pub output_dir: String,
     #[serde(default)]
     pub crates: Option<Vec<String>>,
     #[serde(default)]
@@ -110,7 +125,7 @@ pub(crate) struct CrateSkeletonParams {
     #[serde(default)]
     pub exclude_vendor: Option<bool>,
     #[serde(default)]
-    pub allow_workspace_output: Option<bool>,
+    pub clean: Option<bool>,
 }
 ```
 
@@ -124,7 +139,9 @@ Defaults:
 - `include_reexports = true`.
 - `exclude_tests = true`.
 - `exclude_vendor = true`.
-- `allow_workspace_output = false`.
+- `clean = true`, meaning the tool removes the existing `<directory>/.skeleton`
+  tree before writing the fresh mirror. The implementation must only ever remove
+  that exact hidden generated directory.
 
 Supported `include` values:
 
@@ -138,9 +155,10 @@ Response:
 
 ```rust
 pub(crate) struct CrateSkeletonResponse {
-    pub output_dir: String,
+    pub skeleton_dir: String,
     pub snapshot_id: String,
     pub files_written: Vec<CrateSkeletonFileSummary>,
+    pub total_files: usize,
     pub total_items: usize,
     pub total_bytes: usize,
     pub diagnostics: Vec<String>,
@@ -148,7 +166,8 @@ pub(crate) struct CrateSkeletonResponse {
 
 pub(crate) struct CrateSkeletonFileSummary {
     pub crate_name: String,
-    pub path: String,
+    pub source_path: String,
+    pub skeleton_path: String,
     pub bytes: usize,
     pub items: usize,
 }
@@ -180,9 +199,13 @@ crates/rmc-server/src/tools/graph/skeleton.rs
 
 ## Rendering Model
 
-The renderer should not use `ModuleTreeNode` directly. It lacks NodeIds, files,
-spans, and module visibility. Build a skeleton-specific tree from
-`children_by_parent`:
+The renderer should not produce one giant file. It should build a
+skeleton-specific tree from `children_by_parent`, then bucket retained items by
+their `Node.file` so each output file mirrors the source file that declared the
+items.
+
+Do not use `ModuleTreeNode` directly. It lacks NodeIds, files, spans, and module
+visibility.
 
 ```rust
 struct SkeletonTreeNode {
@@ -201,6 +224,20 @@ struct SkeletonItem {
 }
 ```
 
+Then project the retained tree into per-file buckets:
+
+```rust
+struct SkeletonSourceFile {
+    crate_name: String,
+    source_path: String,
+    skeleton_path: String,
+    modules: Vec<SkeletonModuleInFile>,
+    items: Vec<SkeletonItem>,
+    synthetic_impls: Vec<SkeletonImplBlock>,
+    reexports: Vec<SkeletonReexport>,
+}
+```
+
 Important traversal rule:
 
 - Module nodes recurse into module children.
@@ -210,6 +247,17 @@ Important traversal rule:
 That avoids duplicating enum variants and trait-associated items, because enum
 source already contains variants and trait source already contains associated
 items.
+
+File layout rule:
+
+- `Node.file = "crates/rmc-graph/src/graph/model.rs"` maps to
+  `.skeleton/crates/rmc-graph/src/graph/model.rs`.
+- Only Rust files represented by retained items/modules are generated.
+- Non-Rust files are not copied.
+- Deleted/stale skeleton files are removed when `clean=true`.
+- Inline modules stay in the same mirrored file as their source.
+- File modules produce normal skeleton content in their own mirrored `.rs`
+  files.
 
 For inherent associated items, `parent_id` points at the host type item. These
 items are not inside the type declaration source, so render them in synthetic
@@ -374,9 +422,11 @@ Implementation steps:
 
 5. Stub renderer:
 
-   - Emit banner.
-   - Emit module blocks.
-   - Emit one placeholder comment per retained item:
+   - Emit one `SkeletonFile` per mirrored source path, not one per crate.
+   - Prefix each generated file with a short banner naming the source file,
+     crate, snapshot, and active filters.
+   - Emit module context only where needed to keep the file parseable.
+   - Emit one placeholder comment per retained item in that source file:
 
      ```rust
      // item: rmc_graph::graph::model::Node [Struct]
@@ -439,8 +489,12 @@ Implementation steps:
 
 5. Render module blocks:
 
-   - Root crate file has no outer `mod crate_name`.
-   - Submodules render as `{vis} mod {name} { ... }`.
+   - Each mirrored file renders the items declared in the matching source
+     file.
+   - Inline modules render as `{vis} mod {name} { ... }` inside that same
+     file.
+   - File modules do not get wrapped in parent module blocks in their own file;
+     their path already supplies the context.
    - Convert `visibility == "pub(self)"` to no prefix.
    - Keep `pub`, `pub(crate)`, and `pub(in path)` as emitted visibility.
 
@@ -464,7 +518,7 @@ Implementation steps:
      }
      ```
 
-   - Add a single comment before synthetic impls in each crate file:
+   - Add a single comment before synthetic impls in each mirrored file:
 
      ```rust
      // inherent impl facades; original impl generics/where clauses are not reconstructed
@@ -473,6 +527,7 @@ Implementation steps:
 8. Render declared re-exports:
 
    - For each module, call `declared_reexports_of`.
+   - Write each rendered re-export to the mirrored file that owns the module.
    - Filter by re-export binding visibility.
    - Render simple canonical paths:
 
@@ -492,7 +547,7 @@ Tests:
 - An enum with tuple/record variants is preserved.
 - A const/static initializer is replaced.
 - Attribute/doc toggles work.
-- Generated crate output parses with `ra_ap_syntax::SourceFile::parse`.
+- Each generated mirrored file parses with `ra_ap_syntax::SourceFile::parse`.
 
 Validation:
 
@@ -527,11 +582,13 @@ Implementation steps:
 3. Endpoint behavior:
 
    - Open snapshot with `open_workspace_snapshot`.
-   - Validate `output_dir`.
    - Canonicalize `directory`.
-   - Reject output inside the workspace unless `allow_workspace_output=true`.
+   - Set `skeleton_dir = <canonical directory>/.skeleton`.
+   - If `clean=true`, remove only `skeleton_dir` after verifying the final path
+     is exactly a `.skeleton` child of the workspace root.
    - Call `rmc_graph::graph::render_crate_skeletons`.
-   - Create `output_dir`.
+   - Create parent directories under `.skeleton` for every mirrored source
+     path.
    - Write one file per `SkeletonFile`.
    - Return `CrateSkeletonResponse`.
 
@@ -549,10 +606,12 @@ Implementation steps:
 6. Add endpoint tests in `crates/rmc-server/src/tools/graph/tests.rs`:
 
    - Build/open a snapshot.
-   - Write to a tempdir.
+   - Run the endpoint against a temp fixture workspace.
    - Assert response has at least one file.
+   - Assert files are written under `<fixture>/.skeleton`.
+   - Assert a generated file mirrors a real source-relative path.
    - Assert the file exists and contains a banner.
-   - Assert output-inside-workspace is rejected by default.
+   - Assert `clean=true` removes stale files under `.skeleton`.
 
 Validation:
 
@@ -587,6 +646,8 @@ Implementation steps:
 
 Required limitation notes:
 
+- Files are always written under `<workspace>/.skeleton/` with source-relative
+  paths mirrored from the real codebase.
 - Output is intended to be parseable Rust-like facade source, not type-checking
   source.
 - Trait impl blocks are not reconstructed in v1.
@@ -618,7 +679,7 @@ Implementation steps:
 
 2. Add parse checks:
 
-   - Use `ra_ap_syntax::SourceFile::parse` on generated crate file text.
+   - Use `ra_ap_syntax::SourceFile::parse` on every generated mirrored file.
    - Assert no parse errors for a fixture/simple self-snapshot.
 
 3. Add diagnostics checks:
@@ -630,8 +691,9 @@ Implementation steps:
 4. Manual smoke:
 
    - Build current workspace snapshot.
-   - Run `crate_skeleton` into a temp output dir.
-   - Inspect `rmc_graph.rs` and `rmc_server.rs`.
+   - Run `crate_skeleton`.
+   - Inspect `.skeleton/crates/rmc-graph/src/graph/model.rs` and
+     `.skeleton/crates/rmc-server/src/tools/router.rs`.
 
 Validation:
 
@@ -646,41 +708,35 @@ nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib s
 nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib crate_skeleton
 ```
 
-## Phase 6: Optional Module Granularity
+## Phase 6: Optional Skeleton Manifest
 
-Do this only after crate-level output is useful.
+Do this only after the mirrored `.skeleton/` tree is useful.
 
 Goal:
 
 ```text
-<output_dir>/
-  rmc_graph/
-    lib.rs
-    graph/
-      model.rs
-      query/
-        modules.rs
+.skeleton/
+  manifest.json
+  crates/
+    rmc-graph/
+      src/
+        graph/
+          model.rs
 ```
 
 Implementation notes:
 
-- Bucket rendered direct module items by `Node.file`.
-- Inline modules stay in the parent file because they share the parent file.
-- File modules get `mod child;` declarations in the parent output file.
-- Visibility still comes from declared bindings.
-- Reuse the same source stripping and filtering logic.
-
-Extra params:
-
-```rust
-pub granularity: Option<String>, // "crate" default, "module" later
-```
+- `manifest.json` records snapshot id, generation time, filters, source root,
+  file count, item count, and diagnostics.
+- Keep the MCP response shape as the authoritative immediate result; the
+  manifest is for humans and later tools that read `.skeleton/` directly.
+- Do not add non-Rust source copies.
 
 Validation:
 
-- Generated files parse individually.
-- File count roughly matches source module file count, excluding test-only
-  modules and pruned empty modules.
+- Manifest paths match the generated file list.
+- Re-running with identical snapshot/options produces stable generated Rust
+  file bytes; only manifest generation timestamp is allowed to differ.
 
 ## Phase 7: Optional Pure-Snapshot Metadata
 
@@ -773,7 +829,7 @@ Do not mix this schema bump into the first MCP landing.
 2. `rmc-graph`: source-slice stripping renderer.
 3. `rmc-server`: MCP endpoint + file writing.
 4. Docs/tests polish.
-5. Optional module granularity.
+5. Optional `.skeleton/manifest.json`.
 6. Optional schema v13 metadata.
 
 Each PR should end with the relevant nix-wrapped `cargo check` command. Never
