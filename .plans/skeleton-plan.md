@@ -33,6 +33,25 @@ refactored workspace. The current codebase is split into `rmc-graph` and
     and
     `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib overlap_scope_filters_examples_and_vendor`.
 
+- 2026-05-26 Phase 2 complete:
+  - Ran `jj show --summary` before phase work.
+  - Added `skeleton::source::SourceCache`, keyed by workspace-relative
+    `Node.file`, reading from `snap.manifest.workspace_root`.
+  - Replaced comment-only skeleton output with source-sliced declarations:
+    function bodies become `{ /* ... */ }`, const/static initializers become
+    `todo!()`, and trait default method bodies are stripped in place.
+  - Re-emits item attrs/docs from `Node.attributes` according to
+    `include_attrs` and `include_docs`.
+  - Added conservative source lookup and fallback diagnostics for unreadable
+    sources or stale spans.
+  - Added synthetic inherent impl facades only for associated children whose
+    retained parent is a struct, enum, or union; trait associated children are
+    not duplicated.
+  - Validated with
+    `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph --lib`.
+  - Validated focused tests with
+    `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton`.
+
 ## Goal
 
 Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree

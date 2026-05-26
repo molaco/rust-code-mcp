@@ -64,6 +64,7 @@ pub(super) struct CollectedSkeleton {
 pub(super) struct SkeletonItem {
     pub id: NodeId,
     pub node: Node,
+    pub parent: Option<Node>,
     pub visibility: Option<String>,
 }
 

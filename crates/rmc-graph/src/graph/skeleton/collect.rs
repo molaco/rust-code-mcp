@@ -271,6 +271,7 @@ fn retain_item(
     Some(SkeletonItem {
         id,
         node: node.clone(),
+        parent: None,
         visibility: item_visibility,
     })
 }
@@ -296,7 +297,8 @@ fn collect_inherent_assoc_items(
         ) {
             continue;
         }
-        if let Some(item) = retain_item(*id, node, visibility, include, opts) {
+        if let Some(mut item) = retain_item(*id, node, visibility, include, opts) {
+            item.parent = nodes.get(&parent_id).cloned();
             retained_items.insert(*id, item);
         }
     }

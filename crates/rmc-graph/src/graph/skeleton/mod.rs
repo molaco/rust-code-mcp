@@ -6,6 +6,7 @@
 mod collect;
 mod model;
 mod render;
+mod source;
 
 pub use model::{
     SkeletonDiagnostic, SkeletonFile, SkeletonOptions, SkeletonOutput,
@@ -20,6 +21,5 @@ pub fn render_crate_skeletons(
     opts: &SkeletonOptions,
 ) -> Result<SkeletonOutput> {
     let collected = collect::collect_skeleton(snap, opts)?;
-    render::render_stub_skeleton(snap, opts, collected)
+    render::render_source_skeleton(snap, opts, collected)
 }
-
