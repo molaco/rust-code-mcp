@@ -52,6 +52,23 @@ refactored workspace. The current codebase is split into `rmc-graph` and
   - Validated focused tests with
     `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton`.
 
+- 2026-05-26 Phase 3 complete:
+  - Ran `jj show --summary` before phase work.
+  - Added `CrateSkeletonParams`, the `tools::graph::skeleton` endpoint module,
+    and the `crate_skeleton` router method.
+  - Implemented workspace-root `.skeleton/` writing with exact generated-dir
+    cleanup, safe relative path validation, parent directory creation, and
+    one output file per graph `SkeletonFile`.
+  - Wrapped snapshot rendering and file IO in `tokio::task::spawn_blocking`.
+  - Added paginated `files_written` summaries; `summary=true` now returns
+    totals and page metadata without per-file summaries.
+  - Added endpoint coverage for writing, clean behavior, sibling
+    `.skeleton-backup` preservation, pagination, and summary mode.
+  - Validated with
+    `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib`.
+  - Validated focused tests with
+    `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib crate_skeleton`.
+
 ## Goal
 
 Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree

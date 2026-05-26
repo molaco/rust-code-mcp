@@ -541,6 +541,16 @@ impl SearchToolRouter {
     }
 
     #[tool(
+        description = "Write a stripped Rust skeleton tree under `<directory>/.skeleton/`, mirroring the workspace source layout. Uses the persisted hypergraph snapshot to select local crate items, slices current source files, strips function bodies and value initializers, and writes parseable facade files for codebase context. Requires build_hypergraph to have created a snapshot first."
+    )]
+    async fn crate_skeleton(
+        &self,
+        Parameters(params): Parameters<crate::tools::params::CrateSkeletonParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph::skeleton::crate_skeleton(params).await
+    }
+
+    #[tool(
         description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio. In `visibility`, `module_private` is the canonical bucket for declarations visible only inside their declaring module; `pub_self` and `private` are retained compatibility aliases/legacy buckets and are explained in `visibility_notes`; `restricted_to` is for broader module-subtree restrictions such as `pub(super)` / `pub(in path)`."
     )]
     async fn workspace_stats(

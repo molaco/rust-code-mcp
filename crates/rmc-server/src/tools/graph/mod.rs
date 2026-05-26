@@ -12,6 +12,7 @@ pub(super) mod codemap;
 pub(super) mod core;
 pub(super) mod crates;
 pub(super) mod response;
+pub(super) mod skeleton;
 pub(super) mod similarity;
 pub(super) mod surface;
 

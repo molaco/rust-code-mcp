@@ -420,3 +420,35 @@ pub(crate) struct BuildCodemapParams {
     #[serde(default)]
     pub include_snippets: Option<bool>,
 }
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub(crate) struct CrateSkeletonParams {
+    #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
+    pub directory: String,
+    #[schemars(description = "Optional local crate names to render. Default: all selected local lib/bin crates.")]
+    #[serde(default)]
+    pub crates: Option<Vec<String>>,
+    #[schemars(description = "Visibility buckets to include: `pub`, `pub(crate)`, `restricted`, `private`, or `all`. Default: `pub`, `pub(crate)`.")]
+    #[serde(default)]
+    pub include: Option<Vec<String>>,
+    #[schemars(description = "Preserve item doc comments from the graph snapshot. Default true.")]
+    #[serde(default)]
+    pub include_docs: Option<bool>,
+    #[schemars(description = "Preserve item attributes from the graph snapshot. Default true.")]
+    #[serde(default)]
+    pub include_attrs: Option<bool>,
+    #[schemars(description = "Render synthetic inherent impl facades for retained associated items. Default true.")]
+    #[serde(default)]
+    pub include_impls: Option<bool>,
+    #[schemars(description = "Drop test items by v1 heuristics (`::tests::`, item-level `#[test]`, item-level `#[cfg(test)]`). Default true.")]
+    #[serde(default)]
+    pub skip_test_items: Option<bool>,
+    #[schemars(description = "Exclude vendor crates from local crate selection. Default true.")]
+    #[serde(default)]
+    pub exclude_vendor: Option<bool>,
+    #[schemars(description = "Remove the existing `<directory>/.skeleton` generated tree before writing. Default true.")]
+    #[serde(default)]
+    pub clean: Option<bool>,
+    #[serde(flatten)]
+    pub pagination: ListPaginationParams,
+}
