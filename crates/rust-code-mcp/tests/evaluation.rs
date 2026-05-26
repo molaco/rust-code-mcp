@@ -287,7 +287,12 @@ async fn setup_hybrid_search() -> Result<HybridSearch, Box<dyn std::error::Error
 
     // Create hybrid search
     let hybrid_search = HybridSearch::with_defaults(
-        indexer.embedding_generator_cloned(),
+        indexer.embedding_generator_cloned().map_err(|e| {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })?,
         indexer.vector_store_cloned(),
         Some(indexer.create_bm25_search()
             .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)?),

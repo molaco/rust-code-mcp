@@ -57,11 +57,23 @@ pub(super) fn get_snapshot_path_for_identity(indexing_identity: &str) -> PathBuf
 
 /// Incremental indexer that uses Merkle tree for change detection
 pub struct IncrementalIndexer {
-    indexer: UnifiedIndexer,
+    config: IncrementalIndexerConfig,
+    indexer: Option<UnifiedIndexer>,
+}
+
+#[derive(Clone)]
+struct IncrementalIndexerConfig {
+    cache_path: PathBuf,
+    tantivy_path: PathBuf,
+    collection_name: String,
+    vector_size: usize,
+    embedder_identity: String,
+    codebase_loc: Option<usize>,
+    backend: EmbeddingBackend,
 }
 
 impl IncrementalIndexer {
-    /// Create a new incremental indexer with embedded LanceDB backend.
+    /// Create a new incremental indexer configured for an embedded LanceDB backend.
     ///
     /// `embedder_identity` is the stable string returned by the active
     /// `EmbeddingBackend::identity()`; it is written to the vector
@@ -89,9 +101,9 @@ impl IncrementalIndexer {
     /// Create a new incremental indexer with an explicit embedding
     /// backend.
     ///
-    /// Threaded down to `UnifiedIndexer::for_embedded_with_backend` so
-    /// the embedding generator inside agrees with the identity written
-    /// to the vector store's `metadata.json`.
+    /// Stored until `UnifiedIndexer::for_embedded_with_backend` is needed so
+    /// no-change Merkle checks can return without opening the vector store
+    /// or constructing the embedding generator.
     pub async fn with_backend(
         cache_path: &Path,
         tantivy_path: &Path,
@@ -101,18 +113,37 @@ impl IncrementalIndexer {
         codebase_loc: Option<usize>,
         backend: EmbeddingBackend,
     ) -> Result<Self> {
-        let indexer = UnifiedIndexer::for_embedded_with_backend(
-            cache_path,
-            tantivy_path,
-            collection_name,
-            vector_size,
-            embedder_identity,
-            codebase_loc,
-            backend,
-        )
-        .await?;
+        Ok(Self {
+            config: IncrementalIndexerConfig {
+                cache_path: cache_path.to_path_buf(),
+                tantivy_path: tantivy_path.to_path_buf(),
+                collection_name: collection_name.to_string(),
+                vector_size,
+                embedder_identity: embedder_identity.to_string(),
+                codebase_loc,
+                backend,
+            },
+            indexer: None,
+        })
+    }
 
-        Ok(Self { indexer })
+    async fn ensure_indexer(&mut self) -> Result<&mut UnifiedIndexer> {
+        if self.indexer.is_none() {
+            let config = self.config.clone();
+            let indexer = UnifiedIndexer::for_embedded_with_backend(
+                &config.cache_path,
+                &config.tantivy_path,
+                &config.collection_name,
+                config.vector_size,
+                &config.embedder_identity,
+                config.codebase_loc,
+                config.backend,
+            )
+            .await?;
+            self.indexer = Some(indexer);
+        }
+
+        Ok(self.indexer.as_mut().expect("indexer initialized above"))
     }
 
     /// Index codebase with automatic change detection
@@ -133,7 +164,7 @@ impl IncrementalIndexer {
             codebase_path.display()
         );
 
-        let snapshot_path = get_snapshot_path_for_backend(codebase_path, self.indexer.backend());
+        let snapshot_path = get_snapshot_path_for_backend(codebase_path, &self.config.backend);
         tracing::debug!("Snapshot path: {}", snapshot_path.display());
 
         // Step 1: Load previous snapshot (if exists)
@@ -165,7 +196,10 @@ impl IncrementalIndexer {
         } else {
             // First time: full index with parallel processing
             tracing::info!("Performing full index (first time) with parallel processing");
-            self.indexer.index_directory_parallel(codebase_path).await?
+            self.ensure_indexer()
+                .await?
+                .index_directory_parallel(codebase_path)
+                .await?
         };
 
         // Step 4: Save new snapshot for next time
@@ -227,11 +261,12 @@ impl IncrementalIndexer {
         changes: ChangeSet,
     ) -> Result<IndexStats> {
         let mut stats = IndexStats::default();
+        let indexer = self.ensure_indexer().await?;
 
         // Handle deletions
         for deleted_path in &changes.deleted {
             tracing::info!("Deleting chunks for removed file: {}", deleted_path.display());
-            self.indexer.delete_file_chunks(deleted_path).await?;
+            indexer.delete_file_chunks(deleted_path).await?;
             stats.skipped_files += 1;
         }
 
@@ -239,9 +274,9 @@ impl IncrementalIndexer {
         for modified_path in &changes.modified {
             tracing::info!("Reindexing modified file: {}", modified_path.display());
             // Delete old chunks first
-            self.indexer.delete_file_chunks(modified_path).await?;
+            indexer.delete_file_chunks(modified_path).await?;
 
-            match self.indexer.index_file(modified_path).await {
+            match indexer.index_file(modified_path).await {
                 Ok(IndexFileResult::Indexed { chunks_count }) => {
                     stats.indexed_files += 1;
                     stats.total_chunks += chunks_count;
@@ -258,7 +293,7 @@ impl IncrementalIndexer {
         for added_path in &changes.added {
             tracing::info!("Indexing new file: {}", added_path.display());
 
-            match self.indexer.index_file(added_path).await {
+            match indexer.index_file(added_path).await {
                 Ok(IndexFileResult::Indexed { chunks_count }) => {
                     stats.indexed_files += 1;
                     stats.total_chunks += chunks_count;
@@ -272,7 +307,7 @@ impl IncrementalIndexer {
         }
 
         // Commit changes to Tantivy
-        self.indexer.commit()?;
+        indexer.commit()?;
 
         tracing::info!(
             "✓ Incremental update complete: {} files indexed, {} chunks",
@@ -284,13 +319,15 @@ impl IncrementalIndexer {
     }
 
     /// Get access to underlying indexer for other operations
-    pub fn indexer(&self) -> &UnifiedIndexer {
-        &self.indexer
+    pub fn indexer(&self) -> Result<&UnifiedIndexer> {
+        self.indexer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("UnifiedIndexer has not been initialized yet"))
     }
 
-    /// Get mutable access to underlying indexer
-    pub fn indexer_mut(&mut self) -> &mut UnifiedIndexer {
-        &mut self.indexer
+    /// Get mutable access to underlying indexer, initializing it if needed.
+    pub async fn indexer_mut(&mut self) -> Result<&mut UnifiedIndexer> {
+        self.ensure_indexer().await
     }
 
     /// Clear all indexed data (metadata cache, Tantivy, and vector store)
@@ -299,7 +336,7 @@ impl IncrementalIndexer {
     /// Note: This does NOT delete the Merkle snapshot - that should be handled separately
     /// by the caller (e.g., in index_tool.rs) before calling index_with_change_detection.
     pub async fn clear_all_data(&mut self) -> Result<()> {
-        self.indexer.clear_all_data().await
+        self.ensure_indexer().await?.clear_all_data().await
     }
 }
 
@@ -340,6 +377,55 @@ mod tests {
             get_snapshot_path_for_identity(&first),
             get_snapshot_path_for_identity(&second)
         );
+    }
+
+    #[tokio::test]
+    async fn no_changes_detection_skips_unified_indexer_initialization() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_codebase = temp_dir.path().join("codebase");
+        std::fs::create_dir(&test_codebase).unwrap();
+        std::fs::write(
+            test_codebase.join("test.rs"),
+            "fn main() { println!(\"hello\"); }",
+        )
+        .unwrap();
+
+        let backend = EmbeddingBackend::default();
+        let snapshot_path = get_snapshot_path_for_backend(&test_codebase, &backend);
+        let _ = std::fs::remove_file(&snapshot_path);
+        FileSystemMerkle::from_directory(&test_codebase)
+            .unwrap()
+            .save_snapshot(&snapshot_path)
+            .unwrap();
+
+        let blocked_parent = temp_dir.path().join("not_a_directory");
+        std::fs::write(&blocked_parent, "file, not directory").unwrap();
+        let cache_path = blocked_parent.join("cache");
+        let tantivy_path = blocked_parent.join("tantivy");
+
+        let mut indexer = IncrementalIndexer::with_backend(
+            &cache_path,
+            &tantivy_path,
+            "no_change_lazy_init",
+            0,
+            "invalid-identity-used-only-if-vector-store-initializes",
+            None,
+            backend,
+        )
+        .await
+        .unwrap();
+
+        let stats = indexer
+            .index_with_change_detection(&test_codebase)
+            .await
+            .unwrap();
+
+        assert_eq!(stats.total_files, 1);
+        assert_eq!(stats.unchanged_files, 1);
+        assert_eq!(stats.indexed_files, 0);
+        assert!(indexer.indexer().is_err());
+
+        let _ = std::fs::remove_file(snapshot_path);
     }
 
     #[tokio::test]

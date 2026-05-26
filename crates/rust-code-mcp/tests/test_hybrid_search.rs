@@ -58,7 +58,9 @@ async fn test_manual_hybrid_search() {
         .create_bm25_search()
         .expect("Failed to create BM25 search");
     let hybrid_search = HybridSearch::with_defaults(
-        indexer.embedding_generator_cloned(),
+        indexer
+            .embedding_generator_cloned()
+            .expect("Failed to initialize embedding generator"),
         indexer.vector_store_cloned(),
         Some(bm25_search),
     );

@@ -258,7 +258,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  Indexer init: {:.2}s", init_time.as_secs_f64());
 
         // Also clear the metadata cache to ensure all files are processed
-        indexer.indexer_mut().clear_all_data().await.expect("Failed to clear data");
+        indexer
+            .indexer_mut()
+            .await
+            .expect("Failed to initialize indexer")
+            .clear_all_data()
+            .await
+            .expect("Failed to clear data");
 
         let index_start = Instant::now();
         let stats = indexer.index_with_change_detection(&dir).await

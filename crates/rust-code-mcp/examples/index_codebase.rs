@@ -55,12 +55,17 @@ async fn main() -> Result<()> {
 
     let stats = indexer
         .indexer_mut()
+        .await
+        .context("Failed to initialize indexer")?
         .index_directory_parallel(&codebase)
         .await
         .context("Indexing failed")?;
 
     let duration = start.elapsed();
-    let metrics = indexer.indexer().metrics();
+    let metrics = indexer
+        .indexer()
+        .context("Indexer was not initialized")?
+        .metrics();
     let measured_duration = if metrics.total_duration.is_zero() {
         duration
     } else {

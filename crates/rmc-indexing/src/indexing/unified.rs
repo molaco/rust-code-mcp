@@ -232,11 +232,11 @@ impl UnifiedIndexer {
         let file_duration = file_start.elapsed();
         self.metrics.file_latencies.push(file_duration);
 
-        self.core.refresh_memory_monitor();
+        self.core.refresh_memory_monitor()?;
         self.metrics.peak_memory_bytes = self
             .metrics
             .peak_memory_bytes
-            .max(self.core.memory_used_bytes());
+            .max(self.core.memory_used_bytes()?);
 
         tracing::info!(
             "✓ Indexed {} chunks from {} in {:?}",
@@ -351,7 +351,7 @@ impl UnifiedIndexer {
         tracing::info!("Found {} Rust files, processing in parallel", rust_files.len());
 
         // Calculate safe batch size
-        let batch_size = self.core.calculate_safe_batch_size();
+        let batch_size = self.core.calculate_safe_batch_size()?;
         tracing::info!("Using batch size: {}", batch_size);
 
         // Process in batches
@@ -364,7 +364,7 @@ impl UnifiedIndexer {
             );
 
             // Check memory before batch
-            let memory_usage = self.core.memory_usage_percent();
+            let memory_usage = self.core.memory_usage_percent()?;
             if memory_usage > 85.0 {
                 tracing::warn!(
                     "High memory usage ({:.1}%), pausing to allow GC",
@@ -457,8 +457,10 @@ impl UnifiedIndexer {
     }
 
     /// Get cloned embedding generator for searching
-    pub fn embedding_generator_cloned(&self) -> EmbeddingGenerator {
-        self.core.embedding_generator().clone()
+    pub fn embedding_generator_cloned(&self) -> Result<EmbeddingGenerator> {
+        self.core
+            .embedding_generator_cloned()
+            .map_err(|e| anyhow::anyhow!("Failed to initialize embedding generator: {}", e))
     }
 
     /// Get access to the Tantivy schema

@@ -12,6 +12,9 @@ Progress:
 - Phase 2 completed on 2026-05-26. Skeleton collect/render unit tests now use a
   synthetic temp Cargo package instead of loading the real `rmc-graph`
   workspace through rust-analyzer.
+- Phase 3 completed on 2026-05-26. Incremental no-change detection now runs the
+  Merkle fast path before constructing `UnifiedIndexer`, `VectorStore`, or
+  embedding/model resources.
 
 This plan addresses the stuck D-state process class observed while agents run
 MCP tools and focused Rust tests. The latest live incident was:
@@ -263,6 +266,39 @@ entire repository.
 
 Goal: background sync and incremental indexing should not touch CUDA when there
 are no changed files.
+
+Status: completed on 2026-05-26.
+
+Completed implementation:
+
+- `IndexerCore` now stores embedding backend/configuration and lazily constructs
+  `EmbeddingBatcher` only when embedding, memory, or cloned-generator access is
+  requested.
+- `IndexerCore::process_file_sync` no longer requires tokenizer/model
+  initialization for chunk splitting; it uses the cheap estimate path until
+  embedding work is actually needed.
+- `IncrementalIndexer::new` and `IncrementalIndexer::with_backend` now store a
+  preflight configuration instead of immediately constructing `UnifiedIndexer`.
+- `IncrementalIndexer::index_with_change_detection` loads/builds/compares
+  Merkle snapshots before calling the lazy `ensure_indexer` path.
+- Added a no-change regression test that pre-saves a matching Merkle snapshot
+  and passes invalid index/vector paths that would fail if `UnifiedIndexer` or
+  LanceDB were initialized.
+- Updated examples and integration-style tests that explicitly access the
+  underlying indexer/generator to use the now-fallible lazy accessors.
+
+Validation performed:
+
+```bash
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-indexing --lib no_changes_detection
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-indexing --lib
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib
+nix develop ../nix-devshells#cuda-code --command cargo check -p rust-code-mcp --example quick_bench --example benchmark_phases --example index_codebase --test benchmark_gpu_performance --test test_hybrid_search --test evaluation
+```
+
+The no-change test passed without initializing the underlying `UnifiedIndexer`.
+The manual `nvidia-smi` runtime check remains an operational check for a real
+sync run; it was not needed for the unit-level gate.
 
 Current problem:
 

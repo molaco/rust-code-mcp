@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔥 Warming up GPU (loading model into VRAM)...");
     let warmup_file = codebase_path.join("src/embeddings/mod.rs");
     if warmup_file.exists() {
-        let _ = indexer.indexer_mut().index_file(&warmup_file).await;
+        let _ = indexer.indexer_mut().await?.index_file(&warmup_file).await;
     }
     println!("   Warmup complete\n");
 
@@ -48,7 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🚀 Starting full codebase indexing with GPU...\n");
     let start = Instant::now();
-    let stats = indexer.indexer_mut().index_directory_parallel(&codebase_path).await?;
+    let stats = indexer
+        .indexer_mut()
+        .await?
+        .index_directory_parallel(&codebase_path)
+        .await?;
     let duration = start.elapsed();
 
     println!("\n{}", "=".repeat(60));

@@ -40,6 +40,7 @@ use crate::indexing::IndexingError;
 use crate::metadata_cache::MetadataCache;
 use rmc_engine::parser::RustParser;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Result of processing a single file
@@ -63,8 +64,14 @@ pub(crate) struct IndexerCore {
     chunker: Chunker,
     /// Token limits for oversized chunk splitting
     chunk_split_config: ChunkSplitConfig,
+    /// Active embedding backend configuration
+    embedding_backend: EmbeddingBackend,
+    /// GPU batch size for embedding generation
+    gpu_batch_size: usize,
+    /// Padded token budget for embedding generation
+    max_tokens_per_batch: usize,
     /// Batch embedding generation and memory monitoring
-    embedding_batcher: EmbeddingBatcher,
+    embedding_batcher: Mutex<Option<Arc<EmbeddingBatcher>>>,
 }
 
 impl IndexerCore {
@@ -94,19 +101,37 @@ impl IndexerCore {
             config.chunking_cache_salt(),
         )?;
         let chunker = Chunker::new();
-        let embedding_generator = EmbeddingGenerator::with_backend(backend)?;
-        let embedding_batcher = EmbeddingBatcher::new(
-            embedding_generator,
-            config.gpu_batch_size,
-            config.max_tokens_per_batch,
-        );
 
         Ok(Self {
             file_processor,
             chunker,
             chunk_split_config,
-            embedding_batcher,
+            embedding_backend: backend,
+            gpu_batch_size: config.gpu_batch_size,
+            max_tokens_per_batch: config.max_tokens_per_batch,
+            embedding_batcher: Mutex::new(None),
         })
+    }
+
+    fn embedding_batcher(&self) -> Result<Arc<EmbeddingBatcher>, IndexingError> {
+        let mut guard = self
+            .embedding_batcher
+            .lock()
+            .map_err(|_| IndexingError::Cache("Embedding batcher lock poisoned".into()))?;
+
+        if let Some(batcher) = guard.as_ref() {
+            return Ok(Arc::clone(batcher));
+        }
+
+        let embedding_generator =
+            EmbeddingGenerator::with_backend(self.embedding_backend.clone())?;
+        let batcher = Arc::new(EmbeddingBatcher::new(
+            embedding_generator,
+            self.gpu_batch_size,
+            self.max_tokens_per_batch,
+        ));
+        *guard = Some(Arc::clone(&batcher));
+        Ok(batcher)
     }
 
     // --- File processing delegation (FileProcessor) ---
@@ -184,7 +209,7 @@ impl IndexerCore {
         let chunks = self.chunker.split_oversized_chunks(
             chunks,
             self.chunk_split_config,
-            |chunk| self.embedding_batcher.count_chunk_raw_tokens(chunk),
+            |_| None,
         );
 
         if chunks.is_empty() {
@@ -211,34 +236,35 @@ impl IndexerCore {
         &self,
         chunks: &[CodeChunk],
     ) -> Result<Vec<Embedding>, IndexingError> {
-        self.embedding_batcher
+        self.embedding_batcher()?
             .generate_embeddings_batched(chunks)
             .await
     }
 
     /// Calculate safe batch size for parallel processing based on available memory
-    pub(crate) fn calculate_safe_batch_size(&self) -> usize {
-        self.embedding_batcher.calculate_safe_batch_size()
+    pub(crate) fn calculate_safe_batch_size(&self) -> Result<usize, IndexingError> {
+        Ok(self.embedding_batcher()?.calculate_safe_batch_size())
     }
 
     /// Get current memory usage percentage
-    pub(crate) fn memory_usage_percent(&self) -> f64 {
-        self.embedding_batcher.memory_usage_percent()
+    pub(crate) fn memory_usage_percent(&self) -> Result<f64, IndexingError> {
+        Ok(self.embedding_batcher()?.memory_usage_percent())
     }
 
     /// Refresh memory monitor
-    pub(crate) fn refresh_memory_monitor(&self) {
-        self.embedding_batcher.refresh_memory_monitor()
+    pub(crate) fn refresh_memory_monitor(&self) -> Result<(), IndexingError> {
+        self.embedding_batcher()?.refresh_memory_monitor();
+        Ok(())
     }
 
     /// Get current memory used in bytes
-    pub(crate) fn memory_used_bytes(&self) -> u64 {
-        self.embedding_batcher.memory_used_bytes()
+    pub(crate) fn memory_used_bytes(&self) -> Result<u64, IndexingError> {
+        Ok(self.embedding_batcher()?.memory_used_bytes())
     }
 
-    /// Get reference to embedding generator for cloning
-    pub(crate) fn embedding_generator(&self) -> &EmbeddingGenerator {
-        self.embedding_batcher.embedding_generator()
+    /// Get a cloned embedding generator
+    pub(crate) fn embedding_generator_cloned(&self) -> Result<EmbeddingGenerator, IndexingError> {
+        Ok(self.embedding_batcher()?.embedding_generator().clone())
     }
 }
 
@@ -283,16 +309,16 @@ mod tests {
     fn test_should_process_file_without_embedding_generator() {
         let temp_dir = TempDir::new().unwrap();
         let cache_path = temp_dir.path().join("cache");
-        let file_processor = FileProcessor::with_cache_key_salt(
+        let core = IndexerCore::with_backend(
             &cache_path,
-            IndexerCoreConfig::default().max_file_size,
-            IndexerCoreConfig::default().chunking_cache_salt(),
+            None,
+            EmbeddingBackend::default(),
         )
         .unwrap();
         let test_file = temp_dir.path().join("test.rs");
         std::fs::write(&test_file, "fn test() {}").unwrap();
 
-        let should_process = file_processor.should_process_file(&test_file);
+        let should_process = core.should_process_file(&test_file);
         assert!(should_process.is_ok());
         assert!(should_process.unwrap());
     }

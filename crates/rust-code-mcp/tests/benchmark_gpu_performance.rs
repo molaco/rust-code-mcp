@@ -106,7 +106,7 @@ async fn benchmark_gpu_performance() -> Result<()> {
     let warmup_start = Instant::now();
     let warmup_file = config.codebase_path.join("src/embeddings/mod.rs");
     if warmup_file.exists() {
-        let _ = indexer.indexer_mut().index_file(&warmup_file).await;
+        let _ = indexer.indexer_mut().await?.index_file(&warmup_file).await;
     }
     println!("   Warmup complete in {:.2}s\n", warmup_start.elapsed().as_secs_f64());
 
@@ -118,7 +118,11 @@ async fn benchmark_gpu_performance() -> Result<()> {
     println!("   (Using parallel indexing with GPU batching)\n");
 
     let benchmark_start = Instant::now();
-    let stats = indexer.indexer_mut().index_directory_parallel(&config.codebase_path).await?;
+    let stats = indexer
+        .indexer_mut()
+        .await?
+        .index_directory_parallel(&config.codebase_path)
+        .await?;
     let benchmark_duration = benchmark_start.elapsed();
 
     // Calculate and display results
@@ -198,7 +202,11 @@ async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
     .await?;
 
     let seq_start = Instant::now();
-    let seq_stats = indexer_seq.indexer_mut().index_directory(&codebase_path).await?;
+    let seq_stats = indexer_seq
+        .indexer_mut()
+        .await?
+        .index_directory(&codebase_path)
+        .await?;
     let seq_duration = seq_start.elapsed();
 
     let seq_results = BenchmarkResults::from_stats(seq_stats, seq_duration);
@@ -223,7 +231,11 @@ async fn benchmark_compare_sequential_vs_parallel() -> Result<()> {
     .await?;
 
     let par_start = Instant::now();
-    let par_stats = indexer_par.indexer_mut().index_directory_parallel(&codebase_path).await?;
+    let par_stats = indexer_par
+        .indexer_mut()
+        .await?
+        .index_directory_parallel(&codebase_path)
+        .await?;
     let par_duration = par_start.elapsed();
 
     let par_results = BenchmarkResults::from_stats(par_stats, par_duration);
@@ -275,7 +287,11 @@ async fn benchmark_memory_usage() -> Result<()> {
 
     // Run indexing
     let start = Instant::now();
-    let stats = indexer.indexer_mut().index_directory_parallel(&codebase_path).await?;
+    let stats = indexer
+        .indexer_mut()
+        .await?
+        .index_directory_parallel(&codebase_path)
+        .await?;
     let duration = start.elapsed();
 
     // Monitor memory after indexing
