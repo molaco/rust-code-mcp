@@ -15,6 +15,7 @@ use super::model::{
     CommonFnName, ModuleShadow, OverlapScope, OverlapsReport, TypeCollision, TypeLocation,
     WithinCrateDuplicate,
 };
+use super::shared::crate_scope_allows;
 
 impl OpenedSnapshot {
     /// Single-pass over `nodes_by_id`. Detects cross-crate type collisions,
@@ -55,7 +56,7 @@ impl OpenedSnapshot {
             .keys()
             .copied()
             .filter(|crate_id| {
-                overlap_scope_allows_crate(
+                crate_scope_allows(
                     scope,
                     *crate_id,
                     &crate_target_kind_for,
@@ -213,28 +214,10 @@ impl OpenedSnapshot {
     }
 }
 
-fn overlap_scope_allows_crate(
-    scope: OverlapScope,
-    crate_id: NodeId,
-    crate_target_kind_for: &HashMap<NodeId, String>,
-    vendor_crates: &HashSet<NodeId>,
-) -> bool {
-    match scope {
-        OverlapScope::All => true,
-        OverlapScope::Local | OverlapScope::LocalNoVendor => {
-            let target_kind = crate_target_kind_for
-                .get(&crate_id)
-                .map(String::as_str)
-                .unwrap_or("lib");
-            let local_target = matches!(target_kind, "lib" | "bin");
-            local_target && (scope == OverlapScope::Local || !vendor_crates.contains(&crate_id))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::shared::crate_scope_allows;
 
     #[test]
     fn overlap_scope_filters_examples_and_vendor() {
@@ -247,31 +230,31 @@ mod tests {
         target_kinds.insert(vendor_crate, "lib".to_string());
         let vendor_crates = HashSet::from([vendor_crate]);
 
-        assert!(overlap_scope_allows_crate(
+        assert!(crate_scope_allows(
             OverlapScope::All,
             example_crate,
             &target_kinds,
             &vendor_crates,
         ));
-        assert!(overlap_scope_allows_crate(
+        assert!(crate_scope_allows(
             OverlapScope::Local,
             vendor_crate,
             &target_kinds,
             &vendor_crates,
         ));
-        assert!(!overlap_scope_allows_crate(
+        assert!(!crate_scope_allows(
             OverlapScope::Local,
             example_crate,
             &target_kinds,
             &vendor_crates,
         ));
-        assert!(!overlap_scope_allows_crate(
+        assert!(!crate_scope_allows(
             OverlapScope::LocalNoVendor,
             vendor_crate,
             &target_kinds,
             &vendor_crates,
         ));
-        assert!(overlap_scope_allows_crate(
+        assert!(crate_scope_allows(
             OverlapScope::LocalNoVendor,
             lib_crate,
             &target_kinds,

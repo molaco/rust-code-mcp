@@ -1,6 +1,7 @@
 /target
 /.TRASH
 /storage
+/.skeleton/
 /.fastembed_cache/
 /.tantivy_bench/
 .mcp.json

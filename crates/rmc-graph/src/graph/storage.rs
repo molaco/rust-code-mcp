@@ -206,21 +206,25 @@ pub fn default_data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp").join("graphs"))
 }
 
+pub(in crate::graph) fn is_source_walk_excluded(path: &Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str() == "target"
+            || c.as_os_str() == ".git"
+            || c.as_os_str() == ".skeleton"
+    })
+}
+
 /// Hash inputs that determine whether a snapshot is still current.
 /// For v1: Cargo.toml + Cargo.lock + every `.rs` file under the workspace,
-/// excluding `target/`. Kept simple — change detection is a rebuild trigger,
-/// nothing more.
+/// excluding generated/tooling directories. Kept simple — change detection is
+/// a rebuild trigger, nothing more.
 pub(crate) fn compute_fingerprint(workspace_root: &Path) -> Result<String> {
     let mut entries: Vec<(String, [u8; 32])> = Vec::new();
 
     for entry in WalkDir::new(workspace_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| {
-            !e.path()
-                .components()
-                .any(|c| c.as_os_str() == "target" || c.as_os_str() == ".git")
-        })
+        .filter_entry(|e| !is_source_walk_excluded(e.path()))
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
@@ -613,6 +617,24 @@ mod tests {
         assert_eq!(
             before, after,
             ".git/ contents must not affect fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_when_skeleton_dir_grows() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        write_minimal_crate(root);
+        let before = compute_fingerprint(root).unwrap();
+
+        fs::create_dir_all(root.join(".skeleton/src")).unwrap();
+        fs::write(root.join(".skeleton/src/lib.rs"), "pub fn generated() {}\n").unwrap();
+        fs::write(root.join(".skeleton/manifest.json"), "{}\n").unwrap();
+
+        let after = compute_fingerprint(root).unwrap();
+        assert_eq!(
+            before, after,
+            ".skeleton/ contents must not affect fingerprint"
         );
     }
 

@@ -15,6 +15,24 @@ refactored workspace. The current codebase is split into `rmc-graph` and
   - Ran `jj status`; worktree was clean at phase start.
   - No build or formatting commands were run.
 
+- 2026-05-26 Phase 1 complete:
+  - Ran `jj show --summary` before phase work.
+  - Added `.skeleton/` generated-directory hygiene to `.gitignore`,
+    graph fingerprinting, and codemap source freshness scans.
+  - Reused and generalized existing query infrastructure:
+    `declared_visibility_map` now serves both items and modules, and
+    `crate_scope_allows` is shared by overlaps and skeleton collection.
+  - Added `rmc-graph::graph::skeleton` with public graph-facing options,
+    output models, item-file collector, and parseable stub renderer.
+  - Kept v1 item-file only: no module declarations, inline module wrappers,
+    or re-export placement were implemented in this phase.
+  - Validated with
+    `nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-graph --lib`.
+  - Validated focused tests with
+    `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib skeleton`
+    and
+    `nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-graph --lib overlap_scope_filters_examples_and_vendor`.
+
 ## Goal
 
 Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree

@@ -24,6 +24,7 @@ pub mod model;
 mod query;
 mod recursion_check;
 mod signatures;
+mod skeleton;
 pub mod snapshot;
 mod statics;
 mod storage;
@@ -61,6 +62,10 @@ pub use query::model::{
 };
 pub use query::similarity::{
     GraphSimilarityError, SemanticOverlapOptions, run_semantic_overlaps,
+};
+pub use skeleton::{
+    SkeletonDiagnostic, SkeletonFile, SkeletonOptions, SkeletonOutput,
+    render_crate_skeletons,
 };
 pub use snapshot::{
     BuildOptions, GraphSnapshotCleanupEntry, GraphSnapshotCleanupOptions,

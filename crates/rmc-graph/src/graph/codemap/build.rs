@@ -22,6 +22,7 @@ use crate::graph::codemap::seeds::{
 };
 use crate::graph::ids::NodeId;
 use crate::graph::snapshot::OpenedSnapshot;
+use crate::graph::storage::is_source_walk_excluded;
 
 // `min_call_distance` previously walked outgoing callees from a candidate
 // looking for a seed. That direction was wrong: `build_codemap`'s BFS
@@ -582,8 +583,8 @@ fn extract_snippet(
     }
 }
 
-/// Walk `workspace_root` for every `.rs` file (excluding `target/` and
-/// `.git/` — mirroring [`crate::graph::storage::compute_fingerprint`]'s
+/// Walk `workspace_root` for every `.rs` file (excluding generated/tooling
+/// directories — mirroring [`crate::graph::storage::compute_fingerprint`]'s
 /// filter) and return the maximum file `mtime` in seconds since the UNIX
 /// epoch.
 ///
@@ -597,11 +598,7 @@ pub fn newest_source_mtime(workspace_root: &Path) -> Option<u64> {
     for entry in walkdir::WalkDir::new(workspace_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| {
-            !e.path()
-                .components()
-                .any(|c| c.as_os_str() == "target" || c.as_os_str() == ".git")
-        })
+        .filter_entry(|e| !is_source_walk_excluded(e.path()))
         .filter_map(|e| e.ok())
     {
         if !entry.file_type().is_file() {
@@ -757,29 +754,31 @@ mod tests {
     }
 
     #[test]
-    fn newest_source_mtime_skips_target_and_git_dirs() {
+    fn newest_source_mtime_skips_target_git_and_skeleton_dirs() {
         use std::fs;
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         let kept = root.join("src").join("kept.rs");
         let skipped_target = root.join("target").join("skipped.rs");
         let skipped_git = root.join(".git").join("skipped.rs");
-        for p in [&kept, &skipped_target, &skipped_git] {
+        let skipped_skeleton = root.join(".skeleton").join("skipped.rs");
+        for p in [&kept, &skipped_target, &skipped_git, &skipped_skeleton] {
             fs::create_dir_all(p.parent().unwrap()).expect("mkdir");
             fs::write(p, "// rs").expect("write");
         }
 
         // Make the excluded files much newer than kept; the result must
-        // still reflect `kept`'s mtime, proving target/ and .git/ were
+        // still reflect `kept`'s mtime, proving generated/tooling dirs were
         // filtered out.
         stamp_mtime(&kept, 1_000_000);
         stamp_mtime(&skipped_target, 2_000_000);
         stamp_mtime(&skipped_git, 2_000_000);
+        stamp_mtime(&skipped_skeleton, 2_000_000);
 
         let got = newest_source_mtime(root).expect("at least one kept .rs file");
         assert_eq!(
             got, 1_000_000,
-            "target/ and .git/ entries must not count"
+            "target/, .git/, and .skeleton/ entries must not count"
         );
     }
 
