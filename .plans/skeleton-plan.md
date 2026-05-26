@@ -7,6 +7,14 @@ This plan supersedes the single-crate `strip-code-plan.md` shape for this
 refactored workspace. The current codebase is split into `rmc-graph` and
 `rmc-server`, and the implementation should follow that boundary.
 
+## Execution Progress
+
+- 2026-05-26 Phase 0 complete:
+  - Ran `jj show --summary` before phase work.
+  - Re-read `AGENTS.md`; confirmed `cuda-code` nix shell and no-format rule.
+  - Ran `jj status`; worktree was clean at phase start.
+  - No build or formatting commands were run.
+
 ## Goal
 
 Add an MCP tool named `crate_skeleton` that writes a stripped Rust facade tree
