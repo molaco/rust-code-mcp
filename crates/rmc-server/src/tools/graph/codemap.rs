@@ -29,6 +29,7 @@ use crate::tools::graph::response::*;
 pub(crate) async fn handle_build_codemap(
     directory: &str,
     task_prompt: Option<&str>,
+    embedding_profile: Option<&str>,
     seed_qualified_names: Option<&[String]>,
     max_nodes: Option<usize>,
     depth: Option<u8>,
@@ -127,9 +128,13 @@ pub(crate) async fn handle_build_codemap(
         // have errored above).
         let prompt = trimmed_prompt.expect("validated above");
         let dir_path = std::path::Path::new(directory);
+        let backend = crate::mcp::project_paths::resolve_embedding_backend_for_mcp(
+            embedding_profile,
+            dir_path,
+        )?;
         let paths = crate::mcp::project_paths::ProjectPaths::from_directory(
             dir_path,
-            &rmc_engine::embeddings::EmbeddingBackend::default(),
+            &backend,
         );
         // Best-effort BM25 open. If absent we get vector-only hits; that is
         // still a valid seed source.
@@ -138,7 +143,7 @@ pub(crate) async fn handle_build_codemap(
             dir_path,
             &paths,
             bm25,
-            rmc_engine::embeddings::EmbeddingBackend::default(),
+            backend,
             search_cache,
         )
         .await?;

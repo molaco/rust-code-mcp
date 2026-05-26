@@ -91,7 +91,7 @@ pub(crate) async fn similar_to_item(
     })?.to_string();
 
     // 3. Run vector-only search against the index built with the
-    //    requested embedding profile (the default profile when unset).
+    //    requested embedding profile (the automatic CPU profile when unset).
     let backend = resolve_embedding_backend_for_mcp(
         params.embedding_profile.as_deref(),
         Path::new(&params.directory),

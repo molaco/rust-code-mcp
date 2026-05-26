@@ -16,6 +16,9 @@ use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 use tracing;
 
+use rmc_engine::embeddings::EmbeddingBackend;
+
+use super::defaults::{automatic_embedding_profile_name, is_background_embedding_backend};
 use super::workspace_locks::WorkspaceLockRegistry;
 
 fn normalize_directory(dir: &Path) -> PathBuf {
@@ -76,6 +79,26 @@ impl SyncManager {
         if dirs.insert(dir.clone()) {
             tracing::info!("Now tracking directory for sync: {}", dir.display());
         }
+    }
+
+    /// Add a directory to background sync only when the profile is safe for
+    /// automatic work.
+    pub async fn track_directory_for_backend(
+        &self,
+        dir: PathBuf,
+        backend: &EmbeddingBackend,
+    ) -> bool {
+        if !is_background_embedding_backend(backend) {
+            tracing::info!(
+                "Not tracking {} for background sync because profile {} uses local CUDA; explicit foreground commands remain supported",
+                dir.display(),
+                backend.profile.name(),
+            );
+            return false;
+        }
+
+        self.track_directory(dir).await;
+        true
     }
 
     /// Remove a directory from tracking
@@ -151,8 +174,9 @@ impl SyncManager {
     /// periodic sync cycles. An in-flight workspace sync is allowed to finish.
     pub async fn run_until_shutdown(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         tracing::info!(
-            "Starting background sync with {}s interval",
-            self.interval.as_secs()
+            "Starting background sync with {}s interval; automatic/default profile {}; local CUDA profiles are skipped in background sync",
+            self.interval.as_secs(),
+            automatic_embedding_profile_name(),
         );
 
         if *shutdown.borrow() {
@@ -234,6 +258,16 @@ impl SyncManager {
             let backend = indexed.backend;
             let paths = indexed.paths;
             let stored_identity = indexed.stored_identity;
+
+            if !is_background_embedding_backend(&backend) {
+                tracing::info!(
+                    "Skipping background sync for {} profile {} because automatic/background sync only runs CPU or remote embedding profiles; use an explicit indexing command with embedding_profile=\"{}\" for local CUDA updates",
+                    dir.display(),
+                    backend.profile.name(),
+                    backend.profile.name(),
+                );
+                continue;
+            }
 
             let outcome = index_project_incrementally(IncrementalIndexRequest {
                 codebase_path: dir,
@@ -429,5 +463,48 @@ mod tests {
         // Should not panic
         let result = sync_manager.sync_directory_now(&test_codebase).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn background_sync_rejects_local_cuda_profiles() {
+        let gpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-small")
+                .unwrap();
+        let cpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-cpu-small")
+                .unwrap();
+        let remote_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("openrouter-qwen3-8b")
+                .unwrap();
+
+        assert!(!is_background_embedding_backend(&gpu_backend));
+        assert!(is_background_embedding_backend(&cpu_backend));
+        assert!(is_background_embedding_backend(&remote_backend));
+    }
+
+    #[tokio::test]
+    async fn background_sync_tracking_skips_local_cuda_profiles() {
+        let sync_manager = SyncManager::with_defaults(300);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let gpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-small")
+                .unwrap();
+        let cpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-cpu-small")
+                .unwrap();
+
+        assert!(
+            !sync_manager
+                .track_directory_for_backend(temp_dir.path().to_path_buf(), &gpu_backend)
+                .await
+        );
+        assert!(sync_manager.get_tracked_directories().await.is_empty());
+
+        assert!(
+            sync_manager
+                .track_directory_for_backend(temp_dir.path().to_path_buf(), &cpu_backend)
+                .await
+        );
+        assert_eq!(sync_manager.get_tracked_directories().await.len(), 1);
     }
 }

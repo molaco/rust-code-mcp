@@ -40,6 +40,8 @@ mod qwen3;
 mod token_lengths;
 pub use token_lengths::{EmbeddingTextLen, EmbeddingTokenCounter};
 
+pub const CUDA_CAPABLE_FEATURES_COMPILED: bool = cfg!(feature = "embeddings-cuda");
+
 use crate::chunker::{ChunkId, CodeChunk};
 use std::sync::Arc;
 

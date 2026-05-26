@@ -16,6 +16,8 @@ use rmc_indexing::indexing::project_paths::{
 };
 use directories::ProjectDirs;
 
+use super::defaults::automatic_embedding_backend;
+
 /// Derived paths for a project directory
 pub struct ProjectPaths {
     pub dir_hash: String,
@@ -77,7 +79,7 @@ pub(crate) fn resolve_embedding_backend_for_mcp(
         return Ok(EmbeddingBackend::from_profile(profile));
     }
 
-    Ok(EmbeddingBackend::default())
+    Ok(automatic_embedding_backend())
 }
 
 impl ProjectPaths {
@@ -172,6 +174,14 @@ mod tests {
             serde_json::json!({ "embedder_version": identity }).to_string(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn resolve_embedding_backend_defaults_to_automatic_cpu_profile() {
+        let backend = resolve_embedding_backend_for_mcp(None, Path::new(".")).unwrap();
+
+        assert_eq!(backend.profile.name(), "local-cpu-small");
+        assert_eq!(backend.dim(), 384);
     }
 
     #[test]

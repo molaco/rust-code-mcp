@@ -99,7 +99,7 @@ impl SearchToolRouter {
             &directory,
             &keyword,
             embedding_profile.as_deref(),
-            self.runtime.sync_manager(),
+            self.runtime.background_sync_manager(),
             self.runtime.workspace_locks(),
             Some(self.runtime.search_cache()),
         )
@@ -252,7 +252,7 @@ impl SearchToolRouter {
     ) -> Result<CallToolResult, McpError> {
         crate::tools::endpoints::index::index_codebase(
             params,
-            self.runtime.sync_manager(),
+            self.runtime.background_sync_manager(),
             self.runtime.workspace_locks(),
             Some(self.runtime.search_cache()),
         )
@@ -694,7 +694,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source, and builds a similarity graph above `threshold` (defaults to the embedding model's tuned cutoff — 0.85 for the default Qwen3 model), returning either deduplicated pairs (output_mode=\"pairs\") or single-linkage clusters of transitively-similar items (output_mode=\"clusters\", default). Self-matches and cross-test noise are filtered (skip_test_chunks default true). Pagination/output controls: `max_pairs` caps returned pairs in pairs mode or total emitted cluster members in clusters mode, `offset` skips pairs/clusters, and `summary=true` omits per-member file/span payloads. The response carries `total_pair_count` and `total_cluster_count` before pagination. v1.1: per-Item embedding cache + in-memory cosine — first scan pays the full embedding cost; subsequent scans on unchanged code are nearly free (cache lives in the snapshot's LMDB env at the `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears it). Use this for offline duplicate-detection / refactor planning. NOTE: requires `build_hypergraph` to have been called for the workspace; the vector store / `index_codebase` is no longer required for this tool. Latency is seconds-to-minutes on first run, sub-second on cache-warm reruns."
+        description = "Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source, and builds a similarity graph above `threshold` (defaults to the embedding model's tuned cutoff — 0.80 for local-cpu-small, 0.85 for Qwen3 profiles), returning either deduplicated pairs (output_mode=\"pairs\") or single-linkage clusters of transitively-similar items (output_mode=\"clusters\", default). Self-matches and cross-test noise are filtered (skip_test_chunks default true). Pagination/output controls: `max_pairs` caps returned pairs in pairs mode or total emitted cluster members in clusters mode, `offset` skips pairs/clusters, and `summary=true` omits per-member file/span payloads. The response carries `total_pair_count` and `total_cluster_count` before pagination. v1.1: per-Item embedding cache + in-memory cosine — first scan pays the full embedding cost; subsequent scans on unchanged code are nearly free (cache lives in the snapshot's LMDB env at the `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears it). Use this for offline duplicate-detection / refactor planning. NOTE: requires `build_hypergraph` to have been called for the workspace; the vector store / `index_codebase` is no longer required for this tool. Latency is seconds-to-minutes on first run, sub-second on cache-warm reruns."
     )]
     async fn semantic_overlaps(
         &self,
@@ -720,7 +720,8 @@ max_incoming_per_node=8, embedding_policy='no_rerank', format='json'.
 Seed source: pass `task_prompt` for HybridSearch-driven seeds (requires
 `index_codebase` to have populated the vector store / tantivy index), OR
 `seed_qualified_names` for direct lookup. At least one of the two must
-be supplied.
+be supplied. `task_prompt` seed lookup uses embedding_profile when set;
+otherwise it defaults to local-cpu-small.
 
 Choosing between them: `task_prompt` is best for exploratory queries
 against documented APIs; the underlying hybrid search (BM25 + vector
@@ -746,6 +747,7 @@ workspace.")]
         Parameters(crate::tools::params::BuildCodemapParams {
             directory,
             task_prompt,
+            embedding_profile,
             seed_qualified_names,
             max_nodes,
             depth,
@@ -758,6 +760,7 @@ workspace.")]
         crate::tools::graph::codemap::handle_build_codemap(
             &directory,
             task_prompt.as_deref(),
+            embedding_profile.as_deref(),
             seed_qualified_names.as_deref(),
             max_nodes,
             depth,

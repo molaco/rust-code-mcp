@@ -130,6 +130,14 @@ impl RuntimeState {
         self.sync_manager.as_ref()
     }
 
+    pub fn background_sync_manager(&self) -> Option<&Arc<SyncManager>> {
+        if self.background_sync_enabled() {
+            self.sync_manager.as_ref()
+        } else {
+            None
+        }
+    }
+
     pub fn workspace_locks(&self) -> &WorkspaceLockRegistry {
         &self.workspace_locks
     }

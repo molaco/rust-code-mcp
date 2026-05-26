@@ -347,7 +347,7 @@ pub(crate) struct SimilarToItemParams {
     #[schemars(description = "Restrict results to items of this kind, matching the chunk's symbol_kind (\"Function\", \"Struct\", \"Enum\", \"Trait\", etc.). Case-insensitive. Default: no filter.")]
     #[serde(default)]
     pub item_kind: Option<String>,
-    #[schemars(description = "Embedding profile the codebase was indexed with (built-in name or a profile from embedding_profiles.toml). Must match the profile passed to `index_codebase`, since this tool reads that profile's vector index. Default: the built-in default model.")]
+    #[schemars(description = "Embedding profile the codebase was indexed with (built-in name or a profile from embedding_profiles.toml). Must match the profile passed to `index_codebase`, since this tool reads that profile's vector index. Default: local-cpu-small.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
 }
@@ -362,7 +362,7 @@ pub(crate) struct SemanticOverlapsParams {
     #[schemars(description = "Optional item-kind filter (\"Function\" | \"Struct\" | \"Enum\" | \"Trait\" | \"Method\"). Default: all kinds.")]
     #[serde(default)]
     pub item_kind: Option<String>,
-    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Omit to use the embedding model's tuned default cutoff (0.85 for the Qwen3 code-embedding model used by default). Cosine-similarity scales are model-specific, so an explicit value is interpreted relative to the active model: drop ~0.05 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal.")]
+    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Omit to use the embedding model's tuned default cutoff (0.80 for the default local-cpu-small profile, 0.85 for Qwen3 profiles). Cosine-similarity scales are model-specific, so an explicit value is interpreted relative to the active model: drop ~0.05 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal.")]
     #[serde(default)]
     pub threshold: Option<f32>,
     #[schemars(description = "Cap on returned pairs in pairs mode, or total emitted cluster members in clusters mode. Default 50.")]
@@ -386,7 +386,7 @@ pub(crate) struct SemanticOverlapsParams {
     #[schemars(description = "Drop pairs whose two items share a crate. Default false.")]
     #[serde(default)]
     pub cross_crate_only: Option<bool>,
-    #[schemars(description = "Embedding profile to embed items with (built-in name or a profile from embedding_profiles.toml). Selects the model and the similarity scale `threshold` is interpreted on; switching profiles re-embeds via the per-Item cache. Default: the built-in default model (Qwen3-Embedding-0.6B, local GPU).")]
+    #[schemars(description = "Embedding profile to embed items with (built-in name or a profile from embedding_profiles.toml). Selects the model and the similarity scale `threshold` is interpreted on; switching profiles re-embeds via the per-Item cache. Default: local-cpu-small. Use local-gpu-small or another local-qwen3 profile to explicitly opt into local CUDA.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
 }
@@ -398,6 +398,9 @@ pub(crate) struct BuildCodemapParams {
     #[schemars(description = "Natural-language task description. Required unless seed_qualified_names is supplied. Best for exploratory queries against documented APIs — HybridSearch weighs token frequency in doc comments, so verbose-doc public surfaces rank highest. For pinpoint navigation to a specific implementation, prefer seed_qualified_names. Search hits that don't snap to an indexed Item are surfaced in Codemap.diagnostics with per-failure-mode counts (path-norm, line-resolve, kind-filter).")]
     #[serde(default)]
     pub task_prompt: Option<String>,
+    #[schemars(description = "Optional embedding profile for task_prompt HybridSearch seed lookup. Default: local-cpu-small. Use local-gpu-small or another local-qwen3 profile to explicitly opt into local CUDA.")]
+    #[serde(default)]
+    pub embedding_profile: Option<String>,
     #[schemars(description = "Override seeds by qualified name. The hypergraph indexes only `pub` and `pub(crate)` items — module-local private functions and trait-impl method bodies are not stored as standalone nodes and can't be referenced this way. Names that fail to resolve are surfaced in Codemap.diagnostics rather than erroring out; if the leaf fails but its parent module resolves, the diagnostic notes 'likely private or not indexed'.")]
     #[serde(default)]
     pub seed_qualified_names: Option<Vec<String>>,

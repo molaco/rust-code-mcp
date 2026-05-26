@@ -8,7 +8,9 @@ use rmcp::{
 };
 
 use rmc_engine::embeddings::EmbeddingBackend;
-use crate::mcp::project_paths::{ProjectPaths, data_dir, read_embedder_identity};
+use crate::mcp::project_paths::{
+    ProjectPaths, data_dir, read_embedder_identity, resolve_embedding_backend_for_mcp,
+};
 use rmc_engine::vector_store::VectorStore;
 use rmc_indexing::{
     indexing::open_bm25_search,
@@ -20,7 +22,7 @@ use rmc_indexing::{
 pub(crate) struct HealthCheckParams {
     #[schemars(description = "Optional: project directory to check (checks system-wide if not provided)")]
     pub directory: Option<String>,
-    #[schemars(description = "Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: the built-in default profile.")]
+    #[schemars(description = "Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: local-cpu-small.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
 }
@@ -62,18 +64,12 @@ pub(crate) async fn health_check(
     // the embedder identity. The probe must therefore target the SAME
     // profile the directory was indexed with — otherwise it reports an
     // empty "default" index that was never built. Resolve the requested
-    // profile (default when unset); further down we still read the
+    // profile (automatic CPU default when unset); further down we still read the
     // on-disk `metadata.json` so the report reflects the real cached
     // identity.
-    let backend = match embedding_profile.as_deref() {
-        Some(name) => {
-            let root = directory.as_deref().unwrap_or(".");
-            let profile = rmc_engine::embeddings::resolve_profile(name, std::path::Path::new(root))
-                .map_err(|msg| McpError::invalid_params(msg, None))?;
-            EmbeddingBackend::from_profile(profile)
-        }
-        None => EmbeddingBackend::default(),
-    };
+    let root = directory.as_deref().unwrap_or(".");
+    let backend =
+        resolve_embedding_backend_for_mcp(embedding_profile.as_deref(), std::path::Path::new(root))?;
     let embedder_identity = backend.identity();
 
     // Determine paths using the same shared helper as index_tool.

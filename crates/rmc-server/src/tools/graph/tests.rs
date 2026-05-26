@@ -1021,6 +1021,7 @@ async fn build_codemap_requires_prompt_or_seeds() {
     let result = handle_build_codemap(
         "/tmp", // never opened — validation fails first
         None,   // task_prompt
+        None,   // embedding_profile
         None,   // seed_qualified_names
         None,   // max_nodes
         None,   // depth
@@ -1051,6 +1052,7 @@ async fn build_codemap_rejects_bad_format() {
         None,
         None,
         None,
+        None,
         Some("weird"),
         None,
         &locks,
@@ -1076,6 +1078,7 @@ async fn build_codemap_rejects_bad_embedding_policy() {
     let result = handle_build_codemap(
         "/tmp",
         Some("anything"),
+        None,
         None,
         None,
         None,
@@ -1154,6 +1157,7 @@ async fn build_codemap_waits_for_workspace_lock_before_search_cache_use() {
         handle_build_codemap(
             &directory,
             Some("anything"),
+            None,
             None,
             None,
             None,

@@ -4,7 +4,10 @@
 // compile-time inference budget, not a runtime cost.
 #![recursion_limit = "512"]
 
-use rmc_server::mcp::ServerRuntime;
+use rmc_server::mcp::{
+    automatic_embedding_profile_name, cuda_capable_features_compiled,
+    parse_background_sync_env, ServerRuntime, BACKGROUND_SYNC_ENABLED_VALUES, BACKGROUND_SYNC_ENV,
+};
 use rmc_server::tools::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
 use std::time::Duration;
@@ -34,8 +37,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = ServerRuntime::new(300);
     tracing::info!("Created MCP server runtime (5-minute sync interval)");
 
-    runtime.start_background_sync();
-    tracing::info!("Started background sync task");
+    let background_sync_env = std::env::var(BACKGROUND_SYNC_ENV).ok();
+    let background_sync_enabled = parse_background_sync_env(background_sync_env.as_deref());
+    tracing::info!(
+        "MCP startup defaults: background sync {} ({}='{}'; enabled only for {}, case-insensitive); automatic/background embedding profile default {}; CUDA-capable features compiled: {}",
+        if background_sync_enabled { "enabled" } else { "disabled" },
+        BACKGROUND_SYNC_ENV,
+        background_sync_env.as_deref().unwrap_or("<unset>"),
+        BACKGROUND_SYNC_ENABLED_VALUES,
+        automatic_embedding_profile_name(),
+        cuda_capable_features_compiled(),
+    );
+
+    if background_sync_enabled {
+        runtime.start_background_sync();
+        tracing::info!("Started background sync task");
+    } else {
+        tracing::info!(
+            "Background sync task disabled; set {}=1 to enable",
+            BACKGROUND_SYNC_ENV
+        );
+    }
 
     let service = match SearchTool::with_server_runtime(&runtime).serve(stdio()).await {
         Ok(service) => service,

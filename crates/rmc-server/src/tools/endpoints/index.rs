@@ -7,6 +7,7 @@ use rmc_engine::embeddings::{EmbeddingBackend, Qwen3Variant};
 use rmc_indexing::indexing::{
     index_project_incrementally, IncrementalIndexRequest, IndexStats,
 };
+use crate::mcp::defaults::{automatic_embedding_backend, is_background_embedding_backend};
 use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend_for_mcp};
 use rmc_engine::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
@@ -20,11 +21,11 @@ pub struct IndexCodebaseParams {
     #[schemars(description = "Force full reindex even if already indexed (default: false)")]
     pub force_reindex: Option<bool>,
     #[schemars(
-        description = "Optional embedding model variant. One of: \"qwen3-0.6b\" (default, 1024-dim), \"qwen3-4b\" (2560-dim), \"qwen3-8b\" (4096-dim). Picking a variant different from an existing index returns a version-mismatch error pointing to clear_cache."
+        description = "Optional legacy local Qwen3/CUDA model variant. One of: \"qwen3-0.6b\" (1024-dim), \"qwen3-4b\" (2560-dim), \"qwen3-8b\" (4096-dim). Picking a variant different from an existing index returns a version-mismatch error pointing to clear_cache."
     )]
     pub model: Option<String>,
     #[schemars(
-        description = "Optional embedding profile. Preferred over `model` when both are set. One of: \"local-gpu-small\" (default Qwen3-Embedding-0.6B CUDA), \"local-cpu-small\" (BGESmallENV15Q CPU), \"openrouter-qwen3-8b\" (OpenRouter API), \"local-qwen3-4b\", \"local-qwen3-8b\"."
+        description = "Optional embedding profile. Preferred over `model` when both are set. Default when omitted: \"local-cpu-small\" (BGESmallENV15Q CPU). Use \"local-gpu-small\", \"local-qwen3-4b\", or \"local-qwen3-8b\" to explicitly opt into local CUDA; \"openrouter-qwen3-8b\" uses the remote API profile."
     )]
     pub embedding_profile: Option<String>,
 }
@@ -55,7 +56,7 @@ fn resolve_backend(
     }
 
     let Some(s) = model else {
-        return Ok(EmbeddingBackend::default());
+        return Ok(automatic_embedding_backend());
     };
     let variant = parse_variant(s).map_err(|msg| McpError::invalid_params(msg, None))?;
     Ok(EmbeddingBackend::from_qwen3_variant(variant))
@@ -204,8 +205,8 @@ pub async fn index_codebase(
 
     tracing::info!("Indexing codebase: {} (force: {})", dir.display(), force);
 
-    // Resolve the embedding backend from the optional `model` arg. This
-    // becomes the single source of truth for vector_size /
+    // Resolve the embedding backend from the optional profile/model args.
+    // This becomes the single source of truth for vector_size /
     // embedder_identity / project paths for this run.
     let backend = resolve_backend(
         params.embedding_profile.as_deref(),
@@ -241,10 +242,12 @@ pub async fn index_codebase(
     // Track directory for background sync if indexing was successful
     if let Some(sync_mgr) = sync_manager {
         if stats.indexed_files > 0 || stats.unchanged_files > 0 {
-            sync_mgr.track_directory(dir.clone()).await;
+            sync_mgr
+                .track_directory_for_backend(dir.clone(), &backend)
+                .await;
             tracing::info!(
-                "Directory tracked for background sync: {}",
-                dir.display()
+                "Directory considered for background sync: {}",
+                dir.display(),
             );
         }
     }
@@ -258,10 +261,10 @@ pub async fn index_codebase(
         backend.profile.name(),
         &embedder_identity,
         &paths.collection_name,
-        if sync_manager.is_some() {
-            "enabled (5-minute interval)"
-        } else {
-            "disabled"
+        match (sync_manager.is_some(), is_background_embedding_backend(&backend)) {
+            (false, _) => "disabled",
+            (true, true) => "enabled (5-minute interval; CPU/remote profiles only)",
+            (true, false) => "enabled, but this local CUDA profile is not synced in background",
         },
         force,
         outcome.elapsed,
@@ -488,6 +491,14 @@ mod tests {
     #[test]
     fn parse_variant_rejects_unknown() {
         assert!(parse_variant("minilm").is_err());
+    }
+
+    #[test]
+    fn resolve_backend_without_profile_or_model_uses_automatic_cpu_default() {
+        let backend = resolve_backend(None, None, std::path::Path::new(".")).unwrap();
+
+        assert_eq!(backend.profile.name(), "local-cpu-small");
+        assert_eq!(backend.dim(), 384);
     }
 
     #[test]

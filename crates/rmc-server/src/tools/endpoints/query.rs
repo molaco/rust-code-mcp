@@ -152,6 +152,7 @@ async fn ensure_indexed(
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
     let resolved = resolve_query_backend(paths, backend)?;
     let backend = resolved.backend;
+    let background_backend = backend.clone();
 
     let mut indexer = UnifiedIndexer::for_embedded_with_backend(
         &paths.cache_path,
@@ -178,7 +179,9 @@ async fn ensure_indexed(
     // Track directory for background sync
     if let Some(ref sync_mgr) = sync_manager {
         if stats.indexed_files > 0 || stats.unchanged_files > 0 {
-            sync_mgr.track_directory(dir_path.to_path_buf()).await;
+            sync_mgr
+                .track_directory_for_backend(dir_path.to_path_buf(), &background_backend)
+                .await;
         }
     }
 
@@ -193,7 +196,7 @@ async fn ensure_indexed(
 /// We treat `metadata.json` (written by `LanceDbBackend::new` on first
 /// index) as the source of truth and parse it back into an
 /// `EmbeddingBackend`. If no metadata file exists yet (very fresh
-/// install, no prior index), fall back to the default backend — the
+/// install, no prior index), fall back to the configured backend — the
 /// vector store will then create the metadata on first write.
 struct ResolvedQueryBackend {
     backend: EmbeddingBackend,
@@ -407,7 +410,9 @@ pub(crate) async fn search(
     let mut rebuilt = false;
     let stats = if bm25.is_some() && vector_index_exists {
         if let Some(ref sync_mgr) = sync_manager {
-            sync_mgr.track_directory(dir_path.to_path_buf()).await;
+            sync_mgr
+                .track_directory_for_backend(dir_path.to_path_buf(), &requested_backend)
+                .await;
         }
         None
     } else {

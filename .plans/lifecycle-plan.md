@@ -1,6 +1,6 @@
 # Plan: resource lifecycle and CUDA isolation for MCP/test stability
 
-Status: in progress. Written against `/home/molaco/Documents/rust-code-mcp-refactor`
+Status: completed. Written against `/home/molaco/Documents/rust-code-mcp-refactor`
 on 2026-05-26.
 
 Progress:
@@ -24,6 +24,12 @@ Progress:
   under `.docs` with safe `/proc` collection commands, candidate discovery that
   avoids command-line reads, PID/process-group kill guidance, hibernation
   blocker triage, and NVIDIA-specific `wchan` notes.
+- Phase 6 completed on 2026-05-26. MCP startup is conservative: background
+  sync is disabled unless `RMC_BACKGROUND_SYNC` is explicitly set to an
+  enabled value, automatic/default MCP embedding selection uses
+  `local-cpu-small`, background tracking skips local CUDA embedding profiles,
+  and prompt-driven `build_codemap` can explicitly opt into a non-default
+  profile. Review gate passed at 9.2/10.
 
 This plan addresses the stuck D-state process class observed while agents run
 MCP tools and focused Rust tests. The latest live incident was:
@@ -647,6 +653,63 @@ Implementation shape:
 ## Phase 6: operational defaults
 
 Goal: make the default MCP server conservative.
+
+Status: completed on 2026-05-26.
+
+Completed implementation:
+
+- Added MCP operational defaults for startup/background work:
+  `RMC_BACKGROUND_SYNC` is disabled when unset and enabled only for
+  `1`, `true`, `yes`, or `on` after trimming and case-folding.
+- Updated `rust-code-mcp` startup to log one summary line with background sync
+  enabled/disabled state, the raw `RMC_BACKGROUND_SYNC` value, accepted enabled
+  values, the automatic/background embedding profile default, and whether
+  CUDA-capable embedding features are compiled in.
+- Changed MCP-level automatic/default embedding resolution to
+  `local-cpu-small` without changing `EmbeddingBackend::default()` globally.
+- Kept explicit GPU selection working through `embedding_profile =
+  "local-gpu-small"` / other local Qwen3 profiles and the legacy explicit
+  `model` parameter on `index_codebase`.
+- Made tool routing pass a sync manager to indexing/search only when the
+  background sync task is enabled, so disabled startup does not advertise or
+  accumulate background tracking for normal tool calls.
+- Made background sync skip local CUDA-backed profiles and continue syncing
+  CPU or remote profiles.
+- Added backend-aware background registration through
+  `SyncManager::track_directory_for_backend`, so foreground requests using
+  explicit local CUDA profiles are not added to the background sync tracking
+  set.
+- Added an optional `embedding_profile` to `build_codemap` for prompt-driven
+  HybridSearch seed lookup. The default remains `local-cpu-small`, while
+  explicit local CUDA profiles remain available for foreground use.
+- Updated MCP tool schema descriptions that referred to the old local-GPU
+  default.
+
+Validation performed:
+
+```bash
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib background_sync
+nix develop ../nix-devshells#cuda-code --command cargo test -p rmc-server --lib automatic
+nix develop ../nix-devshells#cuda-code --command cargo check -p rmc-server --lib
+nix develop ../nix-devshells#cuda-code --command cargo check -p rust-code-mcp
+```
+
+The checks passed after the review fixes. The background-sync filter ran
+5 tests; the automatic-default filter ran 3 tests. Cargo emitted existing
+dead-code warnings in lower crates and reported the adjacent
+`../nix-devshells` git tree as dirty.
+
+Review gate:
+
+- Pre-phase `jj show --summary` was run before implementation from working
+  copy change `mvumvlsvtmlxlltlnqwmstsvknqlwpny` with parent commit
+  `3799a8c4`.
+- First reviewer score: 8.1/10 on 2026-05-26. Gate result: fail. The reviewer
+  found that local CUDA profiles could still be registered for background
+  sync, and that prompt-driven `build_codemap` had no explicit embedding
+  profile path.
+- Final reviewer score after fixes: 9.2/10 on 2026-05-26.
+- Gate result: pass (`> 8.5`).
 
 Implementation shape:
 
