@@ -136,7 +136,7 @@ const DEFAULT_MAP_SIZE: usize = 1 << 30; // 1 GiB
 const DEFAULT_MAX_DBS: u32 = 16;
 const DEFAULT_MAX_READERS: u32 = 256;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GraphEnvOptions {
     pub map_size: usize,
     pub max_dbs: u32,

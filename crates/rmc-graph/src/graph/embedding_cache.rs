@@ -18,6 +18,34 @@ pub struct ResolvedEmbedding {
     pub content_hash: [u8; 16],
 }
 
+#[derive(Debug)]
+pub struct PreparedEmbeddings {
+    pub resolved: HashMap<NodeId, ResolvedEmbedding>,
+    pub pending: Vec<PendingEmbedding>,
+    pub embedder_version: String,
+}
+
+#[derive(Debug)]
+pub struct PendingEmbedding {
+    pub nid: NodeId,
+    pub content_hash: [u8; 16],
+    pub source: String,
+}
+
+#[derive(Debug)]
+pub struct ResolvedEmbeddingBatch {
+    pub embeddings: HashMap<NodeId, ResolvedEmbedding>,
+    pub writes: Vec<EmbeddingCacheWrite>,
+    pub embedder_version: String,
+}
+
+#[derive(Debug)]
+pub struct EmbeddingCacheWrite {
+    pub nid: NodeId,
+    pub content_hash: [u8; 16],
+    pub vector: Vec<f32>,
+}
+
 /// Resolve embeddings for the given NodeIds, hitting the cache where possible
 /// and computing-and-persisting where not.
 ///
@@ -37,11 +65,26 @@ pub async fn ensure_embeddings_for(
     nids: &[NodeId],
     backend: &rmc_engine::embeddings::EmbeddingBackend,
 ) -> anyhow::Result<HashMap<NodeId, ResolvedEmbedding>> {
+    let prepared = prepare_embeddings_for(snap, nids, backend)?;
+    let resolved = embed_prepared_embeddings(prepared, backend).await?;
+    write_embedding_cache(snap, &resolved.embedder_version, &resolved.writes)?;
+    Ok(resolved.embeddings)
+}
+
+pub fn prepare_embeddings_for(
+    snap: &OpenedSnapshot,
+    nids: &[NodeId],
+    backend: &rmc_engine::embeddings::EmbeddingBackend,
+) -> anyhow::Result<PreparedEmbeddings> {
     use sha2::{Digest, Sha256};
 
     let mut out: HashMap<NodeId, ResolvedEmbedding> = HashMap::new();
     if nids.is_empty() {
-        return Ok(out);
+        return Ok(PreparedEmbeddings {
+            resolved: out,
+            pending: Vec::new(),
+            embedder_version: backend.identity(),
+        });
     }
 
     // The workspace root from the snapshot manifest is the base for the
@@ -49,12 +92,7 @@ pub async fn ensure_embeddings_for(
     let ws_root = PathBuf::from(&snap.manifest.workspace_root);
 
     // Phase A: classify nids using one short read txn.
-    struct Pending {
-        nid: NodeId,
-        content_hash: [u8; 16],
-        source: String,
-    }
-    let mut pending: Vec<Pending> = Vec::new();
+    let mut pending: Vec<PendingEmbedding> = Vec::new();
     let mut file_cache: HashMap<String, String> = HashMap::new();
 
     // The cache classifier and the embedder are always in lockstep because
@@ -119,7 +157,7 @@ pub async fn ensure_embeddings_for(
                     );
                 }
                 _ => {
-                    pending.push(Pending {
+                    pending.push(PendingEmbedding {
                         nid,
                         content_hash,
                         source: trimmed.to_string(),
@@ -129,17 +167,33 @@ pub async fn ensure_embeddings_for(
         }
     }
 
+    Ok(PreparedEmbeddings {
+        resolved: out,
+        pending,
+        embedder_version: active_version,
+    })
+}
+
+pub async fn embed_prepared_embeddings(
+    prepared: PreparedEmbeddings,
+    backend: &rmc_engine::embeddings::EmbeddingBackend,
+) -> anyhow::Result<ResolvedEmbeddingBatch> {
+    let PreparedEmbeddings {
+        mut resolved,
+        pending,
+        embedder_version,
+    } = prepared;
+
     if pending.is_empty() {
-        return Ok(out);
+        return Ok(ResolvedEmbeddingBatch {
+            embeddings: resolved,
+            writes: Vec::new(),
+            embedder_version,
+        });
     }
 
     let embedder = rmc_engine::embeddings::EmbeddingGenerator::with_backend(backend.clone())
         .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
 
     let mut new_vectors: Vec<Vec<f32>> = Vec::with_capacity(pending.len());
     for chunk_start in (0..pending.len()).step_by(EMBED_CHUNK) {
@@ -155,24 +209,14 @@ pub async fn ensure_embeddings_for(
         new_vectors.extend(vectors);
     }
 
-    {
-        let mut wtxn = snap.env.write_txn()?;
-        for (p, vector) in pending.iter().zip(new_vectors.iter()) {
-            let rec = EmbeddingRecord {
-                content_hash: p.content_hash,
-                vector: vector.clone(),
-                embedder_version: active_version.clone(),
-                generated_at_unix: now,
-            };
-            snap.dbs
-                .embeddings_by_target
-                .put(&mut wtxn, p.nid.as_bytes(), &rec)?;
-        }
-        wtxn.commit()?;
-    }
-
+    let mut writes = Vec::with_capacity(pending.len());
     for (p, vector) in pending.into_iter().zip(new_vectors.into_iter()) {
-        out.insert(
+        writes.push(EmbeddingCacheWrite {
+            nid: p.nid,
+            content_hash: p.content_hash,
+            vector: vector.clone(),
+        });
+        resolved.insert(
             p.nid,
             ResolvedEmbedding {
                 vector,
@@ -181,5 +225,39 @@ pub async fn ensure_embeddings_for(
         );
     }
 
-    Ok(out)
+    Ok(ResolvedEmbeddingBatch {
+        embeddings: resolved,
+        writes,
+        embedder_version,
+    })
+}
+
+pub fn write_embedding_cache(
+    snap: &OpenedSnapshot,
+    embedder_version: &str,
+    writes: &[EmbeddingCacheWrite],
+) -> anyhow::Result<()> {
+    if writes.is_empty() {
+        return Ok(());
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut wtxn = snap.env.write_txn()?;
+    for write in writes {
+        let rec = EmbeddingRecord {
+            content_hash: write.content_hash,
+            vector: write.vector.clone(),
+            embedder_version: embedder_version.to_string(),
+            generated_at_unix: now,
+        };
+        snap.dbs
+            .embeddings_by_target
+            .put(&mut wtxn, write.nid.as_bytes(), &rec)?;
+    }
+    wtxn.commit()?;
+    Ok(())
 }

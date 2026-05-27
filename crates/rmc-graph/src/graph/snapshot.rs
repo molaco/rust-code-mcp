@@ -8,13 +8,21 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use heed::{Env, RoTxn, RwTxn, WithoutTls};
 type GraphRoTxn<'e> = RoTxn<'e, WithoutTls>;
 type GraphRwTxn<'e> = RwTxn<'e>;
+
+static OPENED_GRAPH_ENVS: OnceLock<Mutex<HashMap<PathBuf, CachedGraphEnv>>> = OnceLock::new();
+
+#[derive(Clone)]
+struct CachedGraphEnv {
+    options: GraphEnvOptions,
+    env: Weak<Env<WithoutTls>>,
+}
 
 use super::extract;
 use super::ids::{BindingId, NodeId, UsageId};
@@ -589,7 +597,7 @@ fn now_unix() -> Result<u64> {
 pub struct OpenedSnapshot {
     pub manifest: GraphManifest,
     pub snapshot_dir: PathBuf,
-    pub env: Env<WithoutTls>,
+    pub env: Arc<Env<WithoutTls>>,
     pub dbs: GraphDatabases,
     // codemap caches — both populated lazily by graph::codemap helpers.
     span_index: OnceLock<HashMap<String, Vec<(u32, u32, NodeId)>>>,
@@ -722,12 +730,7 @@ pub(crate) fn open_specific(
     if !snapshot_dir.join("data.mdb").exists() {
         bail!("snapshot manifest exists but data.mdb missing at {}", snapshot_dir.display());
     }
-    let env = unsafe {
-        env_opts
-            .to_open_options()
-            .open(&snapshot_dir)
-            .with_context(|| format!("open heed env at {}", snapshot_dir.display()))?
-    };
+    let env = open_cached_env(&snapshot_dir, env_opts)?;
     // Open dbs in a txn that we then COMMIT (not drop) — committing registers
     // the dbi handles back to the env so later txns can use them. Dropping
     // leaves the handles in a half-open state and later iter() returns EINVAL.
@@ -745,11 +748,54 @@ pub(crate) fn open_specific(
     }))
 }
 
+fn open_cached_env(
+    snapshot_dir: &Path,
+    env_opts: GraphEnvOptions,
+) -> Result<Arc<Env<WithoutTls>>> {
+    let canonical_dir = snapshot_dir
+        .canonicalize()
+        .with_context(|| format!("canonicalize snapshot dir {}", snapshot_dir.display()))?;
+    let cache = OPENED_GRAPH_ENVS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().expect("opened graph env cache poisoned");
+
+    if let Some(cached) = cache.get(&canonical_dir) {
+        if let Some(env) = cached.env.upgrade() {
+            if cached.options != env_opts {
+                bail!(
+                    "snapshot env already open at {} with options {:?}; requested {:?}",
+                    canonical_dir.display(),
+                    cached.options,
+                    env_opts
+                );
+            }
+            return Ok(env);
+        }
+    }
+
+    let env = unsafe {
+        env_opts
+            .to_open_options()
+            .open(&canonical_dir)
+            .with_context(|| format!("open heed env at {}", canonical_dir.display()))?
+    };
+    let env = Arc::new(env);
+    cache.insert(
+        canonical_dir,
+        CachedGraphEnv {
+            options: env_opts,
+            env: Arc::downgrade(&env),
+        },
+    );
+    Ok(env)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::graph::model::{BindingKind, NodeKind};
+    use std::collections::BTreeMap;
     use std::path::Path;
+    use std::sync::Arc;
 
     #[test]
     fn clear_workspace_snapshots_dry_run_reports_without_removing() {
@@ -956,6 +1002,35 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("failed to load workspace"));
+    }
+
+    #[test]
+    fn open_current_reuses_live_snapshot_env_handle() {
+        let td = tempfile::tempdir().unwrap();
+        let workspace = td.path().join("workspace");
+        let data_dir = td.path().join("graphs");
+        fs::create_dir_all(&workspace).unwrap();
+
+        let model = ExtractionModel {
+            workspace_root: workspace.clone(),
+            workspace_hash: "test-workspace".to_string(),
+            workspace_id: NodeId::from_components(&["workspace"]),
+            nodes: BTreeMap::new(),
+            bindings: Vec::new(),
+            usages: Vec::new(),
+            contains: Vec::new(),
+            signatures: Vec::new(),
+            statics: Vec::new(),
+        };
+        let snap = persist_test_model(data_dir.as_path(), &model, GraphEnvOptions::default())
+            .expect("persist test model");
+        let paths = GraphPaths::for_workspace_in(&data_dir, &workspace);
+
+        let reopened = open_current(&paths, GraphEnvOptions::default())
+            .expect("open current")
+            .expect("snapshot present");
+
+        assert!(Arc::ptr_eq(&snap.env, &reopened.env));
     }
 
     #[test]

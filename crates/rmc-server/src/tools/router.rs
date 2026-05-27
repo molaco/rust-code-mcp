@@ -694,13 +694,17 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source, and builds a similarity graph above `threshold` (defaults to the embedding model's tuned cutoff — 0.80 for local-cpu-small, 0.85 for Qwen3 profiles), returning either deduplicated pairs (output_mode=\"pairs\") or single-linkage clusters of transitively-similar items (output_mode=\"clusters\", default). Self-matches and cross-test noise are filtered (skip_test_chunks default true). Pagination/output controls: `max_pairs` caps returned pairs in pairs mode or total emitted cluster members in clusters mode, `offset` skips pairs/clusters, and `summary=true` omits per-member file/span payloads. The response carries `total_pair_count` and `total_cluster_count` before pagination. v1.1: per-Item embedding cache + in-memory cosine — first scan pays the full embedding cost; subsequent scans on unchanged code are nearly free (cache lives in the snapshot's LMDB env at the `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears it). Use this for offline duplicate-detection / refactor planning. NOTE: requires `build_hypergraph` to have been called for the workspace; the vector store / `index_codebase` is no longer required for this tool. Latency is seconds-to-minutes on first run, sub-second on cache-warm reruns."
+        description = "Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source, and builds a similarity graph above `threshold` (defaults to the embedding model's tuned cutoff — 0.80 for local-cpu-small, 0.85 for Qwen3 profiles), returning either deduplicated pairs (output_mode=\"pairs\") or single-linkage clusters of transitively-similar items (output_mode=\"clusters\", default). Self-matches and cross-test noise are filtered (skip_test_chunks default true). Pagination/output controls: `max_pairs` caps returned pairs in pairs mode or total emitted cluster members in clusters mode after the scan; it is not a work cap. `offset` skips pairs/clusters, and `summary=true` omits per-member file/span payloads. The response carries `total_pair_count` and `total_cluster_count` before pagination. v1.1: per-Item embedding cache + in-memory cosine — first scan pays the full embedding cost; subsequent scans on unchanged code are nearly free (cache lives in the snapshot's LMDB env at the `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears it). Use this for offline duplicate-detection / refactor planning. NOTE: requires `build_hypergraph` to have been called for the workspace; the vector store / `index_codebase` is no longer required for this tool. Latency is seconds-to-minutes on first run, sub-second on cache-warm reruns."
     )]
     async fn semantic_overlaps(
         &self,
         Parameters(params): Parameters<crate::tools::params::SemanticOverlapsParams>,
     ) -> Result<CallToolResult, McpError> {
-        crate::tools::graph::similarity::semantic_overlaps(params).await
+        crate::tools::graph::similarity::semantic_overlaps(
+            params,
+            self.runtime.workspace_locks(),
+        )
+        .await
     }
 
     #[tool(description = "Build a task-conditioned subgraph (codemap) of the indexed workspace.

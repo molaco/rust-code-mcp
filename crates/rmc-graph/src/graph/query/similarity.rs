@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use rmc_engine::embeddings::EmbeddingBackend;
 
-use super::super::embedding_cache::ensure_embeddings_for;
+use super::super::embedding_cache::{
+    embed_prepared_embeddings, prepare_embeddings_for, write_embedding_cache,
+};
 use super::super::ids::NodeId;
 use super::super::labels::item_kind_short_label;
 use super::super::math::cosine;
@@ -84,7 +86,6 @@ pub async fn run_semantic_overlaps(
     options: SemanticOverlapOptions,
 ) -> Result<SemanticOverlapsOutput> {
     let canonical = canonicalize_directory(directory)?;
-    let snap = open_directory_snapshot(&canonical)?;
     let threshold = options
         .threshold
         .unwrap_or_else(|| backend.semantic_overlap_threshold());
@@ -103,16 +104,30 @@ pub async fn run_semantic_overlaps(
     let item_kind_filter_label = options.item_kind;
     let crate_name = options.crate_name;
 
-    let crate_id_filter = resolve_crate_filter(&snap, crate_name.as_deref())?;
-    let item_kind_enum = parse_item_kind_filter(item_kind_filter_label.as_deref())?;
-    let mut seeds = enumerate_similarity_seeds(
-        &snap,
-        crate_id_filter,
-        item_kind_enum,
-        skip_tests,
-    )?;
-    let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
-    let embeddings = ensure_embeddings_for(&snap, &seed_nids, backend).await?;
+    let (mut seeds, prepared_embeddings) = {
+        let snap = open_directory_snapshot(&canonical)?;
+        let crate_id_filter = resolve_crate_filter(&snap, crate_name.as_deref())?;
+        let item_kind_enum = parse_item_kind_filter(item_kind_filter_label.as_deref())?;
+        let seeds = enumerate_similarity_seeds(
+            &snap,
+            crate_id_filter,
+            item_kind_enum,
+            skip_tests,
+        )?;
+        let seed_nids: Vec<NodeId> = seeds.iter().map(|(id, _)| *id).collect();
+        let prepared_embeddings = prepare_embeddings_for(&snap, &seed_nids, backend)?;
+        (seeds, prepared_embeddings)
+    };
+    let resolved_embeddings = embed_prepared_embeddings(prepared_embeddings, backend).await?;
+    if !resolved_embeddings.writes.is_empty() {
+        let snap = open_directory_snapshot(&canonical)?;
+        write_embedding_cache(
+            &snap,
+            &resolved_embeddings.embedder_version,
+            &resolved_embeddings.writes,
+        )?;
+    }
+    let embeddings = resolved_embeddings.embeddings;
 
     let mut seeds_ctx = Vec::with_capacity(seeds.len());
     for (seed_id, seed_node) in seeds.drain(..) {
@@ -194,25 +209,19 @@ fn score_semantic_overlaps(
         }
     }
 
-    for i in 0..seeds.len() {
-        let va = &seeds[i].cached_vec;
-        for j in (i + 1)..seeds.len() {
-            let a = &seeds[i];
-            let b = &seeds[j];
-            if a.content_hash == b.content_hash {
-                continue;
-            }
-            if cross_crate_only && a.node.crate_id == b.node.crate_id {
-                continue;
-            }
-            let score = cosine(va, &b.cached_vec);
-            if score < threshold {
-                continue;
-            }
-            let key = canonical_edge(a.id, b.id);
-            edges.entry(key).or_default().push(score);
+    for_each_seed_pair(&seeds, cross_crate_only, |i, j| {
+        let a = &seeds[i];
+        let b = &seeds[j];
+        if a.content_hash == b.content_hash {
+            return;
         }
-    }
+        let score = cosine(&a.cached_vec, &b.cached_vec);
+        if score < threshold {
+            return;
+        }
+        let key = canonical_edge(a.id, b.id);
+        edges.entry(key).or_default().push(score);
+    });
 
     let mut pairs: Vec<(NodeId, NodeId, f32)> = edges
         .into_iter()
@@ -386,6 +395,35 @@ fn enumerate_similarity_seeds(
         seeds.push((NodeId(id), node));
     }
     Ok(seeds)
+}
+
+fn for_each_seed_pair<F>(seeds: &[SeedCtx], cross_crate_only: bool, mut visit: F)
+where
+    F: FnMut(usize, usize),
+{
+    if !cross_crate_only {
+        for i in 0..seeds.len() {
+            for j in (i + 1)..seeds.len() {
+                visit(i, j);
+            }
+        }
+        return;
+    }
+
+    let mut by_crate: HashMap<Option<NodeId>, Vec<usize>> = HashMap::new();
+    for (index, seed) in seeds.iter().enumerate() {
+        by_crate.entry(seed.node.crate_id).or_default().push(index);
+    }
+    let groups: Vec<Vec<usize>> = by_crate.into_values().collect();
+    for left_index in 0..groups.len() {
+        for right_index in (left_index + 1)..groups.len() {
+            for &left in &groups[left_index] {
+                for &right in &groups[right_index] {
+                    visit(left, right);
+                }
+            }
+        }
+    }
 }
 
 fn node_to_similarity_item(node: &Node, summary: bool) -> SimilarityItem {
@@ -596,6 +634,31 @@ mod tests {
             output_mode: output_mode.to_string(),
             cross_crate_only: false,
         }
+    }
+
+    #[test]
+    fn cross_crate_pair_iteration_skips_same_crate_pairs() {
+        let seeds = vec![
+            seed_ctx(1, "crate::a", 10, [1; 16], vec![1.0, 0.0]),
+            seed_ctx(2, "crate::b", 10, [2; 16], vec![0.9, 0.1]),
+            seed_ctx(3, "other::c", 11, [3; 16], vec![0.0, 1.0]),
+        ];
+        let mut pairs = Vec::new();
+
+        for_each_seed_pair(&seeds, true, |a, b| {
+            let left = seeds[a].id;
+            let right = seeds[b].id;
+            if left.as_bytes() < right.as_bytes() {
+                pairs.push((left, right));
+            } else {
+                pairs.push((right, left));
+            }
+        });
+
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.contains(&(nid(1), nid(3))));
+        assert!(pairs.contains(&(nid(2), nid(3))));
+        assert!(!pairs.contains(&(nid(1), nid(2))));
     }
 
     #[test]

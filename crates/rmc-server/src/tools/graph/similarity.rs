@@ -191,7 +191,11 @@ pub(crate) async fn similar_to_item(
 
 pub(crate) async fn semantic_overlaps(
     params: SemanticOverlapsParams,
+    workspace_locks: &crate::mcp::WorkspaceLockRegistry,
 ) -> Result<CallToolResult, McpError> {
+    let _workspace_lock = workspace_locks
+        .lock_exclusive(Path::new(&params.directory))
+        .await;
     let directory = params.directory.clone();
     let backend = resolve_embedding_backend_for_mcp(
         params.embedding_profile.as_deref(),
