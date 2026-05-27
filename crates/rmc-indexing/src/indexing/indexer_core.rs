@@ -33,14 +33,16 @@
 
 use rmc_engine::chunker::{Chunker, ChunkSplitConfig, CodeChunk};
 use rmc_config::config::IndexerCoreConfig;
-use rmc_engine::embeddings::{Embedding, EmbeddingBackend, EmbeddingGenerator};
+use rmc_engine::embeddings::{
+    Embedding, EmbeddingBackend, EmbeddingGenerator, EmbeddingTokenCounter,
+};
 use crate::indexing::embedding_batcher::EmbeddingBatcher;
 use crate::indexing::file_processor::FileProcessor;
 use crate::indexing::IndexingError;
 use crate::metadata_cache::MetadataCache;
 use rmc_engine::parser::RustParser;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Result of processing a single file
@@ -70,6 +72,11 @@ pub(crate) struct IndexerCore {
     gpu_batch_size: usize,
     /// Padded token budget for embedding generation
     max_tokens_per_batch: usize,
+    /// Token counter used for chunk splitting. Initialized lazily so the
+    /// Merkle no-change path can still return before embedding resources.
+    chunk_token_counter: OnceLock<Option<EmbeddingTokenCounter>>,
+    #[cfg(test)]
+    chunk_token_override: Option<Arc<dyn Fn(&CodeChunk) -> Option<usize> + Send + Sync>>,
     /// Batch embedding generation and memory monitoring
     embedding_batcher: Mutex<Option<Arc<EmbeddingBatcher>>>,
 }
@@ -109,6 +116,9 @@ impl IndexerCore {
             embedding_backend: backend,
             gpu_batch_size: config.gpu_batch_size,
             max_tokens_per_batch: config.max_tokens_per_batch,
+            chunk_token_counter: OnceLock::new(),
+            #[cfg(test)]
+            chunk_token_override: None,
             embedding_batcher: Mutex::new(None),
         })
     }
@@ -132,6 +142,44 @@ impl IndexerCore {
         ));
         *guard = Some(Arc::clone(&batcher));
         Ok(batcher)
+    }
+
+    fn count_chunk_raw_tokens(&self, chunk: &CodeChunk) -> Option<usize> {
+        #[cfg(test)]
+        if let Some(counter) = self.chunk_token_override.as_ref() {
+            return counter(chunk);
+        }
+
+        let counter = self.chunk_token_counter.get_or_init(|| {
+            match EmbeddingTokenCounter::from_backend(&self.embedding_backend) {
+                Ok(counter) => {
+                    tracing::info!(
+                        max_len = counter.max_len(),
+                        "Chunk-splitting token counter initialized"
+                    );
+                    Some(counter)
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        "Chunk-splitting token counter unavailable; falling back to text-length estimates"
+                    );
+                    None
+                }
+            }
+        });
+        let counter = counter.as_ref()?;
+
+        match counter.count(&chunk.format_for_embedding()) {
+            Ok(len) => Some(len.raw_tokens),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "Chunk token count unavailable; falling back to estimated split size"
+                );
+                None
+            }
+        }
     }
 
     // --- File processing delegation (FileProcessor) ---
@@ -209,7 +257,7 @@ impl IndexerCore {
         let chunks = self.chunker.split_oversized_chunks(
             chunks,
             self.chunk_split_config,
-            |_| None,
+            |chunk| self.count_chunk_raw_tokens(chunk),
         );
 
         if chunks.is_empty() {
@@ -275,6 +323,7 @@ fn chunk_split_config_from(config: &IndexerCoreConfig) -> ChunkSplitConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     #[test]
@@ -321,5 +370,68 @@ mod tests {
         let should_process = core.should_process_file(&test_file);
         assert!(should_process.is_ok());
         assert!(should_process.unwrap());
+    }
+
+    #[test]
+    fn process_file_sync_uses_token_counts_without_embedding_batcher() {
+        let temp_dir = TempDir::new().unwrap();
+        let src_dir = temp_dir.path().join("src");
+        std::fs::create_dir(&src_dir).unwrap();
+        let test_file = src_dir.join("lib.rs");
+        std::fs::write(
+            &test_file,
+            r#"
+pub fn long_function() {
+    let alpha = 1;
+    let beta = alpha + 1;
+    let gamma = beta + 1;
+    let delta = gamma + 1;
+    let epsilon = delta + 1;
+    println!("{epsilon}");
+}
+"#,
+        )
+        .unwrap();
+
+        let backend = EmbeddingBackend::from_profile_name("openrouter-qwen3-8b").unwrap();
+        let mut fallback_core = IndexerCore::with_backend(
+            &temp_dir.path().join("fallback-cache"),
+            None,
+            backend.clone(),
+        )
+        .unwrap();
+        fallback_core.chunk_token_override = Some(Arc::new(|_| None));
+
+        let fallback = fallback_core.process_file_sync(&test_file).unwrap();
+
+        assert!(fallback_core.embedding_batcher.lock().unwrap().is_none());
+        assert!(fallback_core.chunk_token_counter.get().is_none());
+        assert!(
+            fallback
+                .chunks
+                .iter()
+                .all(|chunk| chunk.context.split_part.is_none())
+        );
+
+        let mut counted_core = IndexerCore::with_backend(
+            &temp_dir.path().join("counted-cache"),
+            None,
+            backend,
+        )
+        .unwrap();
+        counted_core.chunk_token_override = Some(Arc::new(|chunk| {
+            Some(chunk.content.lines().count() * 500)
+        }));
+
+        let counted = counted_core.process_file_sync(&test_file).unwrap();
+
+        assert!(counted_core.embedding_batcher.lock().unwrap().is_none());
+        assert!(counted_core.chunk_token_counter.get().is_none());
+        assert!(
+            counted
+                .chunks
+                .iter()
+                .any(|chunk| chunk.context.split_part.is_some())
+        );
     }
 }
