@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Walk `dir_path` and return all reachable `*.rs` files, skipping common
-/// VCS / build directories (`target`, `vendor`, `.git`, `.jj`, `.direnv`).
+/// VCS / build / generated directories (`target`, `vendor`, `.git`, `.jj`,
+/// `.direnv`, `.skeleton`).
 ///
 /// Pure traversal: does not touch `UnifiedIndexer` state. The caller passes
 /// in `stats` so we can populate `total_files` in one place.
@@ -31,7 +32,10 @@ pub(super) fn collect_rust_files(
         .filter_entry(|entry| {
             let name = entry.file_name().to_string_lossy();
             !(entry.file_type().is_dir()
-                && matches!(name.as_ref(), "target" | "vendor" | ".git" | ".jj" | ".direnv"))
+                && matches!(
+                    name.as_ref(),
+                    "target" | "vendor" | ".git" | ".jj" | ".direnv" | ".skeleton"
+                ))
         });
 
     for entry in walker {
@@ -60,6 +64,32 @@ pub(super) fn collect_rust_files(
 
     stats.total_files = rust_files.len();
     Ok(rust_files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn collect_rust_files_skips_generated_skeleton_tree() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let root = temp_dir.path();
+        let src = root.join("src");
+        let skeleton = root.join(".skeleton/src");
+        fs::create_dir_all(&src).expect("create src");
+        fs::create_dir_all(&skeleton).expect("create skeleton");
+        fs::write(src.join("lib.rs"), "pub fn real() {}\n").expect("write real source");
+        fs::write(skeleton.join("lib.rs"), "pub fn generated() {}\n")
+            .expect("write generated source");
+
+        let mut stats = IndexStats::default();
+        let files = collect_rust_files(root, &mut stats).expect("collect rust files");
+
+        assert_eq!(stats.total_files, 1);
+        assert_eq!(files, vec![src.join("lib.rs")]);
+    }
 }
 
 /// PHASE 1 of `index_directory_parallel`: parse and chunk a batch of files
