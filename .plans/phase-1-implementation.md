@@ -204,34 +204,33 @@ them — only the write/reward path needs it.
   need soft membership + zoom-through to raw; co_change needs git history (young
   code = weak signal).
 
-### P1.5 — Structural CRUD with auto-propagation (the heavy item; before P1.4)
-- **Goal:** `add/modify_signature/modify_body/delete/move` + `extract_*/inline/
-  split/merge` + module/crate ops; each applies atomically or refuses.
-- **Builds on:** P0.2 apply==rebuild engine, RA rename (`rename_by_*` — but make
-  it **apply**, not preview), `WorkspaceHost`.
-- **Net-new:** source mutation + multi-file transaction + propagation per op.
-- **Steps (in ascending difficulty):**
-  1. `move(target,dest)` — relocate decl, fix `use` paths (RA-assisted), cycle
-     check.
-  2. `delete(target)` — ref-check; refuse or cascade.
-  3. `modify_signature` — apply RA rename mechanics + **callsite synthesis** for
-     added params (open decision: refuse / `todo!()` / `callsite_strategy`).
-  4. `modify_body` — replace body span; gated by P1.6.
-  5. `extract_function`/`extract_trait`/`inline`.
-  6. `split_module`/`merge_modules`.
-  7. `create_module`/`move_module`/`lift_to_crate`/`lower_to_module` — touches
-     `mod` tree + **Cargo.toml**.
-- **Exit:** each op atomically mutates source, re-syncs graph via P0.2, or
-  refuses with structured reason.
-- **Issues:**
-  - RA rename is **preview-only** today; applying edits + handling RA refusals
-    (keywords, foreign items, conflicts) is new and partial.
-  - **Transactionality:** N file edits must apply atomically with clean rollback
-    on any failure (lean on jj checkpoint per op).
-  - `modify_signature` callsite synthesis — the biggest correctness call.
-  - `lift_to_crate`/Cargo.toml edits — workspace manifest surgery, easy to break
-    the build.
-  - Silent propagation bugs corrupt training data.
+### P1.5 — Structural CRUD with auto-propagation (split per review #5)
+Split into an MVP vertical slice (P1.5a) that closes the end-to-end loop, then
+expansions. **P1.5a is the only CRUD on the critical path to M3**; b–e follow
+after the first loop runs. All ride the P0.2 apply==rebuild engine and the D2/D3
+affected-set + invalidation contracts; each op is wrapped in a D4 checkpoint.
+
+- **P1.5a (MVP) — `modify_body` only.** Local, **no propagation** (body-only
+  edit class in D2 → cheapest re-extract). Exercises the *entire* apply → gate
+  (P1.6) → reward (P1.7) path with the least surface. This is what unblocks the
+  first end-to-end episode (M3). *Builds on:* P0.2, skeleton body span. *Exit:*
+  body replaced, graph re-synced via the body-only D2 path, gated, rewarded, or
+  refused.
+- **P1.5b — `move` + `delete`.** Introduces propagation: `move` fixes `use`
+  paths (RA-assisted) + cycle check; `delete` ref-checks then refuses/cascades.
+  First use of reverse-dep affected sets.
+- **P1.5c — `modify_signature`.** Apply RA rename mechanics + **callsite
+  synthesis** for added params — the open decision (refuse / `todo!()` /
+  `callsite_strategy`). Highest correctness risk.
+- **P1.5d — `extract_function` / `extract_trait` / `inline`.**
+- **P1.5e — `split_module` / `merge_modules` / `create_module` / `move_module` /
+  `lift_to_crate` / `lower_to_module`.** Touches `mod` tree + **Cargo.toml**
+  (manifest surgery; Cargo edits = cold-rebuild class in D2).
+- **Cross-cutting issues:** RA rename is **preview-only** today — applying edits
+  and handling RA refusals (keywords, foreign items, conflicts) is new;
+  multi-file **transactionality** via per-op D4 checkpoint; `modify_signature`
+  synthesis is the biggest call; silent propagation bugs corrupt training data
+  (mitigate with apply-vs-cold-rebuild differential tests on every op).
 
 ### P1.4 — Counterfactual simulator (after P1.5)
 - **Goal:** `simulate(op)` → predicted deltas + cascade + would-refuse, no apply.
@@ -298,6 +297,12 @@ them — only the write/reward path needs it.
 
 ## Issues Register (ranked by lethality)
 
+Review-raised structural hazards are now resolved by the M0 decisions: snapshot
+identity → **D1**; affected-set → **D2**; full invalidation → **D3**; rollback
+contract → **D4**; P1.5 scope → **split into P1.5a–e**. The two existential
+*measured* unknowns (RA fan-out, cargo latency) remain — they gate everything.
+
+
 1. **Warm-host incremental rebuild reach (P0.2).** If RA invalidation fan-out
    on a small edit is large, "sub-second" fails and the whole RL loop is
    infeasible. *Mitigation:* measure fan-out early on real edits before
@@ -332,17 +337,149 @@ them — only the write/reward path needs it.
 
 ## Recommended milestone order
 
-- **M0 (de-risk):** P0.1 + a *spike* of P0.2 measuring RA invalidation fan-out
-  and a P1.7 spike measuring `cargo check` latency. **These two numbers decide
-  whether the project is feasible as designed.** Do them first, before building
-  anything large.
+- **M0 (decisions + de-risk):** P0.1 + the four **decisions D1–D4** (written
+  contracts: working-snapshot, affected-set, invalidation matrix, checkpoint) +
+  the two **feasibility spikes** (RA fan-out, cargo latency) with go/no-go
+  thresholds. M0 outputs *decisions, not just numbers.* Nothing large is built
+  until D1–D4 hold and both spikes pass.
 - **M1 (read side, parallel, on slow build):** P1.1 + P1.2 + P1.3. Independent
   of P0.2; validates the vision/observation half.
-- **M2 (write engine):** finish P0.2, then P1.5, then P1.4, then P1.6.
-- **M3 (loop):** P0.3 + P1.7 + P1.8 → first end-to-end episodes with a frontier
-  model.
-- **Gate to Phase 2:** M3 green on the rmc repo's own known refactors.
+- **M2a (write engine core):** finish P0.2 (implementing D1–D4) + **P1.5a
+  `modify_body` only**.
+- **M3 (first loop — early!):** P0.3 + P1.6 + P1.7 + P1.8 with `modify_body`
+  alone → end-to-end episodes with a frontier model **before** the full CRUD
+  surface exists. This is the point of the P1.5 split: prove the loop, then
+  widen it.
+- **M2b (CRUD expansion):** P1.5b → c → d → e, then P1.4 simulator (as a dry-run
+  mode of the now-stable apply engine).
+- **Gate to Phase 2:** M3 green on the rmc repo's own known refactors, widened
+  by M2b.
 
 The two M0 spikes are the cheapest way to surface the two lethal issues (#1, #2)
-before sinking months into the build.
+before sinking months into the build; D1–D4 are the cheapest way to surface the
+correctness/identity hazards (#3–#5, #11) before they corrupt training data.
+
+---
+
+## M0 — Decisions to resolve before build (addresses review)
+
+Review (2026-05-28) correctly flagged that M0 must produce **hard decisions**,
+not just measurements, and that four contracts were underdefined: snapshot
+identity under mutation, the affected-set algorithm, the full invalidation
+matrix, and the rollback contract. Resolved below. M0 = these four decisions
+**plus** the two feasibility spikes that validate them.
+
+### D1 — Working-snapshot strategy (resolves review #1)
+
+The published store is content-addressed: `graph_id_for(workspace_hash,
+fingerprint)`, with a `CURRENT` pointer and a per-`graph_id` manifest
+(`storage.rs`). Any `.rs` byte flips the fingerprint → a new `graph_id`. So
+in-place patching of a published snapshot **breaks the invariant** that a
+`graph_id` equals its contents.
+
+**Decision:** Phase 1 adds a second snapshot class.
+
+- **Published snapshots** (`snapshots/<graph_id>/`, immutable, content-addressed)
+  — unchanged. Still the cold-build artifact; serve as an episode's *initial
+  state*.
+- **Working snapshot** (`working/<session_id>/`, **mutable, identity-decoupled**)
+  — identity is `(session_id, base_graph_id, edit_seq)`, **not** a content
+  fingerprint. Never published or reused by fingerprint; purely ephemeral RL
+  state. The apply==rebuild engine patches this in place.
+- **Init:** at episode start, copy the base published LMDB into the working dir
+  (LMDB `mdb_copy`, once per episode, amortized over ~50 steps — fine under
+  right-sized rigor). Open the warm RA host from the same base.
+- **Publish (optional):** only if a result must persist — recompute the real
+  fingerprint/`graph_id` and copy out. Training normally logs the trajectory and
+  discards the working snapshot.
+
+This is the explicit answer to "mutable live snapshot vs new snapshot per edit":
+**one mutable working snapshot per session**, not a new content-addressed
+snapshot per edit (which would mean an LMDB copy per step).
+
+### D2 — Affected-set algorithm (resolves review #3)
+
+"`emit_crate` only for dirty crates" is too optimistic. `extract` builds
+crate/module maps then runs bindings, impl items, attributes, signatures,
+statics, and usages over the local crate set; an exported-surface change ripples
+into reverse-dependents' usages/bindings. Reverse-deps come from the existing
+`crate_edges` consumer→producer graph, reversed.
+
+**Classify the edit, then expand:**
+
+| Edit class | Affected set |
+|---|---|
+| **Body-only** (fn/method body; sig, visibility, items unchanged) | editing fn's outgoing usages only; **no** reverse-deps |
+| **Signature / visibility** (params/return/generics/`pub`) | editing crate (node + signature) **+ reverse-deps that reference the item** (their usages/bindings re-resolve) |
+| **Item add / remove** (pub item created/deleted) | editing crate (nodes/bindings/contains) + reverse-dep usages/bindings (surface changed) |
+| **Module-tree** (add/remove/rename `mod`, move file) | editing crate fully (contains, module nodes, paths) + reverse-dep import bindings (`use` paths) |
+| **Macro / proc-macro / build.rs** | editing crate **fully** + all reverse-deps **fully** (generated code is opaque) |
+| **Cargo.toml feature/dep** | conservative: treat as **cold rebuild** (feature unification can touch the whole workspace) |
+
+The classifier runs on the edit the CRUD op already knows it is making — it does
+not need to infer the class from a textual diff.
+
+### D3 — Invalidation matrix (resolves review #2)
+
+Every persisted table + cache, per edit class. Legend: **P** patch · **D**
+re-derive · **C** content-hash cache (lazy regen, self-invalidating) · **—**
+unchanged · **F** full rebuild.
+
+| Table / cache | Body | Sig/vis | Item ±  | Mod-tree | Macro | Cargo |
+|---|---|---|---|---|---|---|
+| `nodes_by_id` | — | P | P | P | F | F |
+| `bindings_by_id` + `_by_from_module` + `_by_target` | — | P | P | P | F | F |
+| `children_by_parent` (**contains**) | — | — | P | P | F | F |
+| `usages_by_id` + `_by_target` + `_by_consumer` + `_by_consumer_function` | P | P | P | P | F | F |
+| `signatures_by_target` | — | D | D | — | F | F |
+| `static_metadata_by_target` | D (if static) | D | D | — | F | F |
+| `embeddings_by_target` | C | C | C | C | C | C |
+| `descriptions` (new) | C | C | C | C | C | C |
+| `meta_by_key` (counts) | P (usage cnt) | P | P | P | F | F |
+| manifest `node_count` etc. | P | P | P | P | F | F |
+
+`contains`, `signatures`, `statics`, embeddings, descriptions, and `meta` counts
+were the records the review noted as silently stale-able — each now has an
+explicit rule. Content-hash caches (embeddings/descriptions) self-invalidate;
+everything else is patched or re-derived against the affected set from D2.
+
+### D4 — Checkpoint / restore contract (resolves review #4)
+
+`jj op restore` only restores **source**. A `Checkpoint` must capture all four
+layers and `restore` must reset them atomically:
+
+```
+Checkpoint = {
+  source:      jj operation id,
+  graph:       working-snapshot undo-log marker (inverse of each LMDB patch),
+  ra_host:     warm-host edit-sequence number,
+  caches:      embeddings/descriptions are content-hash keyed → self-heal,
+}
+```
+
+- **Per-op undo log** (not full LMDB copies): each patch records the prior value
+  of every key it touches; `restore` replays inverses back to the marker —
+  cheap, suited to frequent rollback.
+- **Source:** `jj op restore` to the checkpoint op.
+- **RA host:** replay inverse `set_file_text` (same incremental path as apply) to
+  the marked edit-seq; if that diverges, fall back to re-open from base (slow —
+  avoid).
+- **Atomicity:** all-or-nothing; a failed restore re-opens the working snapshot
+  from base.
+
+This makes rollback a first-class contract across source + graph + host +
+caches, not a thin `jj` wrapper.
+
+### M0 feasibility spikes (validate the decisions)
+
+1. **RA invalidation fan-out** — apply representative edits of each D2 class to a
+   warm host; measure the real affected-set size and re-extract time. **Go/no-go:
+   body-only edit re-extract < 500ms on a 100k-LOC workspace.** If fan-out is
+   workspace-wide for small edits, D2 collapses and the design needs rework.
+2. **Cargo gate latency** — `cargo check` (warm/incremental) and a scoped test
+   run on the P0.4 pool. **Go/no-go: per-commit check < ~2s warm.** If not,
+   adopt RA-type-check-as-gate and test-only-at-`declare_done`.
+
+M0 ships D1–D4 as written contracts **and** these two numbers. Only then does
+M2 (write engine) start.
 ```
