@@ -65,7 +65,11 @@ share: `rmc-env` largest (5-verb API + CRUD + gates + reward + episode, spread
 across P1.1/P1.4/P1.5/P1.6/P1.7/P1.8/P1.X), then `rmc-analyze` (~2.9k),
 `rmc-host` (~2.0k), `rmc-graph` modifications (~1.5k), `rmc-bench` (~1.1k),
 `rmc-describe` (~1.0k). (Note: the P1.X section's own rollup under-counted —
-it omitted steps 17–19; the table above is authoritative.)
+it omitted steps 17–19; the table above is authoritative.) The per-step
+estimates are pre-reconciliation: the §Canonical Resolutions dedup (P1.8 no
+longer rebuilds the action layer; P1.4/P1.6/P1.7 share `reward_model` +
+`audit_battery`; one cycle/adjacency impl) removes an estimated **~400–600 prod
+LOC** of duplication, so the real total is modestly below 18,815.
 
 ---
 
@@ -98,35 +102,135 @@ P1.X integration (sits above all)
 
 ---
 
-## Cross-step reconciliation — conflicts to resolve before build
+## Canonical Resolutions (authoritative — supersedes any conflicting step text)
 
-Surfaced by the P1.X integration agent. These are real naming/ownership
-collisions that will break the build if two owners land independently. Resolve
-ownership before implementing the affected steps:
+The 20 step sections were drafted by independent parallel agents with no shared
+memory; they collide on names, owners, and a few whole subsystems. This section
+is the single source of truth. **Where a step section below contradicts this,
+this section wins.** It folds in the doc's original 8-item list, the deeper
+duplications found in review, and the borrow-ownership constraint.
 
-1. **`emit_crate_scoped`** — marked "new" in P0.2b *and* P1.5a/d/e. **Owner =
-   P0.2b** (`rmc-graph::graph::extract`); others consume.
-2. **`UndoLog` / `UndoEntry`** — defined twice with *different* variant shapes:
-   P0.2c (`rmc-host::patch`) and P0.3 (`rmc-host::undo`). **Resolve to P0.3's
-   `rmc-host::undo`** (more complete D4 form); P0.2c records into it. **(build
-   blocker)**
-3. **`apply_source_change`** — "new" in both P1.5b and P1.5c
-   (`rmc-server::semantic::rename`). **Owner = P1.5b**; P1.5c reuses.
-4. **`fn_body_range`** — "new" in both P1.5a and P1.5d
-   (`rmc-graph::graph::skeleton::source`). **Owner = P1.5a**; P1.5d reuses.
-5. **`SCHEMA_VERSION` double-bump** — P0.1 (adds `seed`) and P1.2 (adds
-   `descriptions_by_target`) both bump 12→13. **Sequence: P0.1 → 13, P1.2 → 14**
-   (+ `DEFAULT_MAX_DBS` raise belongs to P1.2). **(build blocker)**
-6. **`petgraph` / `rand` / `rand_chacha` / `toml_edit` / `fs_extra`** — workspace
-   deps claimed independently by P1.3a/b, P1.5b/e, P0.4. **Declared once in root
-   `Cargo.toml` by P1.X.**
-7. **CRUD error module drift** — mix of `rmc-env::crud::error` and
-   `rmc-env::error`. **Canonicalize to `rmc-env::crud::error`.**
-8. **Host apply entrypoint** — P0.2a defines `WorkspaceHost::apply_edits`; P1.5a
-   references `WorkspaceHost::apply`. **Canonical = `apply_edits`**; add
-   `ApplyError` to `rmc-host::error`.
+### A. Action layer — one owner (P1.X), one name set
+P1.8 and P1.X independently defined the *entire* action layer in the same file.
+**P1.X owns it; P1.8 consumes it.**
+- **Owner P1.X** (`rmc-env/src/action.rs`): `Action` (5 variants
+  `Navigate`/`Analyze`/`Query`/`Crud`/`Meta`), the sub-enums, `ActionCategory`,
+  `Observation`, `EnvSession`, `Action::dispatch(self, &mut EnvSession) ->
+  Observation`.
+- **P1.8 owns only**: `EpisodeRunner`, `Trajectory`/`TrajectoryStep`/`StepRecord`,
+  `Policy`/`ScriptedPolicy`/`ApiPolicy`, `StepBudget`/`Termination`/
+  `EpisodeOutcome`, `Episode`/`TaskSpec`. It does **not** define `Action`, the
+  sub-enums, or the per-episode aggregate.
+- **Renames (P1.8's names are dropped):** `AnalyzeOp/QueryOp/MetaOp` →
+  `Analyze/Query/Meta`; `ActionKind` → `ActionCategory`; `StepResult` →
+  `Observation`; `EpisodeState` → `EnvSession`.
 
-Highest priority: **#2 and #5 (build blockers).**
+### B. MCP env surface — session API canonical
+P1.8's blocking `run_episode` and P1.X's session API are two designs; the
+session API is canonical because RL needs interactive step-observe-decide.
+- **Canonical (P1.X):** `env_open / env_step / env_view / env_reset /
+  env_simulate / env_reward` over `EnvRegistry`; one `tools/env/` module, one
+  `tools/params/env.rs`.
+- **`run_episode` (P1.8) becomes a thin server-side driver** that opens a
+  session and steps a `ScriptedPolicy`/`ApiPolicy` to completion over `env_step`
+  — a convenience wrapper, not a second API. It lives in `tools/env/`. Drop the
+  separate `tools/endpoints/env.rs` and the duplicate `RunEpisodeParams`.
+
+### C. Shared reward / gate / audit model — one module
+P1.4 (sim), P1.6 (gate), P1.7 (reward) each redefined the same types. **New
+module `rmc-env::reward_model` owns them; all three import, none redefine:**
+`Severity`, `GateOutcome`, `PrincipleViolation` (merge P1.6's `Penalty` in —
+drop `Penalty`), `AuditSnapshot`, `AuditDelta`, `GraphMetrics`,
+`GraphMetricsDelta` (merge P1.4's `MetricDelta` in — drop `MetricDelta`).
+Plus **`rmc-env::audit_battery::run_audit_battery(loaded, snap, scope) ->
+AuditSnapshot`** — the single orchestrator of the audit set
+(`recursion_check`/`dead_pub_report`/`unsafe_audit`/`fn_body_audit`/
+`crate_dependency_metric`). P1.6/P1.7/P1.4 call it; none re-batch the audits.
+
+### D. Shared graph helpers — adjacency + cycle detection (in rmc-graph)
+- **Cycle detection — one impl.** `rmc-graph` exposes
+  `OpenedSnapshot::would_create_crate_cycle(consumer, producer) -> bool` (SCC
+  over `crate_edges`, reusing `recursion_check`'s machinery). P1.5b, P1.5e, P1.4
+  all call it. Drop the three ad-hoc cycle checks.
+- **Adjacency — one set of builders, in rmc-graph:** `crate_edge_graph()`,
+  `module_edge_pairs()`, `call_adjacency()`. Consumed by rmc-analyze (P1.3a
+  spectral, P1.3b affinity) and rmc-env::reward (P1.7). P1.3a drops its own
+  `structural_adjacency`; P1.4/P1.7 build no private adjacencies.
+
+### E. EditPlan / compute_effects / persist — owner P1.5a
+The apply pipeline split is **owned by P1.5a** (`rmc-env::crud`): `EditPlan`,
+`compute_effects(&self, ...) -> EditPlan`, `persist(&mut self, EditPlan)`.
+P1.5a's file list gains `crud/effects.rs`. **P1.4's simulator is a dry-run mode
+that calls `compute_effects` and skips `persist`** (it does not introduce the
+split). P1.5d consumes. This removes the build-order inversion (P1.5a precedes
+P1.4 in M2a→M2b).
+
+### F. CRUD module / engine / errors / cycle-refusal
+- **File:** `rmc-env::crud` lives in `crud.rs` (file-based; submodules under
+  `crud/`). Drop `crud/mod.rs` and `crud/engine.rs`.
+- **Engine:** `CrudEngine` only. Drop the phantom `Editor`.
+- **Errors:** `rmc-graph::graph::patch::PatchError` → `rmc-host::ApplyError`
+  (`#[from] PatchError`) → `rmc-env::crud::error::CrudError` (`#[from]
+  ApplyError`). Drop `GraphError`. CRUD error module = `rmc-env::crud::error`.
+- **Cycle refusal:** `RefusalReason::Cycle` only (P1.6). Drop the `CycleRefusal`
+  type; the cycle check returns a bool and the CRUD op constructs the `Refusal`.
+
+### G. Host / storage ownership
+- **`WorkingSnapshot` defined once** in `rmc-graph::graph::working` (the storage
+  primitive: mutable LMDB copy + `compute_patch`/`apply_patch`), with
+  `WorkingSnapshotId` (D1). **rmc-host does NOT redefine it**; `WorkspaceHost`
+  holds one as a field. (Resolves the cross-crate name clash.)
+- **`UndoLog`/`UndoEntry` defined once** in `rmc-host::undo` (P0.3, the complete
+  D4 form). P0.2c's `apply_patch` *records into* it; P0.2c does not define its
+  own. **(was build blocker)**
+- **Host apply entrypoint = `WorkspaceHost::apply_edits`** (P0.2a); `ApplyError`
+  lives in `rmc-host::error`. Drop `WorkspaceHost::apply`.
+- **`EditClass` owner = P0.2b** (`rmc-graph::graph::affected`, next to
+  `affected_set`); rmc-host imports it.
+
+### H. Build-order & pinned signatures
+- **`SCHEMA_VERSION`:** P0.1 → **13** (adds `seed`/determinism); P1.2 → **14**
+  (adds `descriptions_by_target` + the `DEFAULT_MAX_DBS` raise). Sequenced, no
+  double-bump. **(was build blocker)**
+- **`emit_crate_scoped` owner P0.2b** (`rmc-graph::graph::extract`). Pinned sig:
+  `pub fn emit_crate_scoped(loaded: &LoadedWorkspace, krate: Crate, model: &mut
+  ExtractionModel) -> Result<()>` (verify against `emit_crate`). All others
+  consume.
+- **`apply_source_change` owner P1.5b** (`rmc-server::semantic::rename`). Pinned
+  sig: `pub fn apply_source_change(host: &mut WorkspaceHost, change:
+  SourceChange) -> Result<Vec<PathBuf>, ApplyError>` (applies RA `SourceChange`
+  to the warm-host VFS, returns changed files). P1.5c reuses this exact sig.
+- **`fn_body_range` owner P1.5a** (`rmc-graph::graph::skeleton::source`); P1.5d
+  reuses. `find_item_syntax` visibility raised once (by P1.5a).
+
+### I. Workspace dependencies — declared once
+`petgraph`, `rand`, `rand_chacha`, `toml_edit`, `fs_extra` declared once in root
+`Cargo.toml` `[workspace.dependencies]` (**owner P1.X**); all crates inherit.
+
+### J. Warm-host borrow/ownership (architecture constraint, not a rename)
+`CrudEngine` needs `&mut WorkspaceHost` and `Simulator` needs `&WorkspaceHost`;
+holding both simultaneously inside `EnvSession` is an aliasing-`&mut` error that
+may not compile. **Resolution:** `EnvSession` owns `WorkspaceHost` **by value**;
+`CrudEngine`/`Simulator` are *not* stored holding a borrow — `dispatch`
+constructs them per-arm with a fresh reborrow of the host. If parallel rollouts
+later force it, move the host behind the P0.2a mpsc channel-actor. This
+constraint may reshape the `dispatch` signature and must be settled before P1.8.
+
+### K. DRY notes (non-blocking, fold during implementation)
+- `description_cache.rs` (P1.2) hand-clones `embedding_cache.rs` — instead
+  extract a generic `ContentHashCache<R>` in `rmc-graph` and instantiate it for
+  both embedding and description records.
+- The thin rmc-graph scan helpers (`reverse_crate_edges`, `who_uses_targets`,
+  `callees_adjacency`, `references_in_span`, `crate_edge_graph`,
+  `module_edge_pairs`) each re-walk `usages_by_id`/`crate_edges` — build them on
+  one shared scan pass in `rmc-graph::query`.
+
+### Priority order for resolution
+1. **A + B** (action layer + MCP surface) — the largest structural collision.
+2. **G `UndoLog` + H `SCHEMA_VERSION`** — the two build blockers.
+3. **C** (shared reward_model + audit_battery) — prevents silent type divergence.
+4. **J** (host borrow constraint) — may not compile otherwise.
+5. **D, E, F, I, K** — name/owner cleanups, mechanical once 1–4 are set.
 
 ---
 
@@ -1132,6 +1236,8 @@ Highest priority: **#2 and #5 (build blockers).**
 
 **Goal:** Turn `commit()` into the reward producer — snapshot audit + graph metrics pre-op, run the two-tier correctness gate (RA diagnostics per step / cargo at `declare_done`), diff audit + graph-metric deltas into a fixed-scalarization `RewardVector`, and roll the working snapshot back via the D4 checkpoint on any hard-fail.
 
+> **Reconciled (§Canonical Resolutions C/D):** `Severity`, `GateOutcome`, `PrincipleViolation`, `AuditSnapshot`, `AuditDelta`, `GraphMetrics`, `GraphMetricsDelta` are **imported from `rmc-env::reward_model`**, not redefined here (P1.6 and P1.4 import the same). The audit set runs through `rmc-env::audit_battery::run_audit_battery`; the petgraph adjacency comes from rmc-graph's shared `crate_edge_graph`/`module_edge_pairs` builders. Cycle counting uses `would_create_crate_cycle`/`recursion_check`, not a private impl.
+
 **Crates:** new: [rmc-env] | modified: [rmc-graph, rmc-host]
 
 **Files** (one row per file; new/mod/del):
@@ -1204,7 +1310,9 @@ Highest priority: **#2 and #5 (build blockers).**
 
 
 ### P1.8 — Episode runner + trajectory logging
-**Goal:** Close the loop — define the top-level `Action` enum over the five verb categories, an `EpisodeRunner` that drives view→action→reward under a `StepBudget`, a `Trajectory`/`TrajectoryStep` log (the future SFT data format), and an API harness that runs a frontier model end-to-end on the rmc workspace itself.
+**Goal:** Close the loop — an `EpisodeRunner` that drives view→action→reward under a `StepBudget`, a `Trajectory`/`TrajectoryStep` log (the future SFT data format), and an API harness that runs a frontier model end-to-end on the rmc workspace itself.
+
+> **Reconciled (§Canonical Resolutions A/B):** P1.8 does **not** define the action layer — `Action`, the sub-enums, `ActionCategory`, `Observation`, and the per-episode aggregate (`EnvSession`) are owned by P1.X and consumed here. P1.8's `AnalyzeOp/QueryOp/MetaOp`, `ActionKind`, `StepResult`, `EpisodeState` are dropped in favor of P1.X's names. `run_episode` is a thin server-side driver over the canonical `env_step` session API, living in `tools/env/` (no separate `endpoints/env.rs`). The borrow constraint in §J governs how `dispatch` holds the host.
 
 **Crates:** new: [rmc-env] | modified: [rmc-server, root Cargo.toml]
 
@@ -1288,6 +1396,8 @@ Highest priority: **#2 and #5 (build blockers).**
 
 ### P1.X — Cross-cutting: workspace integration & API surface
 **Goal:** Wire the five new crates into the virtual workspace + `[workspace.dependencies]`, expose the env behind feature-gated MCP tools on `SearchToolRouter`, define the single top-level `Action` facade that fans out to the five verb sub-enums, and ship the consolidated module map + the cross-step LOC/naming reconciliation.
+
+> **Reconciled (§Canonical Resolutions A/B/I):** P1.X is the **sole owner** of the action layer (`action.rs`, `Action`, sub-enums `Navigate/Analyze/Query/Crud/Meta`, `ActionCategory`, `Observation`, `EnvSession`, `Action::dispatch`) and of the session MCP surface (`env_open/env_step/env_view/env_reset/env_simulate/env_reward`). P1.8's runner/policy/trajectory consume these; its `run_episode` is folded in here as a thin driver over `env_step`. The five shared workspace deps are declared once here.
 **Crates:** new: [] (no new crate) | modified: [Cargo.toml (root), rmc-env, rmc-server, rmc-config]
 
 **Files** (one row per file; new/mod/del):
