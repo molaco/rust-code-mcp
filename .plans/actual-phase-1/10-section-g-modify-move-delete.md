@@ -10,7 +10,7 @@ All three verbs are thin wrappers around four substrates: (a) the persisted `Ope
 
 A new workspace crate `rmc-crud` is the cleanest home. It cannot live inside `rmc-graph` (would force `rmc-graph` to depend on `ra_ap_ide`'s rename machinery via `rmc-server::semantic`); cannot live inside `rmc-server` (would drag MCP binary surface into every consumer).
 
-- `crates/rmc-crud/Cargo.toml` — new crate. Deps: `rmc-graph` (path), `rmc-host` (path — or the host module re-exported from rmc-graph), `rmc-semantic` (NEW crate, see below) for `SemanticService`/`RenamePreview`/`RenameEdit`/`RenameFileMove`; `ra_ap_syntax`; `anyhow`/`thiserror`; `tracing`; `tempfile` in dev-deps.
+- `crates/rmc-crud/Cargo.toml` — new crate. Deps: `rmc-graph` (path), `rmc-host` (path — or the host module re-exported from rmc-graph), `rmc-semantic` (NEW crate, see below) for `SemanticService`/`RenamePreview`/`RenameEdit`/`RenameFileMove`; `ra_ap_syntax`; `thiserror` (workspace `"1"`; `rmc-crud` is a library so it gets a typed `EditError`, **not** `anyhow`); `tracing`; `tempfile` in dev-deps.
 - `crates/rmc-crud/src/lib.rs` — facade re-exporting `Crud`, `EditOutcome`, `EditError`, `CascadePolicy`, `BodyEdit`, `MoveOp`, `DeleteOp`, `GraphDiffSummary`.
 - `crates/rmc-crud/src/edit.rs` — pure data types.
 - `crates/rmc-crud/src/source_edit.rs` — byte-level splicing helpers.
@@ -57,6 +57,7 @@ pub struct DeleteOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CascadePolicy {
     #[default] Refuse,
     DeleteCallers,           // bounded-depth (cap 5); recursive delete of caller fns
@@ -64,22 +65,41 @@ pub enum CascadePolicy {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
+#[must_use]
 pub struct GraphDiffSummary {
     pub nodes_added: usize, pub nodes_removed: usize,
     pub bindings_added: usize, pub bindings_removed: usize,
     pub usages_delta: i64,
 }
 
+/// Result of a successful edit. Owns the [`Checkpoint`] that can undo it (see
+/// Step 7 for commit/restore semantics). `#[must_use]`: dropping it silently
+/// commits the live edit, which is almost always a caller bug.
 #[derive(Debug)]
+#[non_exhaustive]
+#[must_use]
 pub struct EditOutcome {
-    pub checkpoint: Checkpoint,
-    pub affected_items: Vec<NodeId>,
-    pub affected_files: Vec<PathBuf>,
-    pub edit_class: EditClass,
-    pub graph_diff_summary: GraphDiffSummary,
+    checkpoint: Checkpoint,
+    affected_items: Vec<NodeId>,
+    affected_files: Vec<PathBuf>,
+    edit_class: EditClass,
+    graph_diff_summary: GraphDiffSummary,
+}
+
+impl EditOutcome {
+    pub fn affected_items(&self) -> &[NodeId] { &self.affected_items }
+    pub fn affected_files(&self) -> &[PathBuf] { &self.affected_files }
+    pub fn edit_class(&self) -> EditClass { self.edit_class }
+    pub fn graph_diff_summary(&self) -> &GraphDiffSummary { &self.graph_diff_summary }
+    /// Consume the outcome and undo the edit via its checkpoint.
+    /// # Errors
+    /// Returns [`EditError`] if the host rejects the restore.
+    pub fn rollback(self, host: &mut WorkspaceHost) -> Result<(), EditError>;
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EditError {
     #[error("target node {0:?} not found in snapshot")] TargetNotFound(NodeId),
     #[error("target node {target:?} has wrong kind: expected {expected}, got {actual:?}")]
@@ -93,7 +113,10 @@ pub enum EditError {
     #[error("move would introduce a module cycle")] ModuleCycle,
     #[error("destination already contains '{path}'")] PathConflict { path: String },
     #[error("warm-host apply rejected the edit: {0}")] HostRejected(String),
-    #[error("io error: {0}")] IoError(#[from] io::Error),
+    // No blanket `#[from] io::Error`: that loses *which* file and *which* op
+    // failed. Carry path + a static op label and preserve the cause via `#[source]`.
+    #[error("io error during {op} on {path}: {source}")]
+    Io { path: PathBuf, op: &'static str, #[source] source: io::Error },
     #[error("cascade depth limit (5) exceeded")] CascadeDepthExceeded,
 }
 ```
@@ -106,20 +129,39 @@ mod body_span; mod source_edit; mod modify_body; mod move_item;
 mod delete; mod preview_apply; mod cycle_check;
 pub use edit::*;
 
-pub struct Crud<'a> {
-    pub host: &'a mut WorkspaceHost,
-    pub snap: &'a OpenedSnapshot,
-    pub semantic: &'a mut SemanticService,
-    pub workspace_root: PathBuf,
+// Separate lifetimes: the two `&mut` borrows (`host`, `semantic`) must NOT be
+// pinned to the shared-snapshot lifetime `'snapshot`. Tying them to one `'a`
+// would force `host`/`semantic` to live exactly as long as `&snapshot`, which
+// blocks re-borrowing the host after the snapshot read window closes. Fields
+// are private; construct via `new`, read via accessors.
+pub struct Crud<'host, 'snapshot, 'semantic> {
+    host: &'host mut WorkspaceHost,
+    snapshot: &'snapshot OpenedSnapshot,
+    semantic: &'semantic mut SemanticService,
+    workspace_root: PathBuf,
 }
 
-impl<'a> Crud<'a> {
-    pub fn new(host: &'a mut WorkspaceHost, snap: &'a OpenedSnapshot,
-               semantic: &'a mut SemanticService, workspace_root: impl Into<PathBuf>) -> Self {
-        Self { host, snap, semantic, workspace_root: workspace_root.into() }
+impl<'host, 'snapshot, 'semantic> Crud<'host, 'snapshot, 'semantic> {
+    pub fn new(
+        host: &'host mut WorkspaceHost,
+        snapshot: &'snapshot OpenedSnapshot,
+        semantic: &'semantic mut SemanticService,
+        workspace_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self { host, snapshot, semantic, workspace_root: workspace_root.into() }
     }
+
+    /// # Errors
+    /// Returns [`EditError`] if the target is missing/wrong-kind/macro-generated,
+    /// the body convention is violated, or the warm host rejects the apply.
     pub fn modify_body(&mut self, op: BodyEdit) -> Result<EditOutcome, EditError>;
+    /// # Errors
+    /// Returns [`EditError`] on non-module destination, a module cycle, a path
+    /// conflict, an RA refusal, or a host rejection.
     pub fn move_item(&mut self, op: MoveOp) -> Result<EditOutcome, EditError>;
+    /// # Errors
+    /// Returns [`EditError`] on live references with `cascade = Refuse`, a
+    /// cascade-depth overflow, or a host rejection.
     pub fn delete(&mut self, op: DeleteOp) -> Result<EditOutcome, EditError>;
 }
 ```
@@ -130,15 +172,16 @@ impl<'a> Crud<'a> {
 
 **Step 1 — Resolve target + validate kind.** WHERE: `modify_body.rs::run`.
 ```rust
-let rtxn = crud.snap.read_txn()?;
-let node = crud.snap.node(&rtxn, op.target)?.ok_or(EditError::TargetNotFound(op.target))?;
+let read_txn = crud.snapshot.read_txn()?;
+let node = crud.snapshot.node(&read_txn, op.target)?
+    .ok_or(EditError::TargetNotFound(op.target))?;
 let kind = node.item_kind;
 if !kind.map(|k| k.is_callable()).unwrap_or(false) {
     return Err(EditError::WrongKind { target: op.target, expected: "callable", actual: kind });
 }
 let (item_start, item_end) = node.span.ok_or(EditError::TargetHasNoSource(op.target))?;
 let rel_file = node.file.clone().ok_or(EditError::TargetHasNoSource(op.target))?;
-drop(rtxn);
+drop(read_txn);
 ```
 DEPENDS: `ItemKind::is_callable` (`model.rs:50`). VERIFY: `modify_body_rejects_non_fn`.
 
@@ -155,9 +198,16 @@ if !body.starts_with('{') || !trailing.ends_with('}') {
 ```
 VERIFY: unit test on `"self.x + 1"` returns `BodyConvention`.
 
-**Step 3 — Find body sub-span.** WHERE: `body_span.rs`.
+**Step 3 — Find body sub-span.** WHERE: `body_span.rs`. Takes a **pre-validated
+span** `(item_start, item_end)` (resolved in Step 1 via
+`node.span.ok_or(EditError::TargetHasNoSource(..))`) — never reaches back into
+`node.span`, so there is no `unwrap()` on a `None` span (that case is already
+modeled as `EditError::TargetHasNoSource`).
 ```rust
-pub(crate) fn body_byte_range(file_text: &str, node: &Node) -> Result<(u32, u32), EditError> {
+pub(crate) fn body_byte_range(
+    file_text: &str,
+    item_span: (u32, u32),
+) -> Result<(u32, u32), EditError> {
     use ra_ap_syntax::{SourceFile, Edition, TextRange, TextSize, ast, AstNode};
     let parse = SourceFile::parse(file_text, Edition::Edition2024);
     if !parse.errors().is_empty() {
@@ -166,7 +216,7 @@ pub(crate) fn body_byte_range(file_text: &str, node: &Node) -> Result<(u32, u32)
         });
     }
     let parsed = parse.tree();
-    let (s, e) = node.span.unwrap();
+    let (s, e) = item_span;
     let wanted = TextRange::new(TextSize::from(s), TextSize::from(e));
     let fn_syntax = parsed.syntax().descendants()
         .filter_map(ast::Fn::cast)
@@ -184,7 +234,7 @@ pub(crate) fn body_byte_range(file_text: &str, node: &Node) -> Result<(u32, u32)
     Ok((u32::from(r.start()), u32::from(r.end())))
 }
 ```
-DEPENDS: `ra_ap_syntax` (already in `rmc-graph` deps; mirror version in `rmc-crud`). VERIFY: `body_byte_offsets_correct` on `pub fn foo() -> u32 { 1 + 2 }`.
+DEPENDS: `ra_ap_syntax` (already in `rmc-graph` deps; mirror version in `rmc-crud`). The caller passes the span it already validated; `body_byte_range` cannot panic on a missing span. VERIFY: `body_byte_offsets_correct` on `pub fn foo() -> u32 { 1 + 2 }`.
 
 **Step 4 — Take checkpoint before writing.**
 ```rust
@@ -196,8 +246,10 @@ DEPENDS: D4 contract. VERIFY: contract test `Checkpoint::take` + immediate `rest
 **Step 5 — Compute new file text in memory.**
 ```rust
 let abs_path = crud.workspace_root.join(&rel_file);
-let original = std::fs::read_to_string(&abs_path)?;
-let (body_start, body_end) = body_span::body_byte_range(&original, &node)?;
+let original = std::fs::read_to_string(&abs_path)
+    .map_err(|source| EditError::Io { path: abs_path.clone(), op: "read", source })?;
+// `(item_start, item_end)` was validated in Step 1 — pass it in, no span unwrap.
+let (body_start, body_end) = body_span::body_byte_range(&original, (item_start, item_end))?;
 let new_text = source_edit::splice_bytes(&original, body_start as usize, body_end as usize, &op.new_body_block);
 let byte_delta: i64 = (op.new_body_block.len() as i64) - ((body_end - body_start) as i64);
 ```
@@ -220,16 +272,24 @@ let edit = FileEdit {
     new_text,
     edit_class: EditClass::BodyOnly,
 };
-let apply = crud.host.apply_edits(&[edit]).map_err(|e| {
+let apply = crud.host.apply_edits(&[edit]).map_err(|apply_err| {
     if let Err(restore_err) = Checkpoint::restore(crud.host, &checkpoint) {
-        tracing::error!(?e, ?restore_err, "modify_body: both apply AND restore failed");
+        tracing::error!(?apply_err, ?restore_err, "modify_body: both apply AND restore failed");
     }
-    EditError::HostRejected(format!("apply rejected: {e}"))
+    EditError::HostRejected(format!("apply rejected: {apply_err}"))
 })?;
 ```
 **Load-bearing decision:** host owns the `fs::write`, not the CRUD layer. Keeps atomicity in one place (RA `set_file_text` + LMDB write txn + disk write under same lock).
 
-**Step 7 — Translate `ApplyOutcome` → `EditOutcome`.**
+**Step 7 — Translate `ApplyOutcome` → `EditOutcome`.** On the **success** path the
+`Checkpoint` is *moved into* the returned `EditOutcome` rather than dropped — i.e.
+ownership of the rollback handle transfers to the caller. This is the RAII commit
+boundary: the apply already happened, so the edit is *live*; holding the checkpoint
+lets the caller (gate/reward loop) either keep the result (commit by simply dropping
+`EditOutcome`, which must NOT auto-restore) or explicitly call
+`EditOutcome::rollback(self)` to undo it. The take/restore boundary therefore commits
+on the `Ok` arm and only restores on the `Err` arms above. `EditOutcome` is
+`#[must_use]` so an accidentally-discarded outcome (and its checkpoint) is caught.
 ```rust
 Ok(EditOutcome {
     checkpoint,
@@ -253,13 +313,17 @@ DEPENDS: `ApplyOutcome` shape from P0.2 (returns counts + `affected_node_ids` so
 
 **Step 9 — Compute dest file + cycle check.** WHERE: `cycle_check.rs`.
 ```rust
-pub(crate) fn would_introduce_cycle(snap: &OpenedSnapshot, rtxn: &GraphRoTxn<'_>,
-                                     target: NodeId, dest_parent: NodeId) -> Result<bool> {
+pub(crate) fn would_introduce_cycle(
+    snapshot: &OpenedSnapshot,
+    read_txn: &GraphRoTxn<'_>,
+    target: NodeId,
+    dest_parent: NodeId,
+) -> Result<bool, EditError> {
     let mut cursor = Some(dest_parent);
     while let Some(id) = cursor {
         if id == target { return Ok(true); }
-        let n = snap.node(rtxn, id)?;
-        cursor = n.and_then(|n| n.parent_id);
+        let node = snapshot.node(read_txn, id)?;
+        cursor = node.and_then(|node| node.parent_id);
     }
     Ok(false)
 }
@@ -269,35 +333,70 @@ Then in `run`: `if cycle_check::would_introduce_cycle(...)? { return Err(EditErr
 **Step 10 — Compute identifier (line, col) for RA.** RA's `rename_by_position` needs `(file, line, column)`, not bytes. Re-parse file with `ra_ap_syntax`; find `ast::Fn::name().syntax().text_range().start()` (mirrors `declaration_name` in `skeleton/source.rs:228`); convert byte → (line, col) via `OpenedSnapshot::line_to_byte` binary search.
 ```rust
 let abs_src_path = crud.workspace_root.join(&rel_src_file);
-let file_text = std::fs::read_to_string(&abs_src_path)?;
+let file_text = std::fs::read_to_string(&abs_src_path)
+    .map_err(|source| EditError::Io { path: abs_src_path.clone(), op: "read", source })?;
 let ident_byte_offset = body_span::identifier_byte_offset(&file_text, &target_node)?;
 let (line, col) = byte_offset_to_line_col(&file_text, ident_byte_offset);
 let preview = crud.semantic.rename_by_position(
     &crud.workspace_root, &abs_src_path, line, col,
     &target_node.display_name, &new_name,
-).map_err(|e| EditError::RaRefused { reason: e.to_string() })?;
+).map_err(|source| EditError::RaRefused { reason: source.to_string() })?;
 ```
 **UPSTREAM CHANGES REQUIRED** — see top-level visibility list above.
 
 **Step 11 — Translate RenamePreview → FileEdits.** WHERE: `preview_apply.rs`.
+
+**Coordinate assumption (documented):** RA's `RenameEdit` line/column are
+**1-based** and `line_to_byte` is indexed by **0-based** line. `start_column`
+is a **byte** column offset *within* the line (UTF-8 byte count from the line
+start, not a Unicode scalar count) — `line_to_byte[line] + (column - 1)` is a
+valid byte offset only under that assumption; a `RenameEdit::column_is_bytes()`
+invariant on the `rmc-semantic` side documents/guarantees it. Every 1-based →
+0-based step uses `checked_sub` (so a stray `0` becomes an `EditError`, not an
+underflow panic), and every `line_to_byte` index is bounds-checked with `.get`.
 ```rust
-pub(crate) fn preview_to_file_edits(snap: &OpenedSnapshot, workspace_root: &Path,
-                                    preview: &RenamePreview) -> Result<Vec<FileEdit>, EditError> {
+pub(crate) fn preview_to_file_edits(
+    snapshot: &OpenedSnapshot,
+    workspace_root: &Path,
+    preview: &RenamePreview,
+) -> Result<Vec<FileEdit>, EditError> {
+    // Resolve one 1-based (line, byte-column) RA coordinate into a 0-based byte
+    // offset, rejecting 0-coordinates and out-of-range lines instead of panicking.
+    fn resolve_byte(
+        line_to_byte: &[u32],
+        line_1based: u32,
+        col_1based: u32,
+    ) -> Result<u32, EditError> {
+        let line0 = line_1based.checked_sub(1).ok_or_else(|| EditError::BodySpliceFailed {
+            reason: format!("RA line {line_1based} is below 1 (1-based expected)"),
+        })?;
+        let col0 = col_1based.checked_sub(1).ok_or_else(|| EditError::BodySpliceFailed {
+            reason: format!("RA column {col_1based} is below 1 (1-based expected)"),
+        })?;
+        let line_start = line_to_byte.get(line0 as usize).copied().ok_or_else(|| {
+            EditError::BodySpliceFailed {
+                reason: format!("RA line {line_1based} out of range ({} lines)", line_to_byte.len()),
+            }
+        })?;
+        Ok(line_start + col0)
+    }
+
     let mut by_file: BTreeMap<PathBuf, Vec<(u32, u32, String)>> = BTreeMap::new();
-    for e in &preview.edits {
-        let rel = e.file_path.strip_prefix(workspace_root).unwrap_or(&e.file_path);
-        let line_to_byte = snap.line_to_byte(rel.to_string_lossy().as_ref())?;
-        let start_byte = line_to_byte[(e.start_line - 1) as usize] + (e.start_column - 1);
-        let end_byte   = line_to_byte[(e.end_line - 1) as usize]   + (e.end_column - 1);
-        by_file.entry(e.file_path.clone()).or_default()
-            .push((start_byte, end_byte, e.new_text.clone()));
+    for edit in &preview.edits {
+        let rel = edit.file_path.strip_prefix(workspace_root).unwrap_or(&edit.file_path);
+        let line_to_byte = snapshot.line_to_byte(rel.to_string_lossy().as_ref())?;
+        let start_byte = resolve_byte(&line_to_byte, edit.start_line, edit.start_column)?;
+        let end_byte   = resolve_byte(&line_to_byte, edit.end_line,   edit.end_column)?;
+        by_file.entry(edit.file_path.clone()).or_default()
+            .push((start_byte, end_byte, edit.new_text.clone()));
     }
     let mut out = Vec::new();
     for (path, mut edits) in by_file {
         edits.sort_by(|a, b| b.0.cmp(&a.0));        // descending so earlier splices keep offsets
-        let mut text = std::fs::read_to_string(&path)?;
-        for (s, e, repl) in &edits {
-            text = source_edit::splice_bytes(&text, *s as usize, *e as usize, repl);
+        let mut text = std::fs::read_to_string(&path)
+            .map_err(|source| EditError::Io { path: path.clone(), op: "read", source })?;
+        for (start, end, replacement) in &edits {
+            text = source_edit::splice_bytes(&text, *start as usize, *end as usize, replacement);
         }
         out.push(FileEdit { path, new_text: text, edit_class: EditClass::ModuleTree });
     }
@@ -316,12 +415,17 @@ let same_file = dest_rel_file == rel_src_file;
 let item_text = file_text[item_start as usize .. item_end as usize].to_string();
 let mut src_new_text = source_edit::delete_byte_range(&file_text, item_start as usize, item_end as usize);
 src_new_text = source_edit::collapse_blank_lines(&src_new_text, item_start as usize);
-let dest_file_text = if same_file { src_new_text.clone() }
-                    else { std::fs::read_to_string(crud.workspace_root.join(&dest_rel_file))? };
+let dest_file_text = if same_file {
+    src_new_text.clone()
+} else {
+    let dest_abs = crud.workspace_root.join(&dest_rel_file);
+    std::fs::read_to_string(&dest_abs)
+        .map_err(|source| EditError::Io { path: dest_abs, op: "read", source })?
+};
 let insertion_point = compute_dest_insertion_byte(&dest_file_text, &dest_node);
 let dest_new_text = source_edit::insert_at_byte_offset(&dest_file_text, insertion_point, &format!("\n\n{}\n", item_text));
 
-let mut file_edits = preview_to_file_edits(crud.snap, &crud.workspace_root, &preview)?;
+let mut file_edits = preview_to_file_edits(crud.snapshot, &crud.workspace_root, &preview)?;
 upsert_file_edit(&mut file_edits, FileEdit { path: abs_src, new_text: src_new_text, edit_class: EditClass::ModuleTree });
 if !same_file {
     upsert_file_edit(&mut file_edits, FileEdit { path: abs_dst, new_text: dest_new_text, edit_class: EditClass::ModuleTree });
@@ -338,8 +442,8 @@ if !same_file {
 
 **Step 16 — Ref-check.**
 ```rust
-let refs   = crud.snap.who_imports(op.target)?;
-let usages = crud.snap.usages_of(op.target)?;
+let refs   = crud.snapshot.who_imports(op.target)?;
+let usages = crud.snapshot.usages_of(op.target)?;
 if (!refs.is_empty() || !usages.is_empty()) && matches!(op.cascade, CascadePolicy::Refuse) {
     return Err(EditError::RefsExist { refs, usages });
 }
@@ -350,17 +454,23 @@ DEPENDS: `who_imports` (`query/usage.rs:798`), `usages_of` (line 802) — both a
 ```rust
 let mut deletions: Vec<NodeId> = vec![op.target];
 if matches!(op.cascade, CascadePolicy::DeleteCallers) {
-    cascade_collect(&mut deletions, crud.snap, op.target, 0)?;
+    cascade_collect(&mut deletions, crud.snapshot, op.target, 0)?;
 }
-fn cascade_collect(out: &mut Vec<NodeId>, snap: &OpenedSnapshot, target: NodeId, depth: u8) -> Result<()> {
+fn cascade_collect(
+    out: &mut Vec<NodeId>,
+    snapshot: &OpenedSnapshot,
+    target: NodeId,
+    depth: u8,
+) -> Result<(), EditError> {
     const MAX_DEPTH: u8 = 5;
     if depth >= MAX_DEPTH { return Err(EditError::CascadeDepthExceeded); }
-    let usages = snap.usages_of(target)?;
-    let caller_fns: HashSet<NodeId> = usages.iter().filter_map(|u| u.consumer_function).collect();
-    for f in caller_fns {
-        if !out.contains(&f) {
-            out.push(f);
-            cascade_collect(out, snap, f, depth + 1)?;
+    let usages = snapshot.usages_of(target)?;
+    let caller_fns: HashSet<NodeId> =
+        usages.iter().filter_map(|usage| usage.consumer_function).collect();
+    for caller in caller_fns {
+        if !out.contains(&caller) {
+            out.push(caller);
+            cascade_collect(out, snapshot, caller, depth + 1)?;
         }
     }
     Ok(())
@@ -370,21 +480,24 @@ DEPENDS: `Usage.consumer_function` (`model.rs:193`). VERIFY: cascade test.
 
 **Step 18 — Per-file deletion edits.** Group by `Node.file`, sort ranges descending within each file:
 ```rust
+let read_txn = crud.snapshot.read_txn()?;
 let mut by_file: BTreeMap<String, Vec<(u32, u32)>> = BTreeMap::new();
 for id in &deletions {
-    if let Some(n) = crud.snap.node(&rtxn, *id)? {
-        if let (Some(file), Some(span)) = (n.file.clone(), n.span) {
+    if let Some(node) = crud.snapshot.node(&read_txn, *id)? {
+        if let (Some(file), Some(span)) = (node.file.clone(), node.span) {
             by_file.entry(file).or_default().push(span);
         }
     }
 }
+drop(read_txn);
 let mut file_edits = Vec::new();
 for (rel_file, mut ranges) in by_file {
     ranges.sort_by(|a, b| b.0.cmp(&a.0));
     let abs = crud.workspace_root.join(&rel_file);
-    let mut text = std::fs::read_to_string(&abs)?;
-    for (s, e) in &ranges {
-        text = source_edit::delete_byte_range(&text, *s as usize, *e as usize);
+    let mut text = std::fs::read_to_string(&abs)
+        .map_err(|source| EditError::Io { path: abs.clone(), op: "read", source })?;
+    for (start, end) in &ranges {
+        text = source_edit::delete_byte_range(&text, *start as usize, *end as usize);
     }
     file_edits.push(FileEdit { path: abs, new_text: text, edit_class: EditClass::ItemAddRemove });
 }

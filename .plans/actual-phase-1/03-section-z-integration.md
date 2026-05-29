@@ -25,49 +25,50 @@ All new crates live under `crates/` and are added to the workspace `members` lis
 
 - **`crates/rmc-spikes` — dev-only feasibility spikes (Section B)**
   - **Purpose:** house the two M0.2 binaries that decide D2/D3 viability and `CargoGateMode` default. Not shipped; not depended on by any other crate.
-  - **Public surface:** two `[[bin]]` targets — `ra_fanout` and `cargo_gate`; one `lib.rs` exposing `bench_harness::{Workload, run, Report}` so both spikes share the same JSON-report format.
-  - **Cargo deps:** `rmc-graph` (path), `rmc-config` (path, for `seed`), `anyhow`, `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `clap = "4"` (new shared dep), `tokio` (workspace), and `criterion = "0.5"` as a dev-dependency only.
+  - **Public surface:** two `[[bin]]` targets — `ra_fanout` and `cargo_gate`; one `lib.rs` exposing `bench_harness::{Workload, run, Report}` (`Report` is `#[non_exhaustive]` with private fields + accessors, since the JSON-report schema will grow) so both spikes share the same JSON-report format.
+  - **Cargo deps:** `rmc-graph` (path), `rmc-config` (path, for `seed`), `anyhow` (allowed: `rmc-spikes` is a binary crate), `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `clap = { workspace = true }` (the shared `clap = "4"` workspace dep), `tokio` (workspace), and `criterion = "0.5"` as a dev-dependency only.
   - **Built in:** Section B. Removed from `default-members` so a `cargo build` from the root does not compile spikes.
 
 - **`crates/rmc-host` — *optional* extracted warm host (Section C)**
   - **Purpose:** if M2a measurement reveals a circular dep between rmc-graph (which holds extract / storage) and the new working-snapshot + RA-host machinery, lift `WorkspaceHost`, `EditSeq`, and the apply==rebuild engine into their own crate. **Default recommendation: keep inside `rmc-graph::host` and skip this crate.** Listed here so the integration plan does not need a re-shuffle if the extraction does become necessary.
-  - **Public surface:** `WorkspaceHost`, `WorkspaceHost::apply_edits`, `WorkspaceHost::checkpoint`, `WorkspaceHost::restore`, `EditClass`, `AffectedSet`.
-  - **Cargo deps if extracted:** `rmc-graph` (path, for `storage`, `extract::per_crate`, `ids`, `model`), `ra_ap_*` (workspace), `heed` (workspace), `anyhow`, `tracing`, `serde`, `bincode`, `sha2`.
+  - **Public surface:** `WorkspaceHost` (private fields + accessors/constructor), `WorkspaceHost::apply_edits`, `WorkspaceHost::checkpoint`, `WorkspaceHost::restore`, `#[non_exhaustive] EditClass` (variants `BodyOnly, SignatureOrVis, ItemAddRemove, ModuleTree, Macro, CargoManifest`), `#[non_exhaustive] AffectedSet`. Fallible methods return the typed `HostError` (Section C), not bare `Result`.
+  - **Cargo deps if extracted:** `rmc-graph` (path, for `storage`, `extract::per_crate`, `ids`, `model`), `ra_ap_*` (workspace), `heed` (workspace), `thiserror = { workspace = true }` (workspace pins `"1"`; typed `HostError`), `tracing`, `serde`, `bincode`, `sha2`. **No `anyhow`** (library crate).
   - **Built in:** Section C, conditionally. The plan tracks both forks; the file-tree diff below shows the default (in-graph) layout.
 
 - **`crates/rmc-semantic` — rename/refactor mechanics (extracted from `rmc-server`) — M2a prerequisite**
   - **Purpose:** the symbol-rename engine (`SemanticService` + RA `rename` preview) lifted out of `rmc-server::semantic` into its own crate so that **both** `rmc-server` (MCP handlers) **and** `rmc-crud` (CRUD verbs) can depend on it without a cycle. `rmc-server` gains a dep on `rmc-crud` (via the `rl` feature, line below); `rmc-crud` needs the rename engine — if the engine stayed in `rmc-server`, the two crates would depend on each other and **fail to compile**. Extracting `rmc-semantic` is therefore mandatory, not optional. This rejects the earlier "promote in place + depend on `rmc-server`" approach.
-  - **Public surface:** `pub struct SemanticService`, `pub struct RenamePreview { edits, file_moves }`, `pub struct RenameEdit`, `pub struct RenameFileMove`, `pub fn rename_by_name(..)`, `pub fn rename_by_position(..)`.
-  - **Cargo deps:** `rmc-graph` (path), `ra_ap_ide` (workspace), `ra_ap_ide_db` (workspace), `ra_ap_syntax` (workspace), `anyhow`, `thiserror`, `tracing`, `serde`.
+  - **Public surface:** `pub struct SemanticService` (private fields + constructor), `#[non_exhaustive] pub struct RenamePreview` (private `edits`, `file_moves` + accessors), `#[non_exhaustive] pub struct RenameEdit`, `#[non_exhaustive] pub struct RenameFileMove`, `pub fn rename_by_name(..)`, `pub fn rename_by_position(..)`.
+  - **Cargo deps:** `rmc-graph` (path), `ra_ap_ide` (workspace), `ra_ap_ide_db` (workspace), `ra_ap_syntax` (workspace), `thiserror = { workspace = true }` (workspace pins `"1"`; typed `SemanticError`), `tracing`, `serde`. **No `anyhow`** (library crate).
   - **Built in:** prerequisite for Section G (M2a). Mechanical move: `crates/rmc-server/src/semantic/` → `crates/rmc-semantic/src/`; flip `pub(crate)` → `pub` on the four types + two fns (real locs `semantic/mod.rs:53`, `rename.rs:15/41/61/70/168`); `rmc-server` re-points its handlers at the new crate.
 
 - **`crates/rmc-crud` — CRUD verbs (Sections G + H)**
-  - **Purpose:** the five Phase-1 verbs (`modify_body`, `move`, `delete`, `modify_signature`, `extract_*`/`inline`, `*_module`/`lift_to_crate`/`lower_to_module`) as pure operations over the working snapshot, expressed as `compute_effects(host, op) -> Effects` and `apply_effects(host, effects) -> Result<Outcome>`. The split satisfies P1.4 (simulator) — simulate is `compute_effects` only.
-  - **Public surface:** `pub enum Crud { ModifyBody{..}, Move{..}, Delete{..}, ModifySignature{..}, ExtractFunction{..}, ExtractTrait{..}, Inline{..}, SplitModule{..}, MergeModules{..}, CreateModule{..}, MoveModule{..}, LiftToCrate{..}, LowerToModule{..} }`, `pub struct Effects { source_patches, graph_patches, manifest_patches, would_refuse }`, `pub trait CrudVerb { fn compute_effects(&self, host: &WorkspaceHost, op: Self::Op) -> Result<Effects>; }`, `pub enum CallsiteFill { Todo, RefuseIfMissing, Explicit(String) }`.
-  - **Cargo deps:** `rmc-graph` (path, for `WorkspaceHost`, `ids`, `model`, `extract`, `storage`), `rmc-config` (path), `rmc-semantic` (path, for `SemanticService`/`RenamePreview`/`RenameEdit`/`RenameFileMove` rename mechanics — **extracted from `rmc-server` to break the `rmc-server` ⇄ `rmc-crud` dependency cycle**; see Canonical Reconciliation §R4), `ra_ap_syntax` (workspace), `ra_ap_ide` (workspace, for `rename` preview), `ra_ap_ide_db` (workspace), `syn = "2"` (**new shared dep**, for AST *analysis only* — locate byte ranges; replacement text is string-built and spliced, never AST-unparsed, per E5), `toml_edit = "0.22"` (**new shared dep**, format-preserving `Cargo.toml` surgery in P1.5e), `anyhow`, `thiserror`, `tracing`, `serde`, `serde_json`. **No `prettyplease`** (banned by E5).
+  - **Purpose:** the five Phase-1 verbs (`modify_body`, `move`, `delete`, `modify_signature`, `extract_*`/`inline`, `*_module`/`lift_to_crate`/`lower_to_module`) as pure operations over the working snapshot, expressed as `Crud::compute_effects(&self, host) -> Result<Effects, CrudError>` and `Crud::apply_effects(host, &effects) -> Result<Outcome, CrudError>` (inherent methods on the `Crud` enum, dispatched by `match` over the closed verb set). The split satisfies P1.4 (simulator) — simulate is `compute_effects` only.
+  - **Public surface:** `#[non_exhaustive] pub enum Crud { ModifyBody{..}, Move{..}, Delete{..}, ModifySignature{..}, ExtractFunction{..}, ExtractTrait{..}, Inline{..}, SplitModule{..}, MergeModules{..}, CreateModule{..}, MoveModule{..}, LiftToCrate{..}, LowerToModule{..} }`, `#[non_exhaustive] pub struct Effects` with private fields + accessors (`source_patches()`, `graph_patches()`, `manifest_patches()`, `would_refuse()`), `#[non_exhaustive] pub enum CallsiteFill { Todo, RefuseIfMissing, Explicit(String) }`.
+    - **DD-2 consolidation (§8 "skip a trait when there is one implementation").** The earlier draft listed *both* the 13-variant `Crud` enum *and* a `CrudVerb` trait with an associated `Op`. That is redundant dispatch machinery for one closed, in-crate verb set with no substitution pressure: the trait is **removed** from the public surface. Verbs are dispatched by `match` inside `compute_effects` / `apply_effects` (inherent methods on `Crud`; equivalently free fns over `&Crud`). `#[non_exhaustive]` keeps the enum growable without breaking downstream `match` arms.
+  - **Cargo deps:** `rmc-graph` (path, for `WorkspaceHost`, `ids`, `model`, `extract`, `storage`), `rmc-config` (path), `rmc-semantic` (path, for `SemanticService`/`RenamePreview`/`RenameEdit`/`RenameFileMove` rename mechanics — **extracted from `rmc-server` to break the `rmc-server` ⇄ `rmc-crud` dependency cycle**; see Canonical Reconciliation §R4), `ra_ap_syntax` (workspace), `ra_ap_ide` (workspace, for `rename` preview), `ra_ap_ide_db` (workspace), `syn = "2"` (**new shared dep**, for AST *analysis only* — locate byte ranges; replacement text is string-built and spliced, never AST-unparsed, per E5), `toml_edit = "0.22"` (**new shared dep**, format-preserving `Cargo.toml` surgery in P1.5e), `thiserror = { workspace = true }` (the workspace pins `"1"`; this crate's errors are the typed `CrudError`), `tracing`, `serde`, `serde_json`. **No `anyhow`** — `rmc-crud` is a library, so it uses the typed `CrudError` (`thiserror`); `anyhow` is reserved for the `rmc-spikes` / `rmc-rl` binaries. **No `prettyplease`** (banned by E5).
   - **Built in:** Sections G (modify_body, move, delete) and H (signature, extract/inline, module-tree).
 
 - **`crates/rmc-gates` — write-time guideline gates (Section I)**
   - **Purpose:** wrap the existing audits (`fn_body_audit`, `unsafe_audit`, `recursion_check`, `derive_audit`, `channel_audit`, `docs_audit`, `analyze_complexity`) and the SCC cycle check from `petgraph` into a `GateHarness` that runs over the dirty set produced by D2, returns hard refusals (with `RefusalReason`) and soft penalties.
-  - **Public surface:** `pub struct GateHarness`, `pub struct GateReport { hard_refusals: Vec<RefusalReason>, soft_penalties: Vec<Penalty> }`, `pub fn run_gates(host: &WorkspaceHost, dirty: &AffectedSet, allowlist: &BoundaryAllowlist) -> GateReport`, `pub struct BoundaryAllowlist` (read-only loader for `rmc.gates.toml`).
-  - **Cargo deps:** `rmc-graph` (path, exposes `query/audits::*`, `fn_body_audit`, `unsafe_audit`, `recursion_check`, `derive_audit`, `channel_audit`, `docs_audit`), `rmc-config` (path), `petgraph = "0.6"` (**new shared dep**, for SCC), `anyhow`, `thiserror`, `tracing`, `serde`, `toml = "0.9"` (workspace already present).
+  - **Public surface:** `pub struct GateHarness` (private fields + constructor), `#[non_exhaustive] pub struct GateReport` (private `hard_refusals: Vec<RefusalReason>`, `soft_penalties: Vec<Penalty>` + accessors), `pub fn run_gates(host: &WorkspaceHost, dirty: &AffectedSet, allowlist: &BoundaryAllowlist) -> Result<GateReport, GateError>`, `pub struct BoundaryAllowlist` (private-fielded read-only loader for `rmc.gates.toml`).
+  - **Cargo deps:** `rmc-graph` (path, exposes `query/audits::*`, `fn_body_audit`, `unsafe_audit`, `recursion_check`, `derive_audit`, `channel_audit`, `docs_audit`), `rmc-config` (path), `petgraph = "0.6"` (**new shared dep**, for SCC), `thiserror = { workspace = true }` (workspace pins `"1"`; typed `GateError`), `tracing`, `serde`, `toml = "0.9"` (workspace already present). **No `anyhow`** (library crate).
   - **Built in:** Section I.
 
 - **`crates/rmc-reward` — commit + reward vector (Section J first half, P1.7)**
   - **Purpose:** cargo gate runner (`CargoGateMode::{Off, RaOnly, CheckOnly, CheckAndTest, RaPlusCheckEveryK{k:5}}`), audit diff, graph-metric delta (modularity / conductance / clustering coefficient via `petgraph`), reward scalarizer.
-  - **Public surface:** `pub struct RewardVector { compile_ok, test_pass_delta, audit_deltas, graph_metric_deltas, gate_penalty, refusal_count }`, `pub fn commit(host: &mut WorkspaceHost, gate_report: &GateReport, mode: CargoGateMode) -> Result<RewardVector>`, `pub enum CargoGateMode`, `pub fn rollback(host: &mut WorkspaceHost, checkpoint: &Checkpoint) -> Result<()>` (thin wrapper over `WorkspaceHost::restore` + `jj op restore`).
-  - **Cargo deps:** `rmc-graph` (path), `rmc-gates` (path), `rmc-config` (path), `petgraph = "0.6"`, `linfa = "0.7"`, `linfa-clustering = "0.7"`, `anyhow`, `thiserror`, `tracing`, `serde`, `serde_json`, `tokio` (workspace), `which = "6"`.
+  - **Public surface:** `#[non_exhaustive] pub struct RewardVector` (private `compile_ok`, `test_pass_delta`, `audit_deltas`, `graph_metric_deltas`, `gate_penalty`, `refusal_count` + accessors), `pub fn commit(host: &mut WorkspaceHost, gate_report: &GateReport, mode: CargoGateMode) -> Result<RewardVector, RewardError>`, `#[non_exhaustive] pub enum CargoGateMode`, `pub fn rollback(host: &mut WorkspaceHost, checkpoint: &Checkpoint) -> Result<(), RewardError>` (thin wrapper over `WorkspaceHost::restore` + `jj op restore`).
+  - **Cargo deps:** `rmc-graph` (path), `rmc-gates` (path), `rmc-config` (path), `petgraph = "0.6"`, `linfa = "0.7"`, `linfa-clustering = "0.7"`, `thiserror = { workspace = true }` (workspace pins `"1"`; typed `RewardError`), `tracing`, `serde`, `serde_json`, `tokio` (workspace), `which = "6"`. **No `anyhow`** (library crate).
   - **Built in:** Section J first half (P1.7).
 
 - **`crates/rmc-episode` — episode runner + trajectory (Section J second half, P1.8)**
   - **Purpose:** the loop: `observe -> act -> reward`, action dispatch over the 5-verb API, step budget, `declare_done`, trajectory log (the future SFT dataset format), per-episode jj checkpoint.
-  - **Public surface:** `pub struct EpisodeRunner`, `pub struct Trajectory { steps: Vec<Step> }`, `pub struct Step { observation: ContextView, action: Action, reward: RewardVector, refusal: Option<RefusalReason> }`, `pub enum Action { Crud(Crud), Navigate(NavAction), Simulate(Crud), DeclareDone }`, `pub trait Policy { async fn act(&mut self, obs: &ContextView) -> Result<Action>; }`, `pub struct AnthropicPolicy` (default impl wrapping the Anthropic Messages API).
-  - **Cargo deps:** `rmc-graph` (path), `rmc-crud` (path), `rmc-gates` (path), `rmc-reward` (path), `rmc-config` (path), `tokio` (workspace), `serde`, `serde_json`, `anyhow`, `thiserror`, `tracing`, `reqwest = { workspace = true }` for the Anthropic API client.
+  - **Public surface:** `pub struct EpisodeRunner` (private fields + constructor), `#[non_exhaustive] pub struct Trajectory` (private `steps: Vec<Step>` + accessor), `#[non_exhaustive] pub struct Step` (private `observation: ContextView`, `action: Action`, `reward: RewardVector`, `refusal: Option<RefusalReason>` + accessors), `#[non_exhaustive] pub enum Action { Crud(Crud), Navigate(NavAction), Simulate(Crud), DeclareDone }`, `pub trait Policy { async fn act(&mut self, obs: &ContextView) -> Result<Action, EpisodeError>; }` (a real substitution port — `AnthropicPolicy` + test fakes), `pub struct AnthropicPolicy` (default impl wrapping the Anthropic Messages API; private fields incl. the redacted API key).
+  - **Cargo deps:** `rmc-graph` (path), `rmc-crud` (path), `rmc-gates` (path), `rmc-reward` (path), `rmc-config` (path), `tokio` (workspace), `serde`, `serde_json`, `thiserror = { workspace = true }` (workspace pins `"1"`; typed `EpisodeError`), `tracing`, `reqwest = { workspace = true }` for the Anthropic API client, `chrono = { workspace = true }` (UTC `started_at`/`finished_at` timestamps stamped onto each `Step`/`Trajectory` for the JSONL trajectory log — this is the sole consumer of the workspace `chrono` dep). **No `anyhow`** (library crate).
   - **Built in:** Section J second half (P1.8).
 
 - **`crates/rmc-rl` (bin) — CLI driver (Section J close)**
   - **Purpose:** thin `clap`-driven CLI: `rmc-rl episode --task <name> --model <id> --budget <n>` and `rmc-rl bench-spike` (forwards to `rmc-spikes`). Single `[[bin]]` target, no library surface.
-  - **Cargo deps:** `rmc-episode` (path), `rmc-config` (path), `clap = "4"`, `anyhow`, `tokio`, `tracing`, `tracing-subscriber`.
+  - **Cargo deps:** `rmc-episode` (path), `rmc-config` (path), `clap = { workspace = true }`, `anyhow` (allowed: `rmc-rl` is a binary crate), `tokio`, `tracing`, `tracing-subscriber`.
   - **Built in:** Section J close.
 
 ## Modified existing crate inventory
@@ -75,7 +76,7 @@ All new crates live under `crates/` and are added to the workspace `members` lis
 For each existing crate, the changes are anchored to the section that introduces them.
 
 - **`crates/rmc-config` (Section A → updated in B, E, I, J)**
-  - **New pub APIs:** `pub struct RuntimeConfig { pub seed: u64, pub cargo_gate_mode: CargoGateMode, pub callsite_fill: CallsiteFill, pub working_snapshot_root: PathBuf, pub anthropic_model: String, pub description_model: String }`.
+  - **New pub APIs:** `#[non_exhaustive] pub struct RuntimeConfig` with private fields (`seed: Seed`, `cargo_gate_mode: CargoGateMode`, `callsite_fill: CallsiteFill`, `working_snapshot_root: PathBuf`, `anthropic_model: String`, `description_model: String`) + accessors and `from_env_with_seed` constructor. The Anthropic/description API keys are *not* stored here in plaintext — `src/anthropic.rs` exposes them via a redacted `Secret<String>` newtype (custom `Debug`, private field) per Section J.
   - **New modules:** `src/runtime.rs` (RuntimeConfig + env loader); `src/anthropic.rs` (model id + API-key plumbing — pure config, no client).
   - **No new heavy deps:** keep `rmc-config` deps-thin (anyhow, tracing, directories already present).
   - **Schema/version bump:** the existing `Config` keeps `from_env`; the new `RuntimeConfig` adds `from_env_with_seed(default_seed: u64)`. Bumps `rmc-config` minor version 0.1 → 0.2 inside the workspace.
@@ -107,7 +108,8 @@ For each existing crate, the changes are anchored to the section that introduces
 - **`crates/rmc-server` (Sections D, E, F, G/H, J — handler additions only)**
   - **New modules:** `src/mcp/handlers/navigate.rs`, `describe.rs`, `analyze.rs`, `crud.rs`, `episode.rs`.
   - **`semantic/` module extracted, not modified in place:** `src/semantic/` moves out to the new `crates/rmc-semantic/` (see New crate inventory + cycle rationale). The four types and two fns are promoted `pub(crate)` → `pub` **in the new crate**; `rmc-server`'s handlers re-point at `rmc-semantic`. Separately, promote `OpenedSnapshot::line_to_byte` from `pub(crate)` → `pub` — this stays in `rmc-graph` (real loc `snapshot.rs:665`, not the earlier-cited `629`).
-  - **Workspace dep additions:** `rmc-semantic` (path, replaces the in-tree `semantic/` module — non-feature-gated); `rmc-crud`, `rmc-gates`, `rmc-reward`, `rmc-episode` (all gated by a new `rl` feature). The `rl`-feature dep on `rmc-crud` is exactly why `semantic/` had to leave this crate.
+  - **Workspace dep additions:** `rmc-semantic` (path, replaces the in-tree `semantic/` module — non-feature-gated); `rmc-crud`, `rmc-gates`, `rmc-reward`, `rmc-episode` (all gated by a new `rl` feature, using `dep:`-prefixed optional deps so the feature is purely additive). The `rl`-feature dep on `rmc-crud` is exactly why `semantic/` had to leave this crate.
+  - **§14 — `rl` is NOT a default feature.** `[features] default = []` (or the pre-existing default set with `rl` *excluded*). `rl` is enabled only by the `rmc-rl` bin and off in the published `rust-code-mcp` binary (Open decisions register). This is what keeps the cycle-break argument honest: `rmc-server` only reaches `rmc-crud`/`rmc-reward`/`rmc-episode` when `rl` is on, and `rmc-crud` reaches the rename engine through `rmc-semantic` (extracted), never back through `rmc-server` — so the dependency graph stays a DAG.
   - **No schema bumps.**
 
 - **`crates/rust-code-mcp` (no changes)** — top-level bin keeps using `rmc-server`; the new RL stack is driven by the new `rmc-rl` bin instead.
@@ -169,8 +171,16 @@ The single source of truth is the root `Cargo.toml`. Below is the diff against t
 +# Phase 1: locate cargo / jj binaries inside the devshell (Section J)
 +which         = "6"
 +
-+# Phase 1: trajectory + reward logging
++# Phase 1: trajectory timestamps (consumed by rmc-episode for Step/Trajectory
++# started_at/finished_at in the JSONL log — NOT orphaned).
 +chrono        = { version = "0.4", default-features = false, features = ["std", "serde"] }
++
++# thiserror is ALREADY a workspace dependency pinned to "1" (in the elided
++# entries above). It is NOT bumped: every new library crate
++# (rmc-semantic/-crud/-gates/-reward/-episode, optional rmc-host) declares
++# `thiserror = { workspace = true }` and inherits the "1" pin (DD-5). No
++# thiserror v2 is introduced. `anyhow` stays confined to the bins rmc-spikes
++# and rmc-rl.
 
  [patch.crates-io]
  fastembed = { path = "vendor/fastembed" }
@@ -257,6 +267,11 @@ crates/
 +   src/verbs/{modify_body,move_,delete,modify_signature,extract_function,
 +              extract_trait,inline,split_module,merge_modules,create_module,
 +              move_module,lift_to_crate,lower_to_module}.rs
++     # §5 keyword-collision convention: the `Crud::Move` verb's module is
++     # `move_.rs` (trailing underscore) because `move` is a Rust keyword and
++     # cannot name a module/identifier. The enum *variant* stays `Move`
++     # (variants are not keyword-restricted); only the file/`mod` ident takes
++     # the trailing `_`. (`move_module.rs` is a distinct verb, no collision.)
 + rmc-gates/                               (Section I — M3)
 +   src/{lib,hard,soft,allowlist}.rs
 + rmc-reward/                              (Section J — M3)

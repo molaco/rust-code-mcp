@@ -27,10 +27,64 @@ This slice belongs to **M1** (read-side, parallel, on slow build). It runs once 
 - `crates/rmc-server/src/tools/params.rs` — `SearchByDescriptionParams`.
 - `crates/rmc-graph/Cargo.toml` — new `descriptions` feature enabling `dep:reqwest`, `dep:tokio`, `dep:rmc-engine` with `rmc-engine/embeddings`.
 
+**Feature-gating discipline (§14).** The `descriptions` feature is additive and gates **whole items** — the entire `descriptions` module, its public re-exports, the `search_by_description` MCP tool/handler/params, and the free functions — each via `#[cfg(feature = "descriptions")]` on the item (module, fn, struct, impl), never on individual struct fields or trait methods. The one unavoidable exception is the `descriptions_by_target` sub-DB: rather than `#[cfg]`-gating a *field* of `GraphDatabases` (which would make the struct shape feature-dependent and is the pattern §14 warns against), the field is **always present** so the on-disk schema is stable across builds; only the population/query *code paths* are gated. Every gated public item carries a `#[doc(cfg(feature = "descriptions"))]` annotation so the required flag is visible in rustdoc.
+
 ## Type definitions
 
 ```rust
 // crates/rmc-graph/src/graph/descriptions/mod.rs
+
+/// Errors from the description-index subsystem. `rmc-graph` is a library crate,
+/// so callers branch on failure mode (retry-on-429, abort-on-cap, skip
+/// unresolvable, surface storage corruption) — hence a typed `thiserror` enum
+/// rather than `anyhow`. `#[non_exhaustive]` because new failure modes (e.g. a
+/// local-model launch error) are expected as backends grow.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DescriptionError {
+    /// Transport-level failure talking to the model backend (connect/timeout).
+    #[error("model request failed")]
+    Network(#[source] reqwest::Error),
+    /// Provider returned HTTP 429; `retry_after` echoes the `retry-after` header.
+    #[error("model rate-limited (HTTP 429); retry after {retry_after:?}")]
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+        #[source]
+        source: reqwest::Error,
+    },
+    /// Provider returned a non-429 error status (4xx/5xx) after retries.
+    #[error("model returned error status {status}")]
+    Http {
+        status: u16,
+        #[source]
+        source: reqwest::Error,
+    },
+    /// The configured daily generation cap was reached; no further work issued.
+    #[error("daily generation cap reached ({cap} generations)")]
+    DailyCapReached { cap: u64 },
+    /// The target could not be resolved to source (missing node, no span, or the
+    /// span no longer addresses bytes in the file). Read paths delete the stale
+    /// record; see Step 8.
+    #[error("target {target} is unresolvable to source")]
+    Unresolvable { target: NodeId },
+    /// Persisted-store failure (heed / LanceDB / filesystem). Storage corruption
+    /// is not a local invariant, so it propagates rather than panicking.
+    /// `StorageError` is the crate's existing heed/LanceDB wrapper (defined in
+    /// `storage.rs`); it preserves the underlying `heed::Error` /
+    /// `lancedb::Error` via `#[source]`.
+    #[error("description store operation failed")]
+    Storage(#[from] StorageError),
+    /// `acquire`/`batch` did not complete within the configured timeout (§12).
+    #[error("operation timed out")]
+    Timeout,
+    /// `ANTHROPIC_API_KEY` (or equivalent) was absent or malformed at construction.
+    #[error("model configuration invalid: {0}")]
+    Config(String),
+}
+
+/// `Result` alias for the description subsystem. Every public fallible fn below
+/// returns this; `# Errors` docs on each fn name the relevant variants.
+pub type Result<T> = std::result::Result<T, DescriptionError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DescriptionRecord {
@@ -41,17 +95,31 @@ pub struct DescriptionRecord {
 }
 
 pub struct DescriptionStore<'a> {
-    pub(crate) snap: &'a OpenedSnapshot,
-    pub(crate) db: heed::Database<heed::types::Bytes, heed::types::SerdeBincode<DescriptionRecord>>,
+    // Private: callers must go through `new` + accessor methods so the snapshot
+    // and sub-DB handle stay in sync (§5).
+    snap: &'a OpenedSnapshot,
+    db: heed::Database<heed::types::Bytes, heed::types::SerdeBincode<DescriptionRecord>>,
 }
 
 impl<'a> DescriptionStore<'a> {
     pub fn new(snap: &'a OpenedSnapshot) -> Self {
-        Self { snap, db: snap.dbs.descriptions_by_target }
+        // `dbs()` is the crate-visible accessor; `descriptions_by_target` is
+        // `pub(crate)` on `GraphDatabases` so same-crate modules read it without
+        // it being part of the public API (§5).
+        Self { snap, db: snap.dbs().descriptions_by_target }
     }
+    /// # Errors
+    /// Returns [`DescriptionError::Storage`] on a heed read failure.
     pub fn get(&self, target: NodeId) -> Result<Option<DescriptionRecord>>;
+    /// # Errors
+    /// Returns [`DescriptionError::Storage`] on a heed write failure.
     pub fn put(&self, target: NodeId, rec: &DescriptionRecord) -> Result<()>;
+    /// # Errors
+    /// Returns [`DescriptionError::Storage`] on a heed write failure.
     pub fn delete(&self, target: NodeId) -> Result<()>;
+    /// # Errors
+    /// Returns [`DescriptionError::Storage`] if the staleness scan cannot read
+    /// a record.
     pub fn iter_stale<'b>(&'b self, items: &'b [NodeId], model_version: &'b str)
         -> Result<impl Iterator<Item = (NodeId, StaleReason)> + 'b>;
 }
@@ -60,24 +128,48 @@ impl<'a> DescriptionStore<'a> {
 pub enum StaleReason { Missing, HashMismatch, ModelMismatch, Unresolvable }
 
 pub struct PromptCtx {
-    pub node: Node,
-    pub signature: Option<FunctionSignature>,
-    pub doc_comment: Option<String>,
-    pub attributes: Vec<String>,
-    pub neighbor_labels: Vec<String>,    // up to NEIGHBOR_FANOUT = 8
-    pub item_source: String,
-    pub content_hash: [u8; 16],
+    // Private fields: a `PromptCtx` is only ever produced by `build_for`, which
+    // establishes the invariant that `content_hash == SHA-256(trimmed
+    // item_source)[..16]`. Exposing the fields would let callers desync that
+    // pairing (§5). `content_hash()` is the one value the generator needs back.
+    node: Node,
+    signature: Option<FunctionSignature>,
+    doc_comment: Option<String>,
+    attributes: Vec<String>,
+    neighbor_labels: Vec<String>,    // up to NEIGHBOR_FANOUT = 8
+    item_source: String,
+    content_hash: [u8; 16],
 }
 
 const NEIGHBOR_FANOUT: usize = 8;
 
 impl PromptCtx {
+    /// Builds prompt context for `target`, or `Ok(None)` if the node is absent
+    /// or not an Item (a non-error skip).
+    ///
+    /// # Errors
+    /// Returns [`DescriptionError::Storage`] on a heed read failure and
+    /// [`DescriptionError::Unresolvable`] when the file cannot be read or the
+    /// recorded span no longer addresses bytes in the source (see Step 3).
     pub fn build_for(snap: &OpenedSnapshot, target: NodeId) -> Result<Option<PromptCtx>>;
+    #[must_use]
     pub fn render_prompt(&self) -> String;
+    /// The content hash this context was built against (the invalidation key).
+    #[must_use]
+    pub fn content_hash(&self) -> [u8; 16] { self.content_hash }
 }
 
-#[async_trait::async_trait]
+/// LLM backend port. Implementors are selected statically via
+/// `DescriptionGenerator<M>` (no `dyn DescriptionModel` anywhere), so we use
+/// native async-fn-in-trait (Rust 2024) rather than `#[async_trait]` boxing
+/// (§8/§20). `Send + Sync` is retained so the generator can be shared across
+/// the bounded-concurrency batch (§12). The returned futures must be `Send`;
+/// for the two in-crate impls this holds, so no RPITIT bound is needed.
 pub trait DescriptionModel: Send + Sync {
+    /// # Errors
+    /// Returns [`DescriptionError::Network`], [`DescriptionError::RateLimited`],
+    /// [`DescriptionError::Http`], or [`DescriptionError::Timeout`] per the
+    /// retry/timeout contract documented on the impl.
     async fn batch(&self, prompts: Vec<String>) -> Result<Vec<String>>;
     fn version(&self) -> &str;
     fn recommended_batch_size(&self) -> usize { 8 }
@@ -94,33 +186,116 @@ pub struct AnthropicHaikuClient {
 impl AnthropicHaikuClient {
     pub const DEFAULT_MODEL: &'static str = "claude-haiku-4-5-20251001";
     pub const API_KEY_ENV: &'static str = "ANTHROPIC_API_KEY";
+    /// # Errors
+    /// Returns [`DescriptionError::Config`] if `ANTHROPIC_API_KEY` is unset or
+    /// empty, or [`DescriptionError::Network`] if the `reqwest::Client` cannot
+    /// be built.
     pub fn from_env() -> Result<Self>;
 }
 
-pub struct RateLimiter { inner: Arc<tokio::sync::Mutex<TokenBucket>>, rpm_cap: usize }
+pub struct RateLimiter {
+    inner: Arc<tokio::sync::Mutex<TokenBucket>>,
+    rpm_cap: usize,
+    acquire_timeout: std::time::Duration,    // default 60s
+}
 struct TokenBucket { capacity: f64, tokens: f64, refill_per_sec: f64, last_refill: Instant }
 
 impl RateLimiter {
     pub fn new(rpm_cap: usize) -> Self;
-    pub async fn acquire(&self, n: usize);
+    /// Sets the maximum time `acquire` will wait for tokens (default 60s).
+    #[must_use]
+    pub fn with_acquire_timeout(self, timeout: std::time::Duration) -> Self;
+
+    /// Waits until `n` tokens are available, then consumes them.
+    ///
+    /// The lock guarding the token bucket is released before each
+    /// `tokio::time::sleep`, so it is **never held across `.await`** (§12). The
+    /// whole wait is bounded by `acquire_timeout`; exceeding it yields
+    /// [`DescriptionError::Timeout`] rather than blocking unboundedly.
+    ///
+    /// # Cancellation
+    /// Cancel-safe: if the returned future is dropped (e.g. the enclosing
+    /// `select!` arm loses), no tokens have been consumed — the bucket is only
+    /// debited after the wait completes, so a cancelled `acquire` leaves the
+    /// limiter state unchanged.
+    ///
+    /// # Errors
+    /// Returns [`DescriptionError::Timeout`] if `n` tokens do not become
+    /// available within `acquire_timeout`.
+    pub async fn acquire(&self, n: usize) -> Result<()>;
+    #[must_use]
     pub fn rpm_cap(&self) -> usize { self.rpm_cap }
 }
 
 pub struct DescriptionGenerator<M: DescriptionModel> {
-    pub model: M,
-    pub batch_size: usize,
-    pub limiter: RateLimiter,
-    pub store: DescriptionStoreOwned,
-    pub stats: Arc<tokio::sync::Mutex<DescriptionGenStats>>,
-}
-
-pub struct DescriptionStoreOwned {
-    pub env: Arc<heed::Env<heed::WithoutTls>>,
-    pub db: heed::Database<heed::types::Bytes, heed::types::SerdeBincode<DescriptionRecord>>,
-    pub workspace_root: PathBuf,
+    // Private (§5): constructed via `new` / `builder`. `batch_size` is clamped
+    // to the model's `recommended_batch_size` and the daily-cap invariant lives
+    // on `stats`; exposing the fields would let callers desync those.
+    model: M,
+    batch_size: usize,
+    max_concurrency: usize,         // semaphore permits for the batch (default 8)
+    limiter: RateLimiter,
+    store: DescriptionStoreOwned,
+    stats: Arc<tokio::sync::Mutex<DescriptionGenStats>>,
+    daily_cap: Option<u64>,
 }
 
 impl<M: DescriptionModel> DescriptionGenerator<M> {
+    /// Constructs a generator with default batch size (`model
+    /// .recommended_batch_size()`), 60 rpm limiter, and 8-way concurrency.
+    pub fn new(model: M, store: DescriptionStoreOwned) -> Self;
+    /// Fluent builder for non-default batch size / concurrency / limiter / cap.
+    #[must_use]
+    pub fn builder(model: M, store: DescriptionStoreOwned) -> DescriptionGeneratorBuilder<M>;
+    /// Read-only snapshot of run stats.
+    pub async fn stats(&self) -> DescriptionGenStats;
+}
+
+/// Builder for [`DescriptionGenerator`]. Validates that `batch_size` does not
+/// exceed `model.recommended_batch_size()` and that `max_concurrency >= 1`.
+pub struct DescriptionGeneratorBuilder<M: DescriptionModel> { /* private */ }
+
+impl<M: DescriptionModel> DescriptionGeneratorBuilder<M> {
+    #[must_use] pub fn batch_size(self, n: usize) -> Self;
+    #[must_use] pub fn max_concurrency(self, n: usize) -> Self;
+    #[must_use] pub fn limiter(self, limiter: RateLimiter) -> Self;
+    #[must_use] pub fn daily_cap(self, cap: Option<u64>) -> Self;
+    pub fn build(self) -> DescriptionGenerator<M>;
+}
+
+pub struct DescriptionStoreOwned {
+    // Private (§5): the env, sub-DB handle, and workspace root are an
+    // inseparable triple; accessors below hand out borrows without letting
+    // callers swap one out of step with the others.
+    env: Arc<heed::Env<heed::WithoutTls>>,
+    db: heed::Database<heed::types::Bytes, heed::types::SerdeBincode<DescriptionRecord>>,
+    workspace_root: PathBuf,
+}
+
+impl DescriptionStoreOwned {
+    pub fn new(env: Arc<heed::Env<heed::WithoutTls>>, workspace_root: PathBuf) -> Result<Self>;
+    #[must_use]
+    pub fn workspace_root(&self) -> &Path;
+}
+
+impl<M: DescriptionModel> DescriptionGenerator<M> {
+    /// Regenerates descriptions for `targets`, writing one heed txn per LLM
+    /// batch and reporting `(written, total)` progress.
+    ///
+    /// # Concurrency & partial completion
+    /// Within a batch the per-prompt requests run concurrently bounded by a
+    /// `tokio::sync::Semaphore` of `max_concurrency` permits (so `join_all`
+    /// over a large batch cannot open unbounded sockets). On the first failing
+    /// batch the function returns `Err` with the count of items already
+    /// committed in prior batches lost to the caller — those writes are durable
+    /// (each batch is its own txn), so a re-run skips them via `iter_stale`.
+    /// The function is therefore resumable, not transactional.
+    ///
+    /// # Errors
+    /// Returns [`DescriptionError::DailyCapReached`] when the configured cap is
+    /// hit (already-written records are kept), any model error from
+    /// [`DescriptionModel::batch`] (network/429/http/timeout), or
+    /// [`DescriptionError::Storage`] on a heed write failure.
     pub async fn regenerate_targets(&mut self, snap: &OpenedSnapshot, targets: Vec<NodeId>,
                                      mut progress: impl FnMut(usize, usize)) -> Result<usize>;
 }
@@ -142,20 +317,33 @@ pub struct DescriptionRetrieval {
 }
 
 impl DescriptionRetrieval {
+    /// # Errors
+    /// [`DescriptionError::Storage`] if the LanceDB table cannot be opened or
+    /// created.
     pub async fn open_or_create(path: &Path, embed: EmbeddingGenerator) -> Result<Self>;
+    /// # Errors
+    /// [`DescriptionError::Storage`] on a heed read or LanceDB write failure.
     pub async fn reindex(&self, store: &DescriptionStoreOwned) -> Result<usize>;
+    /// # Errors
+    /// [`DescriptionError::Storage`] on a LanceDB write failure.
     pub async fn upsert_one(&self, target: NodeId, description: &str) -> Result<()>;
+    /// Returns up to `limit` hits as `(NodeId, similarity)` sorted descending.
+    ///
+    /// # Errors
+    /// [`DescriptionError::Storage`] on a LanceDB query failure; a network/HTTP
+    /// error from embedding the query surfaces as
+    /// [`DescriptionError::Network`]/[`DescriptionError::Http`].
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<(NodeId, f32)>>;
 }
 ```
 
 ## Step-by-step implementation
 
-1. **Declare new sub-DB + bump schema.** WHERE: `storage.rs`. Add `pub descriptions_by_target: Database<Bytes, SerdeBincode<DescriptionRecord>>` to `GraphDatabases`. Add creation line after `embeddings_by_target`. Mirror in `open` path. Bump `SCHEMA_VERSION 12 → 13`, `DEFAULT_MAX_DBS 16 → 20`. Gate behind `cfg(feature = "descriptions")`. VERIFY: `cargo check -p rmc-graph --features descriptions`.
+1. **Declare new sub-DB + bump schema.** WHERE: `storage.rs`. Add `descriptions_by_target: Database<Bytes, SerdeBincode<DescriptionRecord>>` to `GraphDatabases` with crate-visible accessor `dbs()` exposing the handle (the field stays private per §5). The field is **always present** (NOT `#[cfg]`-gated) so the on-disk schema is build-independent; only the description code paths are feature-gated (§14, see note above). Add creation line after `embeddings_by_target`. Mirror in `open` path. Bump `SCHEMA_VERSION 12 → 13`, `DEFAULT_MAX_DBS 16 → 20`. VERIFY: `cargo check -p rmc-graph --features descriptions` AND `cargo check -p rmc-graph` (default, feature off).
 
 2. **`DescriptionRecord` + serde + match policy.** Implement struct in `mod.rs`; derive `Serialize`/`Deserialize`. Match policy in `iter_stale` and generator read path: `stored.content_hash == current_hash && stored.model_version == active_model.version()`. VERIFY: `record_roundtrip`.
 
-3. **`PromptCtx::build_for(snap, target)`.** Open `RoTxn`. Load `Node` via `snap.node`; bail with `None` if not found or non-Item. Load `FunctionSignature` via `snap.function_signature`. Load attributes via `snap.item_attributes`; partition into doc-comment lines (starts with `///` or `//!`) joined as `doc_comment` and other `attributes`. Read trimmed `item_source` (recipe from `embedding_cache.rs:120-138`): `let abs = workspace_root.join(file_rel); let content = fs::read_to_string(&abs)?; let slice = content.get(span.0..span.1)?; let trimmed = slice.trim();`. Compute `content_hash = Sha256::digest(trimmed)[..16]`. Neighbors: `snap.callees_of(target)?` + `snap.referrers_of(target)?`, concat, dedupe, take first 8. Format each as `{qualified_name}({item_kind_short_label})`. VERIFY: `prompt_includes_signature_and_neighbors`.
+3. **`PromptCtx::build_for(snap, target)`.** Open `RoTxn`. Load `Node` via `snap.node`; bail with `None` if not found or non-Item. Load `FunctionSignature` via `snap.function_signature`. Load attributes via `snap.item_attributes`; partition into doc-comment lines (starts with `///` or `//!`) joined as `doc_comment` and other `attributes`. Read trimmed `item_source` (recipe from `embedding_cache.rs:120-138`): `let abs = workspace_root.join(file_rel); let content = fs::read_to_string(&abs).map_err(|_| DescriptionError::Unresolvable { target })?; let slice = content.get(span.0..span.1).ok_or(DescriptionError::Unresolvable { target })?; let trimmed = slice.trim();`. NOTE: the span lookup uses an explicit `ok_or(...)` mapping to a typed error rather than `?`-on-`Option` inside a `Result` fn (§9). Compute `content_hash = Sha256::digest(trimmed)[..16]`. Neighbors: `snap.callees_of(target)?` + `snap.referrers_of(target)?`, concat, dedupe, take first 8. Format each as `{qualified_name}({item_kind_short_label})`. VERIFY: `prompt_includes_signature_and_neighbors`.
 
 4. **Prompt template.** WHERE: `descriptions/prompt.rs::PromptCtx::render_prompt` + `models/anthropic.rs::SYSTEM_PROMPT`.
 
@@ -178,7 +366,7 @@ impl DescriptionRetrieval {
 
    `signature_str` rendered via private fn walking `sig.params`/`sig.return_type` and prepending `async fn` / `fn`. VERIFY: golden snapshot test.
 
-5. **`DescriptionModel` trait + `AnthropicHaikuClient`.** `#[async_trait]` from existing workspace dep. HTTP via `reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?`. URL `https://api.anthropic.com/v1/messages`. Headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`. Per-prompt request body:
+5. **`DescriptionModel` trait + `AnthropicHaikuClient`.** Native async-fn-in-trait (Rust 2024) — NO `#[async_trait]`; the generator selects `M` statically and no `dyn DescriptionModel` exists in the crate (§8/§20). HTTP via `reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?`. URL `https://api.anthropic.com/v1/messages`. Headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`. Per-prompt request body:
    ```json
    {
      "model": "claude-haiku-4-5-20251001",
@@ -187,30 +375,37 @@ impl DescriptionRetrieval {
      "messages": [{"role": "user", "content": "<rendered prompt>"}]
    }
    ```
-   Anthropic API has no batch — `batch(prompts)` issues `prompts.len()` parallel requests via `futures::future::join_all`, capped by per-client semaphore (default 8 concurrent). Extract `response.content[0].text`, trim, truncate at first newline. Retry policy: copy from `crates/rmc-engine/src/embeddings/openrouter/retry.rs::is_retryable_reqwest_error` — retry on 429/5xx/connect timeout with exponential backoff (250ms, 500ms, 1s, 2s, 4s; MAX_RETRIES=5); 429 honors `retry-after`. `version()` returns the model string. VERIFY: gated integration test with `ANTHROPIC_API_KEY`.
+   Anthropic API has no batch — `batch(prompts)` issues `prompts.len()` parallel requests via `futures::future::join_all`, each request gated by an `Arc<tokio::sync::Semaphore>` of `max_concurrency` permits (default 8) held for the lifetime of that request's future, so at most 8 sockets are open at once regardless of `prompts.len()`. Partial completion: `join_all` collects all results; the first `Err` (after per-request retries) short-circuits `batch` to that `DescriptionError`, dropping the other in-flight futures (cancel-safe — no record is written until `batch` returns `Ok`). Extract `response.content[0].text`, trim, truncate at first newline. Retry policy: copy from `crates/rmc-engine/src/embeddings/openrouter/retry.rs::is_retryable_reqwest_error` — retry on 429/5xx/connect timeout with exponential backoff (250ms, 500ms, 1s, 2s, 4s; MAX_RETRIES=5); 429 honors `retry-after` and maps to `DescriptionError::RateLimited { retry_after }` on final failure, non-429 4xx/5xx to `DescriptionError::Http { status }`, connect/timeout to `DescriptionError::Network`. `version()` returns the model string. VERIFY: gated integration test with `ANTHROPIC_API_KEY`.
 
 6. **`DescriptionGenerator::regenerate_targets`.**
    ```
-   fn regenerate_targets(snap, targets):
-       ctxs = targets.filter_map(|t| PromptCtx::build_for(snap, t).transpose())
+   fn regenerate_targets(snap, targets) -> Result<usize>:
+       ctxs = targets.filter_map(|t| PromptCtx::build_for(snap, t).transpose())  // Result<_> items
+                     .collect::<Result<Vec<_>>>()?
        for batch in ctxs.chunks(self.batch_size):
-           self.limiter.acquire(1).await
+           // Cap check BEFORE issuing work so committed records stay consistent.
+           if let Some(cap) = self.daily_cap:
+               if stats.lock().await.generations_today + batch.len() as u64 > cap:
+                   return Err(DescriptionError::DailyCapReached { cap })
+           self.limiter.acquire(1).await?                 // Result; Timeout on stall
            prompts = batch.iter().map(|(_, c)| c.render_prompt()).collect()
-           outputs = self.model.batch(prompts).await?
+           outputs = self.model.batch(prompts).await?    // bounded by max_concurrency semaphore (Step 5)
            assert outputs.len() == batch.len()
+           // One heed write txn per batch (durable on success of this batch).
            for ((nid, ctx), desc) in batch.iter().zip(outputs):
                rec = DescriptionRecord {
-                   content_hash: ctx.content_hash,
+                   content_hash: ctx.content_hash(),
                    description: clean_description(&desc),
                    model_version: self.model.version().to_string(),
                    generated_at_unix: now_unix(),
                }
-               self.store.put(*nid, &rec)?
+               self.store.put(*nid, &rec)?               // DescriptionError::Storage on failure
                written += 1
            progress(written, total)
-           stats.lock().generations_today += batch.len()
+           stats.lock().await.generations_today += batch.len() as u64
+       Ok(written)
    ```
-   `clean_description`: trim, strip surrounding quotes, truncate at first `\n`, hard 200-char cap. Rate limiter token-bucket: `capacity = rpm_cap as f64, refill_per_sec = rpm_cap as f64 / 60.0`. Default 60 rpm (batches/min). Cost ceiling: `generations_today_cap: Option<u64>` field; abort with `DescriptionError::DailyCapReached` if exceeded. VERIFY: `regen_only_dirty`, `rpm_cap_respected`.
+   Partial-completion semantics: each batch is its own durable heed txn, so an error in batch *k* keeps batches `0..k` on disk; a re-run skips them via `iter_stale` (resumable, not transactional). `clean_description`: trim, strip surrounding quotes, truncate at first `\n`, hard 200-char cap. Rate limiter token-bucket: `capacity = rpm_cap as f64, refill_per_sec = rpm_cap as f64 / 60.0`. Default 60 rpm (batches/min). Cost ceiling: `daily_cap: Option<u64>` field; abort with `DescriptionError::DailyCapReached { cap }` before exceeding it. VERIFY: `regen_only_dirty`, `rpm_cap_respected`, `daily_cap_blocks`.
 
 7. **Workspace-wide initial population.** New free function `populate_workspace_descriptions(workspace_root)`. Open snapshot; walk `nodes_by_id` collecting Items sorted by `qualified_name`. Pass to `regenerate_targets`. Resumable: pre-filter via `iter_stale`. After all writes, `DescriptionRetrieval::reindex(&store_owned)`.
 
@@ -248,7 +443,7 @@ impl DescriptionRetrieval {
     ```
     Wire into `router.rs` with `#[tool(description = "Search workspace items by natural-language description ...")] async fn search_by_description(...)`. VERIFY: smoke test mirroring `embedding_profile_smoke.rs`.
 
-12. **Cost ceiling + stats endpoint.** Daily rollover: `day_start_unix: u64` on stats struct. `generations_today_cap = Some(5_000)` by default (~$2.50/day Haiku). Configurable via env `RMC_DESCRIPTIONS_DAILY_CAP`. Read-only MCP tool `description_gen_status` returning `DescriptionGenStats`.
+12. **Cost ceiling + stats endpoint.** Daily rollover: `day_start_unix: u64` on stats struct. The generator's `daily_cap` defaults to `Some(5_000)` (~$2.50/day Haiku), set via `DescriptionGeneratorBuilder::daily_cap`. Configurable via env `RMC_DESCRIPTIONS_DAILY_CAP`. Read-only MCP tool `description_gen_status` returning `DescriptionGenStats`.
 
 ## Tests
 
@@ -261,7 +456,7 @@ impl DescriptionRetrieval {
 - **`regen_only_dirty`** — 3 items, mutate source of 1; `MockDescriptionModel` records calls; assert `mock.calls.lock().len() == 1`.
 - **`search_returns_expected`** — pre-populate `[("fn parse_cli_args", "this function parses CLI arguments"), ("fn open_file", "opens a file by path"), ("fn add", "adds two integers")]`. `reindex`. `search("parse CLI", 3)` → top result is `parse_cli_args`.
 - **`rpm_cap_respected`** — `RateLimiter::new(60)`; submit 4 targets; wall-clock ≥ ~3s; use `tokio::time::pause()` + `advance` for determinism.
-- **`daily_cap_blocks`** — `generations_today_cap = Some(2)`; submit 5 → 2 written + `DailyCapReached`.
+- **`daily_cap_blocks`** — builder `.daily_cap(Some(2))`; submit 5 → 2 written + `DescriptionError::DailyCapReached { cap: 2 }`.
 - **`unresolvable_node_is_deleted`** — synthetic NodeId; `iter_stale` yields `Unresolvable`; wrapper calls `delete`.
 - **`apply_to_cold_rebuild_diff`** — M2a `#[ignore]` stub.
 

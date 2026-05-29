@@ -67,6 +67,35 @@ Action::Crud(op) => {
 { checkpoint → persist → commit }`. The Checkpoint never spans the gate
 check, so a refusal cannot leave behind half-applied state.
 
+**`EditError` is a `thiserror`-derived enum** (library crate — no `anyhow`;
+`anyhow` is confined to the `rmc-spikes`/`rmc-rl` binaries). It pins the
+existing workspace `thiserror = "1"`. The variants distinguish a *transient
+I/O / host fault* (retryable, source preserved) from a *domain refusal*
+(the gate intentionally said no — not an error to retry):
+
+```rust
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum EditError {
+    /// Hard gate refused the edit before anything was written. Not retryable.
+    #[error("edit refused by hard gates")]
+    Refused(Vec<RefusalReason>),
+    /// Host rejected the write (e.g. cargo/test gate failed after persist);
+    /// checkpoint already rolled back.
+    #[error("host rejected the edit")]
+    HostRejected(#[source] HostError),
+    /// Transient filesystem/IO fault while writing source. Retryable.
+    #[error("io error editing {path}")]
+    Io { path: PathBuf, #[source] source: std::io::Error },
+}
+```
+
+`#[from]` is used for the unambiguous transient cases (e.g. wrapping a
+`HostError` where there is a single host-error arm); the path-carrying `Io`
+variant uses an explicit `#[source]` so the failing file is preserved
+alongside the chained `std::io::Error`. Callers branch on the variant:
+`Refused` is terminal, `HostRejected`/`Io` may be retried.
+
 ## E2 — Episode / Commit ownership (resolves Finding #2)
 
 `Commit<'a>` borrows `WorkspaceHost` + `OpenedWorkingSnapshot`; `Episode`
@@ -109,11 +138,25 @@ impl<M: ModelClient> Episode<M> {
 ```
 
 `Navigator` and `Crud` are also built per-step from configs + borrows, not
-stored. If `Crud` and `Commit` need overlapping `&mut self.host` in
-practice, the fallback is `Arc<Mutex<WorkspaceHost>>` shared between
-constructs — cheap clone-of-arc, no contention in a single-threaded
-episode loop. Section J §9 (`Episode::new`) is revised: store only owned
-or Arc-backed fields; never store a borrowing struct.
+stored. **The primary resolution is scoped per-action construction** —
+build `Commit`/`Crud`/`Navigator` from `Episode`'s owned fields inside
+`step()`, so each `&mut self.host` borrow is short-lived and the borrow
+checker sequences them naturally. Because `step()` dispatches one verb at a
+time, the constructs do not actually need *simultaneous* `&mut self.host`;
+sequence the borrows (build `Crud`, run it, drop it, then build `Commit`)
+rather than holding both at once.
+
+`Arc<Mutex<WorkspaceHost>>` is a **last-resort fallback only**, to be used
+only if a future verb genuinely requires two live `&mut host` handles in the
+same scope. It contradicts the guideline preference for scoped ownership
+over shared mutable state (§6/§12): it adds a lock whose poisoning must be
+handled and reintroduces interior-mutability hazards for no benefit in a
+single-threaded loop. Prefer `RefCell<WorkspaceHost>` (single-threaded
+interior mutability, no lock) over `Arc<Mutex<…>>` if interior mutability is
+unavoidable; reach for the `Arc<Mutex<…>>` only when the host must also cross
+threads. Section J §9 (`Episode::new`) is revised: store only owned fields;
+never store a borrowing struct, and do not preemptively wrap the host in a
+lock.
 
 ## E3 — FileEdit.path is workspace-relative (resolves Finding #3)
 
@@ -133,20 +176,45 @@ let edit = FileEdit {
 ```
 
 Same correction applies wherever Section G/H constructs a `FileEdit` with
-`crud.workspace_root.join(...)` — pass the relative path instead. Enforce
-via constructor + debug assertion:
+`crud.workspace_root.join(...)` — pass the relative path instead.
+
+**Preferred enforcement: a `RelativePath` newtype validated on
+construction** so the invariant holds in *release* as well as debug builds
+(a `debug_assert!` is stripped in release and would let an absolute path
+slip through a production episode). Make the field's type carry the
+guarantee rather than re-checking strings:
 
 ```rust
+/// A workspace-relative path. The inner `PathBuf` is private; the only way
+/// to obtain one is via `TryFrom`, which rejects absolute paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelativePath(PathBuf);
+
+impl TryFrom<PathBuf> for RelativePath {
+    type Error = NotRelative;
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        if path.is_relative() { Ok(Self(path)) } else { Err(NotRelative(path)) }
+    }
+}
+
+impl RelativePath {
+    pub fn as_path(&self) -> &Path { &self.0 }
+}
+
 impl FileEdit {
-    pub fn new(path: PathBuf, new_text: String, edit_class: EditClass) -> Self {
-        debug_assert!(path.is_relative(), "FileEdit.path must be workspace-relative");
+    /// `path` is guaranteed workspace-relative by the `RelativePath` type.
+    pub fn new(path: RelativePath, new_text: String, edit_class: EditClass) -> Self {
         Self { path, new_text, edit_class }
     }
 }
 ```
 
-Test `file_edit_relative_path_invariant` asserts every emitted edit's
-path is relative.
+This makes the absolute-path state unrepresentable (§7) — callers cannot
+construct a `FileEdit` from an absolute path at all. If introducing the
+newtype is deferred, the interim guard must be a real runtime check that
+returns an error (not a release-stripped `debug_assert!`). Test
+`file_edit_relative_path_invariant` still asserts every emitted edit's path
+is relative.
 
 ## E4 — Cross-crate usage validity is BodyOnly-only (resolves Finding #4)
 
@@ -179,10 +247,23 @@ let scope_crates: HashSet<NodeId> = match partial.edit_class {
 let existing_nodes: HashMap<NodeId, Node> = self.dbs.nodes_by_id
     .iter(&rtxn)?
     .filter_map(|r| r.ok())
-    .filter(|(_, n)| n.crate_id.map_or(false, |c| scope_crates.contains(&c)))
-    .map(|(k, n)| (NodeId::from_bytes_arr(k.try_into().unwrap()), n))
+    .filter(|(_, n)| n.crate_id.is_some_and(|c| scope_crates.contains(&c)))
+    .map(|(k, n)| {
+        // Local invariant: every key in `nodes_by_id` is a 16-byte NodeId,
+        // written only by our own emitter. A wrong length means LMDB
+        // corruption, not user input — surface it loudly rather than
+        // silently truncating.
+        let bytes: [u8; 16] = k.try_into()
+            .expect("nodes_by_id key is always a 16-byte NodeId");
+        (NodeId::from_bytes_arr(bytes), n)
+    })
     .collect();
 ```
+
+(`.is_some_and(…)` replaces the older `.map_or(false, …)`; the `expect`
+documents the 16-byte key invariant. If LMDB-corruption is to be treated as
+recoverable rather than a panic, return `HostError::CorruptKey` via `?`
+instead — see Section C's `HostError`.)
 
 For ItemAddRemove and ModuleTree, additional workspace-wide sweeps of
 `bindings_by_target` / `usages_by_target` keyed on the dropped NodeIds

@@ -25,39 +25,41 @@ graph/
     snapshot.rs             WorkingSnapshot, init_from_published, publish_as_new_graph_id
     identity.rs             SessionId, WorkingSnapshotIdentity
     undo_log.rs             UndoLog, UndoBatch, UndoOp, UndoMarker        (C's in-memory design)
-    patch/
-      mod.rs                DiffPatch + compute_patch/apply_patch + the D3 matrix
+    patch.rs                DiffPatch + compute_patch/apply_patch + the D3 matrix
                             (SubDb, InvalidationAction, InvalidationRule, invalidations_for, ALL_SUB_DBS)
+    patch/                  submodules of patch.rs (file-based, no mod.rs — §10)
       nodes.rs  bindings.rs  usages.rs  contains.rs  signatures.rs  statics.rs  meta.rs
   host/                     P0.2 warm host, D2 classifier + affected-set, per-crate re-extract
     workspace_host.rs       WorkspaceHost, FileEdit, EditSeq, apply_edits
     edit_class.rs           EditClass (canonical variants), classify()
     affected_set.rs         AffectedSet, ReverseDepGraph, expand()/affected_set()
     extract_per_crate.rs    extract_partial, PartialExtractionModel
-  checkpoint/               D4 checkpoint contract
-    mod.rs                  Checkpoint (C's fields), take()
+  checkpoint.rs             Checkpoint (C's fields), take()
+  checkpoint/               D4 checkpoint contract — submodules (file-based, no mod.rs — §10)
     jj.rs                   jj op log/restore wrappers
     restore.rs              WorkspaceHost::rollback / restore replay
   view/  descriptions/  analyze/        P1.1 / P1.2 / P1.3 (unchanged)
 ```
 
-There is **no `graph/affected/`**, and none of `host/edits.rs`,
-`host/diff_patch.rs`, `host/re_extract.rs`, `host/rollback.rs`,
-`checkpoint/checkpoint.rs`, `checkpoint/undo.rs` — those are superseded
-B/C filenames (§R6).
+There is **no `graph/affected/`**, no `working/patch/mod.rs`, no
+`checkpoint/mod.rs`, and none of `host/edits.rs`, `host/diff_patch.rs`,
+`host/re_extract.rs`, `host/rollback.rs`, `checkpoint/undo.rs` — those are
+superseded B/C filenames (§R6). Per §10 the canonical homes are the
+sibling files `working/patch.rs` and `checkpoint.rs` with their submodules
+in the same-named directories (never `mod.rs`).
 
 ## §R2 — Canonical core types (resolves the duplicate D1–D4 declarations)
 
 | Concept | CANONICAL | Home | Superseded |
 |---|---|---|---|
-| Edit class | `EditClass { BodyOnly, SignatureOrVis, ItemAddRemove, ModuleTree, Macro, CargoManifest }` | `host/edit_class.rs` | B `{…, SigOrVis, …, Cargo}`; C `{Body, Signature, …, CargoManifest}` |
-| Host edit input | `FileEdit { path: ws-rel, new_text, edit_class }` (host trusts the class) | `host/workspace_host.rs` | B's `Edit` enum + `classify(&Edit)` — the verb sets the class by construction; no diff-inference |
-| Affected set | `AffectedSet { dirty_files, dirty_crates, reverse_dep_crates, full_rebuild }` (struct) | `host/affected_set.rs` | C's `affected_crates() -> Vec<NodeId>` (becomes the builder that returns `AffectedSet`) |
+| Edit class | `#[non_exhaustive] EditClass { BodyOnly, SignatureOrVis, ItemAddRemove, ModuleTree, Macro, CargoManifest }` | `host/edit_class.rs` | B `{…, SigOrVis, …, Cargo}`; C `{Body, Signature, …, CargoManifest}` |
+| Host edit input | `FileEdit { path: ws-rel, new_text, edit_class }` (host trusts the class; fields private + accessors) | `host/workspace_host.rs` | B's `Edit` enum + `classify(&Edit)` — the verb sets the class by construction; no diff-inference |
+| Affected set | `#[non_exhaustive] AffectedSet { dirty_files, dirty_crates, reverse_dep_crates, full_rebuild }` (struct; fields private + accessors) | `host/affected_set.rs` | C's `affected_crates() -> Vec<NodeId>` (becomes the builder that returns `AffectedSet`) |
 | Undo log | **in-memory** `UndoLog { batches: Vec<UndoBatch> }`; `UndoOp` per primary + per DUP_SORT secondary | `working/undo_log.rs` | B's on-disk `BufWriter` `UndoLog`, `UndoEntry`, byte-offset marker |
 | Undo marker | `UndoMarker(EditSeq)` — pop batches with `seq > marker` | `working/undo_log.rs` | B's `UndoLogMarker { byte_offset, entry_count }` |
-| Checkpoint | `Checkpoint { jj_op_id: String, file_prior_text: HashMap<PathBuf,String>, edit_seq_marker: EditSeq }` | `checkpoint/mod.rs` | B's `{ jj_op_id: JjOpId, undo_log_marker, ra_edit_seq, caches }` |
-| D3 matrix | `SubDb`, `InvalidationAction`, `InvalidationRule`, `invalidations_for(class)`, `ALL_SUB_DBS` | `working/patch/mod.rs` | B's `affected/matrix.rs` (same content, new home) |
-| Diff/patch | `DiffPatch { node_inserts/updates/removes, … }` + `compute_patch`/`apply_patch` | `working/patch/mod.rs` | C's `host/diff_patch.rs` (same content, new home) |
+| Checkpoint | `#[non_exhaustive] Checkpoint { jj_op_id: JjOpId, file_prior_text: HashMap<PathBuf,String>, edit_seq_marker: EditSeq }` — fields private + accessors | `checkpoint.rs` | B's `{ jj_op_id: JjOpId, undo_log_marker, ra_edit_seq, caches }` |
+| D3 matrix | `#[non_exhaustive]` `SubDb`, `#[non_exhaustive]` `InvalidationAction`, `InvalidationRule`, `invalidations_for(class)`, `ALL_SUB_DBS` | `working/patch.rs` | B's `affected/matrix.rs` (same content, new home) |
+| Diff/patch | `#[non_exhaustive] DiffPatch { node_inserts/updates/removes, … }` — fields private + accessors — `compute_patch`/`apply_patch` | `working/patch.rs` | C's `host/diff_patch.rs` (same content, new home) |
 
 Rationale for the load-bearing picks:
 - **EditClass names** follow the source plan (`phase-1-implementation.md`)
@@ -75,25 +77,34 @@ Rationale for the load-bearing picks:
   the undo-log marker (the log is keyed by `EditSeq`), so all three D4
   domains are covered: source = `jj_op_id`, graph + RA-seq =
   `edit_seq_marker`, RA-replay data = `file_prior_text`.
+- **`jj_op_id` keeps B's `JjOpId` newtype** (DD-4): the field is an opaque
+  jj operation-log handle, not free text, so it stays a domain newtype
+  rather than a stringly-typed ID (§7) — an earlier draft downgraded it to
+  `String`; that regression is reverted here. The newtype has a private
+  inner field + accessor.
 
 **Consequence for `PartialExtractionModel`** (`extract_per_crate.rs`): it
-must carry the affected-set context E4's scan-window reads. Canonical:
+must carry the affected-set context E4's scan-window reads. Canonical
+(fields **private + accessors**, `#[non_exhaustive]` — it grows as
+re-extraction widens; §5/§7):
 ```rust
+#[non_exhaustive]
 pub struct PartialExtractionModel {
-    pub edit_class: EditClass,            // NEW — E4 reads partial.edit_class
-    pub dirty_crates: Vec<NodeId>,
-    pub reverse_dep_crates: Vec<NodeId>,  // NEW — E4 reads partial.reverse_dep_crates
-    pub nodes: BTreeMap<NodeId, Node>,
-    pub bindings: Vec<Binding>,
-    pub usages: Vec<Usage>,
-    pub contains: Vec<(NodeId, NodeId)>,
-    pub signatures: Vec<(NodeId, FunctionSignature)>,
-    pub statics: Vec<(NodeId, StaticMetadata)>,
+    edit_class: EditClass,            // NEW — E4 reads partial.edit_class()
+    dirty_crates: Vec<NodeId>,
+    reverse_dep_crates: Vec<NodeId>,  // NEW — E4 reads partial.reverse_dep_crates()
+    nodes: BTreeMap<NodeId, Node>,
+    bindings: Vec<Binding>,
+    usages: Vec<Usage>,
+    contains: Vec<(NodeId, NodeId)>,
+    signatures: Vec<(NodeId, FunctionSignature)>,
+    statics: Vec<(NodeId, StaticMetadata)>,
 }
+// accessors: edit_class(&self), dirty_crates(&self), reverse_dep_crates(&self), …
 ```
 The builder copies `edit_class` / `dirty_crates` / `reverse_dep_crates`
-from the `AffectedSet`; E4's `partial.edit_class` / `.reverse_dep_crates`
-then compile as written.
+from the `AffectedSet`; E4's `partial.edit_class()` /
+`.reverse_dep_crates()` accessors then resolve as written.
 
 ## §R3 — One M0.1 deliverable, not two
 
@@ -127,16 +138,14 @@ workspace `Cargo.toml`. `syn` / `ra_ap_syntax` are for byte-range
 **analysis only**; replacement text is string-built and spliced.
 `toml_edit` is kept (format-preserving, not a whole-file formatter).
 
-**Section H still narrates `prettyplease::unparse(&file)` in several verb
-bodies** (`modify_signature`, `extract_*`, `*_module`) — those calls are
-**voided by E5 + this section**. The implementer does NOT call `unparse`:
-locate the byte range with `syn`/`ra_ap_syntax`, build the replacement
-string from the op's fields, and `splice_bytes`. The `syn` `printing`
-feature and the `quote` / `proc-macro2` codegen deps are dropped (they
-exist only to support unparse). Converting Section H's per-verb bodies from
-unparse to locate-and-splice is the one **open rewrite** this
-reconciliation does not finish inline — E5 sketches the splice for §3/5/9/
-11/12/16; the rest of Section H (file lists, step order, tests) is correct.
+**Section H has been converted off `prettyplease::unparse`** (resolved).
+Every verb body (`modify_signature`, `extract_*`, `inline`, `*_module`,
+`lift/lower_to_crate`) now locates the target byte range with
+`syn`/`ra_ap_syntax` (analysis only), builds the replacement string from the
+op's fields, and `splice_bytes` — no AST unparse anywhere. The `syn`
+`printing` feature and the `quote` / `proc-macro2` codegen deps are dropped
+(they existed only to support unparse). E5 sketches the splice for
+§3/5/9/11/12/16; Section H's file lists, step order, and tests carry the rest.
 
 ## §R5 — Scrubs applied to the body
 
@@ -158,9 +167,10 @@ reconciliation does not finish inline — E5 sketches the splice for §3/5/9/
 | `EditClass::SigOrVis`, `::Signature` | `EditClass::SignatureOrVis` |
 | `EditClass::Cargo` | `EditClass::CargoManifest` |
 | `EditClass::Body` (Section C) | `EditClass::BodyOnly` |
-| `affected/edit.rs`, `affected/set.rs`, `affected/matrix.rs` | `host/edit_class.rs`, `host/affected_set.rs`, `working/patch/mod.rs` |
-| `host/edits.rs`, `host/diff_patch.rs`, `host/re_extract.rs`, `host/rollback.rs` | `host/workspace_host.rs`, `working/patch/mod.rs`, `host/extract_per_crate.rs`, `checkpoint/restore.rs` |
-| `checkpoint/checkpoint.rs`, `checkpoint/undo.rs` | `checkpoint/mod.rs`, `working/undo_log.rs` |
+| `affected/edit.rs`, `affected/set.rs`, `affected/matrix.rs` | `host/edit_class.rs`, `host/affected_set.rs`, `working/patch.rs` |
+| `host/edits.rs`, `host/diff_patch.rs`, `host/re_extract.rs`, `host/rollback.rs` | `host/workspace_host.rs`, `working/patch.rs`, `host/extract_per_crate.rs`, `checkpoint/restore.rs` |
+| `checkpoint/mod.rs`, `checkpoint/checkpoint.rs`, `checkpoint/undo.rs` | `checkpoint.rs` (home; no `mod.rs` — §10), `checkpoint.rs`, `working/undo_log.rs` |
+| `working/patch/mod.rs` | `working/patch.rs` (home; no `mod.rs` — §10) |
 | B's `Edit` enum + `classify(&Edit)` | build `FileEdit { edit_class }` directly in the verb |
 | `Commit<'static>` stored in `Episode` (C) | per-step `Commit<'_>` (E2 / scrub #3) |
 | `rmc_host::FileEdit` | `rmc_graph::graph::host::FileEdit` (rmc-host skipped) |

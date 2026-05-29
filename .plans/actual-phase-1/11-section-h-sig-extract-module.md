@@ -22,16 +22,19 @@ All in `crates/rmc-crud/src/`:
 - `crates/rmc-crud/src/lower_to_module.rs` — P1.5e inverse: fold small workspace crate back.
 - `crates/rmc-crud/src/callsite_fill.rs` — `CallsiteFill` enum + `CallsiteCtx`.
 - `crates/rmc-crud/src/cargo_surgery.rs` — `toml_edit`-based reads/writes of `Cargo.toml`; format-preserving.
-- `crates/rmc-crud/src/syn_ast.rs` — common helpers for `syn`/`ra_ap_syntax` parse + **byte-range location only** (signature span, arg-list span, impl-block item ranges). **No `prettyplease::unparse`** — replacement text is string-built and spliced via `source_edit::splice_bytes` per E5 (see Canonical Reconciliation §R4).
+- `crates/rmc-crud/src/syn_ast.rs` — common helpers for `syn`/`ra_ap_syntax` parse used **for ANALYSIS only** (signature span, arg-list span, impl-block item ranges, captured-local resolution). These helpers return byte ranges (`(u32, u32)`) into the original source; they **never** render or unparse an AST. **No `prettyplease`, no `syn` `printing`/`quote`/`proc-macro2` codegen** — replacement text is string-built from each op's input fields and spliced via `source_edit::splice_bytes` per E5 (see Canonical Reconciliation §R4, errata E5). `source_edit` (the byte-splice helper module from Section G) is reused here.
 - `crates/rmc-crud/src/name_resolution.rs` — thin wrapper around RA's `Semantics` for capture analysis in `extract_function`.
 
-`crates/rmc-crud/src/lib.rs` re-exports new verbs; `facade.rs` gains nine methods; `edit.rs` gains the `Cargo` variant + `is_full_rebuild()`; `error.rs` gains new variants.
+`crates/rmc-crud/src/lib.rs` re-exports new verbs; `facade.rs` gains nine methods; `edit.rs` gains the `EditClass::CargoManifest` variant + `is_full_rebuild()`; `error.rs` gains new variants.
 
-New deps in `crates/rmc-crud/Cargo.toml` (E5: analysis-only — no `printing`,
-no `prettyplease`, no `quote`/`proc-macro2` codegen; build replacement
-strings by hand and splice):
+New deps in `crates/rmc-crud/Cargo.toml` (E5: analysis-only — `syn` is
+used purely to *locate byte ranges*, so the codegen-side features are
+deliberately omitted: no `printing`, no `quote`, no `proc-macro2`, and
+**no `prettyplease` dependency at all**. Replacement text is built by hand
+and spliced):
 ```
-syn = { version = "2", features = ["full", "parsing", "extra-traits", "visit", "visit-mut"] }
+# `parsing` + `visit` only — NOT `printing` (no AST→source rendering, per E5).
+syn = { version = "2", features = ["full", "parsing", "extra-traits", "visit"] }
 toml_edit = "0.22"
 cargo_metadata = { workspace = true }
 ra_ap_hir = "0.0.330"
@@ -41,12 +44,22 @@ ra_ap_vfs = "0.0.330"
 rmc-graph = { path = "../rmc-graph" }
 rmc-server = { path = "../rmc-server" }
 ```
+`visit-mut` is intentionally dropped: we no longer mutate the AST (the old
+`visit_mut` rewrite path is gone), only walk it immutably to find spans.
 
 ## Type definitions
 
 ### callsite_fill.rs
 
 ```rust
+// DERIVE IMPACT (§8): the `ClosureBuilder(Box<dyn Fn ...>)` variant makes the
+// enum *un-derivable* for `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash` — a boxed
+// closure implements none of them. This is an accepted trade-off for the
+// escape-hatch variant. A hand-written `Debug` impl prints the active variant
+// name (`"ClosureBuilder(<fn>)"` for the closure) so enclosing types that need
+// `Debug` are not blocked; `Clone`/`PartialEq` remain unavailable. Callers that
+// need a cloneable/comparable fill should use `Todo`/`Default`/`Refuse`.
+#[non_exhaustive]
 pub enum CallsiteFill {
     /// DEFAULT: `todo!("filled in by modify_signature: <param>")`. Compiles,
     /// runtime-panics if reached, easy to grep.
@@ -60,8 +73,12 @@ pub enum CallsiteFill {
     ClosureBuilder(Box<dyn Fn(&CallsiteCtx) -> String + Send + Sync>),
 }
 
+// Hand-written so the closure variant doesn't block `Debug` on enclosing types.
+impl std::fmt::Debug for CallsiteFill { /* match → variant name */ }
+
 impl Default for CallsiteFill { fn default() -> Self { CallsiteFill::Todo } }
 
+#[derive(Debug, Clone, Copy)]
 pub struct CallsiteCtx<'a> {
     pub fn_id: NodeId,
     pub added_param: &'a Param,
@@ -74,12 +91,16 @@ pub struct CallsiteCtx<'a> {
 ### modify_signature.rs
 
 ```rust
+// Note: cannot derive `Debug`/`Clone` because of `callsite_fill: CallsiteFill`
+// (the `ClosureBuilder` variant — see derive-impact note above). A hand-written
+// `Debug` delegates to `CallsiteFill`'s manual `Debug`.
 pub struct SignatureChange {
     pub target: NodeId,
-    pub new_sig: FunctionSignature,     // ENTIRE new sig, not a delta
+    pub new_sig: FunctionSignature,     // ENTIRE new sig, not a delta — see DD-3 invariant below
     pub callsite_fill: CallsiteFill,    // default Todo
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct SignatureDelta {
     pub added:    Vec<(usize, Param)>,
     pub removed:  Vec<usize>,
@@ -93,9 +114,35 @@ pub(crate) struct SignatureDelta {
 }
 ```
 
+> **LIMITATION / INVARIANT (DD-3).** `SignatureChange` deliberately takes the
+> *whole new signature* (`new_sig: FunctionSignature`), not an explicit ordered
+> edit-list. The input type is **not** being restructured — a whole-sig input is
+> the ergonomic choice for callers (and for the RL agent, which emits a target
+> signature, not a diff script). The cost is that Step 2 must *infer* the
+> `SignatureDelta` by comparing old vs new, and **rename-vs-(remove+add) is
+> heuristic and can be ambiguous.** Documented heuristic, applied in this order:
+> 1. **Position-pair pass.** Walk old/new params by index. Same name + same type
+>    at index `i` → unchanged. Same name, different type → `retyped(i)`.
+> 2. **Name-set reconciliation** for positions that didn't pair: a param whose
+>    *name* exists in old but at a different index, with all other names stable →
+>    `reordered`. A name present in new but absent from old → candidate `added`;
+>    a name present in old but absent from new → candidate `removed`.
+> 3. **Rename inference (the ambiguous step).** When exactly one name was
+>    "removed" and exactly one "added" *at the same position with the same type*,
+>    it is classified as `renamed(i, new_name)` rather than `removed(i)` +
+>    `added(i, _)`. With multiple simultaneous add+remove at the same position,
+>    OR a same-position name change *with* a type change, the heuristic cannot
+>    distinguish rename from remove+add and **conservatively chooses remove+add**
+>    (which triggers `callsite_fill` for the "added" param). This may insert a
+>    `todo!()` where a pure rename was intended — callers wanting an unambiguous
+>    rename should use the dedicated rename path / keep the param type stable.
+> The cargo gate (P1.7) is the backstop: a mis-inferred delta surfaces as a
+> compile error and reverts via Checkpoint.
+
 ### extract_function.rs / extract_trait.rs / inline.rs
 
 ```rust
+#[derive(Debug, Clone)]
 pub struct ExtractFunctionOp {
     pub source_fn: NodeId,
     pub byte_range: (u32, u32),               // inside source_fn's file
@@ -104,6 +151,7 @@ pub struct ExtractFunctionOp {
     pub new_fn_visibility: BindingVisibility,
 }
 
+#[derive(Debug, Clone)]
 pub struct ExtractTraitOp {
     pub source_struct: NodeId,
     pub method_subset: Vec<NodeId>,
@@ -112,26 +160,34 @@ pub struct ExtractTraitOp {
     pub place_trait_inline: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct InlineOp { pub target_fn: NodeId, pub policy: InlinePolicy }
+
+#[derive(Debug, Clone)]
 pub enum InlinePolicy { InlineAll, InlineSites(Vec<UsageId>) }
 ```
 
 ### split_module / merge_modules / create_module / move_module
 
 ```rust
+#[derive(Debug, Clone)]
 pub struct SplitModuleOp { pub source_module: NodeId, pub splits: Vec<ModuleSplit> }
+#[derive(Debug, Clone)]
 pub struct ModuleSplit {
     pub new_name: String,
     pub items: Vec<NodeId>,
     pub keep_reexport: bool,
 }
+#[derive(Debug, Clone)]
 pub struct MergeModulesOp { pub sources: Vec<NodeId>, pub dest: NodeId }
+#[derive(Debug, Clone)]
 pub struct CreateModuleOp {
     pub parent: NodeId,
     pub name: String,
     pub initial_items: Vec<NodeId>,
     pub use_mod_rs: bool,
 }
+#[derive(Debug, Clone)]
 pub struct MoveModuleOp {
     pub source_module: NodeId,
     pub new_parent: NodeId,
@@ -142,6 +198,7 @@ pub struct MoveModuleOp {
 ### lift_to_crate / lower_to_module
 
 ```rust
+#[derive(Debug, Clone)]
 pub struct LiftToCrateOp {
     pub source_module: NodeId,
     pub new_crate_name: String,    // kebab-case
@@ -149,6 +206,7 @@ pub struct LiftToCrateOp {
     pub keep_facade: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct LowerToModuleOp {
     pub source_crate: NodeId,
     pub dest_parent_module: NodeId,
@@ -158,36 +216,148 @@ pub struct LowerToModuleOp {
 
 ### Crud methods
 
+Each verb is `#[must_use]` on its `EditOutcome` (carries the live `Checkpoint`).
+Every public verb carries an `# Errors` doc section naming its dominant failure
+modes (validation refusal, `SynParse` on a malformed target file, `Io` on the
+read/write, `HostUnavailable` when the warm RA host is down, and — for the two
+Cargo verbs — `CargoMetadata`/`CargoTomlConflict`). Sketch:
+
 ```rust
 impl Crud {
+    /// Rewrite a function/method signature and patch every detectable callsite.
+    ///
+    /// # Errors
+    /// `TargetNotFound`/`WrongItemKind` (bad target), `SynParse` (unparseable
+    /// source), `SignatureSynthesisRefused` (added param + `CallsiteFill::Refuse`),
+    /// `Io` (read/write), `HostUnavailable`, `LineIndex` (offset→line mapping).
     pub fn modify_signature(&mut self, op: SignatureChange) -> Result<EditOutcome, EditError>;
+    /// Extract a statement range into a new private function + call.
+    ///
+    /// # Errors
+    /// `InvalidByteRange`, `ExtractFunctionScopeCapture`, `SynParse`, `Io`,
+    /// `HostUnavailable`, `LineIndex`.
     pub fn extract_function(&mut self, op: ExtractFunctionOp) -> Result<EditOutcome, EditError>;
+    /// Hoist a subset of inherent methods into a new trait + `impl`.
+    ///
+    /// # Errors
+    /// `ExtractTraitMethodsNotInherent`, `SynParse`, `Io`.
     pub fn extract_trait(&mut self, op: ExtractTraitOp) -> Result<EditOutcome, EditError>;
+    /// Inline a function into its callsites (with per-arg let-binding).
+    ///
+    /// # Errors
+    /// `InlineRecursiveFn`, `SynParse`, `Io`, `HostUnavailable`.
     pub fn inline(&mut self, op: InlineOp) -> Result<EditOutcome, EditError>;
+    /// Partition a module's items into N sibling modules.
+    ///
+    /// # Errors
+    /// `ItemsNotInModule`, `ModuleTreeConflict`, `SynParse`, `Io`.
     pub fn split_module(&mut self, op: SplitModuleOp) -> Result<EditOutcome, EditError>;
+    /// Fold N sibling modules into one.
+    ///
+    /// # Errors
+    /// `ModuleTreeConflict`, `SynParse`, `Io`.
     pub fn merge_modules(&mut self, op: MergeModulesOp) -> Result<EditOutcome, EditError>;
+    /// Create a child module, optionally seeded with moved items.
+    ///
+    /// # Errors
+    /// `ModuleTreeConflict`, `SynParse`, `Io`.
     pub fn create_module(&mut self, op: CreateModuleOp) -> Result<EditOutcome, EditError>;
+    /// Relocate/rename a module file and rewrite `use` paths workspace-wide.
+    ///
+    /// # Errors
+    /// `ModuleTreeConflict`, `SynParse`, `Io`.
     pub fn move_module(&mut self, op: MoveModuleOp) -> Result<EditOutcome, EditError>;
+    /// Promote a module to a new workspace crate (FULL REBUILD).
+    ///
+    /// # Errors
+    /// `CargoTomlConflict`, `CargoMetadata` (running `cargo metadata`),
+    /// `SynParse`, `Io`, `HostUnavailable`.
     pub fn lift_to_crate(&mut self, op: LiftToCrateOp) -> Result<EditOutcome, EditError>;
+    /// Fold a small workspace crate back into a module (FULL REBUILD).
+    ///
+    /// # Errors
+    /// `CargoTomlConflict`, `CargoMetadata`, `SynParse`, `Io`.
     pub fn lower_to_module(&mut self, op: LowerToModuleOp) -> Result<EditOutcome, EditError>;
 }
 ```
 
 ### New `EditError` variants
 
+`EditError` is the crate's single `thiserror` enum (Section G already owns
+`TargetNotFound`, `WrongItemKind`, `InvalidByteRange`, `Io { path, op, source }`,
+the host-apply/restore variants, etc.). It is `#[non_exhaustive]`. **Not a god
+enum:** variants are domain-scoped (validation, synthesis-refusal, parse, IO,
+host, cargo) and the count is bounded by the closed verb set. If a future verb
+family needs many private failure modes, scope them into a per-op error that
+`EditError` wraps with `#[source]` rather than flattening more leaf variants in.
+`anyhow` is **not** used anywhere in `rmc-crud` (library crate) — only the
+`rmc-spikes`/`rmc-rl` binaries use `anyhow`.
+
+The verbs in this section add domain variants plus the wrapper variants the
+bare `?` calls (`syn::parse_file`, `syn::parse_str`, line-index lookups,
+`std::fs`, `cargo metadata`/`Command`, warm-host access) require:
+
 ```rust
-SignatureSynthesisRefused { fn_id: NodeId, callsite_count: usize },
-CargoTomlConflict { crate_name: String, reason: String },
-ExtractFunctionScopeCapture { unresolved: Vec<String> },
-ExtractTraitMethodsNotInherent { stray: Vec<NodeId> },
-ItemsNotInModule { module: NodeId, stray: Vec<NodeId> },
-ModuleTreeConflict { parent: NodeId, name: String, reason: String },
-InlineRecursiveFn { fn_id: NodeId },
+#[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
+pub enum EditError {
+    // --- existing (Section G), elided ---
+
+    // --- domain (this section) ---
+    #[error("signature synthesis refused for {fn_id:?}: {callsite_count} callsite(s) need a fill")]
+    SignatureSynthesisRefused { fn_id: NodeId, callsite_count: usize },
+    #[error("Cargo.toml conflict for crate `{crate_name}`: {reason}")]
+    CargoTomlConflict { crate_name: String, reason: String },
+    #[error("extract_function: unresolved scope captures: {unresolved:?}")]
+    ExtractFunctionScopeCapture { unresolved: Vec<String> },
+    #[error("extract_trait: methods are not inherent on the target: {stray:?}")]
+    ExtractTraitMethodsNotInherent { stray: Vec<NodeId> },
+    #[error("items not in module {module:?}: {stray:?}")]
+    ItemsNotInModule { module: NodeId, stray: Vec<NodeId> },
+    #[error("module-tree conflict under {parent:?} for `{name}`: {reason}")]
+    ModuleTreeConflict { parent: NodeId, name: String, reason: String },
+    #[error("cannot inline recursive fn {fn_id:?}")]
+    InlineRecursiveFn { fn_id: NodeId },
+
+    // --- wrapper variants for the `?` calls (source-preserving) ---
+    /// `syn`/`ra_ap_syntax` failed to parse the target source (analysis only).
+    #[error("failed to parse `{path}`")]
+    SynParse {
+        path: PathBuf,
+        #[source]
+        source: syn::Error,
+    },
+    /// Filesystem read/write (note: Section G's `Io { path, op, source }` is
+    /// reused where a path+op is known; this `#[from]` arm catches the rest).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// `cargo metadata` invocation or JSON decode failed (lift/lower only).
+    #[error("cargo metadata failed")]
+    CargoMetadata {
+        #[source]
+        source: cargo_metadata::Error,
+    },
+    /// Byte-offset → line/column mapping failed (offset past EOF / not on a
+    /// char boundary) when feeding RA `Semantics`.
+    #[error("line-index lookup failed for offset {offset} in `{path}`")]
+    LineIndex { path: PathBuf, offset: u32 },
+    /// The warm rust-analyzer host needed for capture analysis is unavailable.
+    #[error("warm rust-analyzer host unavailable")]
+    HostUnavailable,
+}
 ```
+
+`Command`-based `cargo metadata` is invoked through the typed `cargo_metadata`
+crate (`MetadataCommand`), not a raw `Command` whose `Output` is string-parsed;
+its `Result` maps to `EditError::CargoMetadata`. Any direct `Command` (none
+strictly required here) would map its `io::Error` through the `Io` arm and its
+non-zero exit through `CargoTomlConflict`/`CargoMetadata` as appropriate.
 
 ### EditOutcome extension
 
 ```rust
+#[derive(Debug)]                          // not Clone: Checkpoint is move-only
+#[must_use = "EditOutcome carries a live Checkpoint that must be committed or restored"]
 pub struct EditOutcome {
     pub file_edits: Vec<FileEdit>,
     pub file_moves: Vec<FileMove>,
@@ -197,17 +367,22 @@ pub struct EditOutcome {
     pub checkpoint: Checkpoint,
 }
 
+#[derive(Debug, Clone)]
 pub struct CargoEdit {
     pub manifest_path: PathBuf,
     pub new_contents: String,            // toml_edit-rendered, format-preserved
 }
 
+// Canonical variant names per Canonical Reconciliation / global conventions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EditClass {
-    Body, SigOrVis, ItemAddRemove, ModuleTree, Macro,
-    Cargo,                               // → COLD REBUILD
+    BodyOnly, SignatureOrVis, ItemAddRemove, ModuleTree, Macro,
+    CargoManifest,                       // lift_to_crate / lower_to_module → COLD REBUILD
 }
 impl EditClass {
-    pub fn is_full_rebuild(self) -> bool { matches!(self, Self::Cargo | Self::Macro) }
+    #[must_use]
+    pub fn is_full_rebuild(self) -> bool { matches!(self, Self::CargoManifest | Self::Macro) }
 }
 ```
 
@@ -228,57 +403,61 @@ Each verb's skeleton:
 
 **Step 1 — Resolve + validate.** Require `item_kind ∈ {Function, Method, AssocFunction}`. Fetch current sig via `snap.function_signature(op.target)?`. VERIFY: `modify_sig_rejects_non_fn`.
 
-**Step 2 — Diff old vs new sig.** `SignatureDelta`: pair by position, refine by name where positions don't match. Same-name+different-ty → `retyped`. New name not in old → `added`. Old name not in new → `removed`. Same set different order → `reordered = Some(permutation)`. VERIFY: `diff_detects_add_remove_rename_reorder`.
+**Step 2 — Diff old vs new sig.** Infer `SignatureDelta` per the **DD-3 heuristic** (see the LIMITATION note under the type defs): position-pair pass, then name-set reconciliation, then the ambiguous rename-vs-(remove+add) inference (single same-position same-type swap → `renamed`; otherwise conservative `removed`+`added`). Same-name+different-ty → `retyped`. New name not in old → `added`. Old name not in new → `removed`. Same set different order → `reordered = Some(permutation)`. VERIFY: `diff_detects_add_remove_rename_reorder`.
 
-**Step 3 — Rewrite the function declaration.** Read file, `syn::parse_file(&src)?`. Locate `ItemFn`/`ImplItemFn`/`TraitItemFn` by span (via `visit_mut::VisitMut`). Replace its `syn::Signature` with translated `FunctionSignature`:
-- `is_async` → `sig.asyncness`.
-- `self_param` → `sig.inputs.first_mut()` set to `FnArg::Receiver`.
-- `params` → `FnArg::Typed(PatType { pat: Ident, ty: syn::parse_str(&p.ty)?, .. })`.
-- `return_type` → `syn::parse_str(&format!("-> {}", new_sig.return_type))?`.
-- `generics` → `syn::parse_str(&render_generics(&new_sig.generics))?`.
+**Step 3 — Rewrite the function declaration (locate span → build string → splice).** Read file; `syn::parse_file(&src).map_err(|source| EditError::SynParse { path, source })?` for **analysis only**. Walk (immutable `syn::visit::Visit`) to the `ItemFn`/`ImplItemFn`/`TraitItemFn` whose span matches `op.target`, and read off the **byte range of its `syn::Signature`** — from the start of the first signature token (`const`/`async`/`fn`, accounting for the `fn` keyword) to just before the body's opening `{` (or the trailing `;` for a trait fn). Call this `(sig_start, sig_end)` (a `syn_ast` helper, `fn_signature_byte_range`). Do **not** mutate the AST.
 
-Re-render: `let new_src = prettyplease::unparse(&file);`. One `FileEdit { path, new_contents: new_src }`. VERIFY: `modify_sig_rewrites_decl_only`.
+Build the replacement signature text by hand from `new_sig: FunctionSignature` (pure string formatter `render_signature`, no AST unparse):
+- `is_async` → emit `async ` prefix.
+- `self_param` → emit `&self` / `&mut self` / `self` as the first input.
+- `params` → `format!("{}: {}", p.name, p.ty)`, comma-joined.
+- `return_type` → emit ` -> {}` when non-unit.
+- `generics` / where-clause → `render_generics(&new_sig.generics)`.
+
+Splice: `let new_text = source_edit::splice_bytes(&src, sig_start as usize, sig_end as usize, &render_signature(&op.new_sig));`. The body and everything outside `(sig_start, sig_end)` is preserved verbatim. One `FileEdit { path, new_text, edit_class: EditClass::SignatureOrVis }`. VERIFY: `modify_sig_rewrites_decl_only`.
+
+**Ident hygiene (synthesized names).** Where this section synthesizes identifiers (callsite `todo!()` text in Step 5, the `__arg_n`/`__arg_self` let-bindings in Step 16), names must not collide with locals already in scope at the splice site. Scheme: collect the set of identifiers in scope (RA `scope.process_all_names` when the host is warm, else a `syn`-walk of the enclosing item's idents); pick the prefix `__arg` and append the parameter index, then if `__arg_{n}` is already present append a numeric disambiguator (`__arg_{n}_{k}`, incrementing `k`) until unused. The same procedure produces `__arg_self`/`__arg_self_{k}`. The chosen names are recorded so all references within one splice agree.
 
 **Step 4 — Find all callsites of OLD sig.** `let sites = snap.who_calls(op.target)?;` + `snap.usages_of(op.target)?` for non-fn-body refs. Union is the rewrite set. Tag with body-call vs const-ref (Default-substitution only valid in body context). VERIFY: `modify_sig_collects_all_callsites`.
 
-**Step 5 — Rewrite each callsite.** Group by file; descending byte-offset order. For each file: parse `syn::File`; for each site (visit_mut to find topmost `ExprCall`/`ExprMethodCall` containing the offset); manipulate `call.args`:
-- **Reorder:** permute `args` per `perm`.
-- **Remove:** `args.remove(i)` for each `removed` (descending).
-- **Add:** for each `(j, new_param)`, build `syn::Expr` per `callsite_fill`:
-  - `Todo` → `syn::parse_str::<syn::Expr>(&format!(r#"todo!("filled in by modify_signature: {}")"#, new_param.name))?`.
-  - `Default` → small allowlist `{i*, u*, f*, bool, String, Vec<_>, Option<_>, HashMap<_,_>}` or `: Default` bound in `new_sig.generics`; else fall back to `Todo`.
-  - `Refuse` → `EditError::SignatureSynthesisRefused { fn_id, callsite_count }`.
-  - `ClosureBuilder(f)` → `syn::parse_str(&f(&ctx))?`.
+**Step 5 — Rewrite each callsite (locate arg-list span → rebuild arg string → splice).** Group by file; **descending byte-offset order** so earlier splices don't shift later ranges. For each file: parse `syn::File` for analysis; for each site walk (immutable `syn::visit::Visit`) to the topmost `ExprCall`/`ExprMethodCall` whose span contains the offset, and read off the **byte range of the arg list** — the span just inside the parens, `(args_start, args_end)` (a `syn_ast` helper). Also capture each existing argument's source text by its sub-span (so existing args are preserved verbatim, including formatting/comments). Build the *new* comma-separated argument string in memory from those captured slices plus synthesized fills:
+- **Reorder:** emit the captured arg slices in `perm` order.
+- **Remove:** drop the captured slice at each `removed` index.
+- **Add:** for each `(j, new_param)`, produce the fill **text** per `callsite_fill`:
+  - `Todo` → `format!(r#"todo!("filled in by modify_signature: {}")"#, new_param.name)` (string, no parse).
+  - `Default` → if `new_param.ty` is in the small allowlist `{i*, u*, f*, bool, String, Vec<_>, Option<_>, HashMap<_,_>}` (or carries a `: Default` bound in `new_sig.generics`) emit `Default::default()`; else fall back to the `Todo` text.
+  - `Refuse` → return `EditError::SignatureSynthesisRefused { fn_id, callsite_count }` (no file touched; Checkpoint reverts).
+  - `ClosureBuilder(f)` → `f(&ctx)` (the returned string is spliced verbatim).
 
-Insertion order: removals/reorder first, then insertions in increasing index. Re-render per touched file; emit `FileEdit`. VERIFY: `modify_sig_add_param_inserts_todo`, `_remove_param_drops_arg`, `_reorder_perm_correct`.
+Assemble the final arg list (removals/reorder applied first, then insertions at increasing index), join with `", "`, and `source_edit::splice_bytes(&src, args_start, args_end, &new_args)`. One `FileEdit` per touched file (accumulate splices in descending order before emitting). VERIFY: `modify_sig_add_param_inserts_todo`, `_remove_param_drops_arg`, `_reorder_perm_correct`.
 
-**Step 6 — Classify + apply.** `EditClass::SigOrVis` (D2 expands to editing crate + reverse-deps). `Crud::take_checkpoint()` → `Crud::apply_file_edits(edits, class)` → host writes + LMDB patch + return `EditOutcome`. On error → `Checkpoint::restore()`.
+**Step 6 — Classify + apply.** `EditClass::SignatureOrVis` (D2 expands to editing crate + reverse-deps). `Crud::take_checkpoint()` → `Crud::apply_file_edits(edits, class)` → host writes + LMDB patch + return `EditOutcome`. On error → `Checkpoint::restore()`.
 
 ### P1.5d — `extract_function`
 
-**Step 7 — Parse + locate range.** Resolve `source_fn` (is_callable). Open file, `syn::parse_file(&src)?`, walk to `ItemFn` matching span; find contiguous statement sub-slice covering `op.byte_range`. Fail if crosses statement boundary → `EditError::InvalidByteRange`. VERIFY: `extract_fn_rejects_mid_statement`.
+**Step 7 — Parse + locate range.** Resolve `source_fn` (is_callable). Open file (`std::fs::read_to_string` → `EditError::Io`), `syn::parse_file(&src).map_err(|source| EditError::SynParse { path, source })?` for analysis, walk (immutable `Visit`) to `ItemFn` matching span; find the contiguous statement sub-slice whose byte span covers `op.byte_range` and record that exact `(stmt_start, stmt_end)` range (this is what gets spliced in Step 9). Fail if `op.byte_range` crosses a statement boundary → `EditError::InvalidByteRange`. VERIFY: `extract_fn_rejects_mid_statement`.
 
-**Step 8 — Capture analysis via RA.** Need `Semantics`; warm host lives behind `WorkspaceHost::semantics()`. Compute `TextRange` from `op.byte_range` via line index; `let scope = sema.scope_at_offset(file_id, range.start())?;`. Collect every `syn::Ident` inside slice (via `syn::visit::Visit`); filter to those resolving (`scope.process_all_names`) to `ScopeDef::Local(Local)`. For each captured local: `Local::ty(db)` → `Type::display(db).to_string()` → param type. Decide `&T` / `&mut T` / `T` from `Local::is_mut(db)` + whether lifted code mutates (re-walk: `=` LHS, `&mut`, method call on `&mut self`). Non-local free idents (paths, use-imports, macro names) left alone. Sanity-check against `op.captured_locals` if non-empty; mismatch → `EditError::ExtractFunctionScopeCapture { unresolved }`. VERIFY: `extract_fn_captures_locals_with_correct_mut`.
+**Step 8 — Capture analysis via RA.** Need `Semantics`; warm host lives behind `WorkspaceHost::semantics()` → if down, `EditError::HostUnavailable`. Compute `TextRange` from `op.byte_range` via the file's line index (offset past EOF / not on a char boundary → `EditError::LineIndex { path, offset }`); `let scope = sema.scope_at_offset(file_id, range.start());`. Collect every `syn::Ident` inside the slice (immutable `syn::visit::Visit`); filter to those resolving (`scope.process_all_names`) to `ScopeDef::Local(Local)`. For each captured local: `Local::ty(db)` → `Type::display(db).to_string()` → param type. Decide `&T` / `&mut T` / `T` from `Local::is_mut(db)` + whether the lifted code mutates (re-walk: `=` LHS, `&mut`, method call on `&mut self`). Non-local free idents (paths, use-imports, macro names) left alone. Sanity-check against `op.captured_locals` if non-empty; mismatch → `EditError::ExtractFunctionScopeCapture { unresolved }`. VERIFY: `extract_fn_captures_locals_with_correct_mut`.
 
-**Step 9 — Synthesize + splice new fn.** Build `syn::ItemFn`: visibility, ident, inputs from captured locals as `&[mut] <ty>`, output from tail expression type if any. Insert `file.items.insert(idx + 1, ItemFn(...))`. Replace `byte_range` with `let _ = new_fn_name(&mut captured_a, captured_b, ...);` (or just call if `()` return, or `let r = ...` if tail-expr). Re-render. VERIFY: `extract_fn_emits_callable_new_fn`.
+**Step 9 — Synthesize + splice new fn (build strings → two splices).** Build the **new fn source text** by hand (no AST construction, no unparse): `format!("{vis}fn {name}({params}){ret} {{\n{body}\n}}", ...)` where `params` is the captured locals rendered as `&[mut] <ty>`, `ret` is `-> <ty>` derived from the tail-expression type if any (else empty), and `body` is the lifted statement slice (verbatim source from `(stmt_start, stmt_end)`). Build the **call replacement text**: `let _ = new_fn_name(&mut captured_a, captured_b, ...);` (or a bare call for `()` return, or `let r = ...;` if there is a tail expr). Apply two `source_edit` splices to the original source, **highest offset first**: (1) insert `"\n\n" + new_fn_text` immediately after the enclosing item's byte-end; (2) `splice_bytes` the `(stmt_start, stmt_end)` range with the call replacement. Emit one `FileEdit`. VERIFY: `extract_fn_emits_callable_new_fn`.
 
 **Step 10 — Classify + apply.** `EditClass::ItemAddRemove`. New fn private by default → no reverse-dep impact. VERIFY: `extract_fn_full_round_trip`.
 
 ### P1.5d — `extract_trait`
 
-**Step 11 — Validate method subset.** Require `parent.item_kind ∈ {Struct, Enum, Union}`. For each method: `parent_id == op.source_struct` and `item_kind == Some(Method)`. Stray → `ExtractTraitMethodsNotInherent`. Locate inherent `ItemImpl` via `syn` (trait_ is None, self_ty resolves to struct).
+**Step 11 — Validate method subset.** Require `parent.item_kind ∈ {Struct, Enum, Union}`. For each method: `parent_id == op.source_struct` and `item_kind == Some(Method)`. Stray → `ExtractTraitMethodsNotInherent`. Locate the inherent `ItemImpl` via `syn` analysis (`trait_` is `None`, `self_ty` resolves to the struct) and record the byte ranges of each subset method (`ImplItemFn` span: `(method_start, method_end)`) plus the signature sub-span and body sub-span of each.
 
-**Step 12 — Emit trait + impl.** Build `syn::ItemTrait { vis, ident, items: method_subset.map(|m| TraitItem::Fn(TraitItemFn { sig, default: None })) }` (signature only, no body). Build `syn::ItemImpl { trait_: Some(TypePath(trait_name)), self_ty: struct_path, items: ImplItem::Fn(ImplItemFn { sig, block: lifted body }) }`. Remove method nodes from inherent impl; prepend new trait + impl in file (or new `<mod>/<trait_snake>.rs` if `place_trait_inline == false`). VERIFY: `extract_trait_moves_methods_preserving_bodies`.
+**Step 12 — Emit trait + impl (build strings → splice).** Build the **trait text** by hand: `format!("{vis}trait {trait_name} {{\n{sigs}\n}}")` where `sigs` is each subset method's *signature* sub-span (verbatim source) followed by `;` (signature only, no body). Build the **impl text**: `format!("impl {trait_name} for {self_ty} {{\n{methods}\n}}")` where `methods` is each subset method's full `(method_start, method_end)` source verbatim (signature + body preserved exactly). Apply `source_edit` splices, highest offset first: delete each method's byte range from the inherent impl (`source_edit::delete_byte_range`), then insert `"\n\n" + trait_text + "\n\n" + impl_text` either at the top of the file (`place_trait_inline == true`) or as a new file `FileMove { from: None, to: <mod>/<trait_snake>.rs, contents: ... }` with a `mod`/`pub use` wired into the parent (when `place_trait_inline == false`). Preserving the method source verbatim guarantees bodies are byte-identical. VERIFY: `extract_trait_moves_methods_preserving_bodies`.
 
-**Step 13 — Classify + apply.** `EditClass::ItemAddRemove` if private; `SigOrVis` if pub (changes reverse-dep import resolution).
+**Step 13 — Classify + apply.** `EditClass::ItemAddRemove` if private; `EditClass::SignatureOrVis` if pub (changes reverse-dep import resolution).
 
 ### P1.5d — `inline`
 
-**Step 14 — Fetch body + callsites.** Resolve target_fn (callable). Locate `ItemFn`/`ImplItemFn`; capture `block: syn::Block` + `sig.inputs` (param names). Reject if any `&mut` ref with conditionally-evaluated param read; reject recursive: `snap.recursive_callers_count(target_fn, 1)?.callers > 0 && body_calls_itself` → `InlineRecursiveFn`. VERIFY: `inline_rejects_recursive`.
+**Step 14 — Fetch body + callsites.** Resolve target_fn (callable). Locate `ItemFn`/`ImplItemFn` via `syn` analysis; record the **byte range of the body block** (the inner source between the braces) and the param names from `sig.inputs`. Read the body source verbatim from that range (no AST capture). Reject if any `&mut` ref with conditionally-evaluated param read; reject recursive: `snap.recursive_callers_count(target_fn, 1)?.callers > 0 && body_calls_itself` → `InlineRecursiveFn` (the `?` on the snapshot query maps host failure to its existing variant; parse failure → `SynParse`). VERIFY: `inline_rejects_recursive`.
 
 **Step 15 — Determine callsite set.** `InlineAll` → `snap.who_calls + usages_of(call-shaped)`. `InlineSites(usage_ids)` → load each via `usages_by_id`.
 
-**Step 16 — Per-callsite substitution with arg-lifting (no double-eval).** Descending byte order per file. For each callsite, build:
+**Step 16 — Per-callsite substitution with arg-lifting (no double-eval).** Descending byte order per file. For each callsite, locate the call expression's span and its argument sub-spans via `syn` analysis (read each `<expr_n>` verbatim from source). Synthesize hygienic binding names per the **ident hygiene scheme** (Step 3): the base is `__arg_{n}` / `__arg_self`, disambiguated against the idents in scope at the callsite so they cannot shadow real locals. Build the replacement **block text** by hand:
 ```
 {
     let __arg_0 = <expr_0>;
@@ -287,15 +466,15 @@ Insertion order: removals/reorder first, then insertions in increasing index. Re
     <body_with_param_names_replaced_by___arg_n>
 }
 ```
-Param substitution via `visit_mut`: any `syn::Path` with single segment `param_n` → `Ident::new("__arg_n", ...)`. Self handling: method calls get `__arg_self = <receiver>`; receiver was `&self`/`&mut self` → prepend `&` or `&mut`. Replace callsite expression with this block. VERIFY: `inline_substitutes_args_no_double_eval`, `_method_call_self_handling`.
+The body comes from the verbatim body-range source captured in Step 14; param→`__arg_n` substitution is done by locating each param-name identifier's sub-span (single-segment path matching `param_n`) **in the body source via `syn` analysis** and `source_edit`-splicing the hygienic name in (highest offset first, on the body string), then wrapping with the `let` prelude. Self handling: method calls get `__arg_self = <receiver>`; if the receiver was `&self`/`&mut self`, prepend `&`/`&mut`. Splice the assembled block over the callsite expression's byte range. VERIFY: `inline_substitutes_args_no_double_eval`, `_method_call_self_handling`.
 
-**Step 17 — Delete fn if InlineAll.** After splice, count remaining usages; for safety `delete = (policy == InlineAll)`. Remove `ItemFn` from file. EditClass: `ItemAddRemove` if deleting, else `Body`. VERIFY: `inline_all_deletes_fn_when_no_remaining_callers`.
+**Step 17 — Delete fn if InlineAll.** After splice, count remaining usages; for safety `delete = (policy == InlineAll)`. Delete the fn by `source_edit::delete_byte_range` over the `ItemFn`'s span (locate via `syn`), then `source_edit::collapse_blank_lines` at the deletion point. EditClass: `EditClass::ItemAddRemove` if deleting, else `EditClass::BodyOnly`. VERIFY: `inline_all_deletes_fn_when_no_remaining_callers`.
 
 ### P1.5e — `create_module`
 
 **Step 18 — Validate.** Parent must be Module or Crate. Name regex `^[a-z_][a-z0-9_]*$`. Parent file: for Module = `parent.file`; for Crate = root module's file. Decide new path: `<dir>/<name>.rs` or `<dir>/<name>/mod.rs` per `use_mod_rs`. Conflict → `ModuleTreeConflict`.
 
-**Step 19 — Emit files.** `FileMove { from: None, to: new_path, contents: "// new module\n" }`. Append `pub mod <name>;` (or `mod <name>;`) to parent file via `syn::parse_file` + `file.items.push(ItemMod { ... })` + `prettyplease`.
+**Step 19 — Emit files.** `FileMove { from: None, to: new_path, contents: "// new module\n" }`. Append the module declaration to the parent file by hand: parse the parent with `syn::parse_file` for analysis to find the byte offset of the last top-level item's end (insertion point), then `source_edit::insert_at_byte_offset(&parent_src, insert_at, &format!("\n{}mod {};\n", vis_prefix, name))` where `vis_prefix` is `"pub "` or `""`. No AST mutation, no unparse.
 
 **Step 20 — Move initial items.** Cut from current file, paste into new module file as part of same edit batch (NodeIds for new module don't exist until re-extract). `EditClass::ModuleTree`. Apply. VERIFY: `create_module_with_initial_items_round_trip`.
 
@@ -311,11 +490,11 @@ Param substitution via `visit_mut`: any `syn::Path` with single segment `param_n
 
 **Step 24 — Validate.** All `sources` + `dest` share `parent_id`. Item-name collisions → `ModuleTreeConflict`.
 
-**Step 25 — Move items into dest.** For each source: parse `<source>.rs`, take `file.items`, paste into dest file. Rewrite import-cycles inside merged module.
+**Step 25 — Move items into dest.** For each source: parse `<source>.rs` for analysis, read each top-level item's byte span, and concatenate those verbatim source slices into the dest file (`source_edit::insert_at_byte_offset` at dest's item-list end). No AST nodes are re-rendered. Rewrite import-cycles inside the merged module by span-located `use`-prefix splices (same mechanism as Step 27).
 
-**Step 26 — Delete source files + `mod` decls.** `FileMove { from: source_file, to: None }`; remove `mod <source>;` from parent.
+**Step 26 — Delete source files + `mod` decls.** `FileMove { from: source_file, to: None }`; remove `mod <source>;` from the parent by locating its `ItemMod` span (`syn` analysis) and `source_edit::delete_byte_range` + `collapse_blank_lines`.
 
-**Step 27 — Workspace-wide `use` rewrite.** For every workspace file: `use <parent>::<source_name>::X` → `use <parent>::<dest_name>::X`. Via `SemanticService`-style mechanism + `syn`-based prefix substitution. `EditClass::ModuleTree`. Apply. VERIFY: `merge_modules_collapses_two_into_one`.
+**Step 27 — Workspace-wide `use` rewrite.** For every workspace file: `use <parent>::<source_name>::X` → `use <parent>::<dest_name>::X`. Mechanism: parse each file for analysis, walk `UseTree` to find the byte span of the matching path *prefix*, and `source_edit::splice_bytes` the new prefix in (descending offset per file). `EditClass::ModuleTree`. Apply. VERIFY: `merge_modules_collapses_two_into_one`.
 
 ### P1.5e — `move_module`
 
@@ -323,9 +502,9 @@ Param substitution via `visit_mut`: any `syn::Path` with single segment `param_n
 
 **Step 29 — Compute file move.** Old path: `source_module.file`. New path: under `<dir of new_parent's file>/<new_name>.rs` (preserve mod.rs style). `FileMove { from: old, to: new }` plus directory moves if children exist.
 
-**Step 30 — Update `mod` declarations.** Remove `mod <old>;` from old parent file; add `mod <new>;` to new parent file (via `syn` walk).
+**Step 30 — Update `mod` declarations.** Remove `mod <old>;` from the old parent file (locate `ItemMod` span via `syn` analysis → `source_edit::delete_byte_range`); add `mod <new>;` to the new parent file (`syn` analysis to find the item-list-end offset → `source_edit::insert_at_byte_offset`).
 
-**Step 31 — Rewrite all `use` paths workspace-wide.** For each `.rs` (Merkle-filtered to those importing the moved module): parse, walk `UseTree`, prefix-replace `<old_qualified>` → `<new_qualified>`. `EditClass::ModuleTree`. Apply. VERIFY: `move_module_updates_all_uses`.
+**Step 31 — Rewrite all `use` paths workspace-wide.** For each `.rs` (Merkle-filtered to those importing the moved module): parse for analysis, walk `UseTree` to locate the byte span of the `<old_qualified>` path prefix, and `source_edit::splice_bytes` `<new_qualified>` in its place (descending offset per file; existing tokens preserved verbatim — no AST re-render). `EditClass::ModuleTree`. Apply. VERIFY: `move_module_updates_all_uses`.
 
 ### P1.5e — `lift_to_crate` (Cargo surgery — FULL REBUILD)
 
@@ -342,15 +521,15 @@ edition = "<op.edition>"
 ```
 `src/lib.rs` = source_module's current file contents (verbatim). If source_module is dir-style (`mod.rs`), recursively copy subtree. Emit `CargoEdit` + `FileMove` per copied file.
 
-**Step 34 — Compute + inject deps.** `cargo metadata --format-version 1 --no-deps` via `Command`. Walk lifted files; collect `use <name>::...` for each `<name>` that's a workspace or registry crate. Look up version in source crate's `Cargo.toml`; path-dep → `<name> = { path = "../<name>" }`; registry → copy version as-is. Apply via `toml_edit::DocumentMut::insert("dependencies", ...)`.
+**Step 34 — Compute + inject deps.** Run `cargo metadata` through the typed `cargo_metadata::MetadataCommand::new().no_deps().exec()` (errors → `EditError::CargoMetadata { source }`; not a raw `Command` whose stdout is string-parsed). Walk lifted files (parse for analysis); collect `use <name>::...` for each `<name>` that's a workspace or registry crate. Look up version in the source crate's `Cargo.toml` (`toml_edit`); path-dep → `<name> = { path = "../<name>" }`; registry → copy version as-is. Apply via `toml_edit::DocumentMut` and render with `.to_string()` into `CargoEdit.new_contents` (format-preserving).
 
 **Step 35 — Update workspace `Cargo.toml`.** `members.push(format!("crates/{}", new_crate_name))`. If broadly usable, add to `[workspace.dependencies]`. Emit `CargoEdit`.
 
 **Step 36 — Update source crate's `Cargo.toml`.** Add `<new_crate_name> = { workspace = true }` (or path-form) to `[dependencies]`. Emit `CargoEdit`.
 
-**Step 37 — Rewrite import paths workspace-wide.** Replace `<src_crate>::<source_module_path>::X` → `<new_crate_name>::X`. If `keep_facade`: replace source module file contents with `pub use <new_crate_name>::*;` so existing internal callers continue to work.
+**Step 37 — Rewrite import paths workspace-wide.** Replace `<src_crate>::<source_module_path>::X` → `<new_crate_name>::X` by span-located `use`-prefix splices (`syn` analysis → `source_edit::splice_bytes`, descending offset per file). If `keep_facade`: replace the source module file contents with `pub use <new_crate_name>::*;` so existing internal callers continue to work.
 
-**Step 38 — Classify + apply (slow path).** `EditClass::Cargo` → `is_full_rebuild() == true`. `Crud::apply_file_edits` routes to cold-rebuild path: write all files, close warm host, delete working LMDB, re-run `build_and_persist`. Checkpoint records jj op id + copy of pre-edit Cargo manifests (LMDB undo log doesn't cover them). VERIFY: `lift_to_crate_full_rebuild_succeeds`, `_workspace_compiles_after`.
+**Step 38 — Classify + apply (slow path).** `EditClass::CargoManifest` → `is_full_rebuild() == true`. `Crud::apply_file_edits` routes to the cold-rebuild path: write all files, close warm host, delete working LMDB, re-run `build_and_persist`. Checkpoint records jj op id + copy of pre-edit Cargo manifests (LMDB undo log doesn't cover them). VERIFY: `lift_to_crate_full_rebuild_succeeds`, `_workspace_compiles_after`.
 
 ### P1.5e — `lower_to_module` (inverse — also FULL REBUILD)
 
@@ -358,7 +537,7 @@ edition = "<op.edition>"
 
 **Step 40 — Copy code in.** Read `crates/<src>/src/lib.rs` → new module body. Recursively walk subtree → reproduce under `<dest_parent>/<new_module_name>/`.
 
-**Step 41 — Update consumer manifests.** For every crate depending on `<src>` (per cargo metadata): remove dep; replace `<src>::X` → `<dest_crate>::<dest_path>::<new_module_name>::X`.
+**Step 41 — Update consumer manifests.** For every crate depending on `<src>` (per `cargo_metadata::MetadataCommand`, errors → `EditError::CargoMetadata`): remove the dep (`toml_edit`); replace `<src>::X` → `<dest_crate>::<dest_path>::<new_module_name>::X` via span-located `use`-prefix splices.
 
 **Step 42 — Remove from workspace.** Root `Cargo.toml`: remove `crates/<src>` from members; remove from `[workspace.dependencies]`. `FileMove` deleting `crates/<src>/` directory.
 
@@ -421,16 +600,16 @@ edition = "<op.edition>"
 ## Open decisions / risks
 
 - **`CallsiteFill` default = `Todo`.** Picked over `Default` (silent semantic change) and `Refuse` (too aggressive). `Todo` keeps workspace type-checking, panics at runtime if reached, greppable.
-- **`syn` 2 + `prettyplease`, not RA's `TextEdit`.** RA's TextEdit perfect for single-symbol edits; verbs here do structural mutation (whole sigs, blocks, ItemFns). Downside: prettyplease re-formats whole files — accepted (rustfmt normalizes anyway).
+- **`syn` 2 for ANALYSIS, hand-built strings + `source_edit::splice_bytes` for edits (E5).** No whole-file formatter (`prettyplease`/`rustfmt`) and no AST→source rendering anywhere. `syn`/`ra_ap_syntax` are used *only* to locate byte ranges (signature span, arg-list span, impl-method ranges, extracted statement range, `UseTree` prefix spans); replacement text is formatted by hand from each op's input fields and spliced byte-for-byte, leaving all surrounding source verbatim. This avoids the lossy "re-format the whole file" round-trip E5 forbids and keeps diffs minimal.
 - **Cargo.toml lib: `toml_edit`.** `DocumentMut` preserves comments + ordering. `cargo_toml` round-trips lossily.
 - **Capture analysis depends on warm RA host.** If unavailable → `EditError::HostUnavailable`. P0.2 is critical path anyway.
 - **`inline` always lifts each arg.** Even if param used once — small cost, large correctness win (no double-eval, no precedence surprises).
-- **Multi-file atomicity = Checkpoint's job.** Every verb calls `take_checkpoint()` BEFORE first write; on ANY failure → `restore()`. D4 covers source + graph + RA host; `EditClass::Cargo` extends to capture pre-edit Cargo manifest contents.
-- **`lift_to_crate` / `lower_to_module` are HIGH-COST.** Unambiguous `EditClass::Cargo` → full cold rebuild → tens of seconds. Episode runner exposes cost in action-space metadata; agent's RL signal accounts for it. Alternative: gate behind `declare_done`. Current: emit via regular Crud API, mark `EditClass::Cargo`, let runner decide.
+- **Multi-file atomicity = Checkpoint's job.** Every verb calls `take_checkpoint()` BEFORE first write; on ANY failure → `restore()`. D4 covers source + graph + RA host; `EditClass::CargoManifest` extends to capture pre-edit Cargo manifest contents.
+- **`lift_to_crate` / `lower_to_module` are HIGH-COST.** Unambiguous `EditClass::CargoManifest` → full cold rebuild → tens of seconds. Episode runner exposes cost in action-space metadata; agent's RL signal accounts for it. Alternative: gate behind `declare_done`. Current: emit via regular Crud API, mark `EditClass::CargoManifest`, let runner decide.
 - **`modify_signature` cannot eliminate every false positive in callsite detection.** RA-unresolvable calls (`dyn Trait` over external trait, generic `F: Fn(..)`) won't appear in `who_calls`. Silently break post-edit. **Mitigation:** pair every `modify_signature` with cargo gate (P1.7) — fail → checkpoint reverts.
 - **`extract_trait` self-call subtleties.** `impl Trait for Foo { fn a(...) { self.b(...) } }` works if `b` stays on Foo. Trait default method shadowing may compile-but-mean-something-subtly-different. Cargo gate catches compile-break subset.
 - **`split_module` re-exports.** Default `keep_reexport = false` requires rewriting external users. Partial `splits` (not covering every item) leaves unsplit items in source_module (no error). Underspecified by design.
-- **Determinism.** Every verb's source rewriting is deterministic: `syn::parse_file` deterministic; `prettyplease::unparse` deterministic; `toml_edit` round-trips deterministically; `who_calls` results iterated in LMDB-sorted order (P0.1 guarantee).
+- **Determinism.** Every verb's source rewriting is deterministic: `syn::parse_file` parsing is deterministic; hand-built replacement strings are pure functions of the op's input fields; `source_edit::splice_bytes` is a pure byte operation; `toml_edit` round-trips deterministically; `who_calls` results iterated in LMDB-sorted order (P0.1 guarantee). Splices within a file are always applied in descending byte-offset order so the result is independent of collection iteration order.
 
 
 ---

@@ -22,15 +22,15 @@ The extract → persist pipeline has these confirmed `HashMap`/`HashSet` iterati
 ## New modules / files
 
 - `crates/rmc-graph/src/graph/determinism.rs` — new module. Houses the canonical sort orders for `ExtractionModel.bindings`, `usages`, `contains`, `signatures`, `statics`; the public `sort_model_for_persistence(&mut ExtractionModel)` entrypoint called from `extract::extract` before `write_model`.
-- `crates/rmc-graph/src/graph/snapshot_compare.rs` — new module. Public functions: `dump_snapshot(&OpenedSnapshot) -> SnapshotDump` returning a canonical in-memory representation of every sub-DB as `BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>`, and `compare_snapshots(&SnapshotDump, &SnapshotDump) -> SnapshotDiff` returning per-table set differences. Used by the golden test and later by P0.2's apply-vs-cold-rebuild differential test.
+- `crates/rmc-graph/src/graph/snapshot_compare.rs` — new module. Defines the typed `SnapshotDumpError` (`thiserror`, wraps `heed::Error`). Public functions: `dump_snapshot(&OpenedSnapshot) -> Result<SnapshotDump, SnapshotDumpError>` returning a canonical in-memory representation of every sub-DB as `BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>`, and `compare_snapshots(&SnapshotDump, &SnapshotDump) -> SnapshotDiff` returning per-table set differences. Used by the golden test and later by P0.2's apply-vs-cold-rebuild differential test.
 - `crates/rmc-graph/tests/determinism_golden.rs` — integration test. Builds the rmc workspace twice (two staging dirs), dumps both, asserts `compare_snapshots == empty`.
 - `crates/rmc-graph/benches/determinism_bench.rs` — micro-benchmark to track the cost of `sort_model_for_persistence` (target: < 5% of total extract time).
 - `bench/Cargo.toml` — new workspace **outside** the main workspace (path: `/home/molaco/Documents/rust-code-mcp-refactor/bench/Cargo.toml`). NOT a member of the rmc workspace. It is a separate Cargo workspace that vendors the 50-100 corpus crates.
 - `bench/fetch_corpus.sh` — fetch / pin / verify-build script.
 - `bench/corpus.toml` — declarative manifest: list of `[corpus.<slug>] git, rev, path, edition, expected_loc, tags`.
 - `bench/README.md` — selection criteria, expected build time, troubleshooting.
-- `crates/rmc-config/src/config.rs` (edit) — add `pub seed: u64` field to `Config`, with env-var loader `RMC_SEED` (default `0`).
-- `crates/rmc-graph/src/graph/snapshot.rs` (edit) — extend `BuildOptions` with `pub seed: u64`; thread through `extract::extract`.
+- `crates/rmc-config/src/config.rs` (edit) — add a `Seed(u64)` newtype (private inner field + `new`/`value` accessors) and a `pub seed: Seed` field to `Config`, with env-var loader `RMC_SEED` (default `Seed::default()` == 0). `from_env` returns `Result<Self, ConfigError>` and surfaces a malformed `RMC_SEED` as `ConfigError::InvalidSeed`.
+- `crates/rmc-graph/src/graph/snapshot.rs` (edit) — extend `BuildOptions` with `pub seed: Seed` (re-exporting `rmc_config::Seed`); thread through `extract::extract`.
 
 ## Type definitions
 
@@ -80,33 +80,118 @@ fn sort_statics(v: &mut Vec<(NodeId, StaticMetadata)>) {
 ```rust
 // crates/rmc-graph/src/graph/snapshot_compare.rs
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotDump {
-    pub nodes: BTreeMap<Vec<u8>, Vec<u8>>,             // bincode-encoded Node
-    pub bindings: BTreeMap<Vec<u8>, Vec<u8>>,
-    pub bindings_by_from_module: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-    pub bindings_by_target: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-    pub children_by_parent: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-    pub usages: BTreeMap<Vec<u8>, Vec<u8>>,
-    pub usages_by_target: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-    pub usages_by_consumer: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-    pub usages_by_consumer_function: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-    pub signatures: BTreeMap<Vec<u8>, Vec<u8>>,
-    pub statics: BTreeMap<Vec<u8>, Vec<u8>>,
-    pub meta: BTreeMap<String, Vec<u8>>,               // excludes "graph_id", "created_at_unix"
+/// Failure while dumping an opened snapshot into its canonical in-memory form.
+///
+/// Wraps the underlying heed/LMDB read failure so callers can distinguish a
+/// transient storage fault from a content mismatch reported by
+/// `compare_snapshots`.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SnapshotDumpError {
+    /// A read transaction or cursor iteration over a sub-DB failed.
+    #[error("failed to read snapshot sub-DB during dump")]
+    Read(#[from] heed::Error),
 }
 
+/// Canonical in-memory image of every persisted sub-DB, used for content-equality
+/// comparison of two cold builds. Fields are private; growable, so non-exhaustive.
+/// Construct only via `dump_snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SnapshotDump {
+    nodes: BTreeMap<Vec<u8>, Vec<u8>>,             // bincode-encoded Node
+    bindings: BTreeMap<Vec<u8>, Vec<u8>>,
+    bindings_by_from_module: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+    bindings_by_target: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+    children_by_parent: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+    usages: BTreeMap<Vec<u8>, Vec<u8>>,
+    usages_by_target: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+    usages_by_consumer: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+    usages_by_consumer_function: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+    signatures: BTreeMap<Vec<u8>, Vec<u8>>,
+    statics: BTreeMap<Vec<u8>, Vec<u8>>,
+    meta: BTreeMap<String, Vec<u8>>,               // excludes "graph_id", "created_at_unix"
+}
+
+impl SnapshotDump {
+    /// Primary `nodes` table: content-addressed NodeId bytes → bincode `Node`.
+    #[must_use]
+    pub fn nodes(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> { &self.nodes }
+    /// Primary `bindings` table.
+    #[must_use]
+    pub fn bindings(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> { &self.bindings }
+    /// Primary `usages` table.
+    #[must_use]
+    pub fn usages(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> { &self.usages }
+    /// Primary `signatures` table.
+    #[must_use]
+    pub fn signatures(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> { &self.signatures }
+    /// Primary `statics` table.
+    #[must_use]
+    pub fn statics(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> { &self.statics }
+    /// Metadata table (excludes `"graph_id"` and `"created_at_unix"`).
+    #[must_use]
+    pub fn meta(&self) -> &BTreeMap<String, Vec<u8>> { &self.meta }
+    // Remaining DUP_SORT secondaries (`*_by_*`) exposed analogously as needed.
+}
+
+/// Per-table set differences between two dumps. Private fields; non-exhaustive.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct SnapshotDiff { /* per-table _only_in_a / _only_in_b / _value_differs */ }
 
-impl SnapshotDiff { pub fn is_empty(&self) -> bool { /* all empty */ } }
+impl SnapshotDiff {
+    /// True when every per-table difference set is empty (content-equal).
+    #[must_use]
+    pub fn is_empty(&self) -> bool { /* all empty */ }
+    /// Keys whose `nodes` value differs between the two dumps.
+    #[must_use]
+    pub fn nodes_value_differs(&self) -> &BTreeSet<Vec<u8>> { /* accessor */ }
+}
 
-pub fn dump_snapshot(snap: &OpenedSnapshot) -> Result<SnapshotDump>;
+/// Dump every sub-DB of an opened snapshot into its canonical in-memory form.
+///
+/// # Errors
+/// Returns [`SnapshotDumpError::Read`] if a read transaction or cursor iteration
+/// over any sub-DB fails (preserving the underlying [`heed::Error`]).
+pub fn dump_snapshot(snap: &OpenedSnapshot) -> Result<SnapshotDump, SnapshotDumpError>;
+
+/// Compute per-table set differences. Pure; never fails.
+#[must_use]
 pub fn compare_snapshots(a: &SnapshotDump, b: &SnapshotDump) -> SnapshotDiff;
 ```
 
 ```rust
-// crates/rmc-config/src/config.rs — extend Config
+// crates/rmc-config/src/config.rs — Seed newtype + extend Config
+
+/// Global determinism seed. Threaded through every stochastic step (future
+/// clustering / GMM / node2vec consumers). Private inner field; `0` by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Seed(u64);
+
+impl Seed {
+    /// Construct a seed from a raw `u64`.
+    #[must_use]
+    pub fn new(value: u64) -> Self { Self(value) }
+    /// The raw seed value.
+    #[must_use]
+    pub fn value(self) -> u64 { self.0 }
+}
+
+/// Malformed configuration drawn from the environment.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// `RMC_SEED` was set but did not parse as a `u64`.
+    #[error("RMC_SEED is not a valid u64: {value:?}")]
+    InvalidSeed {
+        /// The offending raw value.
+        value: String,
+        /// The underlying parse failure.
+        #[source]
+        source: std::num::ParseIntError,
+    },
+}
 
 pub struct Config {
     pub server_port: u16,
@@ -116,17 +201,28 @@ pub struct Config {
     pub debug: bool,
     pub retry_attempts: u32,
     pub retry_delay_ms: u64,
-    /// Global determinism seed. Threaded through every stochastic step.
-    /// Future clustering / GMM / node2vec consumers reach for this. 0 by default.
-    pub seed: u64,
+    /// Global determinism seed. See [`Seed`].
+    pub seed: Seed,
 }
 
 impl Config {
-    pub fn from_env() -> Self {
-        Self {
+    /// Build a `Config` from environment variables.
+    ///
+    /// # Errors
+    /// Returns [`ConfigError::InvalidSeed`] if `RMC_SEED` is set but does not
+    /// parse as a `u64`. A malformed seed is surfaced rather than silently
+    /// defaulting to `0`, so determinism runs cannot drift on a typo'd env var.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let seed = match std::env::var("RMC_SEED") {
+            Ok(raw) => Seed::new(raw.parse().map_err(|source| {
+                ConfigError::InvalidSeed { value: raw, source }
+            })?),
+            Err(_) => Seed::default(), // unset / non-UTF-8 → default 0
+        };
+        Ok(Self {
             // ...existing fields...
-            seed: std::env::var("RMC_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0),
-        }
+            seed,
+        })
     }
 }
 ```
@@ -138,12 +234,13 @@ pub struct BuildOptions {
     pub force_rebuild: bool,
     pub data_dir_override: Option<PathBuf>,
     pub env: GraphEnvOptions,
-    pub seed: u64,
+    /// Determinism seed (re-exported `rmc_config::Seed`). `Seed::default()` == 0.
+    pub seed: Seed,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
-        Self { /* existing */ seed: 0 }
+        Self { /* existing */ seed: Seed::default() }
     }
 }
 ```
@@ -173,9 +270,9 @@ build_cmd = "cargo check --offline --frozen --all-targets"
 2. **WHAT**: Add `mod determinism;` to `crates/rmc-graph/src/graph/mod.rs` after `pub(crate) mod snapshot;`. **DEPENDS**: 1. **VERIFY**: `cargo check -p rmc-graph` succeeds.
 3. **WHAT**: In `snapshot.rs`, change `binding_id_for` / `usage_id_for` visibility from `pub(crate)` to `pub(in crate::graph)`. **VERIFY**: build succeeds.
 4. **WHAT**: Call `determinism::sort_model_for_persistence(&mut model)` at the end of `extract::extract` (after `extract_usages`). **VERIFY**: existing extract tests still pass.
-5. **WHAT**: Add `pub seed: u64` to `BuildOptions` (with `Default::default`) and to `Config` with env-var loader `RMC_SEED`. **VERIFY**: `BuildOptions::default().seed == 0`.
-6. **WHAT**: Thread `seed` from `Config` → call sites that construct `BuildOptions`. **VERIFY**: `cargo check --workspace` succeeds.
-7. **WHAT**: Change `extract::extract(loaded: &LoadedWorkspace, seed: u64) -> ExtractionModel`; thread seed through `sort_model_for_persistence` (today ignored — plumbing for P1.3 clustering). **VERIFY**: build.
+5. **WHAT**: Add the `Seed(u64)` newtype to `rmc-config`; add `pub seed: Seed` to `BuildOptions` (with `Default::default`) and to `Config` whose `from_env` returns `Result<Self, ConfigError>` and surfaces a malformed `RMC_SEED` as `ConfigError::InvalidSeed`. **VERIFY**: `BuildOptions::default().seed == Seed::default()` and `BuildOptions::default().seed.value() == 0`.
+6. **WHAT**: Thread `seed: Seed` from `Config` → call sites that construct `BuildOptions`. Callers of `Config::from_env` now propagate/report the `Result<_, ConfigError>` (the binary entrypoint surfaces `ConfigError::InvalidSeed` at startup rather than running with a silent default). **VERIFY**: `cargo check --workspace` succeeds.
+7. **WHAT**: Change `extract::extract(loaded: &LoadedWorkspace, seed: Seed) -> ExtractionModel`; thread seed through `sort_model_for_persistence` (today ignored — plumbing for P1.3 clustering). **VERIFY**: build.
 
 ### Phase 2: P0.1 — snapshot comparison + golden test
 
@@ -185,7 +282,7 @@ build_cmd = "cargo check --offline --frozen --all-targets"
 
 ### Phase 3: P0.1 — fix remaining ordering escapes
 
-11–16. Audit `usages.rs:45`, `signatures.rs:47`, `statics.rs:33`, `bindings.rs:54`, `bindings.rs:42-44`, `impls.rs:42,49`. Convert HashMaps that are iterated for emission to `BTreeMap` or `FxHashMap` (deterministic seed). Add `// HashMap-iteration: order leaks; canonicalized by graph::determinism::sort_*` comments. **VERIFY**: golden test from step 9 still passes.
+11–16. Audit `usages.rs:45`, `signatures.rs:47`, `statics.rs:33`, `bindings.rs:54`, `bindings.rs:42-44`, `impls.rs:42,49`. Convert HashMaps that are iterated for emission to `BTreeMap` (an `FxHashMap` is deterministic only with a fixed hash seed and build, which is too fragile to rely on for an on-disk ordering contract; `BTreeMap` gives key order by construction). Add `// HashMap-iteration: order leaks; canonicalized by graph::determinism::sort_*` comments. **VERIFY**: golden test from step 9 still passes.
 
 ### Phase 4: P0.4 — benchmark pool
 
@@ -213,13 +310,15 @@ build_cmd = "cargo check --offline --frozen --all-targets"
 - **`two_cold_builds_are_content_equal`** — build rmc workspace twice into tmpdirs, dump, assert `SnapshotDiff::is_empty()`.
 - **`two_cold_builds_are_byte_equal_after_compact`** (#[ignore]) — compact both LMDB envs and `sha256` `data.mdb`.
 - **`corpus_crates_are_content_equal`** (#[ignore], `RMC_BENCH_DETERMINISM=1`) — over 5 smallest corpus crates.
-- **`seed_field_propagates_through_build_options`** — construct `BuildOptions { seed: 42, ... }`, assert no panic.
+- **`seed_threads_into_persisted_model`** — build with `BuildOptions { seed: Seed::new(42), .. }`, then read the persisted snapshot's `meta` (or the `BuildOptions` recorded by `extract::extract`) and assert the stored/threaded seed value is exactly `42` — i.e. the seed actually reaches the model/persist layer, not merely "no panic".
+- **`from_env_rejects_malformed_seed`** — set `RMC_SEED=not-a-number`, assert `Config::from_env()` returns `Err(ConfigError::InvalidSeed { .. })`; set `RMC_SEED=7`, assert `Ok(cfg)` with `cfg.seed.value() == 7`; unset, assert `cfg.seed == Seed::default()`.
+- **`dump_snapshot_surfaces_read_error`** — point `dump_snapshot` at a closed/corrupt env (or a sub-DB whose read txn fails) and assert it returns `Err(SnapshotDumpError::Read(_))` rather than panicking, exercising the failure path.
 - **`sort_bindings_is_total_and_idempotent`** — shuffled IDs, two calls same result, two shuffles same outputs.
 - **`sort_usages_is_total_and_idempotent`** — same shape for Usage.
 - **`sort_contains_dedups`** — `[(A,B),(A,B),(C,D)]` → `[(A,B),(C,D)]`.
-- **`dump_round_trip`** — `persist_test_model`, dump, assert non-empty.
+- **`dump_round_trip`** — `persist_test_model` with a known node, dump, assert the dump's `nodes()` contains that node's content-addressed key and the decoded value round-trips equal to the input (not merely "non-empty").
 - **`compare_identical_dumps_is_empty`** — two read txns, same snapshot.
-- **`compare_detects_node_diff`** — mutate one byte, assert `nodes_value_differs.len() == 1`.
+- **`compare_detects_node_diff`** — mutate one byte, assert `diff.nodes_value_differs().len() == 1`.
 
 ## Open decisions / risks
 

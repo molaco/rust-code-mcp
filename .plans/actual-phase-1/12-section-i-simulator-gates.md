@@ -12,15 +12,16 @@ The two slices share infrastructure (a `Baseline` snapshot of per-item metrics c
 
 - `crates/rmc-crud/src/simulate.rs` — `Crud::simulate(op) -> SimulateOutcome`; assembles cascade preview + token-cost estimate; delegates to `effects::compute_effects` + `GateRunner::evaluate`.
 - `crates/rmc-crud/src/effects.rs` — `Effects` struct + free `compute_effects(host, op)` dispatching per verb.
-- `crates/rmc-crud/src/apply.rs` (refactor of P1.5 verbs) — each verb becomes `pub(crate) fn persist(host, effects, checkpoint) -> Result<EditOutcome>`. `Crud::apply` = `compute_effects → GateRunner::evaluate → if hard refusal → bail; else persist → commit`.
-- `crates/rmc-gates/Cargo.toml` — new crate. Deps: `rmc-graph`, `rmc-config`, `petgraph`, `toml`, `serde`, `anyhow`, `thiserror`.
+- `crates/rmc-crud/src/apply.rs` (refactor of P1.5 verbs) — each verb becomes `pub(crate) fn persist(host, effects, checkpoint) -> Result<EditOutcome, CrudError>`. `Crud::apply` = `compute_effects → GateRunner::evaluate → if hard refusal → bail; else persist → commit`.
+- `crates/rmc-gates/Cargo.toml` — new crate. Deps: `rmc-graph`, `rmc-config`, `petgraph`, `toml`, `serde`, `thiserror` (workspace `"1"`). No `anyhow` — `rmc-gates` is a library; it returns the typed `GateError` (below). `anyhow` stays confined to the binaries (`rmc-spikes`, `rmc-rl`).
 - `crates/rmc-gates/src/lib.rs` — `GateRunner`, `GateOutcome`, `RefusalReason`, `RefusalCode`, `Severity`.
-- `crates/rmc-gates/src/thresholds.rs` — `GateThresholds` + TOML loader.
-- `crates/rmc-gates/src/allowlist.rs` — `ForbiddenDepAllowlist { rules: Vec<ForbiddenDependencyRule> }`, reusing `rmc_graph::query::model::ForbiddenDependencyRule`.
+- `crates/rmc-gates/src/config.rs` — `GatesConfig { thresholds: GateThresholds, allowlist: ForbiddenDepAllowlist }` + the *single* validated `gates.toml` loader `load_from_workspace_root`. One file read, deserialized once, then validated (e.g. `soft_* <= max_*`). Returns `Result<GatesConfig, GateConfigError>` (thiserror). `thresholds.rs`/`allowlist.rs` no longer read the file themselves.
+- `crates/rmc-gates/src/thresholds.rs` — `GateThresholds` type + defaults only (no I/O).
+- `crates/rmc-gates/src/allowlist.rs` — `ForbiddenDepAllowlist { rules: Vec<ForbiddenDependencyRule> }` type + baseline-merge logic only (no I/O), reusing `rmc_graph::query::model::ForbiddenDependencyRule`.
 - `crates/rmc-gates/src/baseline.rs` — `Baseline::capture(snap, loaded)` — episode-start per-item complexity, LOC, had_unsafe, crate_dep_set.
 - `crates/rmc-gates/src/audits.rs` — dirty-set audit wrappers.
 - `crates/rmc-gates/src/complexity.rs` — `compute_complexity(body_text)` via `ra_ap_syntax` walking.
-- `crates/rmc-gates/src/cycle.rs` — `detect_new_module_cycles`, `detect_new_crate_cycles` using `petgraph::algo::tarjan_scc`.
+- `crates/rmc-gates/src/cycle.rs` — `detect_new_module_cycles`, `detect_new_crate_cycles` using `petgraph::algo::tarjan_scc`; both return `Result<_, GateError>` so `evaluate` can `?` them.
 - `crates/rmc-gates/src/dirty_dep_filter.rs` — filter `crate_edges` by dirty set; feed `forbidden_dependency_check`.
 - `gates.toml` at workspace root — sample config with all thresholds at defaults + starter `[forbidden_dependencies]` table. Read-only to agent.
 
@@ -29,16 +30,27 @@ The two slices share infrastructure (a `Baseline` snapshot of per-item metrics c
 ```rust
 // crates/rmc-crud/src/effects.rs
 
+#[non_exhaustive]
 pub struct Effects {
-    pub source_edits: Vec<FileEdit>,
-    pub edit_class: EditClass,
-    pub estimated_affected_items: Vec<NodeId>,
-    pub estimated_graph_diff: GraphDiffSummary,
-    pub would_refuse: Vec<RefusalReason>,
+    source_edits: Vec<FileEdit>,
+    edit_class: EditClass,
+    estimated_affected_items: Vec<NodeId>,
+    estimated_graph_diff: GraphDiffSummary,
+    would_refuse: Vec<RefusalReason>,
 }
+// Constructed inside `compute_effects`; read via accessors
+// (`source_edits()`, `edit_class()`, `estimated_affected_items()`,
+// `estimated_graph_diff()`, `would_refuse()`). `would_refuse` is set by
+// the gate fold in `simulate` (Step 2) via a `set_would_refuse(..)` setter.
 
-pub struct FileEdit { pub file: String, pub range: (u32, u32), pub replacement: Vec<u8> }
+// File path of a read-only edit. The read view never mutates it, so a
+// workspace-relative path newtype (validated relative at construction)
+// is enough — no raw `String`.
+pub struct FileEdit { file: RelativePath, range: (u32, u32), replacement: Vec<u8> }
+// `RelativePath` is the workspace newtype from errata E3; accessors
+// `file()`, `range()`, `replacement()`.
 
+#[non_exhaustive]
 pub struct GraphDiffSummary {
     pub nodes_added: usize, pub nodes_removed: usize,
     pub bindings_added: usize, pub bindings_removed: usize,
@@ -49,13 +61,23 @@ pub struct GraphDiffSummary {
 ```rust
 // crates/rmc-crud/src/simulate.rs
 
+#[non_exhaustive]
 pub struct SimulateOutcome {
     pub effects: Effects,
     pub cascade_preview: Vec<CascadeStep>,
     pub estimated_token_cost: usize,
 }
 
-pub struct CascadeStep { pub op_kind: String, pub node: NodeId, pub reason: String }
+pub struct CascadeStep { pub kind: CascadeKind, pub node: NodeId, pub reason: String }
+
+/// Closed set of follow-up operations a cascade can predict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub enum CascadeKind {
+    ReResolveUsage,  // signature/visibility changed → re-resolve a usage
+    FixUsePath,      // item added/removed/moved → fix a `use` path
+    FullReExtract,   // macro / cargo edit → coarse full re-extract
+}
 ```
 
 ```rust
@@ -63,18 +85,22 @@ pub struct CascadeStep { pub op_kind: String, pub node: NodeId, pub reason: Stri
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct GateThresholds {
-    pub max_complexity: u32,          // default 20 (cyclomatic, McCabe)
-    pub max_params: u32,              // default 7
-    pub max_fn_loc: u32,              // default 60
-    pub max_nesting: u32,             // default 4
-    pub max_unwrap_per_fn: u32,       // default 0 in production crates
-    pub forbid_unsafe_introduce: bool,// default true
-    pub forbid_new_cycles: bool,      // default true
-    pub soft_complexity: u32,         // default 12
-    pub soft_fn_loc: u32,             // default 40
-    pub soft_unwrap: u32,             // default 0
+    max_complexity: u32,          // default 20 (cyclomatic, McCabe)
+    max_params: u32,              // default 7
+    max_fn_loc: u32,              // default 60
+    max_nesting: u32,             // default 4
+    max_unwrap_per_fn: u32,       // default 0 in production crates
+    forbid_unsafe_introduce: bool,// default true
+    forbid_new_cycles: bool,      // default true
+    soft_complexity: u32,         // default 12
+    soft_fn_loc: u32,             // default 40
+    soft_unwrap: u32,             // default 0
 }
+// Fields are private; serde populates them at deserialize time and the
+// validated loader (Step 8) is the only other constructor. Read via
+// accessors (`max_complexity()`, `soft_complexity()`, …).
 
 impl Default for GateThresholds { fn default() -> Self { /* above */ } }
 ```
@@ -83,42 +109,80 @@ impl Default for GateThresholds { fn default() -> Self { /* above */ } }
 // crates/rmc-gates/src/lib.rs
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum RefusalCode {
     ComplexityTooHigh, FnTooLong, TooManyParams, NestingTooDeep,
     TooManyUnwraps, UnsafeIntroduced,
     ModuleCycleIntroduced, CrateCycleIntroduced,
     ForbiddenDependency, MissingDocsOnPub,
+    MutableStaticIntroduced,   // mut_static_audit (Overview audit list)
+    UnboundedChannel,          // channel_capacity_audit (Overview audit list)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum Severity { Hard, Soft }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct RefusalReason {
-    pub code: RefusalCode,
-    pub severity: Severity,
-    pub item: NodeId,
-    pub threshold: Option<u32>,
-    pub actual: Option<u32>,
-    pub message: String,         // includes file:span + "what to do" hint
+    code: RefusalCode,
+    severity: Severity,
+    item: NodeId,
+    threshold: Option<u32>,
+    actual: Option<u32>,
+    message: String,         // includes file:span + "what to do" hint
+}
+// Built by the `refusal(..)` constructors below; read via accessors
+// (`code()`, `severity()`, `item()`, `threshold()`, `actual()`, `message()`).
+
+/// Typed gate error (`rmc-gates` is a library — no `anyhow`).
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum GateError {
+    /// A graph/snapshot query failed while reading dirty-set state.
+    #[error("snapshot query failed")]
+    Query(#[source] rmc_graph::Error),
+    /// An underlying audit failed.
+    #[error("audit failed")]
+    Audit(#[source] rmc_graph::Error),
+    /// Reading the would-be post-edit body failed.
+    #[error("could not read post-edit body for {item:?}")]
+    PostEditBody { item: NodeId },
+    /// Cycle projection / petgraph SCC stage failed.
+    #[error("cycle detection failed")]
+    Cycle(#[source] rmc_graph::Error),
 }
 
 pub struct GateRunner<'a> {
-    pub snap: &'a OpenedSnapshot,
-    pub loaded: &'a LoadedWorkspace,
-    pub thresholds: GateThresholds,
-    pub allowlist: ForbiddenDepAllowlist,
-    pub baseline: &'a Baseline,
+    snap: &'a OpenedSnapshot,
+    loaded: &'a LoadedWorkspace,
+    thresholds: GateThresholds,
+    allowlist: ForbiddenDepAllowlist,
+    baseline: &'a Baseline,
 }
+// Constructed via `GateRunner::new(snap, loaded, thresholds, allowlist, baseline)`;
+// fields private so callers cannot swap a stale baseline/allowlist mid-evaluate.
 
 impl<'a> GateRunner<'a> {
-    pub fn evaluate(&self, dirty: &[NodeId], effects: &Effects) -> Result<GateOutcome>;
+    /// # Errors
+    /// Returns [`GateError`] if a snapshot/audit/cycle query fails. A refused
+    /// edit is *not* an error — it is reported in [`GateOutcome::hard`].
+    pub fn evaluate(&self, dirty: &[NodeId], effects: &Effects)
+        -> Result<GateOutcome, GateError>;
 }
 
+#[non_exhaustive]
 pub struct GateOutcome {
     pub hard: Vec<RefusalReason>,
     pub soft: Vec<RefusalReason>,
-    pub passed: bool,           // == hard.is_empty()
+}
+
+impl GateOutcome {
+    /// `true` when there are no hard refusals. Derived from `hard` so it can
+    /// never desync.
+    #[must_use]
+    pub fn passed(&self) -> bool { self.hard.is_empty() }
 }
 ```
 
@@ -141,16 +205,17 @@ pub struct Baseline {
 
 1. **Refactor every P1.5 verb into `compute_effects` + `persist`.** WHERE: `crates/rmc-crud/src/{body,move_item,delete,modify_signature,...}.rs`. Template: `modify_body`. Split into:
    ```rust
-   pub(crate) fn compute_effects(host: &WorkspaceHost, op: &ModifyBodyOp) -> Result<Effects>;
-   pub(crate) fn persist(host: &mut WorkspaceHost, effects: Effects, checkpoint: &mut CheckpointBuilder) -> Result<EditOutcome>;
+   pub(crate) fn compute_effects(host: &WorkspaceHost, op: &ModifyBodyOp) -> Result<Effects, CrudError>;
+   pub(crate) fn persist(host: &mut WorkspaceHost, effects: Effects, checkpoint: &mut CheckpointBuilder) -> Result<EditOutcome, CrudError>;
    ```
-   `compute_effects` takes `&WorkspaceHost` (immutable — no `set_file_text`, no LMDB writes); computes byte range via `OpenedSnapshot::span_index()` + `Node.span`; builds `Effects { source_edits, edit_class, estimated_affected_items: vec![op.target], estimated_graph_diff: GraphDiffSummary::default(), would_refuse: vec![] }`. `persist` does RA `set_file_text` + scoped re-extract + LMDB diff-patch. `Crud::apply` becomes:
+   `compute_effects` takes `&WorkspaceHost` (immutable — no `set_file_text`, no LMDB writes); computes byte range via `OpenedSnapshot::span_index()` + `Node.span`; builds the value through the constructor `Effects::new(source_edits, edit_class, /* estimated_affected_items */ vec![op.target], GraphDiffSummary::default())` (private fields; `would_refuse` starts empty and is filled later via `set_would_refuse`). `persist` does RA `set_file_text` + scoped re-extract + LMDB diff-patch. `Crud::apply` becomes:
    ```rust
-   pub fn apply<O: CrudOp>(&mut self, op: O) -> Result<EditOutcome> {
+   pub fn apply<O: CrudOp>(&mut self, op: O) -> Result<EditOutcome, CrudError> {
        let effects = O::compute_effects(&self.host, &op)?;
-       let dirty = effects.estimated_affected_items.clone();
+       let dirty = effects.estimated_affected_items().to_vec();
+       // `GateError` → `CrudError::Gate(#[from] GateError)`.
        let gate_outcome = self.gates.evaluate(&dirty, &effects)?;
-       if !gate_outcome.passed { return Err(CrudError::Refused(gate_outcome.hard)); }
+       if !gate_outcome.passed() { return Err(CrudError::Refused(gate_outcome.hard)); }
        let mut checkpoint = self.host.begin_checkpoint()?;
        let edit_outcome = O::persist(&mut self.host, effects, &mut checkpoint)?;
        checkpoint.commit()?;
@@ -159,13 +224,14 @@ pub struct Baseline {
    ```
    DEPENDS: P0.2 `apply_edits`, D4 `Checkpoint`, D2 `EditClass`, P1.5 verb impls. VERIFY: every verb's existing apply test passes after split.
 
-2. **`Crud::simulate(op) -> Result<SimulateOutcome>`.** WHERE: `simulate.rs`.
+2. **`Crud::simulate(op) -> Result<SimulateOutcome, CrudError>`.** WHERE: `simulate.rs`.
    ```rust
-   pub fn simulate<O: CrudOp>(&self, op: O) -> Result<SimulateOutcome> {
+   pub fn simulate<O: CrudOp>(&self, op: O) -> Result<SimulateOutcome, CrudError> {
        let mut effects = O::compute_effects(&self.host, &op)?;
-       let dirty = effects.estimated_affected_items.clone();
+       let dirty = effects.estimated_affected_items().to_vec();
        let gate_outcome = self.gates.evaluate(&dirty, &effects)?;
-       effects.would_refuse = gate_outcome.hard.iter().chain(gate_outcome.soft.iter()).cloned().collect();
+       effects.set_would_refuse(
+           gate_outcome.hard.iter().chain(gate_outcome.soft.iter()).cloned().collect());
        let cascade_preview = predict_cascade(&self.host, &effects)?;
        let estimated_token_cost = estimate_context_view_cost(&self.host, &effects)?;
        Ok(SimulateOutcome { effects, cascade_preview, estimated_token_cost })
@@ -173,12 +239,12 @@ pub struct Baseline {
    ```
    Same `compute_effects` apply uses — by construction simulate cannot diverge.
 
-3. **Cascade preview.** WHERE: `simulate.rs::predict_cascade`. Walks D2's affected-set graph. Per `effects.edit_class`:
+3. **Cascade preview.** WHERE: `simulate.rs::predict_cascade`. Walks D2's affected-set graph. Per `effects.edit_class()`:
    - `BodyOnly` → no cascade.
-   - `SignatureOrVis` → for each NodeId in reverse-deps (from `who_uses` + `who_imports`), emit `CascadeStep { op_kind: "re_resolve_usage", node, reason: "signature changed" }`.
-   - `ItemAddRemove` → `fix_use_path` per consumer module.
-   - `ModuleTree` → `fix_use_path` for every `Binding` whose `target` lies under moved subtree.
-   - `Macro` / `Cargo` → single coarse `op_kind: "full_reextract"`.
+   - `SignatureOrVis` → for each NodeId in reverse-deps (from `who_uses` + `who_imports`), emit `CascadeStep { kind: CascadeKind::ReResolveUsage, node, reason: "signature changed" }`.
+   - `ItemAddRemove` → `CascadeKind::FixUsePath` per consumer module.
+   - `ModuleTree` → `CascadeKind::FixUsePath` for every `Binding` whose `target` lies under moved subtree.
+   - `Macro` / `CargoManifest` → single coarse `CascadeKind::FullReExtract`.
    DEPENDS: D2 classification; `who_uses`, `who_imports`, `usages_of`, `imports_of`, `re_export_chain`. VERIFY: `modify_body` cascade empty; `move` of `pub fn` with N consumers → `cascade_preview.len() >= N`.
 
 4. **Fold GateRunner output into `would_refuse`.** Wired in Step 2.
@@ -200,7 +266,20 @@ pub struct Baseline {
    - Softs at ~half/2/3 of hard ceilings.
    VERIFY: `gate_thresholds_defaults`.
 
-8. **TOML loader.** WHERE: `thresholds.rs::load_from_workspace_root`. `<workspace>/gates.toml`; `toml::from_str::<GateThresholds>` over `#[serde(default)]`. Missing file → `GateThresholds::default()`. Sample:
+8. **Single validated TOML loader.** WHERE: `config.rs::load_from_workspace_root`. Reads `<workspace>/gates.toml` **once** and deserializes the whole file into one `GatesConfig { thresholds: GateThresholds, allowlist: ForbiddenDepAllowlist }` (thresholds from the top-level keys via `#[serde(default)]`, allowlist from the `[forbidden_dependencies]` table). Missing file → `GatesConfig::default()` (defaults + baseline rules). After deserializing, **validate**: every `soft_*` must be `<= ` its `max_*` counterpart (`soft_complexity <= max_complexity`, `soft_fn_loc <= max_fn_loc`, `soft_unwrap <= max_unwrap_per_fn`); on violation return `GateConfigError::SoftExceedsHard { field, soft, hard }`. This replaces the two former independent reads in `thresholds.rs` + `allowlist.rs` — there is now a single read with cross-field validation, so soft/hard can never be configured inconsistently.
+   ```rust
+   #[derive(Debug, thiserror::Error)]
+   #[non_exhaustive]
+   pub enum GateConfigError {
+       #[error("could not read gates.toml")]
+       Read(#[source] std::io::Error),
+       #[error("could not parse gates.toml")]
+       Parse(#[from] toml::de::Error),
+       #[error("soft threshold for `{field}` ({soft}) exceeds hard limit ({hard})")]
+       SoftExceedsHard { field: &'static str, soft: u32, hard: u32 },
+   }
+   ```
+   Sample `gates.toml`:
    ```toml
    max_complexity = 20
    max_params = 7
@@ -224,9 +303,9 @@ pub struct Baseline {
    producer = "rmc-server*"
    severity = "error"
    ```
-   VERIFY: `loader_returns_defaults_on_missing_file`, `loader_parses_sample_gates_toml`.
+   VERIFY: `loader_returns_defaults_on_missing_file`, `loader_parses_sample_gates_toml`, `loader_rejects_soft_above_hard`.
 
-9. **Allowlist loader.** WHERE: `allowlist.rs::load_from_workspace_root`. Parse `[forbidden_dependencies]` table; merge with hard-coded baseline:
+9. **Allowlist baseline merge.** WHERE: `allowlist.rs::ForbiddenDepAllowlist::with_baseline` (pure — no file read; the `[forbidden_dependencies]` table is already deserialized by the single loader in Step 8). Merge the deserialized rules with the hard-coded baseline:
    ```rust
    const BASELINE_RULES: &[(&str, &str, &str)] = &[
        ("rmc-config", "rmc-engine*", "config must not import engine"),
@@ -257,12 +336,14 @@ pub struct Baseline {
 
 11. **`GateRunner::evaluate(dirty, effects)`.** WHERE: `lib.rs`.
     ```rust
-    pub fn evaluate(&self, dirty: &[NodeId], effects: &Effects) -> Result<GateOutcome> {
+    pub fn evaluate(&self, dirty: &[NodeId], effects: &Effects)
+        -> Result<GateOutcome, GateError> {
         let mut hard = Vec::new();
         let mut soft = Vec::new();
         // 1. Per-fn metrics on each dirty function.
         for &node in dirty {
-            let item = self.snap.node(&self.snap.read_txn()?, node)?;
+            let item = self.snap.node(&self.snap.read_txn()?, node)
+                .map_err(GateError::Query)?;
             let Some(item) = item else { continue };
             let Some(ItemKind::Function | ItemKind::Method | ItemKind::AssocFunction) = item.item_kind else { continue };
             let body = read_body_post_edit(&item, effects)?;
@@ -310,26 +391,26 @@ pub struct Baseline {
         for f in audits::missing_docs_for(dirty, self.snap)? {
             soft.push(refusal_missing_docs(f));
         }
-        Ok(GateOutcome { passed: hard.is_empty(), hard, soft })
+        Ok(GateOutcome { hard, soft })   // `passed()` is derived from `hard`
     }
     ```
-    `read_body_post_edit` overlays `effects.source_edits` onto current source before measuring — gates evaluate would-be state without writing.
+    `read_body_post_edit` overlays `effects.source_edits()` onto current source before measuring — gates evaluate would-be state without writing.
 
 11b. **Dirty-set audit wrappers (Phase 1 fallback).** WHERE: `audits.rs`. Run workspace-wide audit, post-filter:
     ```rust
     pub fn unsafe_findings_for(dirty: &[NodeId], snap: &OpenedSnapshot, loaded: &LoadedWorkspace,
-                                _effects: &Effects) -> Result<Vec<UnsafeFinding>> {
+                                _effects: &Effects) -> Result<Vec<UnsafeFinding>, GateError> {
         let dirty_set: HashSet<NodeId> = dirty.iter().copied().collect();
-        let all = snap.unsafe_audit(loaded)?;
+        let all = snap.unsafe_audit(loaded).map_err(GateError::Audit)?;
         Ok(all.into_iter()
-            .filter(|f| f.enclosing_function.map_or(false, |n| dirty_set.contains(&n)))
+            .filter(|f| f.enclosing_function.is_some_and(|n| dirty_set.contains(&n)))
             .collect())
     }
     ```
-    Same shape for `fn_body_findings_for`, `recursion_cycles_for`, `mut_static_findings_for`, `derive_findings_for`, `missing_docs_for`, `channel_capacity_findings_for`. Phase 2 grows each audit a `fn audit_only(crate_id: NodeId, items: &HashSet<NodeId>) -> Vec<Finding>` overload.
+    Same shape (all `-> Result<_, GateError>`) for `fn_body_findings_for`, `recursion_cycles_for`, `mut_static_findings_for` (→ `RefusalCode::MutableStaticIntroduced`), `derive_findings_for`, `missing_docs_for`, `channel_capacity_findings_for` (→ `RefusalCode::UnboundedChannel`). Phase 2 grows each audit a `fn audit_only(crate_id: NodeId, items: &HashSet<NodeId>) -> Vec<Finding>` overload.
 
 12. **Cycle detection.** WHERE: `cycle.rs`. `petgraph::algo::tarjan_scc`. **Module-cycle:**
-    1. Project post-edit module-parent graph: start from `baseline.module_parent_edges`; apply `effects.source_edits` (only when `effects.edit_class == ModuleTree`).
+    1. Project post-edit module-parent graph: start from `baseline.module_parent_edges`; apply `effects.source_edits()` (only when `effects.edit_class() == EditClass::ModuleTree`).
     2. Build `petgraph::DiGraph<NodeId, ()>` over projected edges.
     3. `tarjan_scc` → SCC > 1 = cycle. Subtract baseline cycles → return new only.
     **Crate-cycle:**
@@ -342,10 +423,12 @@ pub struct Baseline {
 13. **Forbidden-dep dirty filter.** WHERE: `dirty_dep_filter.rs`.
     ```rust
     pub fn check_forbidden(snap: &OpenedSnapshot, allowlist: &ForbiddenDepAllowlist,
-                            dirty: &[NodeId], effects: &Effects) -> Result<Vec<ForbiddenDependencyViolation>> {
+                            dirty: &[NodeId], effects: &Effects)
+        -> Result<Vec<ForbiddenDependencyViolation>, GateError> {
         let touched_crates: HashSet<NodeId> = dirty.iter()
             .filter_map(|n| snap.node(&snap.read_txn()?, *n).ok().flatten()?.crate_id).collect();
-        let all_violations = snap.forbidden_dependency_check(&allowlist.rules)?;
+        let all_violations = snap.forbidden_dependency_check(&allowlist.rules)
+            .map_err(GateError::Audit)?;
         Ok(all_violations.into_iter()
             .filter(|v| /* consumer/producer maps back to touched_crate */ true)
             .filter(|v| !baseline_had_violation(v))
@@ -354,12 +437,12 @@ pub struct Baseline {
     ```
     Existing `forbidden_dependency_check` in `query/crates.rs` called as-is; wrapper narrows. VERIFY: `forbidden_dep_refused`.
 
-14. **Aggregate.** Step 11's pseudocode. `passed = hard.is_empty()`. `soft` flows into P1.7 scalarizer.
+14. **Aggregate.** Step 11's pseudocode. `GateOutcome::passed()` is derived from `hard` (no stored field). `soft` flows into P1.7 scalarizer.
 
 15. **Wire `Crud::apply` to gate.** Step 1's `apply` body. Critical ordering:
     1. `compute_effects` (no I/O).
     2. `gates.evaluate(dirty, &effects)`.
-    3. `!passed` → `Err(CrudError::Refused(hard))`. NO checkpoint, NO source, NO LMDB.
+    3. `!outcome.passed()` → `Err(CrudError::Refused(hard))`. NO checkpoint, NO source, NO LMDB.
     4. Else → `begin_checkpoint` → `persist` → `commit`.
     Guarantees refused op is byte-identical to never having been called. VERIFY: `simulate_predicts_refusal`.
 
@@ -370,19 +453,19 @@ pub struct Baseline {
 (`crates/rmc-crud/tests/`, `crates/rmc-gates/tests/`)
 
 - **`simulate_equals_apply_for_modify_body`** (`crates/rmc-crud/tests/simulate_eq_apply.rs`) — `simulate(op).effects == apply(op).recorded_effects`. Repeat for every verb.
-- **`simulate_predicts_refusal`** — `ModifyBodyOp` whose body is `fn foo() { unsafe { std::ptr::null::<u8>().read() } }` on fn with `baseline.had_unsafe == false`. Assert `simulate.effects.would_refuse` contains `RefusalReason { code: UnsafeIntroduced, severity: Hard }`. Then `apply(op)` → `Err(CrudError::Refused(..))`.
-- **`hard_complexity_refuses`** — body with 25 `if` branches (cyclomatic = 26); `max_complexity = 20`; `evaluate` returns `Hard ComplexityTooHigh { threshold: 20, actual: 26 }`; `passed == false`.
+- **`simulate_predicts_refusal`** — `ModifyBodyOp` whose body is `fn foo() { unsafe { std::ptr::null::<u8>().read() } }` on fn with `baseline.had_unsafe == false`. Assert `simulate.effects.would_refuse()` contains a `RefusalReason` with `code() == RefusalCode::UnsafeIntroduced` and `severity() == Severity::Hard`. Then `apply(op)` → `Err(CrudError::Refused(..))`.
+- **`hard_complexity_refuses`** — body with 25 `if` branches (cyclomatic = 26); `max_complexity = 20`; `evaluate` returns `Hard ComplexityTooHigh { threshold: 20, actual: 26 }`; `outcome.passed() == false`.
 - **`soft_unwrap_warns`** — body with 1 `.unwrap()`; baseline 0. `max_unwrap_per_fn = 0, soft_unwrap = 0`: `hard` contains `Hard TooManyUnwraps`. Then `max_unwrap_per_fn = 1, soft_unwrap = 0`: `hard` empty, `soft` contains `Soft TooManyUnwraps`.
 - **`cycle_introduced_refused`** — fixture with modules `a`, `b`; `MoveModuleOp` re-parenting `a` under `b` + `ModifyBodyOp` inserting `use crate::a::Foo` into `b`. Assert `ModuleCycleIntroduced` in `hard`.
 - **`forbidden_dep_refused`** — allowlist `rmc-config !-> rmc-engine`; `ModifyBodyOp` inserting `use rmc_engine::EmbeddingGenerator;` into fn in `rmc-config`. Assert `ForbiddenDependency` in `hard`.
-- **`dirty_set_audit_speed`** (`crates/rmc-gates/benches/dirty_audit.rs`) — 100k-LOC fixture; baseline captured once; `evaluate(&[one_node], ...)` × 100 < 50ms each. 10 dirty nodes < 200ms each.
+- **`dirty_set_audit_speed`** (`crates/rmc-gates/benches/dirty_audit.rs`) — **aspirational / `#[ignore]`** (see Open decisions: Phase 1 filters workspace-wide audits, so these latency targets are non-deterministic and likely fail until each audit grows an `audit_only` overload). 100k-LOC fixture; baseline captured once; *target* `evaluate(&[one_node], ...)` × 100 < 50ms each, 10 dirty nodes < 200ms each. Marked `#[ignore]` so CI does not gate on it; run explicitly with `cargo bench`/`-- --ignored`.
 - **`baseline_does_not_count_pre_existing`** — fixture fn with 3 existing `.unwrap()`s. Capture baseline. `ModifyBodyOp` that doesn't touch any unwrap → 0 `TooManyUnwraps`. Then add 4th unwrap → 1 refusal with `actual: 1` (NEW count, not total 4).
-- **`evaluate_uses_post_edit_body`** — existing body 0 unwraps; `effects.source_edits` adds one. Gate runs against overlay (sees 1), not on-disk (still 0).
-- **`gates_toml_round_trip`** — non-default values; load; equals expected; missing fields default.
+- **`evaluate_uses_post_edit_body`** — existing body 0 unwraps; `effects.source_edits()` adds one. Gate runs against overlay (sees 1), not on-disk (still 0).
+- **`gates_toml_round_trip`** — non-default values; `config.rs::load_from_workspace_root` parses the whole file into one `GatesConfig`; thresholds equal expected; missing fields default; allowlist includes baseline + TOML rules. (Soft-above-hard rejection covered by `loader_rejects_soft_above_hard`.)
 
 ## Open decisions / risks
 
-- **Audit latency at write time.** Phase 1 "filter workspace-wide audit" is a stopgap — existing audits walk whole workspace (~100s of ms on 100k LOC). 50/200ms targets in `dirty_set_audit_speed` are aspirational and likely fail in Phase 1; Phase 2 needs each audit to grow `audit_only(crate_id, items)`. Documented as known limit.
+- **Audit latency at write time.** Phase 1 "filter workspace-wide audit" is a stopgap — existing audits walk whole workspace (~100s of ms on 100k LOC). 50/200ms targets in `dirty_set_audit_speed` are aspirational and likely fail in Phase 1, so that bench is marked `#[ignore]` (run on demand, never CI-gating); Phase 2 needs each audit to grow `audit_only(crate_id, items)` before the targets become enforceable. Documented as known limit.
 - **`compute_complexity` duplicative.** Regex-counting `analyze_complexity` exists in `rmc-server/src/tools/endpoints/analysis.rs`. New syntax-tree version is more accurate but lives in `rmc-gates` to avoid pulling `rmc-server` into gate path. Server's tool should adopt new impl in follow-up.
 - **Threshold calibration.** Defaults from rust-guidelines. After P1.7 first runs, ratchet down based on false-refusal rate observed in trajectories. Track in `EpisodeRunner::stats.refusals_by_code`.
 - **Allowlist format ownership.** `gates.toml` at workspace root; agent has NO verb to touch it. If future Phase needs agent-editable thresholds, route through `agent_overrides.toml` with constraint that overrides can only *tighten*.
