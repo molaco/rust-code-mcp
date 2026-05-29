@@ -71,11 +71,15 @@ already applied to the split sections):
   `RenamePreview`, `RenameEdit`, `RenameFileMove`, `rename_by_*`, `SemanticError`.
   Deps: `rmc-graph`, `ra_ap_{ide,ide_db,syntax}`, `thiserror`, `tracing`, `serde`.
 - **`rmc-crud`** — the 13 verbs as `Crud` enum + `compute_effects`/`apply_effects`.
-  Public: `Crud` (`#[non_exhaustive]`), `Effects`, `CallsiteFill`, `EditOutcome`,
+  Public: `Crud` (`#[non_exhaustive]`), `Effects`, `EditOutcome`,
   `CascadePolicy`, `SignatureChange`, `EditError`/`CrudError`; helpers
   `source_edit` (splice), `syn_ast` (analysis), `preview_apply` (RA line/col→byte).
-  Deps: `rmc-graph`, `rmc-config`, `rmc-semantic`, `ra_ap_{syntax,ide,ide_db}`,
-  `syn = "2"`, `toml_edit = "0.22"`, `thiserror`, `tracing`, `serde`, `serde_json`.
+  **Reads `rmc_config::CallsiteFill`** (the config-facing enum lives in
+  `rmc-config`, not here — DD-D); an internal `CallsiteStrategy`
+  (`From<rmc_config::CallsiteFill>`) adds the non-serializable `ClosureBuilder`
+  runtime variant. Deps: `rmc-graph`, `rmc-config`, `rmc-semantic`,
+  `ra_ap_{syntax,ide,ide_db}`, `syn = "2"`, `toml_edit = "0.22"`, `thiserror`,
+  `tracing`, `serde`, `serde_json`.
 - **`rmc-gates`** — audit/refusal harness over the dirty set. `GateHarness`,
   `GateOutcome`/`GateReport`, `RefusalReason`, `RefusalCode`, `Severity`,
   `Penalty`, `CascadeKind`, `BoundaryAllowlist`, `GatesConfig`, `GateError`.
@@ -94,14 +98,23 @@ already applied to the split sections):
   *(No `analyze/` or `descriptions/` — those are the dropped enrich track.)*
 - **`rmc-config`** — slim `#[non_exhaustive] RuntimeConfig` (private fields +
   accessors): `seed: Seed`, `callsite_fill: CallsiteFill`,
-  `working_snapshot_root: PathBuf`. New `src/runtime.rs`. *(No Anthropic/model
-  config — no LLM in this subset.)*
+  `working_snapshot_root: PathBuf`. New `src/runtime.rs`. **`CallsiteFill`
+  (config-facing variants `Todo`, `RefuseIfMissing`, `Explicit(String)`) is
+  defined HERE** — it is a configuration value, and `rmc-config` is a leaf
+  crate with NO dependency on `rmc-crud` (DD-D breaks the cycle). *(No
+  Anthropic/model config — no LLM in this subset.)*
 - **`rmc-indexing`** — `src/indexing/seed.rs` (deterministic file ordering).
-- **`rmc-server`** — new MCP tool handlers `src/mcp/handlers/{navigate,crud,
-  simulate,gates}.rs`; `semantic/` **moved out** to `rmc-semantic` and
-  re-pointed; promote `OpenedSnapshot::line_to_byte` to `pub`. New deps:
-  `rmc-semantic` (path), `rmc-crud`/`rmc-gates` (path). No `rl` feature gate
-  needed — these tools ship in the server (no RL crates to hide).
+- **`rmc-server`** — new tools are added to the existing `SearchToolRouter` as
+  `#[tool]` methods in `src/tools/router.rs`, with param structs in
+  `src/tools/params/` and bodies delegating to new endpoint modules under
+  `src/tools/endpoints/{navigate,refactor,simulate,gates}.rs` (mirroring the
+  existing `query`/`analysis`/`index`/`health`/`cache` endpoints). **There is no
+  `src/mcp/handlers/`** — `src/mcp/` stays runtime/cache/sync/locks. `semantic/`
+  **moved out** to `rmc-semantic` and re-pointed; promote
+  `OpenedSnapshot::line_to_byte` to `pub`. `RuntimeState` (in `src/mcp/runtime.rs`)
+  gains a `WorkspaceHostRegistry` and a `RuntimeClearScope::HostOnly` variant.
+  New deps: `rmc-semantic`, `rmc-crud`, `rmc-gates` (all path). No `rl` feature
+  gate — these tools ship in the server (no RL crates to hide).
 
 ### Dropped / not built
 `rmc-reward`, `rmc-episode`, `rmc-rl`, `rmc-spikes`. `rmc-host` stays optional
@@ -110,6 +123,10 @@ already applied to the split sections):
 ---
 
 ## 4. MCP tool surface (~20 new tools in `rmc-server`)
+
+All are declared as `#[tool]` methods on the existing `SearchToolRouter`
+(`src/tools/router.rs`); params in `src/tools/params/`; logic in new
+`src/tools/endpoints/` modules. They are *not* a separate handler tree.
 
 - **Navigate (read):** `goto`, `zoom`, `show_body`, `show_callers`,
   `follow_trail` → `ContextView`. Ride the cold `OpenedSnapshot`; shared lock.
@@ -129,10 +146,16 @@ diff-patch → record undo. Gate refusal or any apply error triggers rollback.
 
 ## 5. Engine model (warm host as a tool, not an episode)
 
-A long-lived **per-workspace** `WorkspaceHost` (keyed in the existing
-`SearchRuntimeCache`/runtime registry) holding a warm rust-analyzer
-`AnalysisHost` + `Vfs` over the LMDB graph. The plan's per-episode working-copy
-distinction collapses for a tool product — see decisions below.
+A long-lived **per-workspace** `WorkspaceHost` holding a warm rust-analyzer
+`AnalysisHost` + `Vfs` over the LMDB graph, owned by a **new
+`WorkspaceHostRegistry` on `RuntimeState`** — NOT `SearchRuntimeCache`, which is
+keyed by embedder/vector/tantivy identity and unrelated to host state. The
+registry maps canonical workspace dir → host handle, reuses the existing
+`WorkspaceLockRegistry` for exclusion (writes exclusive, reads shared), and is
+surfaced through the existing lifecycle tools: a new `RuntimeClearScope::HostOnly`
+for `clear_runtime`, and a host section added to `RuntimeStatus` (`runtime_status`).
+The plan's per-episode working-copy distinction collapses for a tool product —
+see decisions below.
 
 Detail for each piece lives in the existing sections:
 - Warm host + apply pipeline + rollback → **`06-section-c-warm-host-rollback.md`**
@@ -159,13 +182,37 @@ undo. There is **no** working-copy/`commit`/`discard` dance.
   `begin_session` / `commit` / `discard` tools over the working snapshot
   (`mdb_copy`) — the D1 machinery already supports it.
 
-**DD-B — Rollback substrate: undo-log primary, jj optional.** Rollback replays
-the in-process `UndoLog` + `file_prior_text` (works in any directory). When the
-workspace is a jj (or git) repo, also record the op id and prefer
-`jj op restore` for the source side.
-- *Rationale:* this environment isn't a VCS repo; the tool must still undo.
-- *Flip:* require a jj workspace and make `jj op restore` the primary path if
-  you want VCS-native history of every tool edit.
+**DD-B — Rollback substrate: undo-log + `file_prior_text` is the ONLY default
+path.** Rollback always replays the in-process `UndoLog` (LMDB graph) +
+`file_prior_text` (source files). **`jj op restore` is NOT used by default** —
+this workspace *is* a jj repo, and op-granular restore would roll back unrelated
+human/tool edits interleaved with the tool's own. jj op ids are recorded as
+**audit metadata only** (which op a tool edit produced), never replayed
+automatically.
+- *Rationale:* a shared working tree may have concurrent writers; op-granular
+  restore is too coarse to be a safe undo primitive.
+- *Opt-in only:* `jj op restore` is offered solely for *isolated-session*
+  recovery (a dedicated scratch workspace with no other writers), never on the
+  live workspace.
+
+**DD-C — Gate baseline: per-write preimage of the affected set, not a persisted
+baseline.** With episodes dropped there is no episode-start snapshot to diff
+against. Delta gates ("no NEW unsafe", "no new cycle", "complexity didn't
+regress") compare the *would-be post-edit* state of the affected set against its
+**immediate pre-edit state**, captured inside `compute_effects` from the
+currently published graph. No baseline persists across tool calls — each call
+recomputes its own preimage; after a successful apply the new state simply
+becomes the next call's preimage. Absolute gates ("introduces `unsafe` at all")
+need no baseline. This replaces Section I's episode-start `Baseline` capture,
+which is dropped with the RL stack.
+
+**DD-D — Dependency direction: `rmc-config` is a leaf.** `rmc-config` must not
+depend on `rmc-crud`. Any config-facing type a verb reads (notably
+`CallsiteFill`) is defined in `rmc-config`; `rmc-crud` depends on `rmc-config`
+and maps it to any richer internal form it needs (an internal `CallsiteStrategy`
+adding the non-serializable `ClosureBuilder` variant via
+`From<rmc_config::CallsiteFill>`). This breaks the would-be `rmc-config ⇄
+rmc-crud` cycle the first draft created.
 
 ---
 
@@ -215,7 +262,10 @@ crates/
       checkpoint.rs + checkpoint/    +    jj.rs, restore.rs
   rmc-server/
     Cargo.toml                       ~    + rmc-semantic, rmc-crud, rmc-gates (path)
-    src/mcp/handlers.rs + handlers/  +    navigate.rs, crud.rs, simulate.rs, gates.rs
+    src/tools/router.rs              ~    + #[tool] methods (navigate/refactor/simulate/gates)
+    src/tools/params/                ~    + param structs for the new tools
+    src/tools/endpoints/             +    navigate.rs, refactor.rs, simulate.rs, gates.rs
+    src/mcp/runtime.rs               ~    + WorkspaceHostRegistry on RuntimeState; RuntimeClearScope::HostOnly
     src/semantic/                    →    MOVED to crates/rmc-semantic/
 + rmc-semantic/  src/{lib,service,rename,error}.rs
 + rmc-crud/      src/{lib,effects,error,source_edit,syn_ast,callsite_fill,preview_apply}.rs
