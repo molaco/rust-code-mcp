@@ -18,6 +18,7 @@ Devshell: every shell command runs under `nix develop ../nix-devshells#cuda-code
 ## Table of contents
 
 - [Errata (post-review revisions) — canonical resolutions](#errata-post-review-revisions--canonical-resolutions) — **READ FIRST**
+- [Canonical Reconciliation — Single Source of Truth](#canonical-reconciliation--single-source-of-truth) — **HIGHEST PRECEDENCE**
 - [Section Z — Integration, Milestones, Crate Inventory](#section-z--integration-milestones-crate-inventory)
 - [Section A — P0.1 Determinism + P0.4 Benchmark Pool](#section-a--p01-determinism--p04-benchmark-pool)
 - [Section B — M0 Contracts (D1–D4) + Feasibility Spikes](#section-b--m0-contracts-d1d4--feasibility-spikes)
@@ -38,6 +39,12 @@ Eight blockers raised in review of the first draft. The resolutions below
 are canonical. Where the body of the plan (Sections Z, A–J) contradicts
 this errata, **the errata wins** — body text is as-of-draft design;
 errata is what we build.
+
+> **Precedence:** the **Canonical Reconciliation** section (immediately
+> after this Errata) outranks even the Errata. It resolves the cross-slice
+> type/layout/crate duplication the Errata left open (the B⇄C duplicate
+> D1–D4 declarations, the 3-way module-layout split, the rmc-semantic
+> cycle). Order: **Canonical Reconciliation → Errata → body.**
 
 ## E1 — Canonical apply pipeline (resolves Finding #1)
 
@@ -302,25 +309,34 @@ existing `src/graph/{codemap, query, skeleton, ...}/` layout. Section Z's
 file-tree diff is the canonical statement:
 
 ```
-crates/rmc-graph/src/graph/working/        (D1)
-crates/rmc-graph/src/graph/host/           (P0.2 warm host)
-crates/rmc-graph/src/graph/affected/       (D2/D3)
-crates/rmc-graph/src/graph/checkpoint/     (D4)
+crates/rmc-graph/src/graph/working/        (D1 working snapshot, D4 undo log, D3 patch helpers)
+crates/rmc-graph/src/graph/host/           (P0.2 warm host, D2 edit-class + affected-set, per-crate re-extract)
+crates/rmc-graph/src/graph/checkpoint/     (D4 Checkpoint + jj + restore)
 crates/rmc-graph/src/graph/view/           (P1.1)
 crates/rmc-graph/src/graph/descriptions/   (P1.2)
 crates/rmc-graph/src/graph/analyze/        (P1.3)
 ```
 
+There is **no `affected/` directory** — the earlier draft of this entry
+listed one, but Section Z's file-tree (the canonical statement) and Z's
+re-export list (`pub use host::affected_set::AffectedSet`,
+`pub use host::edit_class::EditClass`) home D2 under `host/` and D3's
+patch helpers under `working/patch/`. D2/D3 live in `host/` + `working/`,
+not a standalone `affected/`. The **Canonical Reconciliation** section
+below is authoritative on the full layout and supersedes this entry where
+they differ.
+
 Section B's `crates/rmc-graph/src/working/`, `affected/`, `checkpoint/`
 (no `graph/` prefix) and Section C's `crates/rmc-graph/src/host/` are
-typos — treat as if prefixed with `graph/`. The corresponding `pub mod`
-declarations belong in `src/graph/mod.rs`, not `src/lib.rs`:
+typos — treat as if prefixed with `graph/`, and re-home B's `affected/*`
+into `host/{edit_class,affected_set}.rs` + `working/patch/mod.rs` per the
+Canonical Reconciliation. The corresponding `pub mod` declarations belong
+in `src/graph/mod.rs`, not `src/lib.rs`:
 
 ```rust
 // crates/rmc-graph/src/graph/mod.rs
 pub mod working;
 pub mod host;
-pub mod affected;
 pub mod checkpoint;
 pub mod view;
 pub mod descriptions;
@@ -382,6 +398,178 @@ existing in `rmc-graph`.
 
 ---
 
+# Canonical Reconciliation — Single Source of Truth
+
+This plan was synthesized from independent per-slice subagent designs.
+Sections B and C were authored separately and **each** declared the D1–D4
+types; the Errata fixed eight semantic blockers but did not dedup those
+declarations, so the same type appears two or three times with different
+names, shapes, and module homes. This section picks **one** of each and
+names what to delete.
+
+**Precedence (highest first): this section → Errata (E1–E8) → body
+(Sections Z, A–J).** Where they disagree, the higher authority wins. The
+four scrubs in §R5 are already applied to the body.
+
+## §R1 — Canonical module layout (resolves B ⇄ C ⇄ Z)
+
+Three layouts existed: B's `working/ affected/ checkpoint/`, C's
+everything-under-`host/`, and Z's `working/ host/ checkpoint/`. **Z's
+file-tree is canonical** — it is the most complete and matches Z's own
+re-export list (`pub use host::affected_set::AffectedSet`, etc.). All paths
+are under `crates/rmc-graph/src/graph/`:
+
+```
+graph/
+  working/                  D1 working snapshot, D4 undo log, D3 patch APPLY helpers
+    snapshot.rs             WorkingSnapshot, init_from_published, publish_as_new_graph_id
+    identity.rs             SessionId, WorkingSnapshotIdentity
+    undo_log.rs             UndoLog, UndoBatch, UndoOp, UndoMarker        (C's in-memory design)
+    patch/
+      mod.rs                DiffPatch + compute_patch/apply_patch + the D3 matrix
+                            (SubDb, InvalidationAction, InvalidationRule, invalidations_for, ALL_SUB_DBS)
+      nodes.rs  bindings.rs  usages.rs  contains.rs  signatures.rs  statics.rs  meta.rs
+  host/                     P0.2 warm host, D2 classifier + affected-set, per-crate re-extract
+    workspace_host.rs       WorkspaceHost, FileEdit, EditSeq, apply_edits
+    edit_class.rs           EditClass (canonical variants), classify()
+    affected_set.rs         AffectedSet, ReverseDepGraph, expand()/affected_set()
+    extract_per_crate.rs    extract_partial, PartialExtractionModel
+  checkpoint/               D4 checkpoint contract
+    mod.rs                  Checkpoint (C's fields), take()
+    jj.rs                   jj op log/restore wrappers
+    restore.rs              WorkspaceHost::rollback / restore replay
+  view/  descriptions/  analyze/        P1.1 / P1.2 / P1.3 (unchanged)
+```
+
+There is **no `graph/affected/`**, and none of `host/edits.rs`,
+`host/diff_patch.rs`, `host/re_extract.rs`, `host/rollback.rs`,
+`checkpoint/checkpoint.rs`, `checkpoint/undo.rs` — those are superseded
+B/C filenames (§R6).
+
+## §R2 — Canonical core types (resolves the duplicate D1–D4 declarations)
+
+| Concept | CANONICAL | Home | Superseded |
+|---|---|---|---|
+| Edit class | `EditClass { BodyOnly, SignatureOrVis, ItemAddRemove, ModuleTree, Macro, CargoManifest }` | `host/edit_class.rs` | B `{…, SigOrVis, …, Cargo}`; C `{Body, Signature, …, CargoManifest}` |
+| Host edit input | `FileEdit { path: ws-rel, new_text, edit_class }` (host trusts the class) | `host/workspace_host.rs` | B's `Edit` enum + `classify(&Edit)` — the verb sets the class by construction; no diff-inference |
+| Affected set | `AffectedSet { dirty_files, dirty_crates, reverse_dep_crates, full_rebuild }` (struct) | `host/affected_set.rs` | C's `affected_crates() -> Vec<NodeId>` (becomes the builder that returns `AffectedSet`) |
+| Undo log | **in-memory** `UndoLog { batches: Vec<UndoBatch> }`; `UndoOp` per primary + per DUP_SORT secondary | `working/undo_log.rs` | B's on-disk `BufWriter` `UndoLog`, `UndoEntry`, byte-offset marker |
+| Undo marker | `UndoMarker(EditSeq)` — pop batches with `seq > marker` | `working/undo_log.rs` | B's `UndoLogMarker { byte_offset, entry_count }` |
+| Checkpoint | `Checkpoint { jj_op_id: String, file_prior_text: HashMap<PathBuf,String>, edit_seq_marker: EditSeq }` | `checkpoint/mod.rs` | B's `{ jj_op_id: JjOpId, undo_log_marker, ra_edit_seq, caches }` |
+| D3 matrix | `SubDb`, `InvalidationAction`, `InvalidationRule`, `invalidations_for(class)`, `ALL_SUB_DBS` | `working/patch/mod.rs` | B's `affected/matrix.rs` (same content, new home) |
+| Diff/patch | `DiffPatch { node_inserts/updates/removes, … }` + `compute_patch`/`apply_patch` | `working/patch/mod.rs` | C's `host/diff_patch.rs` (same content, new home) |
+
+Rationale for the load-bearing picks:
+- **EditClass names** follow the source plan (`phase-1-implementation.md`)
+  and `m0-spikes.md` prose (`BodyOnly`, `SignatureOrVis`, `CargoManifest`).
+  B's D3 `invalidations_for` and E4's table use the abbreviations
+  `SigOrVis`/`Cargo` — read those as `SignatureOrVis`/`CargoManifest`.
+- **In-memory UndoLog** is sufficient: crash-recovery is "drop the
+  working-snapshot dir and re-`mdb_copy` from the published base" (the
+  slow-path bailout already in Section C). Durability buys nothing the
+  recopy doesn't, and the `Vec<UndoBatch>` is what C's apply/rollback
+  (Steps 7, 11) and G/J already use.
+- **Checkpoint = C's shape** because `file_prior_text` is the *mechanism*
+  RA restore needs (replay `set_file_text` with prior text); B's bare
+  `ra_edit_seq` can't restore RA without it. `edit_seq_marker` doubles as
+  the undo-log marker (the log is keyed by `EditSeq`), so all three D4
+  domains are covered: source = `jj_op_id`, graph + RA-seq =
+  `edit_seq_marker`, RA-replay data = `file_prior_text`.
+
+**Consequence for `PartialExtractionModel`** (`extract_per_crate.rs`): it
+must carry the affected-set context E4's scan-window reads. Canonical:
+```rust
+pub struct PartialExtractionModel {
+    pub edit_class: EditClass,            // NEW — E4 reads partial.edit_class
+    pub dirty_crates: Vec<NodeId>,
+    pub reverse_dep_crates: Vec<NodeId>,  // NEW — E4 reads partial.reverse_dep_crates
+    pub nodes: BTreeMap<NodeId, Node>,
+    pub bindings: Vec<Binding>,
+    pub usages: Vec<Usage>,
+    pub contains: Vec<(NodeId, NodeId)>,
+    pub signatures: Vec<(NodeId, FunctionSignature)>,
+    pub statics: Vec<(NodeId, StaticMetadata)>,
+}
+```
+The builder copies `edit_class` / `dirty_crates` / `reverse_dep_crates`
+from the `AffectedSet`; E4's `partial.edit_class` / `.reverse_dep_crates`
+then compile as written.
+
+## §R3 — One M0.1 deliverable, not two
+
+Sections B ("type-first contracts") and C ("warm host") both define D1–D4.
+**B is the home of the canonical declarations; C consumes them by `use`,
+never re-declares them.** M0.1 (Section B) ships the §R2 types at the §R1
+homes; M2a (Section C) implements the methods (`apply_edits`,
+`compute_patch`, `apply_patch`, `rollback`, `extract_partial`) against
+those exact types. Where Section C's text appears to re-declare `EditClass`
+/ `UndoLog` / `Checkpoint`, read it as:
+```rust
+use crate::graph::{
+    host::edit_class::EditClass,
+    working::undo_log::UndoLog,
+    checkpoint::Checkpoint,
+};
+```
+Section B's `working::patch` helper signatures (the M0.1 exit gate) are the
+`working/patch/*` files in §R1.
+
+## §R4 — Canonical crate set
+
+| Crate | Status | Note |
+|---|---|---|
+| `rmc-semantic` | **NEW, mandatory** | rename engine extracted from `rmc-server::semantic`; breaks the `rmc-server` ⇄ `rmc-crud` cycle (rmc-server deps rmc-crud via `rl`; rmc-crud needs the rename engine). M2a prereq. |
+| `rmc-host` | optional, **default SKIP** | keep `WorkspaceHost` in `rmc-graph::graph::host`; extract only if a real circular dep appears. G's `pub use rmc_host::FileEdit` reads as `pub use rmc_graph::graph::host::FileEdit`. |
+| `rmc-spikes`, `rmc-crud`, `rmc-gates`, `rmc-reward`, `rmc-episode`, `rmc-rl` | new | as Section Z. |
+
+**`prettyplease` is banned** (E5) — removed from every dep list and the
+workspace `Cargo.toml`. `syn` / `ra_ap_syntax` are for byte-range
+**analysis only**; replacement text is string-built and spliced.
+`toml_edit` is kept (format-preserving, not a whole-file formatter).
+
+**Section H still narrates `prettyplease::unparse(&file)` in several verb
+bodies** (`modify_signature`, `extract_*`, `*_module`) — those calls are
+**voided by E5 + this section**. The implementer does NOT call `unparse`:
+locate the byte range with `syn`/`ra_ap_syntax`, build the replacement
+string from the op's fields, and `splice_bytes`. The `syn` `printing`
+feature and the `quote` / `proc-macro2` codegen deps are dropped (they
+exist only to support unparse). Converting Section H's per-verb bodies from
+unparse to locate-and-splice is the one **open rewrite** this
+reconciliation does not finish inline — E5 sketches the splice for §3/5/9/
+11/12/16; the rest of Section H (file lists, step order, tests) is correct.
+
+## §R5 — Scrubs applied to the body
+
+1. **rmc-semantic extracted** — Z crate inventory, `members`, file-tree,
+   and rmc-crud deps updated; rmc-crud deps `rmc-semantic`, not `rmc-server`.
+2. **prettyplease removed** — rmc-crud deps, rmc-graph deps, workspace
+   `Cargo.toml` diff.
+3. **`Episode` de-self-referenced** — Section J's `Episode` no longer
+   stores `Commit<'static>` / owned `Crud` / `Navigator`; it stores owned
+   config + `host`/`snap`/`semantic` and builds the borrowing structs
+   per-step (matches E2).
+4. **E7 `affected/` removed** — D2/D3 live under `host/` + `working/patch/`
+   per §R1; E7's stray `affected/` dir and `pub mod affected;` deleted.
+
+## §R6 — Superseded names (grep map for Sections B/C)
+
+| Body text | Read as |
+|---|---|
+| `EditClass::SigOrVis`, `::Signature` | `EditClass::SignatureOrVis` |
+| `EditClass::Cargo` | `EditClass::CargoManifest` |
+| `EditClass::Body` (Section C) | `EditClass::BodyOnly` |
+| `affected/edit.rs`, `affected/set.rs`, `affected/matrix.rs` | `host/edit_class.rs`, `host/affected_set.rs`, `working/patch/mod.rs` |
+| `host/edits.rs`, `host/diff_patch.rs`, `host/re_extract.rs`, `host/rollback.rs` | `host/workspace_host.rs`, `working/patch/mod.rs`, `host/extract_per_crate.rs`, `checkpoint/restore.rs` |
+| `checkpoint/checkpoint.rs`, `checkpoint/undo.rs` | `checkpoint/mod.rs`, `working/undo_log.rs` |
+| B's `Edit` enum + `classify(&Edit)` | build `FileEdit { edit_class }` directly in the verb |
+| `Commit<'static>` stored in `Episode` (C) | per-step `Commit<'_>` (E2 / scrub #3) |
+| `rmc_host::FileEdit` | `rmc_graph::graph::host::FileEdit` (rmc-host skipped) |
+| `OpenedWorkingSnapshot` (Section J) | `WorkingSnapshot` (D1 — already an opened env+dbs handle) |
+| `prettyplease` | (removed — string-splice, E5) |
+| `OpenedSnapshot::line_to_byte` @ `snapshot.rs:629` | real loc `snapshot.rs:665` |
+
+---
+
 # Section Z — Integration, Milestones, Crate Inventory
 
 ## Overview
@@ -419,10 +607,16 @@ All new crates live under `crates/` and are added to the workspace `members` lis
   - **Cargo deps if extracted:** `rmc-graph` (path, for `storage`, `extract::per_crate`, `ids`, `model`), `ra_ap_*` (workspace), `heed` (workspace), `anyhow`, `tracing`, `serde`, `bincode`, `sha2`.
   - **Built in:** Section C, conditionally. The plan tracks both forks; the file-tree diff below shows the default (in-graph) layout.
 
+- **`crates/rmc-semantic` — rename/refactor mechanics (extracted from `rmc-server`) — M2a prerequisite**
+  - **Purpose:** the symbol-rename engine (`SemanticService` + RA `rename` preview) lifted out of `rmc-server::semantic` into its own crate so that **both** `rmc-server` (MCP handlers) **and** `rmc-crud` (CRUD verbs) can depend on it without a cycle. `rmc-server` gains a dep on `rmc-crud` (via the `rl` feature, line below); `rmc-crud` needs the rename engine — if the engine stayed in `rmc-server`, the two crates would depend on each other and **fail to compile**. Extracting `rmc-semantic` is therefore mandatory, not optional. This rejects the earlier "promote in place + depend on `rmc-server`" approach.
+  - **Public surface:** `pub struct SemanticService`, `pub struct RenamePreview { edits, file_moves }`, `pub struct RenameEdit`, `pub struct RenameFileMove`, `pub fn rename_by_name(..)`, `pub fn rename_by_position(..)`.
+  - **Cargo deps:** `rmc-graph` (path), `ra_ap_ide` (workspace), `ra_ap_ide_db` (workspace), `ra_ap_syntax` (workspace), `anyhow`, `thiserror`, `tracing`, `serde`.
+  - **Built in:** prerequisite for Section G (M2a). Mechanical move: `crates/rmc-server/src/semantic/` → `crates/rmc-semantic/src/`; flip `pub(crate)` → `pub` on the four types + two fns (real locs `semantic/mod.rs:53`, `rename.rs:15/41/61/70/168`); `rmc-server` re-points its handlers at the new crate.
+
 - **`crates/rmc-crud` — CRUD verbs (Sections G + H)**
   - **Purpose:** the five Phase-1 verbs (`modify_body`, `move`, `delete`, `modify_signature`, `extract_*`/`inline`, `*_module`/`lift_to_crate`/`lower_to_module`) as pure operations over the working snapshot, expressed as `compute_effects(host, op) -> Effects` and `apply_effects(host, effects) -> Result<Outcome>`. The split satisfies P1.4 (simulator) — simulate is `compute_effects` only.
   - **Public surface:** `pub enum Crud { ModifyBody{..}, Move{..}, Delete{..}, ModifySignature{..}, ExtractFunction{..}, ExtractTrait{..}, Inline{..}, SplitModule{..}, MergeModules{..}, CreateModule{..}, MoveModule{..}, LiftToCrate{..}, LowerToModule{..} }`, `pub struct Effects { source_patches, graph_patches, manifest_patches, would_refuse }`, `pub trait CrudVerb { fn compute_effects(&self, host: &WorkspaceHost, op: Self::Op) -> Result<Effects>; }`, `pub enum CallsiteFill { Todo, RefuseIfMissing, Explicit(String) }`.
-  - **Cargo deps:** `rmc-graph` (path, for `WorkspaceHost`, `ids`, `model`, `extract`, `storage`), `rmc-config` (path), `rmc-server` (path, **only** for `semantic::SemanticService` rename-preview seed — see "Modified existing crate inventory" below for the pub bump that enables this), `ra_ap_syntax` (workspace), `ra_ap_ide` (workspace, for `rename` preview), `ra_ap_ide_db` (workspace), `syn = "2"` (**new shared dep**, for AST surgery on signatures and impls), `prettyplease = "0.2"` (**new shared dep**, for round-tripped formatting), `toml_edit = "0.22"` (**new shared dep**, for Cargo.toml surgery in P1.5e), `anyhow`, `thiserror`, `tracing`, `serde`, `serde_json`.
+  - **Cargo deps:** `rmc-graph` (path, for `WorkspaceHost`, `ids`, `model`, `extract`, `storage`), `rmc-config` (path), `rmc-semantic` (path, for `SemanticService`/`RenamePreview`/`RenameEdit`/`RenameFileMove` rename mechanics — **extracted from `rmc-server` to break the `rmc-server` ⇄ `rmc-crud` dependency cycle**; see Canonical Reconciliation §R4), `ra_ap_syntax` (workspace), `ra_ap_ide` (workspace, for `rename` preview), `ra_ap_ide_db` (workspace), `syn = "2"` (**new shared dep**, for AST *analysis only* — locate byte ranges; replacement text is string-built and spliced, never AST-unparsed, per E5), `toml_edit = "0.22"` (**new shared dep**, format-preserving `Cargo.toml` surgery in P1.5e), `anyhow`, `thiserror`, `tracing`, `serde`, `serde_json`. **No `prettyplease`** (banned by E5).
   - **Built in:** Sections G (modify_body, move, delete) and H (signature, extract/inline, module-tree).
 
 - **`crates/rmc-gates` — write-time guideline gates (Section I)**
@@ -476,7 +670,7 @@ For each existing crate, the changes are anchored to the section that introduces
   - **New sub-DBs added to `storage::GraphDatabases`** (per D3): `descriptions_by_target`, `undo_log_by_edit_seq` (DUP_SORT), `vision_cache_by_session` (DUP_SORT), `working_meta_by_session`.
   - **New pub APIs surfaced for downstream crates:** `pub use working::WorkingSnapshot`, `pub use host::WorkspaceHost`, `pub use host::affected_set::AffectedSet`, `pub use host::edit_class::EditClass`, `pub use view::ContextView`, `pub use checkpoint::Checkpoint`, `pub use descriptions::store::DescriptionRecord`.
   - **Schema/version bump:** `storage::SCHEMA_VERSION` bumps from current to next + 1.
-  - **New deps in `crates/rmc-graph/Cargo.toml`:** `petgraph = { workspace = true }`, `linfa = { workspace = true }`, `linfa-clustering = { workspace = true }`, `linfa-anomaly = { workspace = true }`, `syn = { workspace = true }`, `prettyplease = { workspace = true }`.
+  - **New deps in `crates/rmc-graph/Cargo.toml`:** `petgraph = { workspace = true }`, `linfa = { workspace = true }`, `linfa-clustering = { workspace = true }`, `linfa-anomaly = { workspace = true }`, `syn = { workspace = true }` (AST *analysis only*, per E5). **No `prettyplease`** (banned by E5).
 
 - **`crates/rmc-indexing` (Section A — small)**
   - **New module:** `src/indexing/seed.rs` — single source of truth for the deterministic ordering of file walks.
@@ -484,8 +678,8 @@ For each existing crate, the changes are anchored to the section that introduces
 
 - **`crates/rmc-server` (Sections D, E, F, G/H, J — handler additions only)**
   - **New modules:** `src/mcp/handlers/navigate.rs`, `describe.rs`, `analyze.rs`, `crud.rs`, `episode.rs`.
-  - **Existing module surface change:** `src/semantic/mod.rs` adds `SemanticService::apply_rename(&mut self, op: RenameOp) -> Result<EditList>` and `SemanticService::rename_preview_pub(&self, op: RenameOp) -> Result<RenamePreview>` so `rmc-crud` can drive the rename mechanics. Promote `SemanticService`, `RenamePreview`, `RenameEdit`, `RenameFileMove` from `pub(crate)` to `pub`. Promote `OpenedSnapshot::line_to_byte` from `pub(crate)` to `pub`.
-  - **Workspace dep additions:** `rmc-crud`, `rmc-gates`, `rmc-reward`, `rmc-episode` (all gated by a new `rl` feature).
+  - **`semantic/` module extracted, not modified in place:** `src/semantic/` moves out to the new `crates/rmc-semantic/` (see New crate inventory + cycle rationale). The four types and two fns are promoted `pub(crate)` → `pub` **in the new crate**; `rmc-server`'s handlers re-point at `rmc-semantic`. Separately, promote `OpenedSnapshot::line_to_byte` from `pub(crate)` → `pub` — this stays in `rmc-graph` (real loc `snapshot.rs:665`, not the earlier-cited `629`).
+  - **Workspace dep additions:** `rmc-semantic` (path, replaces the in-tree `semantic/` module — non-feature-gated); `rmc-crud`, `rmc-gates`, `rmc-reward`, `rmc-episode` (all gated by a new `rl` feature). The `rl`-feature dep on `rmc-crud` is exactly why `semantic/` had to leave this crate.
   - **No schema bumps.**
 
 - **`crates/rust-code-mcp` (no changes)** — top-level bin keeps using `rmc-server`; the new RL stack is driven by the new `rmc-rl` bin instead.
@@ -507,6 +701,8 @@ The single source of truth is the root `Cargo.toml`. Below is the diff against t
    "crates/rmc-server",
 +  # M0 (Section B)
 +  "crates/rmc-spikes",
++  # M2a prerequisite (Section G) — extracted from rmc-server to break the rmc-server ⇄ rmc-crud cycle
++  "crates/rmc-semantic",
 +  # M2b/M3 (Sections G + H)
 +  "crates/rmc-crud",
 +  # M3 (Section I)
@@ -533,10 +729,11 @@ The single source of truth is the root `Cargo.toml`. Below is the diff against t
 +linfa-nn          = "0.7"     # nearest-neighbour, used by LOF
 +linfa-anomaly     = "0.7"
 +
-+# Phase 1: AST surgery for CRUD verbs (Sections C, G, H)
++# Phase 1: AST analysis for CRUD verbs (Sections C, G, H).
++# syn/ra_ap_syntax locate byte ranges ONLY; replacement text is string-built
++# and spliced. No whole-file formatter (prettyplease/rustfmt) — banned by E5.
 +syn           = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
-+prettyplease  = "0.2"
-+toml_edit     = "0.22"
++toml_edit     = "0.22"     # format-preserving Cargo.toml edits (kept; not a formatter)
 +
 +# Phase 1: CLI driver + spike harness (Sections B, J)
 +clap          = { version = "4", features = ["derive"] }
@@ -579,7 +776,7 @@ crates/
       search/
       vector_store/
   rmc-graph/
-    Cargo.toml                            ~  + petgraph, linfa*, syn, prettyplease
+    Cargo.toml                            ~  + petgraph, linfa*, syn (no prettyplease — E5)
     src/
       lib.rs                              ~  + pub use re-exports for the new modules
       graph/
@@ -614,13 +811,15 @@ crates/
     src/indexing/
 +       seed.rs                           (deterministic file ordering)
   rmc-server/
-    Cargo.toml                            ~  + rmc-crud/gates/reward/episode (rl feature)
+    Cargo.toml                            ~  + rmc-semantic (path) + rmc-crud/gates/reward/episode (rl feature)
     src/
       mcp/
 +       handlers/
 +         navigate.rs / describe.rs / analyze.rs / crud.rs / episode.rs
-      semantic/
-        mod.rs                            ~  + pub apply_rename / pub rename_preview
+      semantic/                           →  MOVED to crates/rmc-semantic/ (breaks rmc-server ⇄ rmc-crud cycle)
++ rmc-semantic/                            (extracted from rmc-server/src/semantic — M2a prereq)
++   src/lib.rs                             (pub SemanticService / RenamePreview / RenameEdit / RenameFileMove)
++   src/{service,rename}.rs
 + rmc-spikes/                              (Section B — M0)
 +   src/lib.rs
 +   src/bin/ra_fanout.rs
@@ -3199,17 +3398,16 @@ All in `crates/rmc-crud/src/`:
 - `crates/rmc-crud/src/lower_to_module.rs` — P1.5e inverse: fold small workspace crate back.
 - `crates/rmc-crud/src/callsite_fill.rs` — `CallsiteFill` enum + `CallsiteCtx`.
 - `crates/rmc-crud/src/cargo_surgery.rs` — `toml_edit`-based reads/writes of `Cargo.toml`; format-preserving.
-- `crates/rmc-crud/src/syn_ast.rs` — common helpers for `syn::File` parse/patch/`prettyplease::unparse`.
+- `crates/rmc-crud/src/syn_ast.rs` — common helpers for `syn`/`ra_ap_syntax` parse + **byte-range location only** (signature span, arg-list span, impl-block item ranges). **No `prettyplease::unparse`** — replacement text is string-built and spliced via `source_edit::splice_bytes` per E5 (see Canonical Reconciliation §R4).
 - `crates/rmc-crud/src/name_resolution.rs` — thin wrapper around RA's `Semantics` for capture analysis in `extract_function`.
 
 `crates/rmc-crud/src/lib.rs` re-exports new verbs; `facade.rs` gains nine methods; `edit.rs` gains the `Cargo` variant + `is_full_rebuild()`; `error.rs` gains new variants.
 
-New deps in `crates/rmc-crud/Cargo.toml`:
+New deps in `crates/rmc-crud/Cargo.toml` (E5: analysis-only — no `printing`,
+no `prettyplease`, no `quote`/`proc-macro2` codegen; build replacement
+strings by hand and splice):
 ```
-syn = { version = "2", features = ["full", "parsing", "printing", "extra-traits", "visit", "visit-mut"] }
-prettyplease = "0.2"
-proc-macro2 = "1"
-quote = "1"
+syn = { version = "2", features = ["full", "parsing", "extra-traits", "visit", "visit-mut"] }
 toml_edit = "0.22"
 cargo_metadata = { workspace = true }
 ra_ap_hir = "0.0.330"
@@ -4168,16 +4366,46 @@ pub struct CargoDiagnostic {
 ```rust
 // crates/rmc-episode/src/lib.rs
 
+// Per E2: store ONLY owned / config / Arc-backed fields. `Crud<'a>`,
+// `Navigator`, and `Commit<'a>` each borrow `host` (and `snap`), so storing
+// any of them inside `Episode` is self-referential and will NOT compile in
+// safe Rust. They are built per-step inside `step()` and dropped at end of
+// step — their lifetime is local to the call.
 pub struct Episode<M: ModelClient> {
-    pub host:        WorkspaceHost,
-    pub snap:        OpenedWorkingSnapshot,
-    pub crud:        Crud,
-    pub navigator:   Navigator,
-    pub commit:      Commit<'static>,
-    pub model:       M,
-    pub budget:      StepBudget,
-    pub trajectory:  TrajectoryRecorder,
-    pub task:        TaskSpec,
+    pub host:          WorkspaceHost,
+    pub snap:          OpenedWorkingSnapshot,
+    pub semantic:      SemanticService,   // &mut-borrowed by the per-step Crud
+    pub crud_cfg:      CrudConfig,        // stateless config (callsite_fill, cascade default)
+    pub navigator_cfg: NavigatorConfig,   // stateless config
+    pub gate_runner:   CargoGateRunner,   // owns session_target_dir
+    pub thresholds:    GateThresholds,    // borrowed by the per-step Commit
+    pub weights:       RewardWeights,
+    pub metric_cache:  MetricCache,       // &mut-borrowed by the per-step Commit
+    pub before_audits: AuditCounts,       // &mut-borrowed by the per-step Commit
+    pub model:         M,
+    pub budget:        StepBudget,
+    pub trajectory:    TrajectoryRecorder,
+    pub task:          TaskSpec,
+}
+
+impl<M: ModelClient> Episode<M> {
+    async fn step(&mut self, action: &Action, tokens: u32) -> Result<StepRecord> {
+        // Build the borrowing structs per-action; their `'_` lifetime is local.
+        let mut crud = Crud::new(&mut self.host, &self.snap, &mut self.semantic,
+                                 self.task.workspace_root());
+        let nav = Navigator::new(&self.snap, &self.navigator_cfg);
+        // ... dispatch on `action`; for a committing verb build Commit per-op:
+        let mut commit = Commit {
+            host:       &mut self.host,   // NB: not simultaneously with `crud`'s &mut host —
+            snap:       &self.snap,       // dispatch finishes the Crud borrow before Commit borrows.
+            thresholds: self.thresholds.clone(),
+            gate:       self.gate_runner.clone(),
+            weights:    self.weights.clone(),
+        };
+        // dispatch on `action`; for a committing verb: commit.run(...).await?
+        // then assemble and return the StepRecord.
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
