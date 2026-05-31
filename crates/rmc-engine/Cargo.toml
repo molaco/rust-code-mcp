@@ -15,7 +15,11 @@ embeddings = [
   "dep:futures",
   "dep:toml",
   "fastembed/hf-hub-native-tls",
-  "fastembed/ort-load-dynamic",
+  # Statically link a freshly-downloaded CPU onnxruntime (self-contained binary).
+  # NOT ort-load-dynamic: this machine has no system libonnxruntime.so, and the
+  # stale pyke cache held a CUDA static build whose OrtCreateEnv hangs on AMD
+  # (no NVIDIA driver). download-binaries pulls the CPU build and links it in.
+  "fastembed/ort-download-binaries",
 ]
 embeddings-cuda = [
   "embeddings",
