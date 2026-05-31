@@ -3,9 +3,14 @@ name    = "rmc-indexing"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# CPU embeddings by default; opt into GPU with `--features cuda` (requires nvcc/CUDA toolkit).
+default = []
+cuda = ["rmc-engine/embeddings-cuda"]
+
 [dependencies]
 # In-workspace dependencies
-rmc-engine = { path = "../rmc-engine", features = ["embeddings-cuda", "vector-store", "hybrid-search"] }
+rmc-engine = { path = "../rmc-engine", features = ["embeddings", "vector-store", "hybrid-search"] }
 rmc-config = { path = "../rmc-config" }
 
 # Search and indexing
