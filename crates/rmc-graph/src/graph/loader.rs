@@ -21,10 +21,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_metadata::{MetadataCommand, TargetKind};
 use ra_ap_hir::Crate;
+use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, CargoFeatures, RustLibSource};
 use ra_ap_vfs::Vfs;
+
+use super::audit_util::resolve_workspace_relative;
 
 pub struct LoadedWorkspace {
     pub workspace_root: PathBuf,
@@ -40,13 +43,15 @@ pub fn load(directory: &Path) -> Result<LoadedWorkspace> {
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", directory.display()))?;
     let workspace_root = canonical.clone();
+    let (crate_target_kinds_by_name, crate_target_kinds_by_root_file) =
+        load_crate_target_kinds(&workspace_root);
 
     let cargo_config = CargoConfig {
         sysroot: Some(RustLibSource::Discover),
         no_deps: false,
         features: CargoFeatures::All,
-        all_targets: true,
-        set_test: true,
+        all_targets: false,
+        set_test: false,
         ..Default::default()
     };
 
@@ -65,9 +70,12 @@ pub fn load(directory: &Path) -> Result<LoadedWorkspace> {
         load_workspace_at(&canonical, &cargo_config, &load_config, &|_| {})
             .with_context(|| format!("failed to load workspace at {}", canonical.display()))?;
 
-    let local_crates = filter_local_crates(&db);
-    let (crate_target_kinds_by_name, crate_target_kinds_by_root_file) =
-        load_crate_target_kinds(&workspace_root);
+    let local_crates = filter_local_crates(
+        &db,
+        &vfs,
+        &workspace_root,
+        &crate_target_kinds_by_root_file,
+    );
 
     Ok(LoadedWorkspace {
         workspace_root,
@@ -79,15 +87,63 @@ pub fn load(directory: &Path) -> Result<LoadedWorkspace> {
     })
 }
 
-/// Keep only crates RA tagged as workspace members (`CrateOrigin::Local`).
+/// Keep only crates RA tagged as workspace members (`CrateOrigin::Local`) and
+/// backed by normal library/binary Cargo targets.
+///
+/// rust-analyzer creates crate graph entries for workspace integration tests,
+/// benches, examples, and build scripts too. Those targets can be expensive and
+/// can trigger HIR/body-inference bugs in large workspaces even though the
+/// persisted hypergraph's architectural queries only need production targets.
 /// This is the same filter rust-analyzer's own `view_crate_graph` uses for
 /// its workspace-only mode — it correctly excludes crates.io deps, the
-/// sysroot, the rustc workspace, and proc-macro-host crates.
-fn filter_local_crates(db: &RootDatabase) -> Vec<Crate> {
+/// sysroot, the rustc workspace, and proc-macro-host crates — with an
+/// additional Cargo target-kind filter for workspace-only extra targets.
+fn filter_local_crates(
+    db: &RootDatabase,
+    vfs: &Vfs,
+    workspace_root: &Path,
+    crate_target_kinds_by_root_file: &HashMap<String, String>,
+) -> Vec<Crate> {
     Crate::all(db)
         .into_iter()
         .filter(|krate| krate.origin(db).is_local())
+        .filter(|krate| {
+            if crate_target_kinds_by_root_file.is_empty() {
+                return true;
+            }
+            match crate_root_target_kind(
+                db,
+                vfs,
+                workspace_root,
+                *krate,
+                crate_target_kinds_by_root_file,
+            ) {
+                Some(kind) => should_index_target_kind(kind),
+                None => true,
+            }
+        })
         .collect()
+}
+
+fn crate_root_target_kind<'a>(
+    db: &RootDatabase,
+    vfs: &Vfs,
+    workspace_root: &Path,
+    krate: Crate,
+    crate_target_kinds_by_root_file: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let def_map = crate_def_map(db, krate.base());
+    let root_module_id = def_map.crate_root(db);
+    let root_file_id = def_map[root_module_id]
+        .definition_source_file_id()
+        .original_file(db)
+        .file_id(db);
+    let root_file = resolve_workspace_relative(vfs, root_file_id, workspace_root)?;
+    crate_target_kinds_by_root_file.get(&root_file).map(String::as_str)
+}
+
+fn should_index_target_kind(kind: &str) -> bool {
+    matches!(kind, "lib" | "bin")
 }
 
 fn load_crate_target_kinds(
@@ -211,7 +267,7 @@ mod tests {
             })
             .collect();
         assert!(
-            names.iter().any(|n| n == "rust_code_mcp"),
+            names.iter().any(|n| n == "rust-code-mcp" || n == "rust_code_mcp"),
             "expected rust_code_mcp in local crates, got {names:?}"
         );
     }
@@ -223,6 +279,17 @@ mod tests {
         assert_eq!(target_kind_label(&[TargetKind::Bin]), "bin");
         assert_eq!(target_kind_label(&[TargetKind::Example]), "example");
         assert_eq!(target_kind_label(&[TargetKind::CustomBuild]), "build");
+    }
+
+    #[test]
+    fn should_index_only_library_and_binary_targets() {
+        assert!(should_index_target_kind("lib"));
+        assert!(should_index_target_kind("bin"));
+        assert!(!should_index_target_kind("test"));
+        assert!(!should_index_target_kind("bench"));
+        assert!(!should_index_target_kind("example"));
+        assert!(!should_index_target_kind("build"));
+        assert!(!should_index_target_kind("unknown"));
     }
 
     #[test]

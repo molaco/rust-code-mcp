@@ -194,6 +194,7 @@ pub fn extract(loaded: &LoadedWorkspace) -> ExtractionModel {
         &mut model,
         &loaded.db,
         &loaded.vfs,
+        &loaded.local_crates,
         &def_to_node,
         &module_node_for,
     );

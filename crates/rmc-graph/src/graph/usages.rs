@@ -16,13 +16,15 @@
 //! See `examples/spike_usages.rs` for the timing harness.
 
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use ra_ap_hir::{ModuleDef, Semantics, attach_db};
+use ra_ap_hir::{Crate, ModuleDef, Semantics, attach_db};
 use ra_ap_hir_def::{ModuleDefId, ModuleId};
+use ra_ap_hir_def::nameres::crate_def_map;
 use ra_ap_ide::TryToNav;
-use ra_ap_ide_db::RootDatabase;
+use ra_ap_ide_db::{EditionedFileId, RootDatabase};
 use ra_ap_ide_db::defs::Definition;
-use ra_ap_ide_db::search::ReferenceCategory;
+use ra_ap_ide_db::search::{ReferenceCategory, SearchScope};
 use ra_ap_syntax::AstNode;
 use ra_ap_vfs::Vfs;
 
@@ -34,10 +36,12 @@ pub(crate) fn extract_usages(
     model: &mut ExtractionModel,
     db: &RootDatabase,
     vfs: &Vfs,
+    local_crates: &[Crate],
     def_to_node: &HashMap<ModuleDefId, NodeId>,
     module_node_for: &HashMap<ModuleId, NodeId>,
 ) {
     let workspace_root = model.workspace_root.clone();
+    let usage_scope = usage_search_scope(db, local_crates);
 
     attach_db(db, || {
         let sema = Semantics::new(db);
@@ -51,6 +55,7 @@ pub(crate) fn extract_usages(
             if node.kind != NodeKind::Item {
                 continue;
             }
+            let target_qualified_name = node.qualified_name.clone();
 
             // Convert ModuleDefId → Definition. Skip variants we don't model
             // as Items (Module, BuiltinType, Macro) — those were already
@@ -83,7 +88,20 @@ pub(crate) fn extract_usages(
                 }
             }
 
-            let results = def.usages(&sema).all();
+            let results = match catch_unwind(AssertUnwindSafe(|| {
+                def.usages(&sema).in_scope(&usage_scope).all()
+            })) {
+                Ok(results) => results,
+                Err(_) => {
+                    tracing::warn!(
+                        target: "rmc_graph::usages",
+                        ?target_node_id,
+                        qualified_name = %target_qualified_name,
+                        "skipping usage extraction for item after rust-analyzer panic"
+                    );
+                    continue;
+                }
+            };
             for (ed_file_id, refs) in &results.references {
                 let file_id = ed_file_id.file_id(db);
                 // Only retain refs in workspace-local files. Dep-crate files
@@ -148,6 +166,25 @@ pub(crate) fn extract_usages(
             }
         }
     });
+}
+
+fn usage_search_scope(db: &RootDatabase, local_crates: &[Crate]) -> SearchScope {
+    let mut files = Vec::new();
+    for &krate in local_crates {
+        let def_map = crate_def_map(db, krate.base());
+        let edition = krate.edition(db);
+        for (module_id, _) in def_map.modules() {
+            if module_id.is_block_module(db) {
+                continue;
+            }
+            let file_id = def_map[module_id]
+                .definition_source_file_id()
+                .original_file(db)
+                .file_id(db);
+            files.push(EditionedFileId::new(db, file_id, edition));
+        }
+    }
+    SearchScope::files(&files)
 }
 
 fn classify_category(c: ReferenceCategory) -> UsageCategory {
