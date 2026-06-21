@@ -69,7 +69,8 @@ impl McpTestEnv {
             "name": "index_codebase",
             "arguments": {
                 "directory": self.codebase_path.to_string_lossy().to_string(),
-                "force_reindex": force_reindex
+                "force_reindex": force_reindex,
+                "embedding_profile": "local-gpu-small"
             }
         });
 
@@ -88,16 +89,17 @@ async fn call_index_tool_direct(
         directory: codebase_path.to_string(),
         force_reindex: Some(force_reindex),
         model: None,
-        embedding_profile: None,
+        embedding_profile: Some("local-gpu-small".to_string()),
     };
 
-    index_codebase(params, None)
+    let locks = rmc_server::mcp::WorkspaceLockRegistry::new();
+    index_codebase(params, None, &locks, None)
         .await
         .map_err(|e| anyhow::anyhow!("MCP error: {:?}", e))
 }
 
 #[tokio::test]
-#[ignore] // Run with: cargo test --test test_gpu_index_jsonrpc -- --ignored --nocapture
+#[ignore] // Run with: cargo test -p rust-code-mcp --features cuda --test test_gpu_index_jsonrpc -- --ignored --nocapture
 async fn test_gpu_index_jsonrpc_rust_code_mcp() -> Result<()> {
     // Initialize tracing to see GPU logs
     tracing_subscriber::fmt()

@@ -170,13 +170,13 @@ Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to
 
 | Profile | Model | Runtime | Dim |
 |---------|-------|---------|----:|
-| `local-gpu-small` *(default)* | Qwen3-Embedding-0.6B | local Candle/CUDA | 1024 |
+| `local-cpu-small` *(default)* | BGE-small-en-v1.5 | local ONNX/CPU | 384 |
+| `local-gpu-small` | Qwen3-Embedding-0.6B | local Candle/CUDA | 1024 |
 | `local-qwen3-4b` | Qwen3-Embedding-4B | local Candle/CUDA | 2560 |
 | `local-qwen3-8b` | Qwen3-Embedding-8B | local Candle/CUDA | 4096 |
-| `local-cpu-small` | BGE-small-en-v1.5 | local ONNX/CPU | 384 |
 | `openrouter-qwen3-8b` | Qwen3-Embedding-8B | OpenRouter API | 4096 |
 
-Select one by passing `embedding_profile` to `index_codebase` and the search tools. Each profile gets its own independent index, and search must use the profile its index was built with.
+The default when `embedding_profile` is omitted is `local-cpu-small`. Select another profile by passing `embedding_profile` to `index_codebase` and the search tools. Each profile gets its own independent index, and search must use the profile its index was built with.
 
 **API models** (OpenRouter) require an API key in the environment — keys are never read from config files:
 
@@ -208,11 +208,11 @@ nix develop github:molaco/rust-code-mcp
 nix build github:molaco/rust-code-mcp
 ```
 
-The dev shell includes nightly Rust and the full CUDA toolchain (toolkit, cuDNN, cuBLAS) needed to build and run the GPU embedding path.
+The dev shell includes nightly Rust, ONNX Runtime, and the full CUDA toolchain (toolkit, cuDNN, cuBLAS) needed when you opt into the GPU embedding path.
 
 ## GPU & CUDA
 
-The default embedding profile (`local-gpu-small`, Qwen3) runs on [Candle](https://github.com/huggingface/candle) with CUDA. The local CPU profile (`local-cpu-small`) runs on ONNX and needs no GPU; OpenRouter profiles offload embedding to the API and need no local GPU either.
+The default embedding profile (`local-cpu-small`, BGE) runs on ONNX/CPU and needs no GPU. Local Qwen3 profiles (`local-gpu-small`, `local-qwen3-4b`, `local-qwen3-8b`) run on [Candle](https://github.com/huggingface/candle) with CUDA; OpenRouter profiles offload embedding to the API and need no local GPU.
 
 ### Requirements
 
@@ -226,10 +226,10 @@ The Nix dev shell provides the full CUDA build and runtime environment — this 
 
 ```bash
 nix develop          # nightly Rust + CUDA toolkit + cuDNN/cuBLAS
-cargo build --release
+cargo build --release --features cuda
 ```
 
-When the MCP server is spawned by Claude Code (rather than launched from the Nix shell), its process still needs the CUDA runtime libraries on `LD_LIBRARY_PATH`. Set them in your MCP client config:
+When using a local CUDA profile and the MCP server is spawned by Claude Code (rather than launched from the Nix shell), its process still needs the CUDA runtime libraries on `LD_LIBRARY_PATH`. Set them in your MCP client config:
 
 ```json
 {
@@ -250,12 +250,13 @@ Adjust the paths to your CUDA installation.
 
 ### Running without a GPU
 
-A GPU is not required. Two options, neither needs CUDA at run time:
+A GPU is not required. The default build and default embedding profile are CPU-only:
 
-1. **Keep the GPU-capable build, use a CPU or API profile.** Index and search with `embedding_profile = "local-cpu-small"` (BGE on ONNX/CPU) or any OpenRouter profile — the GPU code paths are simply never exercised.
-2. **CPU-only build.** For a machine with no CUDA toolkit at all, remove the `cuda` feature from the `fastembed` dependency in `Cargo.toml`. The `local-gpu-*` / `local-qwen3-*` profiles become unavailable, but the ONNX and OpenRouter profiles work and the build no longer needs `nvcc` or the CUDA libraries.
+```bash
+cargo build --release
+```
 
-The Nix dev shell's `shellHook` documents the same options inline.
+Index and search with the omitted/default profile or `embedding_profile = "local-cpu-small"` (BGE on ONNX/CPU). OpenRouter profiles also avoid local GPU use, but require `OPENROUTER_API_KEY`.
 
 ## Performance
 
