@@ -178,6 +178,14 @@ Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to
 
 The default when `embedding_profile` is omitted is `local-cpu-small`. Select another profile by passing `embedding_profile` to `index_codebase` and the search tools. Each profile gets its own independent index, and search must use the profile its index was built with.
 
+**Changing that default takes no recompile** — `RMC_EMBEDDING_PROFILE` names the profile used whenever a call omits `embedding_profile`:
+
+```sh
+RMC_EMBEDDING_PROFILE=local-gpu-small rust-code-mcp
+```
+
+The value is read once at startup, and an unknown name is refused there rather than falling back to the default: a typo must not leave "the GPU profile is on" quietly false, with indexing speed as the only symptom. Two things stay as they are — the profile is part of the index identity, so pointing the default at another profile means a different index that has to be built from scratch; and background sync still skips local CUDA profiles, so a CUDA default leaves the periodic re-index idle while explicit calls keep working.
+
 **API models** (OpenRouter) require an API key in the environment — keys are never read from config files:
 
 ```sh
