@@ -17,7 +17,7 @@ use anyhow::Result;
 use std::time::Instant;
 
 async fn index_burn_codebase(force: bool) -> Result<(String, std::time::Duration)> {
-    use rmc_server::tools::{index_codebase, IndexCodebaseParams};
+    use rmc_server::tools::{IndexCodebaseParams, index_codebase};
 
     let params = IndexCodebaseParams {
         directory: "/home/molaco/Documents/burn".to_string(),
@@ -27,7 +27,10 @@ async fn index_burn_codebase(force: bool) -> Result<(String, std::time::Duration
     };
 
     let start = Instant::now();
-    let result = index_codebase(params, None)
+    // Workspace lock registry: this perf test runs one pass at a time, but the
+    // function takes it as a required argument.
+    let locks = rmc_server::mcp::WorkspaceLockRegistry::new();
+    let result = index_codebase(params, None, &locks, None)
         .await
         .map_err(|e| anyhow::anyhow!("MCP error: {:?}", e))?;
     let elapsed = start.elapsed();
@@ -84,11 +87,15 @@ async fn test_burn_gpu_performance() -> Result<()> {
     let total_chunks = result.match_indices("Total chunks:").count();
 
     println!("Performance Metrics:");
-    println!("  Total time: {:.2} minutes ({:.2}s)",
+    println!(
+        "  Total time: {:.2} minutes ({:.2}s)",
         elapsed.as_secs_f64() / 60.0,
         elapsed.as_secs_f64()
     );
-    println!("  Files/sec: {:.2}", file_count as f64 / elapsed.as_secs_f64());
+    println!(
+        "  Files/sec: {:.2}",
+        file_count as f64 / elapsed.as_secs_f64()
+    );
 
     if result.contains("chunks") {
         println!("\n✓ Successfully indexed Burn codebase");
@@ -110,13 +117,19 @@ async fn test_burn_gpu_performance() -> Result<()> {
     println!("========================================");
     println!("Files indexed: {}", file_count);
     println!("Time: {:.2} minutes", elapsed.as_secs_f64() / 60.0);
-    println!("Throughput: {:.1} files/sec", file_count as f64 / elapsed.as_secs_f64());
+    println!(
+        "Throughput: {:.1} files/sec",
+        file_count as f64 / elapsed.as_secs_f64()
+    );
     println!();
     println!("Comparison with CPU baseline (10 minutes):");
     let cpu_baseline = 600.0; // 10 minutes in seconds
     let speedup = cpu_baseline / elapsed.as_secs_f64();
     println!("  Speedup: {:.2}x faster", speedup);
-    println!("  Time saved: {:.1} minutes", (cpu_baseline - elapsed.as_secs_f64()) / 60.0);
+    println!(
+        "  Time saved: {:.1} minutes",
+        (cpu_baseline - elapsed.as_secs_f64()) / 60.0
+    );
     println!("========================================\n");
 
     Ok(())
@@ -144,9 +157,15 @@ async fn test_burn_incremental_index() -> Result<()> {
     println!("========================================");
     println!("Incremental Indexing Results");
     println!("========================================");
-    println!("Full index:        {:.2} minutes", elapsed1.as_secs_f64() / 60.0);
+    println!(
+        "Full index:        {:.2} minutes",
+        elapsed1.as_secs_f64() / 60.0
+    );
     println!("Incremental index: {:.2} seconds", elapsed2.as_secs_f64());
-    println!("Speedup:           {:.0}x faster", elapsed1.as_secs_f64() / elapsed2.as_secs_f64());
+    println!(
+        "Speedup:           {:.0}x faster",
+        elapsed1.as_secs_f64() / elapsed2.as_secs_f64()
+    );
     println!("========================================\n");
 
     Ok(())

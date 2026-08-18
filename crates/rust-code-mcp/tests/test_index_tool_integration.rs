@@ -8,11 +8,32 @@
 //! 5. Result formatting
 
 use anyhow::Result;
-use rmc_server::mcp::SyncManager;
-use rmc_server::tools::{index_codebase, IndexCodebaseParams};
+use rmc_server::mcp::{SyncManager, WorkspaceLockRegistry};
+use rmc_server::tools::{IndexCodebaseParams, index_codebase};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tempfile::TempDir;
+
+/// The lock registry these tests hand to `index_codebase`.
+///
+/// Neither the registry nor the search cache is the subject of these tests, but
+/// the function requires both. The registry is ONE per test binary, as it is on
+/// a live server where it lives with the process: a fresh one per call would
+/// silently drop the serialisation of identical workspaces, so the tests would
+/// exercise a path production never takes. The search cache is `None` — nothing
+/// here observes it.
+fn workspace_locks() -> &'static WorkspaceLockRegistry {
+    static LOCKS: OnceLock<WorkspaceLockRegistry> = OnceLock::new();
+    LOCKS.get_or_init(WorkspaceLockRegistry::new)
+}
+
+async fn index(
+    params: IndexCodebaseParams,
+    sync_manager: Option<&Arc<SyncManager>>,
+) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+    index_codebase(params, sync_manager, workspace_locks(), None).await
+}
 
 struct IndexToolTestEnv {
     _temp_dir: TempDir,
@@ -63,7 +84,7 @@ async fn test_index_tool_invalid_directory() {
         embedding_profile: None,
     };
 
-    let result = index_codebase(params, None).await;
+    let result = index(params, None).await;
 
     assert!(result.is_err(), "Should return error for nonexistent path");
     println!("✓ Invalid directory rejected correctly");
@@ -82,7 +103,7 @@ async fn test_index_tool_not_a_directory() -> Result<()> {
         embedding_profile: None,
     };
 
-    let result = index_codebase(params, None).await;
+    let result = index(params, None).await;
 
     assert!(result.is_err(), "Should return error for file path");
     println!("✓ File path rejected correctly");
@@ -96,17 +117,23 @@ async fn test_index_tool_basic_indexing() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
     // Create test files
-    env.write_file("main.rs", r#"
+    env.write_file(
+        "main.rs",
+        r#"
         fn main() {
             println!("Hello, world!");
         }
-    "#)?;
+    "#,
+    )?;
 
-    env.write_file("lib.rs", r#"
+    env.write_file(
+        "lib.rs",
+        r#"
         pub fn library_function() -> i32 {
             42
         }
-    "#)?;
+    "#,
+    )?;
 
     let params = IndexCodebaseParams {
         directory: env.get_path_string(),
@@ -115,12 +142,15 @@ async fn test_index_tool_basic_indexing() -> Result<()> {
         embedding_profile: None,
     };
 
-    let result = index_codebase(params, None).await;
+    let result = index(params, None).await;
 
     assert!(result.is_ok(), "Should successfully index valid codebase");
     let call_result = result.unwrap();
     assert!(call_result.is_error.is_none() || !call_result.is_error.unwrap());
-    assert!(!call_result.content.is_empty(), "Should have result content");
+    assert!(
+        !call_result.content.is_empty(),
+        "Should have result content"
+    );
 
     println!("✓ Basic indexing works");
 
@@ -141,7 +171,7 @@ async fn test_index_tool_empty_directory() -> Result<()> {
         embedding_profile: None,
     };
 
-    let result = index_codebase(params, None).await;
+    let result = index(params, None).await;
 
     assert!(result.is_ok(), "Should handle empty directory gracefully");
 
@@ -158,11 +188,11 @@ async fn test_index_tool_no_changes_detection() -> Result<()> {
     env.write_file("test.rs", "fn test() {}")?;
 
     // First index
-    let result1 = index_codebase(env.create_params(false), None).await;
+    let result1 = index(env.create_params(false), None).await;
     assert!(result1.is_ok());
 
     // Second index - should detect no changes
-    let result2 = index_codebase(env.create_params(false), None).await;
+    let result2 = index(env.create_params(false), None).await;
     assert!(result2.is_ok());
 
     println!("✓ No changes detection works");
@@ -178,11 +208,11 @@ async fn test_index_tool_force_reindex() -> Result<()> {
     env.write_file("test.rs", "fn test() {}")?;
 
     // First index
-    let result1 = index_codebase(env.create_params(false), None).await;
+    let result1 = index(env.create_params(false), None).await;
     assert!(result1.is_ok());
 
     // Force reindex - should reindex everything
-    let result2 = index_codebase(env.create_params(true), None).await;
+    let result2 = index(env.create_params(true), None).await;
     assert!(result2.is_ok());
 
     println!("✓ Force reindex works");
@@ -211,12 +241,16 @@ async fn test_index_tool_with_sync_manager() -> Result<()> {
     };
 
     // Index with sync manager
-    let result = index_codebase(params, Some(&sync_manager)).await;
+    let result = index(params, Some(&sync_manager)).await;
     assert!(result.is_ok());
 
     // Directory should now be tracked
     let tracked = sync_manager.get_tracked_directories().await;
-    assert_eq!(tracked.len(), 1, "Directory should be added to sync manager");
+    assert_eq!(
+        tracked.len(),
+        1,
+        "Directory should be added to sync manager"
+    );
     assert!(tracked.contains(&env.codebase_path));
 
     println!("✓ Integration with SyncManager works");
@@ -236,7 +270,7 @@ async fn test_index_tool_nested_structure() -> Result<()> {
     env.write_file("src/utils/helper.rs", "pub fn help() {}")?;
     env.write_file("tests/integration_test.rs", "#[test] fn test() {}")?;
 
-    let result = index_codebase(env.create_params(false), None).await;
+    let result = index(env.create_params(false), None).await;
 
     assert!(result.is_ok(), "Should handle nested structure");
 
@@ -255,14 +289,14 @@ async fn test_index_tool_incremental_update() -> Result<()> {
     env.write_file("file2.rs", "fn file2() {}")?;
 
     // First index
-    let result1 = index_codebase(env.create_params(false), None).await;
+    let result1 = index(env.create_params(false), None).await;
     assert!(result1.is_ok());
 
     // Add new file
     env.write_file("file3.rs", "fn file3() {}")?;
 
     // Second index - should detect new file
-    let result2 = index_codebase(env.create_params(false), None).await;
+    let result2 = index(env.create_params(false), None).await;
     assert!(result2.is_ok());
 
     println!("✓ Incremental update detected");
@@ -275,15 +309,18 @@ async fn test_index_tool_incremental_update() -> Result<()> {
 async fn test_index_tool_result_format() -> Result<()> {
     let env = IndexToolTestEnv::new()?;
 
-    env.write_file("test.rs", r#"
+    env.write_file(
+        "test.rs",
+        r#"
         /// Test function
         pub fn test_function() -> i32 {
             println!("Testing");
             42
         }
-    "#)?;
+    "#,
+    )?;
 
-    let result = index_codebase(env.create_params(false), None).await?;
+    let result = index(env.create_params(false), None).await?;
 
     // Verify result structure
     assert!(!result.content.is_empty(), "Should have content");
@@ -304,7 +341,7 @@ async fn test_index_tool_with_non_rust_files() -> Result<()> {
     env.write_file("config.toml", "[package]")?;
     env.write_file(".gitignore", "target/")?;
 
-    let result = index_codebase(env.create_params(false), None).await;
+    let result = index(env.create_params(false), None).await;
 
     assert!(result.is_ok(), "Should handle mixed file types");
 
@@ -322,13 +359,13 @@ async fn test_index_tool_performance() -> Result<()> {
     for i in 0..20 {
         env.write_file(
             &format!("file{}.rs", i),
-            &format!("pub fn function_{}() {{ println!(\"test\"); }}", i)
+            &format!("pub fn function_{}() {{ println!(\"test\"); }}", i),
         )?;
     }
 
     // First index
     let start1 = std::time::Instant::now();
-    let result1 = index_codebase(env.create_params(false), None).await;
+    let result1 = index(env.create_params(false), None).await;
     let elapsed1 = start1.elapsed();
     assert!(result1.is_ok());
 
@@ -336,12 +373,15 @@ async fn test_index_tool_performance() -> Result<()> {
 
     // Second index (no changes) - should be much faster
     let start2 = std::time::Instant::now();
-    let result2 = index_codebase(env.create_params(false), None).await;
+    let result2 = index(env.create_params(false), None).await;
     let elapsed2 = start2.elapsed();
     assert!(result2.is_ok());
 
     println!("Second index (no changes): {:?}", elapsed2);
-    println!("Speedup: {:.1}x", elapsed1.as_secs_f64() / elapsed2.as_secs_f64());
+    println!(
+        "Speedup: {:.1}x",
+        elapsed1.as_secs_f64() / elapsed2.as_secs_f64()
+    );
 
     assert!(elapsed2 < elapsed1, "Second index should be faster");
 
