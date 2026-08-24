@@ -164,6 +164,64 @@ For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses
 
 Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path **and the active embedding profile** — so different profiles get independent indexes. It does not write index/cache data to your project directory; `crate_skeleton` is the explicit exception and writes generated files under `.skeleton/`. The persisted hypergraph lives alongside the index data (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
 
+## Shared daemon (one server per project)
+
+The stdio transport is 1:1 with its client by construction: every editor window or
+agent session spawns its own server process — and with it another copy of the loaded
+rust-analyzer context (~2 GB per workspace) plus another ONNX/GPU context. Measured on
+one developer machine before this landed: six live servers, 8.9 GB, all analyzing the
+same repository.
+
+The runtime state was already shareable (`RuntimeState` is a bundle of `Arc`s, semantic
+contexts are cached per project path, and locking is per workspace), so the only missing
+piece was a transport that accepts more than one client:
+
+- running the binary **with no arguments** makes it a *client* of a per-project daemon,
+  spawning that daemon on first use — no change to `.mcp.json` is needed;
+- the daemon serves every connection from one shared `RuntimeState` and exits after
+  30 minutes with no clients (`--idle-secs` / `RMC_DAEMON_IDLE_SECS`, `0` = never);
+- if the daemon cannot be reached or started, the client serves the session in-process,
+  exactly as before — the daemon is a memory optimisation, not a new point of failure;
+- a session whose daemon dies mid-flight ends with exit code 1 and a message on stderr,
+  instead of continuing quietly in a second server: stdin is already partly consumed, so
+  a server started afterwards would answer a truncated stream;
+- a bad `RMC_EMBEDDING_PROFILE` exits 2 in every mode that serves a session, the client
+  included, while `--help` and `--print-socket` answer normally and exit 0, because they
+  serve nothing and are how a host reads back the value it got wrong.
+
+The socket key covers the **workspace root** — the walk upwards takes the nearest
+`Cargo.toml` that declares a `[workspace]` and stops at a `.git` or `.jj` boundary, so two
+sessions started in different subdirectories of one repository share a daemon while a stray
+outer manifest cannot merge two repositories into one — the binary's size and mtime, the
+resolved index root (`data_dir()`), because it decides where the index lives and is itself
+resolved from `XDG_DATA_HOME` and then `HOME`, `LD_LIBRARY_PATH`, because it decides which
+CUDA and ONNX libraries the daemon links at start, and every `RMC_*` and `RUST_CODE_MCP_*`
+variable plus `OPENROUTER_API_KEY`. The three transport knobs (`RMC_DAEMON`,
+`RMC_DAEMON_DIR`, `RMC_DAEMON_IDLE_SECS`) are excluded, because they
+choose which daemon a client talks to rather than what it answers. A rebuilt binary, or a
+differently configured one, therefore gets its own daemon instead of silently attaching to
+one that answers differently.
+
+The daemon runs in the project root it is keyed on, so every client of one daemon resolves
+a relative `directory` argument the same way, whichever subdirectory its session started
+in. A client whose own working directory is a subdirectory therefore sees `"."` mean the
+project root through the daemon and that subdirectory with `RMC_DAEMON=0`, so prefer
+absolute paths in tool arguments.
+
+```bash
+rust-code-mcp --print-socket   # which socket this project resolves to
+rust-code-mcp --in-process     # previous behaviour (same as RMC_DAEMON=0)
+rust-code-mcp --daemon         # run the daemon in the foreground
+```
+
+Sockets and daemon logs live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
+`RMC_DAEMON_DIR`). The log sits next to the socket under the same name with a `.log`
+extension, and it is appended rather than replaced, so the crash of an earlier daemon
+stays readable after a new one starts. A directory that already exists is used as it is
+and never re-permissioned; only a directory the daemon creates gets owner-only access. A
+symlink, a path that is not a directory, and a directory owned by another user are
+refused. Unix only; on other platforms the server stays in-process.
+
 ## Embedding Models
 
 Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to_item`, `semantic_overlaps`) run on a configurable embedding **profile**. Built-in profiles:

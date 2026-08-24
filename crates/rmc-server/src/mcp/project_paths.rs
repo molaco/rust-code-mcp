@@ -63,7 +63,10 @@ impl From<IndexingIndexedProfilePaths> for IndexedProfilePaths {
 }
 
 /// Get the path for storing persistent index and cache.
-pub(crate) fn data_dir() -> PathBuf {
+///
+/// Public because the daemon keys its socket on this path: two clients that
+/// resolve a different index root must not share one server.
+pub fn data_dir() -> PathBuf {
     ProjectDirs::from("dev", "rust-code-mcp", "search")
         .map(|dirs| dirs.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))

@@ -142,6 +142,10 @@ All optional, all environment variables, all with safe defaults:
 Note: for a large compute-bound model, raising concurrency can make indexing
 *slower* by overloading the provider. Measure before committing a value.
 
+All of these, together with `RMC_EMBEDDING_PROFILE` and `OPENROUTER_API_KEY`, are
+part of the shared-daemon socket key, so two differently configured sessions
+never share one server.
+
 ## 5. Things that will bite you
 
 1. **`dim` must be exact.** If a TOML `dim` does not match the model's true

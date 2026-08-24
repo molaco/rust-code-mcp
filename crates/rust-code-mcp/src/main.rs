@@ -4,6 +4,11 @@
 // compile-time inference budget, not a runtime cost.
 #![recursion_limit = "512"]
 
+// One server per project instead of one per session; see `daemon`. Unix only —
+// the transport is a unix socket, other platforms keep the stdio server.
+#[cfg(unix)]
+mod daemon;
+
 use rmc_server::mcp::{
     cuda_capable_features_compiled, install_automatic_backend, parse_background_sync_env,
     resolve_automatic_profile_name, validate_automatic_profile, ServerRuntime,
@@ -32,17 +37,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_ansi(false)
         .init();
 
-    tracing::info!("Starting MCP Server...");
+    // Resolve the mode before the expensive startup: a client of the shared
+    // daemon needs neither a `ServerRuntime` nor a background sync task — it is
+    // a pipe between stdio and the socket.
+    #[cfg(unix)]
+    let mode = {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        match daemon::resolve_mode(&args) {
+            Ok(mode) => mode,
+            Err(e) => {
+                eprintln!("{e}\n\n{}", daemon::USAGE);
+                // Explicit coercion site: `main` returns `Box<dyn Error>` without
+                // `Send + Sync`, and without the typed let inference takes the
+                // whole body with it.
+                let boxed: Box<dyn std::error::Error> = e;
+                return Err(boxed);
+            }
+        }
+    };
 
-    // Syncs every 5 minutes (300 seconds).
-    let runtime = ServerRuntime::new(300);
-    tracing::info!("Created MCP server runtime (5-minute sync interval)");
-
-    let background_sync_env = std::env::var(BACKGROUND_SYNC_ENV).ok();
-    let background_sync_enabled = parse_background_sync_env(background_sync_env.as_deref());
+    // The two modes that serve nothing come first: they answer from the
+    // arguments alone. They are also how a host reads a configuration it got
+    // wrong, so a rejected profile must not silence them.
+    #[cfg(unix)]
+    match &mode {
+        daemon::Mode::Help => {
+            print!("{}", daemon::USAGE);
+            return Ok(());
+        }
+        daemon::Mode::PrintSocket { socket } => {
+            println!("{}", socket.display());
+            return Ok(());
+        }
+        daemon::Mode::Client { .. } | daemon::Mode::Daemon { .. } | daemon::Mode::InProcess => {}
+    }
 
     // A statement, not a log argument: `tracing` evaluates arguments only when
     // the callsite level is enabled, so `RUST_LOG=error` would skip the check.
+    // Every mode that reaches this line serves a session, and a non-unix build
+    // has no mode at all, so both paths validate here exactly once, before the
+    // client arm below and before any server starts.
     let requested_profile = std::env::var(EMBEDDING_PROFILE_ENV).ok();
     let automatic_backend =
         validate_automatic_profile(resolve_automatic_profile_name(requested_profile.as_deref()))
@@ -55,6 +89,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("{EMBEDDING_PROFILE_ENV}: the default backend was already resolved before startup");
         std::process::exit(2);
     }
+
+    #[cfg(unix)]
+    if let daemon::Mode::Client { socket, idle } = &mode {
+        // An unreachable daemon never leaves the session without a server:
+        // fall through to the previous in-process behaviour.
+        match daemon::run_client(socket, *idle).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                tracing::info!("shared daemon unavailable; serving this session in-process")
+            }
+            Err(e) => {
+                // Bytes were already exchanged, so this session's stdin is
+                // partly consumed: an in-process server would answer a
+                // truncated stream.
+                //
+                // Exit rather than return: `tokio::io::stdin` reads on the
+                // blocking pool, and that read only ends when the host
+                // closes stdin. Returning would hand the error to the
+                // runtime drop, which waits for that read, so the failure
+                // would show up as a hang instead of a non-zero exit.
+                eprintln!("shared daemon session failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    tracing::info!("Starting MCP Server...");
+
+    // Syncs every 5 minutes (300 seconds).
+    let runtime = ServerRuntime::new(300);
+    tracing::info!("Created MCP server runtime (5-minute sync interval)");
+
+    let background_sync_env = std::env::var(BACKGROUND_SYNC_ENV).ok();
+    let background_sync_enabled = parse_background_sync_env(background_sync_env.as_deref());
 
     tracing::info!(
         "MCP startup defaults: background sync {} ({}='{}'; enabled only for {}, case-insensitive); automatic/background embedding profile default {} ({}='{}'); CUDA-capable features compiled: {}",
@@ -76,6 +144,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Background sync task disabled; set {}=1 to enable",
             BACKGROUND_SYNC_ENV
         );
+    }
+
+    // Daemon: the same runtime, but many connections instead of one stdio pipe.
+    #[cfg(unix)]
+    if let daemon::Mode::Daemon { socket, idle } = &mode {
+        let result = daemon::run_daemon(socket, *idle, &runtime).await;
+        let shutdown = runtime.shutdown_gracefully(Duration::from_secs(10)).await;
+        tracing::info!("Runtime shutdown after daemon exit: {:?}", shutdown);
+        return result.map_err(|e| -> Box<dyn std::error::Error> { e });
     }
 
     let service = match SearchTool::with_server_runtime(&runtime).serve(stdio()).await {

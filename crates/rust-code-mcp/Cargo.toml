@@ -7,9 +7,16 @@ edition = "2024"
 rmc-server = { path = "../rmc-server" }
 
 rmcp = { workspace = true }
-tokio = { workspace = true }
+# net/time/io-util drive the shared-daemon transport (unix socket, spawn wait, proxy).
+tokio = { workspace = true, features = ["net", "time", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Lock around "spawn the daemon": without it two simultaneous sessions spawn two.
+fs2 = { workspace = true }
+# `geteuid` for the socket-directory ownership check.
+libc = { workspace = true }
+# Socket key (project + env + binary identity).
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Examples and integration tests moved here with the executable package, so they

@@ -105,5 +105,10 @@ tokenizers = "0.22"
 rayon = "1.10"         # Data parallelism
 num_cpus = "1.16"      # CPU count detection
 
+# Shared-daemon transport: `geteuid` for the socket-directory ownership check.
+libc = "0.2"
+# Advisory file lock around "spawn the daemon", so two sessions spawn one.
+fs2 = "0.4"
+
 [patch.crates-io]
 fastembed = { path = "vendor/fastembed" }
