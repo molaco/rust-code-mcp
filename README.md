@@ -164,6 +164,38 @@ For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses
 
 Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path **and the active embedding profile** — so different profiles get independent indexes. It does not write index/cache data to your project directory; `crate_skeleton` is the explicit exception and writes generated files under `.skeleton/`. The persisted hypergraph lives alongside the index data (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
 
+## Shared daemon (one server per project)
+
+The stdio transport is 1:1 with its client by construction: every editor window or
+agent session spawns its own server process — and with it another copy of the loaded
+rust-analyzer context (~2 GB per workspace) plus another ONNX/GPU context. Measured on
+one developer machine before this landed: six live servers, 8.9 GB, all analyzing the
+same repository.
+
+The runtime state was already shareable (`RuntimeState` is a bundle of `Arc`s, semantic
+contexts are cached per project path, and locking is per workspace), so the only missing
+piece was a transport that accepts more than one client:
+
+- running the binary **with no arguments** makes it a *client* of a per-project daemon,
+  spawning that daemon on first use — no change to `.mcp.json` is needed;
+- the daemon serves every connection from one shared `RuntimeState` and exits after
+  30 minutes with no clients (`--idle-secs` / `RMC_DAEMON_IDLE_SECS`, `0` = never);
+- if the daemon cannot be reached or started, the client serves the session in-process,
+  exactly as before — the daemon is a memory optimisation, not a new point of failure.
+
+The socket key covers the project directory, the binary's size/mtime, and the env vars
+that change what the server computes. A rebuilt binary therefore gets its own daemon
+instead of silently attaching to one that answers differently.
+
+```bash
+rust-code-mcp --print-socket   # which socket this project resolves to
+rust-code-mcp --in-process     # previous behaviour (same as RMC_DAEMON=0)
+rust-code-mcp --daemon         # run the daemon in the foreground
+```
+
+Sockets and daemon logs live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
+`RMC_DAEMON_DIR`). Unix only; on other platforms the server stays in-process.
+
 ## Embedding Models
 
 Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to_item`, `semantic_overlaps`) run on a configurable embedding **profile**. Built-in profiles:

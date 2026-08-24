@@ -82,6 +82,10 @@ fn test_index_codebase_force_reindex_stdout_is_json_only() -> Result<()> {
     let mut child = ChildGuard {
         child: Command::new(env!("CARGO_BIN_EXE_rust-code-mcp"))
             .env("RUST_LOG", "error")
+            // This test is about the in-process stdio path. Without the opt-out
+            // it would run through the shared daemon and leave it holding an
+            // index of the temporary directory this test then deletes.
+            .env("RMC_DAEMON", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
