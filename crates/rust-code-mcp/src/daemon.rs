@@ -36,7 +36,10 @@
 //! point of failure.
 
 use fs2::FileExt;
-use rmc_server::mcp::{BACKGROUND_SYNC_ENV, RuntimeState, ServerRuntime};
+use rmc_server::mcp::{
+    BACKGROUND_SYNC_ENV, RuntimeClearRequest, RuntimeClearScope, RuntimeState, ServerRuntime,
+    rss_kib,
+};
 use rmc_server::tools::SearchTool;
 use rmcp::ServiceExt;
 use sha2::{Digest, Sha256};
@@ -63,6 +66,14 @@ pub const DAEMON_ENV: &str = "RMC_DAEMON";
 pub const DAEMON_DIR_ENV: &str = "RMC_DAEMON_DIR";
 /// How long a daemon stays alive with no clients, in seconds. `0` means forever.
 pub const IDLE_ENV: &str = "RMC_DAEMON_IDLE_SECS";
+/// RSS above which the daemon unloads its rust-analyzer contexts, in MB.
+/// `0` disables the check.
+pub const RSS_SOFT_ENV: &str = "RMC_RSS_SOFT_MB";
+/// RSS above which unloading is judged hopeless and the daemon retires itself,
+/// in MB. `0` disables the check.
+pub const RSS_HARD_ENV: &str = "RMC_RSS_HARD_MB";
+/// Minimum gap between two unloads, in seconds — see [`WatchdogAction`].
+pub const RSS_COOLDOWN_ENV: &str = "RMC_RSS_COOLDOWN_SECS";
 
 /// Env vars that change what the server computes, and therefore which daemon a
 /// client belongs to. Extend this list whenever a new behaviour-changing knob is
@@ -165,6 +176,13 @@ on demand.
 
 Env: RMC_DAEMON=0 forces in-process; RMC_DAEMON_DIR sets the socket directory;
      RMC_DAEMON_IDLE_SECS is the same as --idle-secs.
+
+Memory watchdog (daemon only; 0 disables a threshold):
+  RMC_RSS_SOFT_MB=4096       unload the analysis contexts above this RSS
+  RMC_RSS_HARD_MB=10240      above this, retire: stop taking new clients, let
+                             the current ones finish, exit — a successor is
+                             started on demand, so no session is cut off
+  RMC_RSS_COOLDOWN_SECS=300  minimum gap between two unloads
 ";
 
 fn daemon_disabled() -> bool {
@@ -183,6 +201,109 @@ fn idle_from_env() -> Duration {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(DEFAULT_IDLE_SECS);
     Duration::from_secs(secs)
+}
+
+/// What the memory watchdog decided to do this tick.
+///
+/// # Why a daemon needs one at all
+///
+/// Before the daemon, a leaking analysis was bounded by the session: the
+/// process died with its client. The daemon deliberately outlives clients, so
+/// nothing bounds it any more — `SemanticService` holds its contexts in a
+/// `HashMap` with no TTL and no eviction, and a workspace stays loaded until
+/// someone calls `clear_runtime` by hand. Which is to say: until an operator
+/// notices, which is exactly what "it just grows" means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchdogAction {
+    /// Below the thresholds, or too soon after the last unload.
+    None,
+    /// Drop the loaded rust-analyzer contexts and return what the allocator
+    /// will give back. Costs the next semantic query a reload (~1.5 s for a
+    /// `Fast` load of a 4000-file workspace), which is why it is rate-limited.
+    Unload,
+    /// Unloading cannot fix this one: retire the daemon.
+    ///
+    /// Retiring is *not* killing the connections. The socket file is unlinked,
+    /// so new clients no longer find this daemon and start a fresh one, while
+    /// the clients already attached finish normally and the process exits when
+    /// the last of them leaves. A daemon that instead exited outright would
+    /// hand every attached session the `Connection closed` error that this
+    /// whole mechanism exists to prevent — a self-inflicted version of the
+    /// failure we are trying to avoid.
+    Retire,
+}
+
+/// Thresholds for [`decide_watchdog_action`], in MB. `0` disables a threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchdogLimits {
+    pub soft_mb: u64,
+    pub hard_mb: u64,
+    pub cooldown: Duration,
+}
+
+/// Four gigabytes: comfortably above the honest cost of one loaded workspace
+/// (~2-3 GB for a `Fast` load of a large repo, measured on `bur/rust_app`), so
+/// ordinary work never trips it, and far below the point where the machine
+/// starts swapping.
+const DEFAULT_RSS_SOFT_MB: u64 = 4096;
+/// Ten gigabytes: past this, unloading has already been tried and the memory is
+/// stuck in the allocator, so only a fresh process gets it back.
+const DEFAULT_RSS_HARD_MB: u64 = 10240;
+/// Five minutes between unloads. Without a floor the watchdog would unload on
+/// every tick — RSS usually does *not* drop after an unload (see
+/// `rmc_server::mcp::memory`), so the trigger stays true and the next tick would
+/// fire again, reloading the workspace on every query and turning a memory
+/// guard into a performance disaster.
+const DEFAULT_RSS_COOLDOWN_SECS: u64 = 300;
+
+impl WatchdogLimits {
+    pub fn from_env() -> Self {
+        Self {
+            soft_mb: env_u64(RSS_SOFT_ENV, DEFAULT_RSS_SOFT_MB),
+            hard_mb: env_u64(RSS_HARD_ENV, DEFAULT_RSS_HARD_MB),
+            cooldown: Duration::from_secs(env_u64(RSS_COOLDOWN_ENV, DEFAULT_RSS_COOLDOWN_SECS)),
+        }
+    }
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+/// Pure decision, so the policy can be judged by a test instead of by watching a
+/// daemon for an afternoon.
+///
+/// `since_unload` is `None` when nothing has been unloaded yet — the cooldown
+/// cannot bar the first attempt.
+pub fn decide_watchdog_action(
+    rss_mb: u64,
+    limits: WatchdogLimits,
+    since_unload: Option<Duration>,
+    retiring: bool,
+) -> WatchdogAction {
+    if retiring {
+        // Already on the way out; a second decision would only unlink a socket
+        // that by then may belong to our successor.
+        return WatchdogAction::None;
+    }
+
+    // Hard first: once memory is this high the unload has demonstrably not
+    // helped, and checking soft first would spend another cooldown finding out.
+    if limits.hard_mb > 0 && rss_mb >= limits.hard_mb {
+        return WatchdogAction::Retire;
+    }
+
+    if limits.soft_mb == 0 || rss_mb < limits.soft_mb {
+        return WatchdogAction::None;
+    }
+
+    match since_unload {
+        Some(elapsed) if elapsed < limits.cooldown => WatchdogAction::None,
+        _ => WatchdogAction::Unload,
+    }
 }
 
 /// Where sockets live. `$XDG_RUNTIME_DIR` is preferred: it is private, on tmpfs,
@@ -478,6 +599,21 @@ pub async fn run_daemon(
     let live = Arc::new(AtomicUsize::new(0));
     let idle_since = Arc::new(AtomicI64::new(now_secs()));
 
+    let limits = WatchdogLimits::from_env();
+    tracing::info!(
+        "memory watchdog: unload above {} MB, retire above {} MB, at most one unload per {:?} ({}/{}/{} to change; 0 disables)",
+        limits.soft_mb,
+        limits.hard_mb,
+        limits.cooldown,
+        RSS_SOFT_ENV,
+        RSS_HARD_ENV,
+        RSS_COOLDOWN_ENV,
+    );
+    let mut last_unload: Option<SystemTime> = None;
+    // Once retiring, the socket file is gone and belongs to whoever binds it
+    // next — this flag keeps the exit path from deleting a successor's socket.
+    let mut retiring = false;
+
     // Signals must reach the same exit path as an idle timeout. A daemon killed
     // outright leaves its socket file behind; clients survive that (they clear it
     // and start a new one), but `--print-socket` plus `ls` then point at an
@@ -523,6 +659,58 @@ pub async fn run_daemon(
             None => {}
         }
 
+        // Memory watchdog. Runs on the same tick as the idle check, so it costs
+        // one `/proc/self/status` read every 15 s and nothing else.
+        if let Some(rss_mb) = rss_kib().map(|kib| kib / 1024) {
+            let since_unload = last_unload.and_then(|at| at.elapsed().ok());
+            match decide_watchdog_action(rss_mb, limits, since_unload, retiring) {
+                WatchdogAction::None => {}
+                WatchdogAction::Unload => {
+                    tracing::warn!(
+                        "RSS {} MB is over the {} MB soft limit; unloading analysis contexts",
+                        rss_mb,
+                        limits.soft_mb
+                    );
+                    let report = runtime
+                        .state()
+                        .clear(RuntimeClearRequest {
+                            scope: RuntimeClearScope::SemanticOnly,
+                            workspace: None,
+                        })
+                        .await;
+                    last_unload = Some(SystemTime::now());
+                    // Report what the release actually achieved, not that it
+                    // ran. On glibc this line is routinely "0 MB released",
+                    // and that fact belongs in the log rather than in a later
+                    // investigation.
+                    tracing::warn!(
+                        "unloaded {} project(s); RSS {:?} -> {:?} KiB, {:?} KiB released",
+                        report.semantic_projects_cleared,
+                        report.memory.rss_kib_before,
+                        report.memory.rss_kib_after,
+                        report.memory.released_kib,
+                    );
+                }
+                WatchdogAction::Retire => {
+                    tracing::warn!(
+                        "RSS {} MB is over the {} MB hard limit; retiring: new clients will start a fresh daemon, current ones finish here",
+                        rss_mb,
+                        limits.hard_mb
+                    );
+                    // Unlinking is what makes this graceful: the address stops
+                    // resolving to us, so the next client spawns a successor,
+                    // while the connections already open keep working.
+                    let _ = fs::remove_file(socket);
+                    retiring = true;
+                }
+            }
+        }
+
+        if retiring && live.load(Ordering::SeqCst) == 0 {
+            tracing::info!("last client left after retiring; shutting down");
+            break;
+        }
+
         if !idle.is_zero()
             && live.load(Ordering::SeqCst) == 0
             && now_secs() - idle_since.load(Ordering::SeqCst) >= idle.as_secs() as i64
@@ -533,8 +721,11 @@ pub async fn run_daemon(
     }
 
     // Clean up, so the next client does not find a file, get refused, and spend a
-    // round trip clearing a stale socket.
-    let _ = fs::remove_file(socket);
+    // round trip clearing a stale socket. Skipped when retiring, where the file
+    // was already unlinked and any file at that path now belongs to a successor.
+    if !retiring {
+        let _ = fs::remove_file(socket);
+    }
     Ok(())
 }
 
@@ -545,6 +736,115 @@ async fn serve_connection(stream: UnixStream, state: RuntimeState) -> Result<(),
         .await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+
+    const LIMITS: WatchdogLimits = WatchdogLimits {
+        soft_mb: 4096,
+        hard_mb: 10240,
+        cooldown: Duration::from_secs(300),
+    };
+
+    #[test]
+    fn ordinary_memory_use_is_left_alone() {
+        assert_eq!(
+            decide_watchdog_action(3000, LIMITS, None, false),
+            WatchdogAction::None
+        );
+    }
+
+    #[test]
+    fn crossing_the_soft_limit_unloads() {
+        assert_eq!(
+            decide_watchdog_action(5000, LIMITS, None, false),
+            WatchdogAction::Unload
+        );
+    }
+
+    /// The trigger normally stays true after an unload, because RSS does not
+    /// drop. Without the cooldown the watchdog would unload on every tick and
+    /// every semantic query would pay for a fresh workspace load.
+    #[test]
+    fn a_second_unload_waits_for_the_cooldown() {
+        assert_eq!(
+            decide_watchdog_action(5000, LIMITS, Some(Duration::from_secs(60)), false),
+            WatchdogAction::None
+        );
+        assert_eq!(
+            decide_watchdog_action(5000, LIMITS, Some(Duration::from_secs(600)), false),
+            WatchdogAction::Unload
+        );
+    }
+
+    /// Past the hard limit the cooldown must not delay retirement: unloading has
+    /// already been tried and the memory is stuck in the allocator.
+    #[test]
+    fn the_hard_limit_outranks_the_cooldown() {
+        assert_eq!(
+            decide_watchdog_action(11000, LIMITS, Some(Duration::from_secs(1)), false),
+            WatchdogAction::Retire
+        );
+    }
+
+    /// Deciding twice would unlink a socket that by then may belong to the
+    /// successor daemon.
+    #[test]
+    fn a_retiring_daemon_decides_nothing_further() {
+        assert_eq!(
+            decide_watchdog_action(11000, LIMITS, None, true),
+            WatchdogAction::None
+        );
+    }
+
+    #[test]
+    fn zero_disables_a_threshold() {
+        let no_soft = WatchdogLimits {
+            soft_mb: 0,
+            ..LIMITS
+        };
+        assert_eq!(
+            decide_watchdog_action(9000, no_soft, None, false),
+            WatchdogAction::None,
+            "soft_mb = 0 must not unload"
+        );
+
+        let no_hard = WatchdogLimits {
+            hard_mb: 0,
+            ..LIMITS
+        };
+        assert_eq!(
+            decide_watchdog_action(99000, no_hard, None, false),
+            WatchdogAction::Unload,
+            "hard_mb = 0 must never retire, however high RSS goes"
+        );
+
+        let disabled = WatchdogLimits {
+            soft_mb: 0,
+            hard_mb: 0,
+            ..LIMITS
+        };
+        assert_eq!(
+            decide_watchdog_action(99000, disabled, None, false),
+            WatchdogAction::None
+        );
+    }
+
+    /// Exactly at the limit counts as over it — a threshold that only fires
+    /// strictly above leaves a value that reads as tripped but does nothing.
+    #[test]
+    fn thresholds_are_inclusive() {
+        assert_eq!(
+            decide_watchdog_action(4096, LIMITS, None, false),
+            WatchdogAction::Unload
+        );
+        assert_eq!(
+            decide_watchdog_action(10240, LIMITS, None, false),
+            WatchdogAction::Retire
+        );
+    }
 }
 
 #[cfg(test)]

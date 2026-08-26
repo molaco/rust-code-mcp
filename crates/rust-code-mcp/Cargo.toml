@@ -15,6 +15,8 @@ tracing-subscriber = { workspace = true }
 fs2 = "0.4"
 # Socket key (project + env + binary identity).
 sha2 = { workspace = true }
+# The global allocator behind the `mimalloc` feature — see its comment below.
+mimalloc = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # Examples and integration tests moved here with the executable package, so they
@@ -76,3 +78,15 @@ embedded = []
 # GPU/CUDA embeddings (qwen3 reranker via candle). Requires nvcc/CUDA toolkit at build time.
 # Default build is CPU-only; opt in with `cargo build --release --features cuda`.
 cuda = ["rmc-server/cuda"]
+# mimalloc as the global allocator instead of the system one.
+#
+# Why: glibc does not return arenas fragmented by rust-analyzer's salsa database
+# to the kernel — a daemon with an EMPTY runtime still held 4.9 GB (the
+# measurement and the numbers are in `rmc_server::mcp::memory`). mimalloc gives
+# memory back on its own, by decay, and can be told to collect on demand.
+#
+# Why mimalloc and not jemalloc: `tikv-jemalloc-sys` does not build on Windows,
+# and the server is needed there too. A feature rather than a default, because
+# replacing the global allocator is a deployment-level decision and its price on
+# a given machine should be measured, not inherited silently.
+mimalloc = ["dep:mimalloc", "rmc-server/mimalloc"]

@@ -9,6 +9,15 @@
 #[cfg(unix)]
 mod daemon;
 
+// Under the `mimalloc` feature every allocation in the process — including
+// rust-analyzer's salsa database, which is what actually fills the heap — goes
+// through mimalloc instead of the system allocator. The reason is in the
+// feature's comment in Cargo.toml; the short version is that glibc keeps its
+// fragmented arenas and mimalloc gives them back.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use rmc_server::mcp::{
     cuda_capable_features_compiled, install_automatic_backend, parse_background_sync_env,
     resolve_automatic_profile_name, validate_automatic_profile, ServerRuntime,

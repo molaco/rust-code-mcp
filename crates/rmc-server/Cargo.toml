@@ -7,6 +7,11 @@ edition = "2024"
 # CPU embeddings by default; opt into GPU with `--features cuda` (requires nvcc/CUDA toolkit).
 default = []
 cuda = ["rmc-engine/embeddings-cuda", "rmc-indexing/cuda"]
+# The same switch as the binary's: when the global allocator is mimalloc,
+# returning memory has to go through `mi_collect` rather than glibc's
+# `malloc_trim` — that one would trim a foreign, nearly empty heap and look
+# like a broken knob.
+mimalloc = ["dep:libmimalloc-sys"]
 
 [dependencies]
 # In-workspace dependencies
@@ -47,6 +52,16 @@ ra_ap_ide_db        = { workspace = true }
 "ra_ap_load-cargo"  = { workspace = true }
 ra_ap_project_model = { workspace = true }
 ra_ap_vfs           = { workspace = true }
+
+# Returning free memory to the kernel: `malloc_trim` on glibc builds.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = "0.2"
+
+# The same, for when the allocator has been swapped for mimalloc — see the
+# `mimalloc` feature.
+[dependencies.libmimalloc-sys]
+version = "0.1"
+optional = true
 
 [dev-dependencies]
 ra_ap_syntax = { workspace = true }

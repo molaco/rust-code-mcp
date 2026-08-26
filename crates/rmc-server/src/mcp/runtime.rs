@@ -10,12 +10,15 @@ use tokio::task::JoinHandle;
 
 use crate::semantic::{SemanticService, SemanticServiceStatus};
 
+use super::memory::{MemoryRelease, release_and_measure, rss_kib};
 use super::{
     SearchRuntimeCache, SearchRuntimeCacheStatus, SyncManager, SyncManagerStatus,
     WorkspaceLockRegistry,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeClearScope {
     All,
@@ -44,6 +47,14 @@ pub struct RuntimeClearReport {
     pub search_cache_entries_cleared: usize,
     pub semantic_projects_cleared: usize,
     pub sync_directories_untracked: usize,
+    /// What clearing actually did to the process's memory.
+    ///
+    /// Without this the report counted objects it had dropped and said nothing
+    /// about the only quantity the operator came for. A run that clears one
+    /// project and returns zero bytes — the normal case, see
+    /// [`super::memory`] — has to be visible in the answer, not discovered
+    /// later with `ps`.
+    pub memory: MemoryRelease,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -181,10 +192,7 @@ impl RuntimeState {
     }
 
     pub async fn clear(&self, request: RuntimeClearRequest) -> RuntimeClearReport {
-        let workspace = request
-            .workspace
-            .as_deref()
-            .map(normalize_workspace);
+        let workspace = request.workspace.as_deref().map(normalize_workspace);
         if let Some(workspace) = &workspace {
             let _workspace_lock = self.workspace_locks.lock_exclusive(workspace).await;
             self.clear_locked(request.scope, Some(workspace)).await
@@ -205,6 +213,7 @@ impl RuntimeState {
             search_cache_entries_cleared: 0,
             semantic_projects_cleared: 0,
             sync_directories_untracked: 0,
+            memory: MemoryRelease::skipped(),
         };
 
         match (scope, workspace) {
@@ -257,6 +266,12 @@ impl RuntimeState {
                 report.sync_directories_untracked = self.untrack_all().await;
             }
         }
+
+        // After the drops, not before: the allocator can only hand back what the
+        // clear has already released. Called unconditionally, including for the
+        // no-op scopes, so the report always carries a real measurement rather
+        // than sometimes a real one and sometimes a placeholder.
+        report.memory = release_and_measure();
 
         report
     }
@@ -413,28 +428,8 @@ fn normalize_workspace(path: &Path) -> PathBuf {
 fn current_process_status() -> ProcessStatus {
     ProcessStatus {
         pid: std::process::id(),
-        rss_kib: current_rss_kib(),
+        rss_kib: rss_kib(),
     }
-}
-
-fn current_rss_kib() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|status| parse_proc_status_rss_kib(&status))
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        None
-    }
-}
-
-fn parse_proc_status_rss_kib(status: &str) -> Option<u64> {
-    status.lines().find_map(|line| {
-        let value = line.strip_prefix("VmRSS:")?;
-        value.split_whitespace().next()?.parse::<u64>().ok()
-    })
 }
 
 #[cfg(test)]
@@ -493,7 +488,10 @@ mod tests {
         let state = runtime.state();
         let workspace = tempfile::tempdir().expect("create temp workspace");
 
-        let guard = state.workspace_locks().lock_exclusive(workspace.path()).await;
+        let guard = state
+            .workspace_locks()
+            .lock_exclusive(workspace.path())
+            .await;
         let clear_state = state.clone();
         let clear_task = tokio::spawn(async move {
             clear_state
@@ -537,10 +535,30 @@ mod tests {
         assert!(!stopped_status.background_sync.running);
     }
 
-    #[test]
-    fn runtime_proc_status_parser_reads_rss() {
-        let status = "Name:\ttest\nVmRSS:\t  12345 kB\n";
+    /// The defect this closes: `clear` used to report only its own bookkeeping,
+    /// so "one project cleared" and "not one byte returned to the kernel" — the
+    /// normal outcome on glibc — were indistinguishable in the answer.
+    #[tokio::test]
+    async fn runtime_clear_reports_a_real_memory_measurement() {
+        let runtime = ServerRuntime::new(3600);
 
-        assert_eq!(parse_proc_status_rss_kib(status), Some(12345));
+        let report = runtime
+            .state()
+            .clear(RuntimeClearRequest {
+                scope: RuntimeClearScope::SemanticOnly,
+                workspace: None,
+            })
+            .await;
+
+        assert!(
+            report.memory.attempted,
+            "a glibc or mimalloc build must actually attempt the release"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            report.memory.rss_kib_before.is_some_and(|rss| rss > 0),
+            "RSS must be read, not guessed: {:?}",
+            report.memory
+        );
     }
 }
