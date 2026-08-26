@@ -178,8 +178,8 @@ Env: RMC_DAEMON=0 forces in-process; RMC_DAEMON_DIR sets the socket directory;
      RMC_DAEMON_IDLE_SECS is the same as --idle-secs.
 
 Memory watchdog (daemon only; 0 disables a threshold):
-  RMC_RSS_SOFT_MB=4096       unload the analysis contexts above this RSS
-  RMC_RSS_HARD_MB=10240      above this, retire: stop taking new clients, let
+  RMC_RSS_SOFT_MB=8192       unload the analysis contexts above this RSS
+  RMC_RSS_HARD_MB=16384      above this, retire: stop taking new clients, let
                              the current ones finish, exit — a successor is
                              started on demand, so no session is cut off
   RMC_RSS_COOLDOWN_SECS=300  minimum gap between two unloads
@@ -241,14 +241,24 @@ pub struct WatchdogLimits {
     pub cooldown: Duration,
 }
 
-/// Four gigabytes: comfortably above the honest cost of one loaded workspace
-/// (~2-3 GB for a `Fast` load of a large repo, measured on `bur/rust_app`), so
-/// ordinary work never trips it, and far below the point where the machine
-/// starts swapping.
-const DEFAULT_RSS_SOFT_MB: u64 = 4096;
-/// Ten gigabytes: past this, unloading has already been tried and the memory is
-/// stuck in the allocator, so only a fresh process gets it back.
-const DEFAULT_RSS_HARD_MB: u64 = 10240;
+/// Eight gigabytes, and the number comes from a measurement rather than a guess.
+///
+/// A freshly started daemon that has done *nothing* — no project loaded, no
+/// query answered — already sits at **2.3 GB**: the ONNX runtime, the embedding
+/// model and the GPU probe are paid for at startup. One `Fast`-loaded workspace
+/// of ~4000 files adds ~3 GB, which is why a healthy daemon serving
+/// `bur/rust_app` measures ~5.3 GB.
+///
+/// So the ordinary working point is above 5 GB, and the first draft of this
+/// constant — 4 GB, picked from the workspace cost alone and forgetting the
+/// fixed 2.3 GB floor — sat *below* normal. It would have unloaded
+/// rust-analyzer every cooldown on a perfectly healthy daemon: a memory guard
+/// that does nothing but make every query reload the workspace.
+const DEFAULT_RSS_SOFT_MB: u64 = 8192;
+/// Sixteen gigabytes: past this, unloading has already been tried and the memory
+/// is stuck in the allocator, so only a fresh process gets it back. Three times
+/// the healthy working point, and well under the 25 GB that prompted this work.
+const DEFAULT_RSS_HARD_MB: u64 = 16384;
 /// Five minutes between unloads. Without a floor the watchdog would unload on
 /// every tick — RSS usually does *not* drop after an unload (see
 /// `rmc_server::mcp::memory`), so the trigger stays true and the next tick would
@@ -829,6 +839,36 @@ mod watchdog_tests {
         assert_eq!(
             decide_watchdog_action(99000, disabled, None, false),
             WatchdogAction::None
+        );
+    }
+
+    /// A healthy daemon serving one large workspace, measured live: 2.3 GB of
+    /// fixed startup cost (ONNX runtime, embedding model, GPU probe) plus ~3 GB
+    /// for a `Fast` load of ~4000 files.
+    const MEASURED_HEALTHY_MB: u64 = 5300;
+
+    /// The defect this closes: the first `DEFAULT_RSS_SOFT_MB` was 4096, chosen
+    /// from the workspace cost alone and forgetting the fixed startup floor —
+    /// below the normal working point, so a healthy daemon would have unloaded
+    /// rust-analyzer on every cooldown forever. A default that fires during
+    /// ordinary work is worse than no watchdog at all.
+    #[test]
+    fn defaults_do_not_fire_on_a_healthy_daemon() {
+        let defaults = WatchdogLimits {
+            soft_mb: DEFAULT_RSS_SOFT_MB,
+            hard_mb: DEFAULT_RSS_HARD_MB,
+            cooldown: Duration::from_secs(DEFAULT_RSS_COOLDOWN_SECS),
+        };
+
+        assert_eq!(
+            decide_watchdog_action(MEASURED_HEALTHY_MB, defaults, None, false),
+            WatchdogAction::None,
+            "a daemon at the measured healthy working point ({MEASURED_HEALTHY_MB} MB) must be \
+             left alone; soft limit is {DEFAULT_RSS_SOFT_MB} MB"
+        );
+        assert!(
+            DEFAULT_RSS_HARD_MB > DEFAULT_RSS_SOFT_MB,
+            "retiring before unloading has even been tried inverts the escalation"
         );
     }
 
