@@ -8,6 +8,7 @@ use serde::Serialize;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::deep_stack::run_analysis;
 use crate::semantic::{SemanticService, SemanticServiceStatus};
 
 use super::memory::{MemoryRelease, release_and_measure, rss_kib};
@@ -188,6 +189,43 @@ impl RuntimeState {
                 running: self.background_sync_running(),
             },
             process: current_process_status(),
+        }
+    }
+
+    /// Bump the revision of every loaded analysis and sweep the type interner.
+    ///
+    /// The reason this exists at all is in [`SemanticService::collect_garbage`]:
+    /// salsa only evicts LRU-capped memos when the revision bumps, and a project
+    /// nobody edits never bumps on its own. Called on a timer by the daemon's
+    /// watchdog; returns the number of contexts collected, for its log line.
+    ///
+    /// # Two things about *how* it is called
+    ///
+    /// It runs on [`run_analysis`]'s thread, not on a runtime worker: the
+    /// interner sweep recurses over the shape of the analyzed types, and a
+    /// 2 MiB tokio stack is what took the whole server down with an `abort`
+    /// the last time rust-analyzer work was run on one.
+    ///
+    /// It does *not* take the workspace locks that [`Self::clear`] takes. Those
+    /// guard the search index and the sync manager, neither of which this
+    /// touches; taking them on a timer would stall indexing for no reason. The
+    /// lock that matters here is the semantic mutex, which is also what makes
+    /// the collection sound.
+    pub async fn collect_garbage(&self) -> usize {
+        let semantic = Arc::clone(&self.semantic);
+        match run_analysis("collect_garbage", move || {
+            semantic
+                .lock()
+                .expect("semantic service mutex poisoned")
+                .collect_garbage()
+        })
+        .await
+        {
+            Ok(collected) => collected,
+            Err(error) => {
+                tracing::warn!("garbage collection did not run: {}", error.message);
+                0
+            }
         }
     }
 

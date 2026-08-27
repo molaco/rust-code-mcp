@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::tools::graph::deep_stack::run_analysis;
+use crate::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,

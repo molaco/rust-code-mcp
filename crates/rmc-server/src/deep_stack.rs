@@ -1,10 +1,12 @@
 //! Running rust-analyzer work on a stack deep enough for it.
 //!
-//! Every graph tool here loads a workspace through rust-analyzer and then walks
-//! HIR/AST trees recursively. That recursion is bounded by the *shape of the
-//! analyzed source*, not by anything we control, and it does not fit in the
-//! 2 MiB stack a tokio blocking-pool thread gets by default: building the
-//! hypergraph for this very workspace aborted the process with
+//! Work that loads a workspace through rust-analyzer walks HIR/AST trees
+//! recursively — the graph tools building a hypergraph, the audits, and the
+//! interner sweep inside a garbage collection alike. That recursion is bounded
+//! by the *shape of the analyzed source*, not by anything we control, and it
+//! does not fit in the 2 MiB stack a tokio blocking-pool thread gets by
+//! default: building the hypergraph for this very workspace aborted the
+//! process with
 //!
 //! ```text
 //! thread 'tokio-rt-worker' has overflowed its stack

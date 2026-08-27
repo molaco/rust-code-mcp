@@ -49,6 +49,13 @@ struct ProjectContext {
     /// refreshed. Without it the cache has no way to notice that the code
     /// moved on — see [`SemanticService::refresh_if_stale`].
     stamps: HashMap<PathBuf, FileStamp>,
+    /// Value of [`SemanticService::clock`] when this context was last asked a
+    /// question. Orders eviction — see [`SemanticService::evict_to_capacity`].
+    ///
+    /// A counter rather than a `SystemTime`: eviction needs the *order* of
+    /// uses, and a wall clock can step backwards (NTP, suspend) and reorder
+    /// them.
+    last_used: u64,
 }
 
 fn stamp_of(path: &Path) -> Option<FileStamp> {
@@ -166,15 +173,60 @@ fn apply_edits(ctx: &mut ProjectContext, paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+/// How many project contexts may stay loaded at once. `0` means unlimited.
+///
+/// Derived rather than guessed. A freshly started daemon costs ~2.3 GB before
+/// it loads anything (ONNX runtime, embedding model, GPU probe); one
+/// `Fast`-loaded workspace of ~4000 files adds ~3 GB; the memory watchdog's
+/// soft limit is 8192 MB. Two loaded workspaces therefore land right at the
+/// point where the watchdog would start unloading anyway, and a third is memory
+/// that guard has already decided it does not want.
+///
+/// What this bounds is a *count*, which is only a proxy for memory — ten tiny
+/// crates cost less than one workspace. The proxy is deliberate: it is the
+/// cheap half of the job, and the watchdog remains the half that measures
+/// actual RSS.
+const DEFAULT_MAX_PROJECTS: usize = 2;
+
+const MAX_PROJECTS_ENV: &str = "RMC_MAX_PROJECTS";
+
+fn max_projects_from_env() -> usize {
+    std::env::var(MAX_PROJECTS_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_PROJECTS)
+}
+
 /// Service for semantic code queries
 pub(crate) struct SemanticService {
     projects: HashMap<PathBuf, ProjectContext>,
+    /// Upper bound on `projects`; `0` disables eviction entirely.
+    ///
+    /// # The defect this closes
+    ///
+    /// Before it, the map had no TTL, no LRU and no ceiling: every directory a
+    /// session ever asked about kept its rust-analyzer context until the
+    /// process died. A daemon outlives its clients by design, so nothing
+    /// bounded that — measured 2026-08-27, one daemon sat on 14.6 GB, most of
+    /// it contexts for directories nobody had touched in hours.
+    max_projects: usize,
+    /// Monotonic tick, handed out by [`Self::touch`]. Only its order matters.
+    clock: u64,
 }
 
 impl SemanticService {
     pub(crate) fn new() -> Self {
+        Self::with_max_projects(max_projects_from_env())
+    }
+
+    /// The cap as an argument rather than as an environment variable, so a test
+    /// can state the capacity it is judging instead of arranging the process
+    /// environment around it.
+    pub(crate) fn with_max_projects(max_projects: usize) -> Self {
         Self {
             projects: HashMap::new(),
+            max_projects,
+            clock: 0,
         }
     }
 
@@ -218,6 +270,96 @@ impl SemanticService {
         }
     }
 
+    /// Give every loaded analysis a revision bump and sweep the type interner.
+    ///
+    /// # Why a daemon has to do this by hand
+    ///
+    /// salsa evicts an LRU-capped query's memos in exactly one place:
+    /// `for_each_evicted`, reached from `reset_for_new_revision`. That is to
+    /// say, **capacities only mean something at the moment the revision bumps**,
+    /// and a revision bumps when a file changes. An IDE gets those for free on
+    /// every keystroke; a project sitting in this daemon that nobody has edited
+    /// for hours never bumps at all, so its capacity — whatever it is set to —
+    /// evicts nothing, ever. Those are precisely the cold contexts that made a
+    /// daemon 14.6 GB. This call is where the bump comes from instead.
+    ///
+    /// `AnalysisHost::trigger_garbage_collection` is a synthetic write plus a
+    /// mark-and-sweep over the interned type storage, and rust-analyzer's own
+    /// main loop calls it the same way when its worker pools go quiet.
+    ///
+    /// # Why calling it with several hosts loaded is sound
+    ///
+    /// The sweep is process-global — the type interner is shared by every
+    /// `AnalysisHost` here — but its roots are refcounts (`Arc::strong_count(item) > 1`
+    /// marks alive), so a type another host holds is a root and survives. What
+    /// the `unsafe` really demands is that no query be *in flight*, holding a
+    /// type it has not recorded anywhere yet. Every path into this service goes
+    /// through one `Mutex<SemanticService>`, and this method needs `&mut self`,
+    /// so holding that lock means no analysis is running in any project.
+    ///
+    /// # Cost
+    ///
+    /// The sweep runs once per host, so N loaded projects pay N sweeps; the
+    /// caller keeps this off the hot path (see the watchdog's interval) rather
+    /// than the method trying to be clever about it. The bump itself is paid
+    /// later, by the next query re-validating its memos.
+    ///
+    /// Returns the number of contexts collected, for the log line.
+    pub(crate) fn collect_garbage(&mut self) -> usize {
+        for (path, ctx) in self.projects.iter_mut() {
+            tracing::debug!("collecting garbage in {}", path.display());
+            ctx.host.trigger_garbage_collection();
+        }
+        self.projects.len()
+    }
+
+    /// Mark `canonical` as the most recently used context.
+    fn touch(&mut self, canonical: &Path) {
+        self.clock += 1;
+        let clock = self.clock;
+        if let Some(ctx) = self.projects.get_mut(canonical) {
+            ctx.last_used = clock;
+        }
+    }
+
+    /// Drop the least recently used contexts until [`Self::max_projects`] holds.
+    ///
+    /// `keep` is never evicted whatever its age: it is the project the caller is
+    /// about to answer a question about, and evicting it would mean reloading it
+    /// on the very next line. With a cap of 1 that is the whole rule — the
+    /// working project stays, everything else goes.
+    ///
+    /// Returns how many contexts were dropped.
+    fn evict_to_capacity(&mut self, keep: &Path) -> usize {
+        if self.max_projects == 0 {
+            return 0;
+        }
+
+        let mut evicted = 0;
+        while self.projects.len() > self.max_projects {
+            let victim = self
+                .projects
+                .iter()
+                .filter(|(path, _)| path.as_path() != keep)
+                .min_by_key(|(_, ctx)| ctx.last_used)
+                .map(|(path, _)| path.clone());
+
+            // Only `keep` is left: the cap is smaller than one project, and one
+            // is the least we can hold and still answer.
+            let Some(victim) = victim else { break };
+
+            tracing::info!(
+                "unloading {} to stay within {}={} loaded project(s)",
+                victim.display(),
+                MAX_PROJECTS_ENV,
+                self.max_projects
+            );
+            self.projects.remove(&victim);
+            evicted += 1;
+        }
+        evicted
+    }
+
     /// Get or load project (lazy loading)
     fn get_or_load(&mut self, project_path: &Path) -> Result<()> {
         self.get_or_load_kind(project_path, LoadKind::Fast)
@@ -236,14 +378,20 @@ impl SemanticService {
             None => true,
         };
 
-        if needs_load {
-            self.load_kind_into_cache(&canonical, requested)?;
-            return Ok(());
-        }
+        let outcome = if needs_load {
+            self.load_kind_into_cache(&canonical, requested)
+        } else {
+            // Cached — but "cached" said nothing about "current" until this call
+            // existed. See [`Self::refresh_if_stale`].
+            self.refresh_if_stale(&canonical, requested)
+        };
+        outcome?;
 
-        // Cached — but "cached" said nothing about "current" until this call
-        // existed. See [`Self::refresh_if_stale`].
-        self.refresh_if_stale(&canonical, requested)
+        // Both branches, and only after they succeeded: a load that failed left
+        // no context to order, and a query that never happened is not a use.
+        self.touch(&canonical);
+        self.evict_to_capacity(&canonical);
+        Ok(())
     }
 
     fn load_kind_into_cache(&mut self, canonical: &Path, requested: LoadKind) -> Result<()> {
@@ -260,6 +408,7 @@ impl SemanticService {
             LoadKind::Fast => loader::load_project(canonical)?,
             LoadKind::Full => loader::load_project_full(canonical)?,
         };
+        self.clock += 1;
         self.projects.insert(
             canonical.to_path_buf(),
             ProjectContext {
@@ -267,6 +416,7 @@ impl SemanticService {
                 vfs,
                 load_kind: requested,
                 stamps,
+                last_used: self.clock,
             },
         );
         tracing::info!("IDE loaded successfully");
@@ -457,6 +607,7 @@ impl SemanticService {
     pub(crate) fn insert_test_project_fast(&mut self, project_path: PathBuf) {
         let canonical =
             std::fs::canonicalize(&project_path).unwrap_or(project_path);
+        self.clock += 1;
         self.projects.insert(
             canonical,
             ProjectContext {
@@ -464,6 +615,7 @@ impl SemanticService {
                 vfs: Vfs::default(),
                 load_kind: LoadKind::Fast,
                 stamps: HashMap::new(),
+                last_used: self.clock,
             },
         );
     }
@@ -742,6 +894,167 @@ pub fn first() {
             fs::create_dir_all(parent).expect("create parent dir");
         }
         fs::write(path, contents.trim_start()).expect("write fixture file");
+    }
+
+    /// Which projects the service is currently holding, canonicalized, so an
+    /// assertion can name them instead of counting them.
+    fn loaded(service: &SemanticService) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = service.projects.keys().cloned().collect();
+        paths.sort();
+        paths
+    }
+
+    /// The cap has to evict by *use*, not by arrival. A queue that dropped the
+    /// oldest arrival would throw away the project the session actually works
+    /// in, which is the one it will ask about next.
+    #[test]
+    fn a_third_project_evicts_the_least_recently_used_not_the_oldest() {
+        let (first, second, third) = (
+            tempfile::tempdir().expect("tempdir a"),
+            tempfile::tempdir().expect("tempdir b"),
+            tempfile::tempdir().expect("tempdir c"),
+        );
+        for dir in [&first, &second, &third] {
+            one_crate_workspace(dir.path());
+        }
+
+        let mut service = SemanticService::with_max_projects(2);
+        for dir in [&first, &second] {
+            service
+                .symbol_search(dir.path(), "target", 8)
+                .expect("load project");
+        }
+
+        // The point of the test: `first` arrived first but is used last, so it
+        // is `second` that must go when `third` needs the room.
+        service
+            .symbol_search(first.path(), "target", 8)
+            .expect("re-query the first project");
+        service
+            .symbol_search(third.path(), "target", 8)
+            .expect("load the third project");
+
+        let mut expected = vec![
+            first.path().canonicalize().expect("canonicalize first"),
+            third.path().canonicalize().expect("canonicalize third"),
+        ];
+        expected.sort();
+        assert_eq!(
+            loaded(&service),
+            expected,
+            "the cap must keep the two most recently used projects"
+        );
+    }
+
+    /// A cap of one is the interesting edge: every load evicts everything else,
+    /// and the one thing that must survive is the project being asked about.
+    #[test]
+    fn the_project_being_used_is_never_the_victim() {
+        let (first, second) = (
+            tempfile::tempdir().expect("tempdir a"),
+            tempfile::tempdir().expect("tempdir b"),
+        );
+        for dir in [&first, &second] {
+            one_crate_workspace(dir.path());
+        }
+
+        let mut service = SemanticService::with_max_projects(1);
+        service
+            .symbol_search(first.path(), "target", 8)
+            .expect("load the first project");
+        let found = service
+            .symbol_search(second.path(), "target", 8)
+            .expect("load the second project");
+
+        assert!(
+            !found.is_empty(),
+            "positive control: the surviving project must still answer, got {found:?}"
+        );
+        assert_eq!(
+            loaded(&service),
+            vec![second.path().canonicalize().expect("canonicalize second")],
+            "the project just queried is the one that stays"
+        );
+    }
+
+    /// `0` means unlimited, the same as it does for the daemon's other knobs.
+    #[test]
+    fn a_cap_of_zero_evicts_nothing() {
+        let dirs: Vec<_> = (0..3)
+            .map(|_| tempfile::tempdir().expect("tempdir"))
+            .collect();
+
+        let mut service = SemanticService::with_max_projects(0);
+        for dir in &dirs {
+            service.insert_test_project_fast(dir.path().to_path_buf());
+        }
+        let kept = service.projects.keys().next().cloned().expect("a project");
+        assert_eq!(service.evict_to_capacity(&kept), 0);
+        assert_eq!(
+            service.project_count(),
+            3,
+            "an unlimited cap holds everything"
+        );
+    }
+
+    /// Two things at once, because the collection can fail in two directions.
+    ///
+    /// *That it happened*: the whole point is the revision bump — without one,
+    /// salsa never reaches `for_each_evicted` and an LRU capacity evicts
+    /// nothing. A collection that returned a count without bumping would look
+    /// exactly like a working one from the outside, so the revision is read
+    /// directly.
+    ///
+    /// *That it was safe*: the sweep is `unsafe` and process-global. Had it
+    /// freed something still in use, the symptom would be a wrong answer or a
+    /// crash on the next query — hence the same question on both sides of it.
+    #[test]
+    fn a_collection_bumps_the_revision_and_keeps_the_answers() {
+        use ra_ap_ide_db::base_db::SourceDatabase;
+
+        let workspace = tempfile::tempdir().expect("create workspace tempdir");
+        let root = workspace.path();
+        one_crate_workspace(root);
+
+        let mut service = SemanticService::new();
+        let before = service
+            .find_references_by_name_with_exact(root, "target", true)
+            .expect("query before collection");
+        assert_eq!(
+            call_sites(&before),
+            1,
+            "positive control: the fixture must start with one call site, got {before:?}"
+        );
+
+        let canonical = root.canonicalize().expect("canonicalize");
+        let revision_before = service.projects[&canonical]
+            .host
+            .raw_database()
+            .nonce_and_revision();
+
+        assert_eq!(
+            service.collect_garbage(),
+            1,
+            "the collection must visit the loaded project"
+        );
+
+        let revision_after = service.projects[&canonical]
+            .host
+            .raw_database()
+            .nonce_and_revision();
+        assert_ne!(
+            revision_before, revision_after,
+            "without a revision bump the LRU capacities never evict anything"
+        );
+
+        let after = service
+            .find_references_by_name_with_exact(root, "target", true)
+            .expect("query after collection");
+        assert_eq!(
+            call_sites(&after),
+            call_sites(&before),
+            "collecting garbage must not change what the analysis knows, got {after:?}"
+        );
     }
 
     /// Does rust-analyzer *leak*, or does the allocator merely keep what it

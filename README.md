@@ -196,6 +196,22 @@ rust-code-mcp --daemon         # run the daemon in the foreground
 Sockets and daemon logs live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
 `RMC_DAEMON_DIR`). Unix only; on other platforms the server stays in-process.
 
+### Keeping the daemon's memory bounded
+
+A daemon outlives its clients by design, so nothing bounds it the way a session used
+to. Five knobs do that instead, all in seconds or MB, all with `0` meaning *off*:
+
+| Knob | Default | What it does |
+|---|---:|---|
+| `RMC_MAX_PROJECTS` | 2 | How many rust-analyzer contexts stay loaded. Past the cap, the least recently used one is dropped; the project being queried is never the victim. |
+| `RMC_GC_INTERVAL_SECS` | 300 | How often loaded analyses are garbage-collected. This is also what makes salsa's LRU capacities do anything: they only evict while the revision bumps, and a project nobody edits never bumps on its own. |
+| `RMC_RSS_SOFT_MB` | 8192 | RSS above which the daemon unloads *all* contexts (at most one unload per `RMC_RSS_COOLDOWN_SECS`, default 300). |
+| `RMC_RSS_HARD_MB` | 16384 | RSS above which unloading is judged hopeless: the daemon unlinks its socket so new clients start a fresh one, and finishes serving the clients it has. |
+| `RMC_RETIRE_GRACE_SECS` | 1800 | How long a retired daemon waits for those clients before exiting anyway. It has to end: a client session runs for hours, and a retired daemon holding 24 GB next to its successor is the failure this bounds. Exiting on the deadline **drops those connections** — the affected session loses its MCP tools until restarted. |
+
+The first two keep the working set from growing; the last three are the guard for when
+it grows anyway.
+
 ## Embedding Models
 
 Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to_item`, `semantic_overlaps`) run on a configurable embedding **profile**. Built-in profiles:

@@ -77,6 +77,9 @@ pub const RSS_COOLDOWN_ENV: &str = "RMC_RSS_COOLDOWN_SECS";
 /// How long a retired daemon waits for its clients to leave before exiting
 /// anyway, in seconds. `0` means wait forever — see [`retire_grace_expired`].
 pub const RETIRE_GRACE_ENV: &str = "RMC_RETIRE_GRACE_SECS";
+/// How often the daemon collects garbage in its loaded analyses, in seconds.
+/// `0` disables it — see [`should_collect_garbage`].
+pub const GC_INTERVAL_ENV: &str = "RMC_GC_INTERVAL_SECS";
 
 /// Env vars that change what the server computes, and therefore which daemon a
 /// client belongs to. Extend this list whenever a new behaviour-changing knob is
@@ -319,6 +322,41 @@ impl WatchdogLimits {
             cooldown: Duration::from_secs(env_u64(RSS_COOLDOWN_ENV, DEFAULT_RSS_COOLDOWN_SECS)),
         }
     }
+}
+
+/// Five minutes — deliberately the same number as [`DEFAULT_RSS_COOLDOWN_SECS`],
+/// because it buys the same thing at the same price.
+///
+/// A collection makes the next query in each project slower (its memos have to
+/// be re-validated against a new revision) in exchange for memory. The cooldown
+/// is already this daemon's statement of how often it is willing to make that
+/// trade; a garbage collection is a far cheaper version of it than an unload, so
+/// there is no case for pacing it more eagerly than the expensive one.
+const DEFAULT_GC_INTERVAL_SECS: u64 = 300;
+
+/// Is it time to collect garbage in the loaded analyses?
+///
+/// # Why the daemon needs a timer for this at all
+///
+/// salsa evicts an LRU-capped query's memos only while bumping the revision, and
+/// a revision bumps when a file changes. rust-analyzer inside an editor gets
+/// those from typing; a project loaded into this daemon and then left alone gets
+/// none, so its LRU capacity — whatever it is set to — never evicts anything.
+/// The measured 14.6 GB daemon was mostly exactly that: contexts for directories
+/// no one had touched for hours. This timer is where the bumps come from
+/// instead, which is what makes the capacities in the rust-analyzer fork mean
+/// something here.
+///
+/// `interval` of zero disables collection.
+///
+/// The elapsed time is measured from daemon startup, so the first collection
+/// happens one interval in rather than on the first tick — before that there is
+/// usually nothing loaded to collect.
+pub fn should_collect_garbage(since_last_gc: Duration, interval: Duration) -> bool {
+    if interval.is_zero() {
+        return false;
+    }
+    since_last_gc >= interval
 }
 
 /// The retire deadline, read from the environment.
@@ -711,6 +749,13 @@ pub async fn run_daemon(
         retire_grace,
         RETIRE_GRACE_ENV,
     );
+    let gc_interval = Duration::from_secs(env_u64(GC_INTERVAL_ENV, DEFAULT_GC_INTERVAL_SECS));
+    tracing::info!(
+        "garbage collection: every {:?} in every loaded analysis ({} to change; 0 disables)",
+        gc_interval,
+        GC_INTERVAL_ENV,
+    );
+    let mut last_gc = SystemTime::now();
     let mut last_unload: Option<SystemTime> = None;
     // Once retiring, the socket file is gone and belongs to whoever binds it
     // next — this flag keeps the exit path from deleting a successor's socket.
@@ -808,6 +853,20 @@ pub async fn run_daemon(
                     retiring = true;
                     retiring_since = Some(SystemTime::now());
                 }
+            }
+        }
+
+        // Garbage collection, on its own timer rather than on the watchdog's
+        // thresholds: its job is to keep the working set from growing in the
+        // first place, so waiting for the soft limit would be waiting for the
+        // problem it prevents. Kept running while retiring too — a retired
+        // daemon can sit here for the whole grace period holding what pushed it
+        // over the hard limit.
+        if should_collect_garbage(last_gc.elapsed().unwrap_or_default(), gc_interval) {
+            let collected = runtime.state().collect_garbage().await;
+            last_gc = SystemTime::now();
+            if collected > 0 {
+                tracing::info!("collected garbage in {} loaded project(s)", collected);
             }
         }
 
@@ -1050,6 +1109,46 @@ mod watchdog_tests {
             DEFAULT_RETIRE_GRACE_SECS <= DEFAULT_IDLE_SECS,
             "a retired daemon outliving the idle timeout defeats the deadline: an idle daemon \
              would already have exited by then"
+        );
+    }
+
+    const GC_EVERY: Duration = Duration::from_secs(300);
+
+    /// The interval is a floor, so the tick that lands before it must not
+    /// collect: the daemon ticks every 15 s, and collecting on each of them
+    /// would re-validate every project's memos four times a minute.
+    #[test]
+    fn a_tick_inside_the_interval_does_not_collect() {
+        assert!(!should_collect_garbage(Duration::ZERO, GC_EVERY));
+        assert!(!should_collect_garbage(Duration::from_secs(299), GC_EVERY));
+    }
+
+    #[test]
+    fn the_interval_eventually_fires() {
+        assert!(should_collect_garbage(GC_EVERY, GC_EVERY));
+        assert!(should_collect_garbage(Duration::from_secs(3600), GC_EVERY));
+    }
+
+    /// Zero turns collection off. Needed because the collection is not free —
+    /// a daemon on a machine with memory to spare can decline to pay for it.
+    #[test]
+    fn a_zero_interval_never_collects() {
+        assert!(!should_collect_garbage(
+            Duration::from_secs(86400),
+            Duration::ZERO
+        ));
+    }
+
+    /// Collecting garbage and unloading contexts buy the same thing — memory in
+    /// exchange for a slower next query — and the collection is by far the
+    /// cheaper of the two. Pacing it more eagerly than the expensive one would
+    /// be backwards, and this is what says so out loud.
+    #[test]
+    fn collection_is_not_paced_more_eagerly_than_an_unload() {
+        assert!(
+            DEFAULT_GC_INTERVAL_SECS >= DEFAULT_RSS_COOLDOWN_SECS,
+            "a collection running more often than the unload cooldown would spend the cheap \
+             mechanism harder than the expensive one"
         );
     }
 }

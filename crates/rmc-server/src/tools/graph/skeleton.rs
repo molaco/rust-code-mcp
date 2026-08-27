@@ -9,7 +9,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::tools::graph::deep_stack::run_analysis;
+use crate::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::CrateSkeletonParams;
 use rmc_graph::graph::{SkeletonFile, SkeletonOptions, render_crate_skeletons};
