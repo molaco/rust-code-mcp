@@ -4,19 +4,20 @@
 //! endpoint follows the shape documented in `graph_tools.rs`: parse MCP
 //! parameters, call graph-owned audit entry points, paginate, serialize.
 //!
-//! Graph audit facade calls are synchronous, so endpoint handlers wrap them in
-//! `spawn_blocking` before rendering MCP responses.
+//! Graph audit facade calls are synchronous and recursive over the analyzed
+//! source, so endpoint handlers hand them to `deep_stack::run_analysis` before
+//! rendering MCP responses.
 
 use std::path::PathBuf;
 
+use crate::tools::graph::deep_stack::run_analysis;
+use crate::tools::graph::response::*;
 use rmc_graph::graph::{
     ChannelCapacityAuditOptions, ChannelCapacityFinding, FnBodyAuditFinding, FnBodyAuditOptions,
     GraphAuditError, MutStaticAuditFinding, RecursionCheckOptions, RecursionCycle,
-    UnsafeAuditFinding,
-    run_channel_capacity_audit, run_fn_body_audit, run_mut_static_audit, run_recursion_check,
-    run_unsafe_audit,
+    UnsafeAuditFinding, run_channel_capacity_audit, run_fn_body_audit, run_mut_static_audit,
+    run_recursion_check, run_unsafe_audit,
 };
-use crate::tools::graph::response::*;
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
@@ -35,9 +36,8 @@ pub(crate) async fn unsafe_audit(
     params: crate::tools::params::UnsafeAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = PathBuf::from(&params.directory);
-    let findings = tokio::task::spawn_blocking(move || run_unsafe_audit(&directory))
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+    let findings = run_analysis("unsafe_audit", move || run_unsafe_audit(&directory))
+        .await?
         .map_err(graph_audit_error("unsafe_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -62,9 +62,8 @@ pub(crate) async fn mut_static_audit(
     params: crate::tools::params::MutStaticAuditParams,
 ) -> Result<CallToolResult, McpError> {
     let directory = PathBuf::from(&params.directory);
-    let findings = tokio::task::spawn_blocking(move || run_mut_static_audit(&directory))
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+    let findings = run_analysis("mut_static_audit", move || run_mut_static_audit(&directory))
+        .await?
         .map_err(graph_audit_error("mut_static_audit"))?;
 
     #[derive(serde::Serialize)]
@@ -97,7 +96,7 @@ pub(crate) async fn recursion_check(
     let directory = PathBuf::from(&params.directory);
     let crate_name = params.crate_name.clone();
     let max_cycle_length = params.max_cycle_length;
-    let output = tokio::task::spawn_blocking(move || {
+    let output = run_analysis("recursion_check", move || {
         run_recursion_check(
             &directory,
             RecursionCheckOptions {
@@ -106,8 +105,7 @@ pub(crate) async fn recursion_check(
             },
         )
     })
-    .await
-    .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+    .await?
     .map_err(graph_audit_error("recursion_check"))?;
 
     #[derive(serde::Serialize)]
@@ -147,7 +145,7 @@ pub(crate) async fn channel_capacity_audit(
     let crate_name = params.crate_name.clone();
     let skip_test_fns = params.skip_test_fns.unwrap_or(true);
 
-    let findings = tokio::task::spawn_blocking(move || {
+    let findings = run_analysis("channel_capacity_audit", move || {
         run_channel_capacity_audit(
             &directory,
             ChannelCapacityAuditOptions {
@@ -156,9 +154,8 @@ pub(crate) async fn channel_capacity_audit(
             },
         )
     })
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
-        .map_err(graph_audit_error("channel_capacity_audit"))?;
+    .await?
+    .map_err(graph_audit_error("channel_capacity_audit"))?;
 
     #[derive(serde::Serialize)]
     struct ScopeSummary {
@@ -197,7 +194,7 @@ pub(crate) async fn fn_body_audit(
     let patterns = params.patterns.clone();
     let skip_test_fns = params.skip_test_fns.unwrap_or(true);
 
-    let output = tokio::task::spawn_blocking(move || {
+    let output = run_analysis("fn_body_audit", move || {
         run_fn_body_audit(
             &directory,
             FnBodyAuditOptions {
@@ -207,9 +204,8 @@ pub(crate) async fn fn_body_audit(
             },
         )
     })
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
-        .map_err(graph_audit_error("fn_body_audit"))?;
+    .await?
+    .map_err(graph_audit_error("fn_body_audit"))?;
 
     #[derive(serde::Serialize)]
     struct ScopeSummary {

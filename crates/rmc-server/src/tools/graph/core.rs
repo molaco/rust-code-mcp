@@ -10,17 +10,18 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use rmc_graph::graph::{
-    BuildOptions, CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage, ModuleDependency,
-    ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount, UsageSummaryRow,
-    WorkspaceStats, build_and_persist,
-};
+use crate::tools::graph::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
     GraphDeclaredReexportsParams, GraphExportsParams, GraphImportsParams, GraphReexportsParams,
     ModuleDependenciesParams, ModuleTreeParams, RecursiveCallersCountParams, WhoCallsParams,
     WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
+};
+use rmc_graph::graph::{
+    BuildOptions, CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage,
+    ModuleDependency, ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount,
+    UsageSummaryRow, WorkspaceStats, build_and_persist,
 };
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
@@ -40,11 +41,11 @@ pub(crate) async fn build_hypergraph(
         ..Default::default()
     };
     // build_and_persist runs `loader::load` + the full extract pass + LMDB
-    // writes synchronously (4-18s wall-clock). Hand off to a blocking thread
-    // so the tokio runtime worker stays free to handle other tool calls.
-    let result = tokio::task::spawn_blocking(move || build_and_persist(&dir, opts))
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+    // writes synchronously (4-18s wall-clock). Hand off to a dedicated thread
+    // so the tokio runtime worker stays free to handle other tool calls — and
+    // so the recursive extract pass gets a stack it fits in (see `deep_stack`).
+    let result = run_analysis("build_hypergraph", move || build_and_persist(&dir, opts))
+        .await?
         .map_err(|e| McpError::internal_error(format!("build_hypergraph failed: {e:#}"), None))?;
 
     json_result(&BuildHypergraphResponse {
@@ -146,7 +147,9 @@ pub(crate) async fn get_exports(params: GraphExportsParams) -> Result<CallToolRe
     })
 }
 
-pub(crate) async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn get_reexports(
+    params: GraphReexportsParams,
+) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
     let consumer_id = resolve_required_node(&snap, &params.consumer, NodeKind::Module)?;
@@ -404,7 +407,9 @@ pub(crate) async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResu
     json_result(&ModuleTreeResponse { tree })
 }
 
-pub(crate) async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn workspace_stats(
+    params: WorkspaceStatsParams,
+) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let stats: WorkspaceStats = snap
         .workspace_stats()
@@ -412,10 +417,7 @@ pub(crate) async fn workspace_stats(params: WorkspaceStatsParams) -> Result<Call
     json_result(&stats)
 }
 
-pub(crate) fn call_site_views(
-    sites: Vec<EnrichedCallSite>,
-    summary: bool,
-) -> Vec<CallSiteView> {
+pub(crate) fn call_site_views(sites: Vec<EnrichedCallSite>, summary: bool) -> Vec<CallSiteView> {
     sites
         .into_iter()
         .map(|site| CallSiteView {
@@ -429,17 +431,18 @@ pub(crate) fn call_site_views(
         .collect()
 }
 
-fn module_dependency_view(
-    dependency: ModuleDependency,
-    summary: bool,
-) -> ModuleDependencyView {
+fn module_dependency_view(dependency: ModuleDependency, summary: bool) -> ModuleDependencyView {
     ModuleDependencyView {
         target_module: dependency.target_module,
         target_kind: dependency.target_kind,
         target_crate: dependency.target_crate,
         import_count: dependency.import_count,
         usage_count: dependency.usage_count,
-        symbols: if summary { None } else { Some(dependency.symbols) },
+        symbols: if summary {
+            None
+        } else {
+            Some(dependency.symbols)
+        },
     }
 }
 

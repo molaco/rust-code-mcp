@@ -11,6 +11,7 @@ pub(super) mod audits;
 pub(super) mod codemap;
 pub(super) mod core;
 pub(super) mod crates;
+pub(super) mod deep_stack;
 pub(super) mod response;
 pub(super) mod skeleton;
 pub(super) mod similarity;

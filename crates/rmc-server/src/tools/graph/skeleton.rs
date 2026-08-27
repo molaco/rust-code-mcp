@@ -9,11 +9,10 @@ use std::{
 
 use serde::Serialize;
 
-use rmc_graph::graph::{
-    SkeletonFile, SkeletonOptions, render_crate_skeletons,
-};
+use crate::tools::graph::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::CrateSkeletonParams;
+use rmc_graph::graph::{SkeletonFile, SkeletonOptions, render_crate_skeletons};
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
 
@@ -39,14 +38,11 @@ pub(crate) async fn crate_skeleton(
     let page_req = list_page(&params.pagination);
     let opts = graph_options(&params);
 
-    let response = tokio::task::spawn_blocking(move || {
+    let response = run_analysis("crate_skeleton", move || {
         let snap = open_workspace_snapshot(&directory)?;
         if clean && skeleton_dir.exists() {
             fs::remove_dir_all(&skeleton_dir).map_err(|e| {
-                McpError::internal_error(
-                    format!("remove {}: {e}", skeleton_dir.display()),
-                    None,
-                )
+                McpError::internal_error(format!("remove {}: {e}", skeleton_dir.display()), None)
             })?;
         }
         let output = render_crate_skeletons(&snap, &opts)
@@ -67,8 +63,7 @@ pub(crate) async fn crate_skeleton(
                 items: file.items,
             });
         }
-        let aggregate_summaries =
-            write_aggregate_files(&skeleton_dir, &snapshot_id, aggregates)?;
+        let aggregate_summaries = write_aggregate_files(&skeleton_dir, &snapshot_id, aggregates)?;
         let total_aggregate_files = aggregate_summaries.len();
         let total_aggregate_bytes = aggregate_summaries
             .iter()
@@ -113,8 +108,7 @@ pub(crate) async fn crate_skeleton(
                 .collect(),
         })
     })
-    .await
-    .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))??;
+    .await??;
 
     json_result(&response)
 }
@@ -170,16 +164,11 @@ fn graph_options(params: &CrateSkeletonParams) -> SkeletonOptions {
     let defaults = SkeletonOptions::default();
     SkeletonOptions {
         crates: params.crates.clone(),
-        include: params
-            .include
-            .clone()
-            .unwrap_or(defaults.include),
+        include: params.include.clone().unwrap_or(defaults.include),
         include_docs: params.include_docs.unwrap_or(defaults.include_docs),
         include_attrs: params.include_attrs.unwrap_or(defaults.include_attrs),
         include_impls: params.include_impls.unwrap_or(defaults.include_impls),
-        skip_test_items: params
-            .skip_test_items
-            .unwrap_or(defaults.skip_test_items),
+        skip_test_items: params.skip_test_items.unwrap_or(defaults.skip_test_items),
         exclude_vendor: params.exclude_vendor.unwrap_or(defaults.exclude_vendor),
     }
 }
@@ -205,7 +194,8 @@ fn validate_include(include: Option<&[String]>) -> Result<(), McpError> {
 }
 
 fn ensure_exact_skeleton_child(root: &Path, skeleton_dir: &Path) -> Result<(), McpError> {
-    if skeleton_dir.parent() != Some(root) || skeleton_dir.file_name() != Some(OsStr::new(".skeleton"))
+    if skeleton_dir.parent() != Some(root)
+        || skeleton_dir.file_name() != Some(OsStr::new(".skeleton"))
     {
         return Err(McpError::invalid_params(
             format!(
@@ -222,7 +212,10 @@ fn safe_relative_source_path(source_path: &str) -> Result<&Path, McpError> {
     let path = Path::new(source_path);
     if path.is_absolute()
         || path.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
         })
     {
         return Err(McpError::internal_error(
@@ -238,14 +231,15 @@ fn push_aggregate_file(
     file: &SkeletonFile,
 ) -> Result<(), McpError> {
     let file_name = aggregate_file_name(&file.crate_name, &file.source_path)?;
-    let entry = aggregates
-        .entry(file_name.clone())
-        .or_insert_with(|| CrateSkeletonAggregateBuilder {
-            file_name,
-            crate_names: BTreeSet::new(),
-            source_files: Vec::new(),
-            items: 0,
-        });
+    let entry =
+        aggregates
+            .entry(file_name.clone())
+            .or_insert_with(|| CrateSkeletonAggregateBuilder {
+                file_name,
+                crate_names: BTreeSet::new(),
+                source_files: Vec::new(),
+                items: 0,
+            });
     entry.crate_names.insert(file.crate_name.clone());
     entry.items += file.items;
     entry.source_files.push(CrateSkeletonAggregateSource {
@@ -314,10 +308,7 @@ fn write_aggregate_files(
     Ok(summaries)
 }
 
-fn render_aggregate_file(
-    snapshot_id: &str,
-    aggregate: &CrateSkeletonAggregateBuilder,
-) -> String {
+fn render_aggregate_file(snapshot_id: &str, aggregate: &CrateSkeletonAggregateBuilder) -> String {
     let mut content = String::new();
     content.push_str("// @generated by rust-code-mcp crate_skeleton\n");
     content.push_str(&format!("// snapshot: {snapshot_id}\n"));
@@ -364,20 +355,14 @@ fn write_skeleton_file(
     create_skeleton_parent_dirs(skeleton_dir, parent)?;
     ensure_output_file_is_not_symlink(&output_path)?;
     fs::write(&output_path, content).map_err(|e| {
-        McpError::internal_error(
-            format!("write {}: {e}", output_path.display()),
-            None,
-        )
+        McpError::internal_error(format!("write {}: {e}", output_path.display()), None)
     })
 }
 
 fn create_skeleton_parent_dirs(skeleton_dir: &Path, parent: &Path) -> Result<(), McpError> {
     ensure_existing_skeleton_ancestors_not_symlinks(skeleton_dir, parent)?;
     fs::create_dir_all(parent).map_err(|e| {
-        McpError::internal_error(
-            format!("create directory {}: {e}", parent.display()),
-            None,
-        )
+        McpError::internal_error(format!("create directory {}: {e}", parent.display()), None)
     })?;
     ensure_existing_skeleton_ancestors_not_symlinks(skeleton_dir, parent)
 }
@@ -422,24 +407,20 @@ fn ensure_existing_skeleton_ancestors_not_symlinks(
 
 fn inspect_existing_skeleton_ancestor(path: &Path) -> Result<(), McpError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(McpError::internal_error(
-                format!(
-                    "refusing to write through symlinked skeleton path: {}",
-                    path.display()
-                ),
-                None,
-            ))
-        }
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            Err(McpError::internal_error(
-                format!(
-                    "refusing to write through non-directory skeleton path: {}",
-                    path.display()
-                ),
-                None,
-            ))
-        }
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(McpError::internal_error(
+            format!(
+                "refusing to write through symlinked skeleton path: {}",
+                path.display()
+            ),
+            None,
+        )),
+        Ok(metadata) if !metadata.file_type().is_dir() => Err(McpError::internal_error(
+            format!(
+                "refusing to write through non-directory skeleton path: {}",
+                path.display()
+            ),
+            None,
+        )),
         Ok(_) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(McpError::internal_error(
@@ -451,15 +432,13 @@ fn inspect_existing_skeleton_ancestor(path: &Path) -> Result<(), McpError> {
 
 fn ensure_output_file_is_not_symlink(output_path: &Path) -> Result<(), McpError> {
     match fs::symlink_metadata(output_path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(McpError::internal_error(
-                format!(
-                    "refusing to overwrite symlinked skeleton file: {}",
-                    output_path.display()
-                ),
-                None,
-            ))
-        }
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(McpError::internal_error(
+            format!(
+                "refusing to overwrite symlinked skeleton file: {}",
+                output_path.display()
+            ),
+            None,
+        )),
         Ok(_) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(McpError::internal_error(
@@ -488,8 +467,7 @@ mod tests {
             "rmc-config.rs"
         );
         assert_eq!(
-            aggregate_file_name("rmc_config", "src/config.rs")
-                .expect("aggregate file name"),
+            aggregate_file_name("rmc_config", "src/config.rs").expect("aggregate file name"),
             "rmc_config.rs"
         );
     }
@@ -510,9 +488,8 @@ mod tests {
         let mut aggregates = BTreeMap::new();
         push_aggregate_file(&mut aggregates, &file).expect("push aggregate file");
 
-        let summaries =
-            write_aggregate_files(&skeleton_dir, "snapshot-id", aggregates)
-                .expect("write aggregate files");
+        let summaries = write_aggregate_files(&skeleton_dir, "snapshot-id", aggregates)
+            .expect("write aggregate files");
 
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].skeleton_path, ".skeleton/rmc-server.rs");
