@@ -74,6 +74,9 @@ pub const RSS_SOFT_ENV: &str = "RMC_RSS_SOFT_MB";
 pub const RSS_HARD_ENV: &str = "RMC_RSS_HARD_MB";
 /// Minimum gap between two unloads, in seconds — see [`WatchdogAction`].
 pub const RSS_COOLDOWN_ENV: &str = "RMC_RSS_COOLDOWN_SECS";
+/// How long a retired daemon waits for its clients to leave before exiting
+/// anyway, in seconds. `0` means wait forever — see [`retire_grace_expired`].
+pub const RETIRE_GRACE_ENV: &str = "RMC_RETIRE_GRACE_SECS";
 
 /// Env vars that change what the server computes, and therefore which daemon a
 /// client belongs to. Extend this list whenever a new behaviour-changing knob is
@@ -230,7 +233,49 @@ pub enum WatchdogAction {
     /// hand every attached session the `Connection closed` error that this
     /// whole mechanism exists to prevent — a self-inflicted version of the
     /// failure we are trying to avoid.
+    ///
+    /// The waiting is bounded, and it has to be — see [`retire_grace_expired`].
     Retire,
+}
+
+/// Thirty minutes, deliberately the same number as [`DEFAULT_IDLE_SECS`].
+///
+/// The policy it states is easy to hold in the head: *no daemon outlives the
+/// idle timeout once it has been retired*, whatever its clients are doing. An
+/// idle daemon already exits after half an hour of silence; a retired one is
+/// strictly worse than idle — it is over the hard memory limit, its socket is
+/// gone, and every new client goes to a successor — so it has no business
+/// living longer than that.
+const DEFAULT_RETIRE_GRACE_SECS: u64 = 1800;
+
+/// Has a retired daemon waited long enough that it should exit even though
+/// clients are still attached?
+///
+/// # Why the wait needs an end at all
+///
+/// [`WatchdogAction::Retire`] hands the socket to a successor and then waits for
+/// `live == 0`. That wait is unbounded, and its length is decided by something
+/// the daemon does not control: how long a client session lasts. A Claude Code
+/// session runs for hours, so the mechanism meant to *free* memory produced its
+/// opposite — measured 2026-08-27, a retired daemon sat on **24.2 GB** next to a
+/// live successor, and the two together were what exhausted this machine's swap.
+///
+/// # The price, stated plainly
+///
+/// Exiting on the deadline breaks the connections still attached. The proxy is
+/// byte-level and remembers no handshake, so a client whose daemon vanishes does
+/// not silently reattach to the successor — that session loses its MCP tools
+/// until it restarts them. That is the trade this knob makes: one session's
+/// tools against gigabytes held away from the whole machine. It only ever
+/// applies past the hard RSS limit, which is why the deadline can be generous.
+///
+/// `grace` of zero disables the deadline and restores the original
+/// wait-forever behaviour.
+pub fn retire_grace_expired(retiring_for: Option<Duration>, grace: Duration) -> bool {
+    if grace.is_zero() {
+        return false;
+    }
+    retiring_for.is_some_and(|elapsed| elapsed >= grace)
 }
 
 /// Thresholds for [`decide_watchdog_action`], in MB. `0` disables a threshold.
@@ -274,6 +319,15 @@ impl WatchdogLimits {
             cooldown: Duration::from_secs(env_u64(RSS_COOLDOWN_ENV, DEFAULT_RSS_COOLDOWN_SECS)),
         }
     }
+}
+
+/// The retire deadline, read from the environment.
+///
+/// Kept out of [`WatchdogLimits`] on purpose: those three numbers are the inputs
+/// of [`decide_watchdog_action`], and this one is not — it governs what happens
+/// *after* that decision has already been made.
+fn retire_grace_from_env() -> Duration {
+    Duration::from_secs(env_u64(RETIRE_GRACE_ENV, DEFAULT_RETIRE_GRACE_SECS))
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -500,13 +554,42 @@ pub async fn run_client(socket: &Path) -> Result<bool, BoxError> {
     }
 }
 
+/// Size at which a daemon log is rolled aside on the next spawn. Generous on
+/// purpose: an indexing run writes hundreds of kilobytes in minutes, and a log
+/// that rolls mid-investigation is barely better than one that is truncated.
+const LOG_ROTATE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Roll the current log aside if it has grown past [`LOG_ROTATE_BYTES`].
+///
+/// Exactly one generation is kept (`<key>.log.1`). Failures are deliberately
+/// ignored: losing the previous log is not a reason to fail to start a daemon.
+fn rotate_log_if_large(path: &Path) {
+    let too_big = fs::metadata(path).is_ok_and(|meta| meta.len() >= LOG_ROTATE_BYTES);
+    if too_big {
+        let _ = fs::rename(path, path.with_extension("log.1"));
+    }
+}
+
+/// Open the log a spawned daemon writes its stderr into.
+///
+/// Append, never truncate. A successor is spawned precisely when its
+/// predecessor is in trouble — over the hard memory limit, or dead — and
+/// truncating here destroyed that predecessor's log at the exact moment someone
+/// was about to read it. Measured 2026-08-27: a retired daemon holding 24.2 GB
+/// whose entire history had been overwritten by the successor that replaced it,
+/// so *why* it grew could not be reconstructed at all.
+///
+/// Daemons are told apart inside the shared file by the pid on their
+/// `daemon listening on …` line.
+fn open_daemon_log(socket: &Path) -> io::Result<File> {
+    let path = log_path(socket);
+    rotate_log_if_large(&path);
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
 fn spawn_daemon(socket: &Path) -> io::Result<Child> {
     let exe = std::env::current_exe()?;
-    let log = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(log_path(socket))?;
+    let log = open_daemon_log(socket)?;
 
     let mut cmd = Command::new(exe);
     cmd.arg("--daemon")
@@ -600,9 +683,12 @@ pub async fn run_daemon(
             socket.display()
         ))
     })?;
+    // The pid is what makes a shared, appended log readable: successive daemons
+    // write into the same file, and this line is the boundary between them.
     tracing::info!(
-        "daemon listening on {} (idle timeout {:?})",
+        "daemon listening on {} (pid {}, idle timeout {:?})",
         socket.display(),
+        std::process::id(),
         idle
     );
 
@@ -619,10 +705,18 @@ pub async fn run_daemon(
         RSS_HARD_ENV,
         RSS_COOLDOWN_ENV,
     );
+    let retire_grace = retire_grace_from_env();
+    tracing::info!(
+        "retire deadline: a retired daemon exits after {:?} even with clients attached ({} to change; 0 waits forever)",
+        retire_grace,
+        RETIRE_GRACE_ENV,
+    );
     let mut last_unload: Option<SystemTime> = None;
     // Once retiring, the socket file is gone and belongs to whoever binds it
     // next — this flag keeps the exit path from deleting a successor's socket.
+    // `retiring_since` is what bounds the wait; see `retire_grace_expired`.
     let mut retiring = false;
+    let mut retiring_since: Option<SystemTime> = None;
 
     // Signals must reach the same exit path as an idle timeout. A daemon killed
     // outright leaves its socket file behind; clients survive that (they clear it
@@ -712,12 +806,31 @@ pub async fn run_daemon(
                     // while the connections already open keep working.
                     let _ = fs::remove_file(socket);
                     retiring = true;
+                    retiring_since = Some(SystemTime::now());
                 }
             }
         }
 
         if retiring && live.load(Ordering::SeqCst) == 0 {
             tracing::info!("last client left after retiring; shutting down");
+            break;
+        }
+
+        // The deadline. Without it this daemon waits for clients that outlive
+        // it by hours, holding whatever pushed it past the hard limit in the
+        // first place.
+        if retiring
+            && retire_grace_expired(
+                retiring_since.and_then(|at| at.elapsed().ok()),
+                retire_grace,
+            )
+        {
+            tracing::warn!(
+                "retired {:?} ago and {} client(s) are still attached; exiting anyway on the {} deadline — those connections will drop",
+                retire_grace,
+                live.load(Ordering::SeqCst),
+                RETIRE_GRACE_ENV,
+            );
             break;
         }
 
@@ -885,6 +998,60 @@ mod watchdog_tests {
             WatchdogAction::Retire
         );
     }
+
+    const GRACE: Duration = Duration::from_secs(1800);
+
+    /// A daemon that has not retired has no deadline to expire, however long it
+    /// has been running.
+    #[test]
+    fn a_daemon_that_never_retired_has_no_deadline() {
+        assert!(!retire_grace_expired(None, GRACE));
+    }
+
+    /// The waiting period is real: a daemon that retired a moment ago must give
+    /// its clients their chance to finish, not drop them on the same tick.
+    #[test]
+    fn a_freshly_retired_daemon_keeps_waiting() {
+        assert!(!retire_grace_expired(Some(Duration::from_secs(60)), GRACE));
+        assert!(!retire_grace_expired(
+            Some(GRACE - Duration::from_secs(1)),
+            GRACE
+        ));
+    }
+
+    /// And it ends. This is the whole point of the knob: on 2026-08-27 a retired
+    /// daemon held 24.2 GB waiting for a session that ran for hours.
+    #[test]
+    fn the_deadline_eventually_fires() {
+        assert!(retire_grace_expired(Some(GRACE), GRACE));
+        assert!(retire_grace_expired(Some(Duration::from_secs(7200)), GRACE));
+    }
+
+    /// Zero restores the original behaviour — wait for the last client, however
+    /// long that takes. Without this the knob could not be turned off, and a
+    /// daemon on a machine with memory to spare would drop sessions for nothing.
+    #[test]
+    fn zero_grace_waits_forever() {
+        let forever = Duration::ZERO;
+        assert!(!retire_grace_expired(
+            Some(Duration::from_secs(86400)),
+            forever
+        ));
+        assert!(!retire_grace_expired(None, forever));
+    }
+
+    /// The deadline is only useful strictly *inside* the idle timeout: a retired
+    /// daemon is worse than an idle one, so it must not be allowed to outlive
+    /// one. Equal is the deliberate choice — this guards against someone raising
+    /// the default past it.
+    #[test]
+    fn the_default_deadline_does_not_exceed_the_idle_timeout() {
+        assert!(
+            DEFAULT_RETIRE_GRACE_SECS <= DEFAULT_IDLE_SECS,
+            "a retired daemon outliving the idle timeout defeats the deadline: an idle daemon \
+             would already have exited by then"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -982,6 +1149,77 @@ mod tests {
             key("/repo", "/bin/mcp", 10, 20, "1"),
             key("/repo", "/bin/mcp", 11, 20, "1"),
             "a different binary size means a different daemon"
+        );
+    }
+
+    /// The regression this exists for: a successor must not erase the log of the
+    /// daemon it is replacing. That log is the only account of *why* the
+    /// predecessor grew, and it was being destroyed at the one moment it
+    /// mattered.
+    #[test]
+    fn a_successor_appends_to_the_log_instead_of_erasing_it() {
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("key.sock");
+        let predecessor = "predecessor: RSS 24000 MB is over the hard limit\n";
+        std::fs::write(log_path(&socket), predecessor).expect("seed the predecessor's log");
+
+        let mut log = open_daemon_log(&socket).expect("successor opens the log");
+        write!(log, "successor: daemon listening (pid 2)\n").expect("successor writes");
+
+        let contents = std::fs::read_to_string(log_path(&socket)).expect("read back");
+        assert!(
+            contents.starts_with(predecessor),
+            "the predecessor's log must survive its successor's start, got {contents:?}"
+        );
+        assert!(
+            contents.contains("successor:"),
+            "the successor's own lines must be there too, got {contents:?}"
+        );
+    }
+
+    /// Appending forever is its own failure mode, so one generation is kept.
+    /// Sparse allocation keeps this test from writing 32 MB to disk.
+    #[test]
+    fn an_oversized_log_is_rolled_aside_rather_than_grown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("key.sock");
+        let log = log_path(&socket);
+
+        let file = File::create(&log).expect("create the oversized log");
+        file.set_len(LOG_ROTATE_BYTES).expect("grow it sparsely");
+        drop(file);
+
+        open_daemon_log(&socket).expect("open after rotation");
+
+        assert_eq!(
+            std::fs::metadata(&log).map(|meta| meta.len()).unwrap_or(0),
+            0,
+            "the fresh log must start empty once the old one was rolled aside"
+        );
+        assert_eq!(
+            std::fs::metadata(log.with_extension("log.1"))
+                .expect("the rolled-aside generation must exist")
+                .len(),
+            LOG_ROTATE_BYTES,
+            "the previous generation must be kept intact, not discarded"
+        );
+    }
+
+    /// A log under the limit is left exactly where it is — rotating on every
+    /// spawn would reintroduce the very loss this pair of tests guards.
+    #[test]
+    fn a_small_log_is_not_rotated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("key.sock");
+        std::fs::write(log_path(&socket), "small\n").expect("seed");
+
+        open_daemon_log(&socket).expect("open");
+
+        assert!(
+            !log_path(&socket).with_extension("log.1").exists(),
+            "nothing should have been rolled aside"
         );
     }
 }
