@@ -33,9 +33,11 @@ pub(crate) async fn similar_to_item(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let _workspace_lock = workspace_locks
-        .lock_shared(Path::new(&params.directory))
-        .await;
+    // The gate comes before the lock: locking by a relative path would key the
+    // registry on a string that means different directories to different
+    // callers.
+    let directory = crate::tools::paths::require_absolute("directory", &params.directory)?;
+    let _workspace_lock = workspace_locks.lock_shared(&directory).await;
 
     // 1. Resolve seed Item from the hypergraph snapshot.
     let snap = open_workspace_snapshot(&params.directory)?;

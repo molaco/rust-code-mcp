@@ -6,6 +6,22 @@ use crate::embeddings::{Embedding, EmbeddingError};
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::sync::Mutex;
 
+/// Where downloaded model weights live.
+///
+/// fastembed's own default is `.fastembed_cache` **relative to the process's
+/// working directory**, which puts a copy of the weights in whatever tree a
+/// session happened to start in — four of them, 128–279 MB each, had piled up
+/// on one machine before this was fixed. One daemon now serves every working
+/// directory, so that default would make the location of the weights depend on
+/// which session woke the daemon first.
+fn model_cache_dir() -> Result<std::path::PathBuf, EmbeddingError> {
+    directories::ProjectDirs::from("", "", "rust-code-mcp")
+        .map(|d| d.cache_dir().join("models"))
+        .ok_or_else(|| {
+            EmbeddingError::model_init("cannot resolve a cache directory for model weights")
+        })
+}
+
 pub(super) struct FastembedCpuEmbedder {
     inner: Mutex<TextEmbedding>,
     backend: EmbeddingBackend,
@@ -32,6 +48,7 @@ impl FastembedCpuEmbedder {
 
         let options = TextInitOptions::new(to_fastembed_model(model))
             .with_max_length(backend.max_len)
+            .with_cache_dir(model_cache_dir()?)
             .with_show_download_progress(false);
         let inner = TextEmbedding::try_new(options)
             .map_err(|e| EmbeddingError::model_init(e.to_string()))?;

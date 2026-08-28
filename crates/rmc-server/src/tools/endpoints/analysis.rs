@@ -92,8 +92,13 @@ use tracing;
 use rmc_engine::parser::RustParser;
 
 use crate::semantic::SemanticService;
+use crate::tools::paths::require_absolute;
 
 fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError> {
+    // Absolute first: the daemon does not share a cwd with the caller, so a
+    // relative directory would resolve — and then quietly answer — elsewhere.
+    require_absolute("directory", project_path)?;
+
     if !project_path.exists() {
         return Err(McpError::invalid_params(
             format!("directory does not exist: {}", project_path.display()),
@@ -656,5 +661,33 @@ edition = "2021"
 
     fn test_semantic() -> Arc<Mutex<SemanticService>> {
         Arc::new(Mutex::new(SemanticService::new()))
+    }
+
+    /// `find_definition`, `find_references`, `rename_symbol`, `get_dependencies`,
+    /// `get_call_graph` and `analyze_complexity` all reach the filesystem through
+    /// this one validator, so the gate lives here rather than six times over.
+    ///
+    /// Mutation that must fail it: drop the `require_absolute` call — a relative
+    /// directory then passes whenever the daemon's own tree happens to contain a
+    /// `Cargo.toml`, and the tool answers about that project instead.
+    #[test]
+    fn a_relative_project_directory_is_refused() {
+        let err = validate_cargo_project_directory(Path::new("crates/rmc-server"))
+            .expect_err("a relative directory must be refused");
+
+        assert!(
+            err.message.contains("must be an absolute path"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// Positive control: a real absolute project still validates, so the test
+    /// above is about relativeness and not about rejecting everything.
+    #[test]
+    fn an_absolute_project_directory_still_validates() {
+        let project = valid_temp_project();
+
+        validate_cargo_project_directory(project.path()).expect("an absolute project is fine");
     }
 }

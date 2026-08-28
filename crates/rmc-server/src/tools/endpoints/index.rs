@@ -11,7 +11,6 @@ use crate::mcp::defaults::{automatic_embedding_backend, is_background_embedding_
 use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend_for_mcp};
 use rmc_engine::vector_store::VectorStoreError;
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
-use std::path::PathBuf;
 use tracing;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -178,7 +177,7 @@ pub async fn index_codebase(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let dir = PathBuf::from(&params.directory);
+    let dir = crate::tools::paths::require_absolute("directory", &params.directory)?;
     let force = params.force_reindex.unwrap_or(false);
 
     // Validate directory

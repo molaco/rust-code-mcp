@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs, io,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
 };
 
 use serde::Serialize;
@@ -21,7 +21,7 @@ pub(crate) async fn crate_skeleton(
 ) -> Result<CallToolResult, McpError> {
     validate_include(params.include.as_deref())?;
 
-    let canonical = PathBuf::from(&params.directory)
+    let canonical = crate::tools::paths::require_absolute("directory", &params.directory)?
         .canonicalize()
         .map_err(|e| {
             McpError::invalid_params(

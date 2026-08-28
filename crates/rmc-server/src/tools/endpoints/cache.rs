@@ -79,15 +79,18 @@ struct TargetDirectory {
     hashes: Vec<String>,
 }
 
-fn target_directory(directory: &str) -> TargetDirectory {
-    let raw = PathBuf::from(directory);
-    let canonical = std::fs::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
-    let canonical_hash = dir_hash(&canonical);
-    let raw_hash = dir_hash(&raw);
-    let mut hashes = vec![canonical_hash];
-    if raw_hash != hashes[0] {
-        hashes.push(raw_hash);
-    }
+/// Resolve the directory whose caches are to be cleared.
+///
+/// Only the canonical path contributes a hash. The raw path used to contribute
+/// a second one, which was a footgun once paths stopped being relative to the
+/// caller's own tree: `clear_cache(".")` would hash the literal `"."` and wipe
+/// whatever the daemon's own directory hashed to. Relative paths are refused
+/// before reaching here, and `dir_hash` canonicalizes, so the raw hash can only
+/// ever have been the wrong answer.
+fn target_directory(directory: &Path) -> TargetDirectory {
+    let raw = directory.to_path_buf();
+    let canonical = std::fs::canonicalize(&raw).unwrap_or(raw);
+    let hashes = vec![dir_hash(&canonical)];
 
     TargetDirectory { canonical, hashes }
 }
@@ -113,7 +116,8 @@ pub(crate) async fn clear_cache(
 
     if let Some(ref directory) = params.directory {
         // Clear cache for specific project
-        let target = target_directory(directory);
+        let directory = crate::tools::paths::require_absolute("directory", directory)?;
+        let target = target_directory(&directory);
         let _workspace_lock = workspace_locks.lock_exclusive(&target.canonical).await;
         if !dry_run {
             if let Some(sync_manager) = sync_manager {

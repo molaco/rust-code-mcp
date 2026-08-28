@@ -22,7 +22,8 @@ use rmc_engine::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
 pub(crate) async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
-    let file_path_obj = Path::new(file_path);
+    let file_path_obj = crate::tools::paths::require_absolute("file_path", file_path)?;
+    let file_path_obj = file_path_obj.as_path();
 
     if !file_path_obj.exists() {
         return Err(McpError::invalid_params(
@@ -384,7 +385,8 @@ pub(crate) async fn search(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let dir_path = Path::new(directory);
+    let dir_path = crate::tools::paths::require_absolute("directory", directory)?;
+    let dir_path = dir_path.as_path();
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
             format!("The specified path '{}' is not a directory", directory),
@@ -471,7 +473,8 @@ pub(crate) async fn get_similar_code(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let dir_path = Path::new(directory);
+    let dir_path = crate::tools::paths::require_absolute("directory", directory)?;
+    let dir_path = dir_path.as_path();
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
             format!("The specified path '{}' is not a directory", directory),

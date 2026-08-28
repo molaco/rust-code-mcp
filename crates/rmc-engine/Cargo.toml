@@ -14,6 +14,9 @@ embeddings = [
   "dep:tokio",
   "dep:futures",
   "dep:toml",
+  # Model weights are cached under the user's cache dir rather than the process's
+  # working directory — see `model_cache_dir` in `embeddings::fastembed_cpu`.
+  "dep:directories",
   "fastembed/hf-hub-native-tls",
   # Use ORT at build/link time instead of dlopening libonnxruntime.so at runtime.
   # Plain Cargo builds download the CPU ORT archive; Nix builds override this

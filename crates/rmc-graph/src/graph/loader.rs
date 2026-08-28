@@ -151,7 +151,16 @@ fn load_crate_target_kinds(
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     let manifest_path = workspace_root.join("Cargo.toml");
     let mut command = MetadataCommand::new();
-    command.manifest_path(manifest_path).no_deps();
+    // `current_dir` is not cosmetic: rustup picks the toolchain by the working
+    // directory (not by `--manifest-path`), and cargo walks up from it looking
+    // for `.cargo/config.toml`. Without this the daemon would analyse every
+    // workspace under the toolchain and registries of whatever tree it was
+    // started in. rust-analyzer sets it on every subprocess it spawns; this was
+    // the one place in the tree that did not.
+    command
+        .current_dir(workspace_root)
+        .manifest_path(manifest_path)
+        .no_deps();
     let metadata = match command.exec() {
         Ok(metadata) => metadata,
         Err(error) => {

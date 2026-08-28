@@ -83,9 +83,8 @@ pub(crate) async fn handle_build_codemap(
     let max_incoming_per_node = max_incoming_per_node.unwrap_or(8);
     let include_snippets = include_snippets.unwrap_or(false);
 
-    let _workspace_lock = workspace_locks
-        .lock_shared(std::path::Path::new(directory))
-        .await;
+    let directory_path = crate::tools::paths::require_absolute("directory", directory)?;
+    let _workspace_lock = workspace_locks.lock_shared(&directory_path).await;
 
     let opts = CodemapOptions {
         max_nodes,

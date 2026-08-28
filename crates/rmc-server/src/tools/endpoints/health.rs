@@ -67,9 +67,16 @@ pub(crate) async fn health_check(
     // profile (automatic CPU default when unset); further down we still read the
     // on-disk `metadata.json` so the report reflects the real cached
     // identity.
-    let root = directory.as_deref().unwrap_or(".");
-    let backend =
-        resolve_embedding_backend_for_mcp(embedding_profile.as_deref(), std::path::Path::new(root))?;
+    // A system-wide check (no `directory`) deliberately looks at no project's
+    // `embedding_profiles.toml`: the filesystem root has none, so the probe
+    // falls back to the built-in default. It used to pass `"."`, which after
+    // the daemon stopped sharing a cwd with its clients would have meant
+    // "whatever directory the daemon happens to sit in".
+    let root = match directory.as_deref() {
+        Some(dir) => crate::tools::paths::require_absolute("directory", dir)?,
+        None => std::path::PathBuf::from("/"),
+    };
+    let backend = resolve_embedding_backend_for_mcp(embedding_profile.as_deref(), &root)?;
     let embedder_identity = backend.identity();
 
     // Determine paths using the same shared helper as index_tool.
