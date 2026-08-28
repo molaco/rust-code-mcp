@@ -859,6 +859,17 @@ pub async fn run_daemon(
         RSS_HARD_ENV,
         RSS_COOLDOWN_ENV,
     );
+    // Announced separately because it answers a different question — the
+    // machine's free memory, not this process's size — and because a knob the
+    // daemon never names is a knob nobody knows to reach for. It also reports
+    // what it can actually see: on a platform without /proc the floor is dead,
+    // and that must be visible at startup rather than inferred from silence.
+    tracing::info!(
+        "machine memory floor: unload when less than {} MB is available, now {:?} MB ({} to change; 0 disables)",
+        limits.min_available_mb,
+        mem_available_kib().map(|kib| kib / 1024),
+        MIN_AVAILABLE_ENV,
+    );
     let retire_grace = retire_grace_from_env();
     tracing::info!(
         "retire deadline: a retired daemon exits after {:?} even with clients attached ({} to change; 0 waits forever)",
