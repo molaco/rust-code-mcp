@@ -177,16 +177,22 @@ fn apply_edits(ctx: &mut ProjectContext, paths: &[PathBuf]) -> Result<()> {
 ///
 /// Derived rather than guessed. A freshly started daemon costs ~2.3 GB before
 /// it loads anything (ONNX runtime, embedding model, GPU probe); one
-/// `Fast`-loaded workspace of ~4000 files adds ~3 GB; the memory watchdog's
-/// soft limit is 8192 MB. Two loaded workspaces therefore land right at the
-/// point where the watchdog would start unloading anyway, and a third is memory
-/// that guard has already decided it does not want.
+/// `Fast`-loaded workspace of ~4000 files adds ~3 GB. Three of them come to
+/// ~11.3 GB, which is what the watchdog's soft limit is set to accommodate
+/// (12288 MB); a fourth is memory that guard has already decided against.
+///
+/// It was 2 while the daemon key included the working directory, and 2 was the
+/// right number then: each daemon served one directory, so a second project was
+/// already unusual. One daemon now serves every directory, so the projects a
+/// person moves between during a day all land in the same map — and evicting
+/// one costs the next question in that project a full reload, measured in
+/// minutes on a large workspace.
 ///
 /// What this bounds is a *count*, which is only a proxy for memory — ten tiny
 /// crates cost less than one workspace. The proxy is deliberate: it is the
 /// cheap half of the job, and the watchdog remains the half that measures
 /// actual RSS.
-const DEFAULT_MAX_PROJECTS: usize = 2;
+const DEFAULT_MAX_PROJECTS: usize = 3;
 
 const MAX_PROJECTS_ENV: &str = "RMC_MAX_PROJECTS";
 

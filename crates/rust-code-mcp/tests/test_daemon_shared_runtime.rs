@@ -36,7 +36,17 @@ impl Session {
     /// `socket_dir` is per test: otherwise a run would attach to the daemon of a
     /// live working session and assert about someone else's process.
     fn start(socket_dir: &Path, shared: bool) -> Result<Self> {
+        Self::start_in(socket_dir, shared, None)
+    }
+
+    /// As [`Session::start`], with the client's working directory chosen by the
+    /// caller — the axis `two_clients_from_different_directories_share_one_process`
+    /// is about.
+    fn start_in(socket_dir: &Path, shared: bool, cwd: Option<&Path>) -> Result<Self> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rust-code-mcp"));
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         command
             .env("RUST_LOG", "error")
             .env("RMC_DAEMON_DIR", socket_dir)
@@ -197,6 +207,49 @@ fn two_clients_share_one_server_process() -> Result<()> {
         "the call was served by the client itself, so no daemon came up and nothing is shared"
     );
     assert_ne!(second_pid, second.child.id());
+
+    drop(first);
+    drop(second);
+    kill_pid(first_pid);
+    Ok(())
+}
+
+/// The same oracle along the axis that used to split the fleet: two sessions
+/// started in DIFFERENT directories must still be served by one process.
+///
+/// The daemon key included the working directory until this test existed. It
+/// bought no isolation — every tool takes its `directory` as a parameter, so the
+/// cwd never chose the project — and it cost, measured on one machine, eleven
+/// processes holding 12.5 GB, several of them analysing the same repository.
+///
+/// Mutation that must fail it: put the cwd back into `key_from_parts`, and the
+/// two pids diverge.
+#[test]
+fn two_clients_from_different_directories_share_one_process() -> Result<()> {
+    let socket_dir = TempDir::new()?;
+    let first_cwd = TempDir::new()?;
+    let second_cwd = TempDir::new()?;
+
+    let mut first = Session::start_in(socket_dir.path(), true, Some(first_cwd.path()))?;
+    let first_pid = first.serving_pid()?;
+    let mut second = Session::start_in(socket_dir.path(), true, Some(second_cwd.path()))?;
+    let second_pid = second.serving_pid()?;
+
+    assert_eq!(
+        first_pid, second_pid,
+        "sessions started in {} and {} were served by different processes — the daemon key is \
+         splitting on the working directory again",
+        first_cwd.path().display(),
+        second_cwd.path().display()
+    );
+    // Same positive control as the sibling test: without it, "one pid" would not
+    // rule out both calls having been served in-process by two clients that
+    // happen to be compared wrongly.
+    assert_ne!(
+        first_pid,
+        first.child.id(),
+        "the call was served by the client itself, so no daemon came up and nothing is shared"
+    );
 
     drop(first);
     drop(second);

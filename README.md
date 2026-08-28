@@ -176,41 +176,61 @@ The runtime state was already shareable (`RuntimeState` is a bundle of `Arc`s, s
 contexts are cached per project path, and locking is per workspace), so the only missing
 piece was a transport that accepts more than one client:
 
-- running the binary **with no arguments** makes it a *client* of a per-project daemon,
-  spawning that daemon on first use — no change to `.mcp.json` is needed;
+- running the binary **with no arguments** makes it a *client* of a shared daemon,
+  spawning that daemon on first use — no config change needed in `.mcp.json`;
 - the daemon serves every connection from one shared `RuntimeState` and exits after
   30 minutes with no clients (`--idle-secs` / `RMC_DAEMON_IDLE_SECS`, `0` = never);
 - if the daemon cannot be reached or started, the client serves the session in-process,
   exactly as before — the daemon is a memory optimisation, not a new point of failure.
 
-The socket key covers the project directory, the binary's size/mtime, and the env vars
-that change what the server computes. A rebuilt binary therefore gets its own daemon
-instead of silently attaching to one that answers differently.
+The socket key covers the binary's size/mtime and the env vars that change what the
+server computes (`RMC_EMBEDDING_PROFILE`, `RMC_BACKGROUND_SYNC`). A
+rebuilt binary or a different profile therefore gets its own daemon instead of silently
+attaching to one that answers differently.
+
+**One daemon serves every working directory.** The key deliberately excludes the
+directory a session starts in. It used to include it, and the result was one daemon per
+directory: measured on one machine, 11 processes holding 12.5 GB between them, several
+analysing the same repository. The cwd never selected the project in the first place —
+every tool takes its `directory` as a parameter — so keying on it bought no isolation,
+only duplication.
+
+The consequence for callers: **path parameters must be absolute**. The daemon shares no
+working directory with the session asking, so a relative path is refused rather than
+resolved against a directory nobody chose (which would answer about the wrong tree
+without saying so).
 
 ```bash
-rust-code-mcp --print-socket   # which socket this project resolves to
-rust-code-mcp --in-process     # previous behaviour (same as RMC_DAEMON=0)
+rust-code-mcp --print-socket   # which socket this configuration resolves to
+rust-code-mcp --in-process     # old behaviour (same as RMC_DAEMON=0)
 rust-code-mcp --daemon         # run the daemon in the foreground
 ```
 
-Sockets and daemon logs live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
-`RMC_DAEMON_DIR`). Unix only; on other platforms the server stays in-process.
+Sockets and daemon logs live in `$XDG_RUNTIME_DIR/rust-code-mcp/`, falling back to
+`/run/user/<uid>/rust-code-mcp/` when that variable is unset (a session started outside a
+login shell) and to `/tmp/rust-code-mcp-$USER/` when there is no runtime directory at
+all; override with `RMC_DAEMON_DIR`. The fallback order matters: computing the same key
+but looking for it in a different directory is another way to end up with two daemons.
+Unix only; on other platforms the server stays in-process.
 
 ### Keeping the daemon's memory bounded
 
 A daemon outlives its clients by design, so nothing bounds it the way a session used
-to. Five knobs do that instead, all in seconds or MB, all with `0` meaning *off*:
+to. Six knobs do that instead, all in seconds or MB, all with `0` meaning *off*:
 
 | Knob | Default | What it does |
 |---|---:|---|
-| `RMC_MAX_PROJECTS` | 2 | How many rust-analyzer contexts stay loaded. Past the cap, the least recently used one is dropped; the project being queried is never the victim. |
+| `RMC_MAX_PROJECTS` | 3 | How many rust-analyzer contexts stay loaded. Past the cap, the least recently used one is dropped; the project being queried is never the victim. |
 | `RMC_GC_INTERVAL_SECS` | 300 | How often loaded analyses are garbage-collected. This is also what makes salsa's LRU capacities do anything: they only evict while the revision bumps, and a project nobody edits never bumps on its own. |
-| `RMC_RSS_SOFT_MB` | 8192 | RSS above which the daemon unloads *all* contexts (at most one unload per `RMC_RSS_COOLDOWN_SECS`, default 300). |
-| `RMC_RSS_HARD_MB` | 16384 | RSS above which unloading is judged hopeless: the daemon unlinks its socket so new clients start a fresh one, and finishes serving the clients it has. |
+| `RMC_RSS_SOFT_MB` | 12288 | RSS above which the daemon unloads *all* contexts (at most one unload per `RMC_RSS_COOLDOWN_SECS`, default 300). Sized for the three workspaces above: ~2.3 GB of fixed startup cost plus ~3 GB each. |
+| `RMC_MIN_AVAILABLE_MB` | 6144 | Machine-wide floor on `MemAvailable`: below it the daemon unloads even though its own RSS is fine. The only reading here that sees pressure the daemon did not cause — a build, a second analyser, the application under development — and the caches belong to whoever needs the memory more. It never retires the daemon; that pressure usually passes with the build that caused it. |
+| `RMC_RSS_HARD_MB` | 20480 | RSS above which unloading is judged hopeless: the daemon unlinks its socket so new clients start a fresh one, and finishes serving the clients it has. |
 | `RMC_RETIRE_GRACE_SECS` | 1800 | How long a retired daemon waits for those clients before exiting anyway. It has to end: a client session runs for hours, and a retired daemon holding 24 GB next to its successor is the failure this bounds. Exiting on the deadline **drops those connections** — the affected session loses its MCP tools until restarted. |
 
-The first two keep the working set from growing; the last three are the guard for when
-it grows anyway.
+The first two keep the working set from growing; the rest are the guard for when it
+grows anyway. Note which question each asks: three of them ask "is this process too
+big?", and `RMC_MIN_AVAILABLE_MB` asks "does the machine still have room?" — a daemon
+can answer the first comfortably while the machine around it goes to swap.
 
 ## Embedding Models
 

@@ -49,6 +49,39 @@ pub(crate) fn parse_proc_status_rss_kib(status: &str) -> Option<u64> {
     })
 }
 
+/// Memory the kernel estimates is available for a new workload, in KiB.
+///
+/// `MemAvailable`, not `MemFree`: page cache and reclaimable slab are free for
+/// the asking, and `MemFree` on a machine that has been up for a day reads as
+/// an emergency when there is none.
+///
+/// This is the one number about the *machine* rather than the process. Without
+/// it a daemon comfortably below its own RSS limit keeps gigabytes of analysis
+/// cached while a `cargo` run next to it goes to swap — the caches belong to
+/// whoever needs the memory more, and a build needs it more than a warm cache.
+///
+/// `None` on platforms without `/proc`, for the same reason as [`rss_kib`]: an
+/// invented number here would read as "plenty of memory".
+pub fn mem_available_kib() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|meminfo| parse_proc_meminfo_available_kib(&meminfo))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+pub(crate) fn parse_proc_meminfo_available_kib(meminfo: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let value = line.strip_prefix("MemAvailable:")?;
+        value.split_whitespace().next()?.parse::<u64>().ok()
+    })
+}
+
 /// mimalloc's own "give it back" entry point.
 ///
 /// Declared here rather than imported: `libmimalloc-sys` binds only the
@@ -180,6 +213,35 @@ mod tests {
     #[test]
     fn proc_status_parser_reports_absence_rather_than_zero() {
         assert_eq!(parse_proc_status_rss_kib("Name:\ttest\n"), None);
+    }
+
+    #[test]
+    fn meminfo_parser_reads_available() {
+        let meminfo = "MemTotal:       64000000 kB\n\
+                       MemFree:         1000000 kB\n\
+                       MemAvailable:   35000000 kB\n";
+
+        assert_eq!(parse_proc_meminfo_available_kib(meminfo), Some(35_000_000));
+    }
+
+    /// `MemFree` must not be mistaken for it: the two differ by the whole page
+    /// cache, and reading the wrong one would starve the daemon on a healthy
+    /// machine.
+    #[test]
+    fn meminfo_parser_does_not_settle_for_memfree() {
+        let meminfo = "MemTotal:       64000000 kB\nMemFree:         1000000 kB\n";
+
+        assert_eq!(parse_proc_meminfo_available_kib(meminfo), None);
+    }
+
+    /// On Linux the reading has to exist, or the floor silently never applies.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn available_memory_is_readable_on_this_platform() {
+        assert!(
+            mem_available_kib().is_some_and(|kib| kib > 0),
+            "MemAvailable must be readable, otherwise the machine-wide floor is dead code"
+        );
     }
 
     /// The measurement must survive RSS growing during the call rather than

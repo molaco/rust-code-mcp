@@ -1,4 +1,4 @@
-//! One server per project: a unix-socket daemon plus a thin proxy client.
+//! One server per user: a unix-socket daemon plus a thin proxy client.
 //!
 //! # Why
 //!
@@ -20,13 +20,26 @@
 //! `RuntimeState`. The client is the same binary with no arguments: it pumps
 //! stdin/stdout into the socket, and spawns the daemon if none is listening.
 //!
-//! # The socket key is more than the project
+//! # The socket key is the configuration, not the directory
 //!
-//! It covers the working directory, the binary's size and mtime, and the env
-//! vars that change what the server computes. Otherwise a rebuilt binary — or a
-//! different configuration — would silently attach to a daemon that answers
-//! differently, and that reads as "the server is lying", not as "we connected to
-//! the wrong one".
+//! It covers the binary's size and mtime and the env vars that change what the
+//! server computes. Otherwise a rebuilt binary — or a different configuration —
+//! would silently attach to a daemon that answers differently, and that reads as
+//! "the server is lying", not as "we connected to the wrong one".
+//!
+//! It deliberately does *not* cover the working directory. It used to, and the
+//! result was one daemon per directory a session happened to start in: measured
+//! on this machine, 11 processes holding 12.5 GB between them, several of them
+//! analysing the same repository. The cwd never selected the project in the
+//! first place — every tool takes its `directory` as a parameter — so keying on
+//! it bought no isolation, only duplication.
+//!
+//! The consequence is that the daemon does not share a working directory with
+//! the session asking, and cannot resolve a relative path on its behalf. Path
+//! parameters are therefore required to be absolute
+//! (`rmc_server::tools::paths::require_absolute`), and the daemon is spawned in
+//! `/` so that anything slipping past that gate fails loudly instead of quietly
+//! answering about the wrong tree.
 //!
 //! # A failing daemon never leaves a client without a server
 //!
@@ -37,15 +50,15 @@
 
 use fs2::FileExt;
 use rmc_server::mcp::{
-    BACKGROUND_SYNC_ENV, RuntimeClearRequest, RuntimeClearScope, RuntimeState, ServerRuntime,
-    rss_kib,
+    BACKGROUND_SYNC_ENV, EMBEDDING_PROFILE_ENV, RuntimeClearRequest, RuntimeClearScope,
+    RuntimeState, ServerRuntime, mem_available_kib, rss_kib,
 };
 use rmc_server::tools::SearchTool;
 use rmcp::ServiceExt;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -74,6 +87,9 @@ pub const RSS_SOFT_ENV: &str = "RMC_RSS_SOFT_MB";
 pub const RSS_HARD_ENV: &str = "RMC_RSS_HARD_MB";
 /// Minimum gap between two unloads, in seconds — see [`WatchdogAction`].
 pub const RSS_COOLDOWN_ENV: &str = "RMC_RSS_COOLDOWN_SECS";
+/// Machine-wide `MemAvailable` floor, in MB: below it the daemon unloads its
+/// contexts even when its own RSS is fine. `0` disables the check.
+pub const MIN_AVAILABLE_ENV: &str = "RMC_MIN_AVAILABLE_MB";
 /// How long a retired daemon waits for its clients to leave before exiting
 /// anyway, in seconds. `0` means wait forever — see [`retire_grace_expired`].
 pub const RETIRE_GRACE_ENV: &str = "RMC_RETIRE_GRACE_SECS";
@@ -84,7 +100,7 @@ pub const GC_INTERVAL_ENV: &str = "RMC_GC_INTERVAL_SECS";
 /// Env vars that change what the server computes, and therefore which daemon a
 /// client belongs to. Extend this list whenever a new behaviour-changing knob is
 /// added, or clients configured differently will end up sharing one server.
-const KEYED_ENV: [&str; 1] = [BACKGROUND_SYNC_ENV];
+const KEYED_ENV: [&str; 2] = [EMBEDDING_PROFILE_ENV, BACKGROUND_SYNC_ENV];
 
 /// Half an hour: long enough to survive a pause between questions in a session,
 /// short enough that a closed editor does not hold gigabytes until end of day.
@@ -176,19 +192,36 @@ on demand.
   --client            the same, explicitly
   --daemon            become the daemon: listen on a socket, serve many clients
   --in-process        run the server in this process over stdio (previous behaviour)
-  --print-socket      print this project's socket path and exit
-  --socket <PATH>     use this socket instead of the one derived from the project
+  --print-socket      print this configuration's socket path and exit
+  --socket <PATH>     use this socket instead of the one derived from the
+                      binary and the environment
   --idle-secs <N>     daemon exits after N seconds with no clients (0 = never)
 
 Env: RMC_DAEMON=0 forces in-process; RMC_DAEMON_DIR sets the socket directory;
      RMC_DAEMON_IDLE_SECS is the same as --idle-secs.
 
+One daemon serves EVERY working directory: the socket is keyed by this binary
+and the environment above, not by the directory a session starts in. Path
+parameters must therefore be absolute — the daemon shares no working directory
+with the session asking, and will refuse a relative path rather than resolve it
+against a directory nobody chose.
+
 Memory watchdog (daemon only; 0 disables a threshold):
-  RMC_RSS_SOFT_MB=8192       unload the analysis contexts above this RSS
-  RMC_RSS_HARD_MB=16384      above this, retire: stop taking new clients, let
+  RMC_RSS_SOFT_MB=12288      unload the analysis contexts above this RSS
+  RMC_RSS_HARD_MB=20480      above this, retire: stop taking new clients, let
                              the current ones finish, exit — a successor is
                              started on demand, so no session is cut off
   RMC_RSS_COOLDOWN_SECS=300  minimum gap between two unloads
+  RMC_MIN_AVAILABLE_MB=6144  unload when the MACHINE has less than this free,
+                             whatever this daemon's own RSS is — the only
+                             reading that sees pressure it did not cause
+  RMC_RETIRE_GRACE_SECS=1800 a retired daemon exits after this even with
+                             clients still attached (those connections drop)
+  RMC_GC_INTERVAL_SECS=300   how often loaded analyses are garbage-collected;
+                             this is also what makes salsa's LRU capacities
+                             evict anything at all
+  RMC_MAX_PROJECTS=3         how many analysis contexts stay loaded; past the
+                             cap the least recently used one is dropped
 ";
 
 fn daemon_disabled() -> bool {
@@ -286,6 +319,9 @@ pub fn retire_grace_expired(retiring_for: Option<Duration>, grace: Duration) -> 
 pub struct WatchdogLimits {
     pub soft_mb: u64,
     pub hard_mb: u64,
+    /// Machine-wide floor on `MemAvailable`. Below it the daemon unloads even
+    /// though its own RSS is fine — see [`DEFAULT_MIN_AVAILABLE_MB`].
+    pub min_available_mb: u64,
     pub cooldown: Duration,
 }
 
@@ -302,11 +338,19 @@ pub struct WatchdogLimits {
 /// fixed 2.3 GB floor — sat *below* normal. It would have unloaded
 /// rust-analyzer every cooldown on a perfectly healthy daemon: a memory guard
 /// that does nothing but make every query reload the workspace.
-const DEFAULT_RSS_SOFT_MB: u64 = 8192;
-/// Sixteen gigabytes: past this, unloading has already been tried and the memory
-/// is stuck in the allocator, so only a fresh process gets it back. Three times
-/// the healthy working point, and well under the 25 GB that prompted this work.
-const DEFAULT_RSS_HARD_MB: u64 = 16384;
+///
+/// It was 8192 while each daemon served one working directory. One daemon now
+/// serves all of them, so the same arithmetic is run for the three projects
+/// `RMC_MAX_PROJECTS` allows: 2.3 GB fixed + 3 × ~3 GB ≈ 11.3 GB. Note what the
+/// change is *not*: one daemon at 12 GB is less than the 12.5 GB that eleven of
+/// them held between them on the machine that prompted this, and unlike that
+/// fleet it is a number something actually enforces.
+const DEFAULT_RSS_SOFT_MB: u64 = 12288;
+/// Twenty gigabytes: past this, unloading has already been tried and the memory
+/// is stuck in the allocator, so only a fresh process gets it back. Kept at a
+/// ratio to the soft limit rather than at a fixed distance — the escalation
+/// wants room for a peak above the working point, not a constant.
+const DEFAULT_RSS_HARD_MB: u64 = 20480;
 /// Five minutes between unloads. Without a floor the watchdog would unload on
 /// every tick — RSS usually does *not* drop after an unload (see
 /// `rmc_server::mcp::memory`), so the trigger stays true and the next tick would
@@ -314,11 +358,31 @@ const DEFAULT_RSS_HARD_MB: u64 = 16384;
 /// guard into a performance disaster.
 const DEFAULT_RSS_COOLDOWN_SECS: u64 = 300;
 
+/// Six gigabytes of `MemAvailable`, and the number is set by what else is on the
+/// machine rather than by what the daemon costs.
+///
+/// The other three thresholds ask "is this process too big?", which a daemon can
+/// answer while the machine around it goes to swap — its own RSS is nobody's
+/// idea of the whole picture. This one asks "does the machine still have room?",
+/// and it is the only reading that sees pressure the daemon did not cause: a
+/// workspace build, a second analyser, the application under development.
+///
+/// Six is chosen to fire *before* the OOM machinery does. A typical `earlyoom`
+/// on a 61 GB desktop warns near 5 GB and starts killing near 2.4 GB; a floor
+/// below that would only ever unload after something had already been killed,
+/// which is not a guard. Higher than ~8 GB and an ordinary `cargo` build would
+/// evict the analysis every time, making every following query reload it.
+///
+/// `0` disables the check — including on any platform where `MemAvailable`
+/// cannot be read, since an unknown reading must not act like a violated floor.
+const DEFAULT_MIN_AVAILABLE_MB: u64 = 6144;
+
 impl WatchdogLimits {
     pub fn from_env() -> Self {
         Self {
             soft_mb: env_u64(RSS_SOFT_ENV, DEFAULT_RSS_SOFT_MB),
             hard_mb: env_u64(RSS_HARD_ENV, DEFAULT_RSS_HARD_MB),
+            min_available_mb: env_u64(MIN_AVAILABLE_ENV, DEFAULT_MIN_AVAILABLE_MB),
             cooldown: Duration::from_secs(env_u64(RSS_COOLDOWN_ENV, DEFAULT_RSS_COOLDOWN_SECS)),
         }
     }
@@ -380,8 +444,13 @@ fn env_u64(name: &str, default: u64) -> u64 {
 ///
 /// `since_unload` is `None` when nothing has been unloaded yet — the cooldown
 /// cannot bar the first attempt.
+///
+/// `available_mb` is `None` when the machine's free memory could not be read.
+/// That is treated as "the floor is not violated": an unreadable number must not
+/// act like an alarming one, or every non-Linux daemon would unload forever.
 pub fn decide_watchdog_action(
     rss_mb: u64,
+    available_mb: Option<u64>,
     limits: WatchdogLimits,
     since_unload: Option<Duration>,
     retiring: bool,
@@ -398,7 +467,19 @@ pub fn decide_watchdog_action(
         return WatchdogAction::Retire;
     }
 
-    if limits.soft_mb == 0 || rss_mb < limits.soft_mb {
+    let over_own_limit = limits.soft_mb > 0 && rss_mb >= limits.soft_mb;
+    // The machine's floor gets its own reason to unload rather than being folded
+    // into the soft limit: the pressure it reports is usually not ours, and a
+    // daemon at 3 GB next to a build that took the machine to swap is exactly
+    // the case the RSS thresholds cannot see.
+    //
+    // It stops at `Unload`, never `Retire`. Retiring unlinks the socket and puts
+    // a deadline on live sessions to answer memory pressure the daemon may not
+    // even have caused, and the pressure usually passes with the build.
+    let machine_is_short = limits.min_available_mb > 0
+        && available_mb.is_some_and(|available| available < limits.min_available_mb);
+
+    if !over_own_limit && !machine_is_short {
         return WatchdogAction::None;
     }
 
@@ -411,16 +492,52 @@ pub fn decide_watchdog_action(
 /// Where sockets live. `$XDG_RUNTIME_DIR` is preferred: it is private, on tmpfs,
 /// and cleaned out at logout together with any orphaned sockets.
 fn socket_dir() -> Result<PathBuf, BoxError> {
-    if let Ok(dir) = std::env::var(DAEMON_DIR_ENV) {
-        return Ok(PathBuf::from(dir));
+    let probed = probe_runtime_dir();
+    Ok(resolve_socket_dir(
+        std::env::var(DAEMON_DIR_ENV).ok().as_deref(),
+        std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+        probed.as_deref(),
+        std::env::var("USER").ok().as_deref(),
+        &std::env::temp_dir(),
+    ))
+}
+
+/// `/run/user/<uid>`, if it exists — the directory `XDG_RUNTIME_DIR` would name.
+///
+/// Read from the filesystem rather than assumed: the uid comes from
+/// `/proc/self`, and the directory has to be there. A session started outside a
+/// login shell (a hook, a cron job, an editor spawned from a display manager)
+/// often has no `XDG_RUNTIME_DIR` at all, and without this it would compute the
+/// same key as its neighbours but look for it in `/tmp` — not find the running
+/// daemon, and start a second one. Both halves of that split were live on this
+/// machine at once, on two keys.
+fn probe_runtime_dir() -> Option<PathBuf> {
+    let uid = fs::metadata("/proc/self").ok()?.uid();
+    let dir = PathBuf::from(format!("/run/user/{uid}"));
+    dir.is_dir().then_some(dir)
+}
+
+/// The pure part of [`socket_dir`], for the same reason as [`key_from_parts`]:
+/// deciding this from tests otherwise means mutating global env in parallel
+/// with other tests.
+fn resolve_socket_dir(
+    env_dir: Option<&str>,
+    xdg: Option<&str>,
+    probed_runtime: Option<&Path>,
+    user: Option<&str>,
+    temp_dir: &Path,
+) -> PathBuf {
+    if let Some(dir) = env_dir.filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
     }
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        if !runtime_dir.is_empty() {
-            return Ok(PathBuf::from(runtime_dir).join("rust-code-mcp"));
-        }
+    if let Some(runtime_dir) = xdg.filter(|d| !d.is_empty()) {
+        return PathBuf::from(runtime_dir).join("rust-code-mcp");
     }
-    let user = std::env::var("USER").unwrap_or_else(|_| "shared".to_string());
-    Ok(std::env::temp_dir().join(format!("rust-code-mcp-{user}")))
+    if let Some(runtime_dir) = probed_runtime {
+        return runtime_dir.join("rust-code-mcp");
+    }
+    let user = user.filter(|u| !u.is_empty()).unwrap_or("shared");
+    temp_dir.join(format!("rust-code-mcp-{user}"))
 }
 
 fn ensure_dir(dir: &Path) -> io::Result<()> {
@@ -429,16 +546,17 @@ fn ensure_dir(dir: &Path) -> io::Result<()> {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
-/// The daemon key: the project plus everything that changes what answers mean.
+/// The daemon key: everything that changes what an answer means.
 ///
 /// The binary contributes its size and mtime rather than a content hash: a
 /// rebuild must produce a *new* daemon (otherwise a client built from new code
 /// would be served by the old server), and reading tens of megabytes on every
 /// startup to establish that is not worth it.
-fn workspace_key() -> Result<String, BoxError> {
-    let cwd = std::env::current_dir()?;
-    let cwd = fs::canonicalize(&cwd).unwrap_or(cwd);
-
+///
+/// The working directory is deliberately absent — see the module docs. Adding
+/// anything here splits the fleet, so a new part earns its place only by
+/// changing what the server *computes*.
+fn daemon_key() -> Result<String, BoxError> {
     let exe = std::env::current_exe()?;
     let exe_meta = fs::metadata(&exe).ok();
     let exe_len = exe_meta.as_ref().map(|m| m.len()).unwrap_or(0);
@@ -459,7 +577,7 @@ fn workspace_key() -> Result<String, BoxError> {
         })
         .collect();
 
-    Ok(key_from_parts(&cwd, &exe, exe_len, exe_mtime, &env))
+    Ok(key_from_parts(&exe, exe_len, exe_mtime, &env))
 }
 
 /// The pure part of the key: everything that matters arrives as an argument.
@@ -467,16 +585,8 @@ fn workspace_key() -> Result<String, BoxError> {
 /// Split out of [`workspace_key`] for testability rather than tidiness: checking
 /// "the key changes with configuration" through `set_var` means mutating global
 /// env in parallel with other tests, which fails for reasons unrelated to keys.
-fn key_from_parts(
-    cwd: &Path,
-    exe: &Path,
-    exe_len: u64,
-    exe_mtime: u128,
-    env: &[(&str, String)],
-) -> String {
+fn key_from_parts(exe: &Path, exe_len: u64, exe_mtime: u128, env: &[(&str, String)]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(cwd.as_os_str().as_encoded_bytes());
-    hasher.update([0]);
     hasher.update(exe.as_os_str().as_encoded_bytes());
     hasher.update(exe_len.to_le_bytes());
     hasher.update(exe_mtime.to_le_bytes());
@@ -492,7 +602,7 @@ fn key_from_parts(
 }
 
 pub fn default_socket_path() -> Result<PathBuf, BoxError> {
-    Ok(socket_dir()?.join(format!("{}.sock", workspace_key()?)))
+    Ok(socket_dir()?.join(format!("{}.sock", daemon_key()?)))
 }
 
 fn lock_path(socket: &Path) -> PathBuf {
@@ -640,7 +750,13 @@ fn spawn_daemon(socket: &Path) -> io::Result<Child> {
         .stderr(Stdio::from(log))
         // Its own process group, so Ctrl-C in one client's session does not take
         // down a server other sessions are using.
-        .process_group(0);
+        .process_group(0)
+        // The root, not the spawning session's directory. One daemon serves
+        // every working directory, so inheriting one client's cwd would make it
+        // the accidental base for any relative path that slipped past the
+        // absolute-path gate — answering about the wrong tree instead of
+        // failing. `/` holds no Cargo project, so such a path fails loudly.
+        .current_dir("/");
     cmd.spawn()
 }
 
@@ -809,16 +925,24 @@ pub async fn run_daemon(
         }
 
         // Memory watchdog. Runs on the same tick as the idle check, so it costs
-        // one `/proc/self/status` read every 15 s and nothing else.
+        // one `/proc/self/status` and one `/proc/meminfo` read every 15 s and
+        // nothing else.
         if let Some(rss_mb) = rss_kib().map(|kib| kib / 1024) {
+            let available_mb = mem_available_kib().map(|kib| kib / 1024);
             let since_unload = last_unload.and_then(|at| at.elapsed().ok());
-            match decide_watchdog_action(rss_mb, limits, since_unload, retiring) {
+            match decide_watchdog_action(rss_mb, available_mb, limits, since_unload, retiring) {
                 WatchdogAction::None => {}
                 WatchdogAction::Unload => {
+                    // Which of the two reasons fired is worth naming: "RSS 3 GB,
+                    // unloading" would read as a bug in the threshold rather
+                    // than as the machine-wide floor doing its job.
                     tracing::warn!(
-                        "RSS {} MB is over the {} MB soft limit; unloading analysis contexts",
+                        "unloading analysis contexts: RSS {} MB (soft limit {} MB), \
+                         machine has {:?} MB available (floor {} MB)",
                         rss_mb,
-                        limits.soft_mb
+                        limits.soft_mb,
+                        available_mb,
+                        limits.min_available_mb
                     );
                     let report = runtime
                         .state()
@@ -927,13 +1051,17 @@ mod watchdog_tests {
     const LIMITS: WatchdogLimits = WatchdogLimits {
         soft_mb: 4096,
         hard_mb: 10240,
+        min_available_mb: 6144,
         cooldown: Duration::from_secs(300),
     };
+
+    /// A machine with room to spare, so a case about RSS is only about RSS.
+    const ROOMY: Option<u64> = Some(40_000);
 
     #[test]
     fn ordinary_memory_use_is_left_alone() {
         assert_eq!(
-            decide_watchdog_action(3000, LIMITS, None, false),
+            decide_watchdog_action(3000, ROOMY, LIMITS, None, false),
             WatchdogAction::None
         );
     }
@@ -941,7 +1069,7 @@ mod watchdog_tests {
     #[test]
     fn crossing_the_soft_limit_unloads() {
         assert_eq!(
-            decide_watchdog_action(5000, LIMITS, None, false),
+            decide_watchdog_action(5000, ROOMY, LIMITS, None, false),
             WatchdogAction::Unload
         );
     }
@@ -952,11 +1080,11 @@ mod watchdog_tests {
     #[test]
     fn a_second_unload_waits_for_the_cooldown() {
         assert_eq!(
-            decide_watchdog_action(5000, LIMITS, Some(Duration::from_secs(60)), false),
+            decide_watchdog_action(5000, ROOMY, LIMITS, Some(Duration::from_secs(60)), false),
             WatchdogAction::None
         );
         assert_eq!(
-            decide_watchdog_action(5000, LIMITS, Some(Duration::from_secs(600)), false),
+            decide_watchdog_action(5000, ROOMY, LIMITS, Some(Duration::from_secs(600)), false),
             WatchdogAction::Unload
         );
     }
@@ -966,7 +1094,7 @@ mod watchdog_tests {
     #[test]
     fn the_hard_limit_outranks_the_cooldown() {
         assert_eq!(
-            decide_watchdog_action(11000, LIMITS, Some(Duration::from_secs(1)), false),
+            decide_watchdog_action(11000, ROOMY, LIMITS, Some(Duration::from_secs(1)), false),
             WatchdogAction::Retire
         );
     }
@@ -976,7 +1104,7 @@ mod watchdog_tests {
     #[test]
     fn a_retiring_daemon_decides_nothing_further() {
         assert_eq!(
-            decide_watchdog_action(11000, LIMITS, None, true),
+            decide_watchdog_action(11000, ROOMY, LIMITS, None, true),
             WatchdogAction::None
         );
     }
@@ -988,7 +1116,7 @@ mod watchdog_tests {
             ..LIMITS
         };
         assert_eq!(
-            decide_watchdog_action(9000, no_soft, None, false),
+            decide_watchdog_action(9000, ROOMY, no_soft, None, false),
             WatchdogAction::None,
             "soft_mb = 0 must not unload"
         );
@@ -998,7 +1126,7 @@ mod watchdog_tests {
             ..LIMITS
         };
         assert_eq!(
-            decide_watchdog_action(99000, no_hard, None, false),
+            decide_watchdog_action(99000, ROOMY, no_hard, None, false),
             WatchdogAction::Unload,
             "hard_mb = 0 must never retire, however high RSS goes"
         );
@@ -1009,8 +1137,75 @@ mod watchdog_tests {
             ..LIMITS
         };
         assert_eq!(
-            decide_watchdog_action(99000, disabled, None, false),
+            decide_watchdog_action(99000, ROOMY, disabled, None, false),
             WatchdogAction::None
+        );
+    }
+
+    /// The case none of the RSS thresholds can see: this daemon is small, and
+    /// the machine is in trouble anyway — a build, a second analyser, the
+    /// application under development. The caches belong to whoever needs the
+    /// memory more.
+    #[test]
+    fn a_short_machine_unloads_even_a_small_daemon() {
+        assert_eq!(
+            decide_watchdog_action(3000, Some(2000), LIMITS, None, false),
+            WatchdogAction::Unload,
+            "3 GB of RSS is fine; 2 GB left on the machine is not"
+        );
+    }
+
+    /// It unloads and stops there. Retiring unlinks the socket and puts a
+    /// deadline on live sessions — too much for pressure that is usually
+    /// somebody else's and passes with the build that caused it.
+    #[test]
+    fn a_short_machine_never_retires() {
+        assert_eq!(
+            decide_watchdog_action(3000, Some(0), LIMITS, None, false),
+            WatchdogAction::Unload,
+            "even at zero available memory the floor may not retire the daemon"
+        );
+    }
+
+    /// The floor is rate-limited like the soft limit, and for the same reason:
+    /// the memory usually does not come back to the machine on the next tick.
+    #[test]
+    fn the_floor_respects_the_cooldown() {
+        assert_eq!(
+            decide_watchdog_action(3000, Some(2000), LIMITS, Some(Duration::from_secs(60)), false),
+            WatchdogAction::None
+        );
+    }
+
+    #[test]
+    fn a_roomy_machine_and_a_small_daemon_are_left_alone() {
+        assert_eq!(
+            decide_watchdog_action(3000, Some(6144), LIMITS, None, false),
+            WatchdogAction::None,
+            "exactly at the floor is not below it"
+        );
+    }
+
+    /// Two ways for the floor to be silent, and both must be: `0` is the opt-out,
+    /// and `None` is "the reading could not be taken". An unknown number that
+    /// acted like an alarming one would unload forever on any platform without
+    /// `/proc`.
+    #[test]
+    fn an_unknown_or_disabled_floor_never_fires() {
+        assert_eq!(
+            decide_watchdog_action(3000, None, LIMITS, None, false),
+            WatchdogAction::None,
+            "unreadable available memory must not read as pressure"
+        );
+
+        let no_floor = WatchdogLimits {
+            min_available_mb: 0,
+            ..LIMITS
+        };
+        assert_eq!(
+            decide_watchdog_action(3000, Some(1), no_floor, None, false),
+            WatchdogAction::None,
+            "min_available_mb = 0 disables the check"
         );
     }
 
@@ -1029,11 +1224,12 @@ mod watchdog_tests {
         let defaults = WatchdogLimits {
             soft_mb: DEFAULT_RSS_SOFT_MB,
             hard_mb: DEFAULT_RSS_HARD_MB,
+            min_available_mb: DEFAULT_MIN_AVAILABLE_MB,
             cooldown: Duration::from_secs(DEFAULT_RSS_COOLDOWN_SECS),
         };
 
         assert_eq!(
-            decide_watchdog_action(MEASURED_HEALTHY_MB, defaults, None, false),
+            decide_watchdog_action(MEASURED_HEALTHY_MB, ROOMY, defaults, None, false),
             WatchdogAction::None,
             "a daemon at the measured healthy working point ({MEASURED_HEALTHY_MB} MB) must be \
              left alone; soft limit is {DEFAULT_RSS_SOFT_MB} MB"
@@ -1044,16 +1240,31 @@ mod watchdog_tests {
         );
     }
 
+    /// The machine-wide floor has to sit above where an OOM killer starts
+    /// choosing victims, or it only ever fires after something has been killed —
+    /// which is not a guard. `earlyoom -m 8,4` on a 61 GB desktop kills near
+    /// 2.4 GB; a floor at or below that would be decoration.
+    #[test]
+    fn the_machine_floor_leaves_room_before_the_oom_killer() {
+        const TYPICAL_OOM_KILL_MB: u64 = 2440;
+
+        assert!(
+            DEFAULT_MIN_AVAILABLE_MB > TYPICAL_OOM_KILL_MB,
+            "a floor at {DEFAULT_MIN_AVAILABLE_MB} MB must leave room above the \
+             ~{TYPICAL_OOM_KILL_MB} MB where the OOM killer starts"
+        );
+    }
+
     /// Exactly at the limit counts as over it — a threshold that only fires
     /// strictly above leaves a value that reads as tripped but does nothing.
     #[test]
     fn thresholds_are_inclusive() {
         assert_eq!(
-            decide_watchdog_action(4096, LIMITS, None, false),
+            decide_watchdog_action(4096, ROOMY, LIMITS, None, false),
             WatchdogAction::Unload
         );
         assert_eq!(
-            decide_watchdog_action(10240, LIMITS, None, false),
+            decide_watchdog_action(10240, ROOMY, LIMITS, None, false),
             WatchdogAction::Retire
         );
     }
@@ -1197,9 +1408,8 @@ mod tests {
         assert!(resolve_mode(&owned).is_err());
     }
 
-    fn key(cwd: &str, exe: &str, len: u64, mtime: u128, sync: &str) -> String {
+    fn key(exe: &str, len: u64, mtime: u128, sync: &str) -> String {
         key_from_parts(
-            Path::new(cwd),
             Path::new(exe),
             len,
             mtime,
@@ -1209,29 +1419,114 @@ mod tests {
 
     #[test]
     fn key_is_stable_for_same_inputs() {
-        assert_eq!(
-            key("/repo", "/bin/mcp", 10, 20, "1"),
-            key("/repo", "/bin/mcp", 10, 20, "1")
-        );
+        assert_eq!(key("/bin/mcp", 10, 20, "1"), key("/bin/mcp", 10, 20, "1"));
     }
 
     /// Configuration must split daemons: a server started with different
     /// behaviour-changing env does not answer what the new client is asking for.
     #[test]
     fn key_depends_on_keyed_env() {
-        assert_ne!(
-            key("/repo", "/bin/mcp", 10, 20, "1"),
-            key("/repo", "/bin/mcp", 10, 20, "0")
+        assert_ne!(key("/bin/mcp", 10, 20, "1"), key("/bin/mcp", 10, 20, "0"));
+    }
+
+    /// The inverse of the old `key_depends_on_project`, and the whole point of
+    /// this change: sessions started in different directories must land on ONE
+    /// daemon. Keying on the cwd bought no isolation — every tool takes its
+    /// `directory` as a parameter — and cost 11 processes holding 12.5 GB.
+    ///
+    /// Judged on the real `daemon_key()`, not on `key_from_parts`: the pure
+    /// helper no longer takes a cwd at all, so asking it would prove nothing.
+    /// The process-wide cwd is restored, and no other test in this binary reads
+    /// it.
+    #[test]
+    fn key_does_not_depend_on_the_working_directory() {
+        let original = std::env::current_dir().expect("a working directory");
+
+        std::env::set_current_dir("/tmp").expect("chdir /tmp");
+        let from_tmp = daemon_key().expect("a key");
+
+        std::env::set_current_dir("/").expect("chdir /");
+        let from_root = daemon_key().expect("a key");
+
+        std::env::set_current_dir(&original).expect("chdir back");
+
+        assert_eq!(
+            from_tmp, from_root,
+            "one daemon serves every working directory"
         );
     }
 
-    /// Different projects, different daemons — otherwise "one per project" turns
-    /// into "one for everything".
     #[test]
-    fn key_depends_on_project() {
-        assert_ne!(
-            key("/repo-a", "/bin/mcp", 10, 20, "1"),
-            key("/repo-b", "/bin/mcp", 10, 20, "1")
+    fn an_explicit_directory_wins() {
+        assert_eq!(
+            resolve_socket_dir(
+                Some("/explicit"),
+                Some("/run/user/1000"),
+                Some(Path::new("/run/user/1000")),
+                Some("sc"),
+                Path::new("/tmp")
+            ),
+            PathBuf::from("/explicit")
+        );
+    }
+
+    #[test]
+    fn the_runtime_dir_is_preferred_when_the_environment_names_it() {
+        assert_eq!(
+            resolve_socket_dir(
+                None,
+                Some("/run/user/1000"),
+                None,
+                Some("sc"),
+                Path::new("/tmp")
+            ),
+            PathBuf::from("/run/user/1000/rust-code-mcp")
+        );
+    }
+
+    /// The split this closes. A session started outside a login shell has no
+    /// `XDG_RUNTIME_DIR`, computes the same key as its neighbours, and used to
+    /// look for the socket in `/tmp` — where it found nothing and started a
+    /// second daemon. Both halves of that were live on this machine at once, on
+    /// two separate keys.
+    #[test]
+    fn a_missing_xdg_variable_still_finds_the_runtime_directory() {
+        assert_eq!(
+            resolve_socket_dir(
+                None,
+                None,
+                Some(Path::new("/run/user/1000")),
+                Some("sc"),
+                Path::new("/tmp")
+            ),
+            PathBuf::from("/run/user/1000/rust-code-mcp"),
+            "an unset XDG_RUNTIME_DIR must not send this client to a different directory \
+             than its neighbours"
+        );
+        assert_eq!(
+            resolve_socket_dir(
+                Some(""),
+                Some(""),
+                Some(Path::new("/run/user/1000")),
+                Some("sc"),
+                Path::new("/tmp")
+            ),
+            PathBuf::from("/run/user/1000/rust-code-mcp"),
+            "empty is as unset as unset"
+        );
+    }
+
+    /// With no runtime directory at all — a container, a non-systemd host — the
+    /// old per-user temp directory is still the answer.
+    #[test]
+    fn without_a_runtime_directory_it_falls_back_to_temp() {
+        assert_eq!(
+            resolve_socket_dir(None, None, None, Some("sc"), Path::new("/tmp")),
+            PathBuf::from("/tmp/rust-code-mcp-sc")
+        );
+        assert_eq!(
+            resolve_socket_dir(None, None, None, None, Path::new("/tmp")),
+            PathBuf::from("/tmp/rust-code-mcp-shared")
         );
     }
 
@@ -1240,13 +1535,13 @@ mod tests {
     #[test]
     fn key_depends_on_binary_identity() {
         assert_ne!(
-            key("/repo", "/bin/mcp", 10, 20, "1"),
-            key("/repo", "/bin/mcp", 10, 21, "1"),
+            key("/bin/mcp", 10, 20, "1"),
+            key("/bin/mcp", 10, 21, "1"),
             "a different binary mtime means a different daemon"
         );
         assert_ne!(
-            key("/repo", "/bin/mcp", 10, 20, "1"),
-            key("/repo", "/bin/mcp", 11, 20, "1"),
+            key("/bin/mcp", 10, 20, "1"),
+            key("/bin/mcp", 11, 20, "1"),
             "a different binary size means a different daemon"
         );
     }
