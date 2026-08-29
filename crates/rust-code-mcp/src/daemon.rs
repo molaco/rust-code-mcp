@@ -455,15 +455,22 @@ pub fn decide_watchdog_action(
     since_unload: Option<Duration>,
     retiring: bool,
 ) -> WatchdogAction {
-    if retiring {
-        // Already on the way out; a second decision would only unlink a socket
-        // that by then may belong to our successor.
-        return WatchdogAction::None;
-    }
-
     // Hard first: once memory is this high the unload has demonstrably not
     // helped, and checking soft first would spend another cooldown finding out.
-    if limits.hard_mb > 0 && rss_mb >= limits.hard_mb {
+    //
+    // A daemon that already retired may not retire again: the socket it would
+    // unlink by then belongs to its successor. Only *this* branch is barred to
+    // it, though — everything below is not only still allowed but is where it
+    // pays best. A retired daemon is past the hard limit by definition, serves
+    // no new clients, and holds its contexts purely for the sessions still
+    // draining; unloading touches no socket at all. Barring the whole function
+    // instead was the 2026-08-29 defect: RSS 21.6 GB sat untouched for the full
+    // `RMC_RETIRE_GRACE_SECS` next to a successor loading its own analysis, and
+    // between them they took this machine's 16 GB of swap to zero. Garbage
+    // collection kept running throughout and kept reporting success — it
+    // reclaims salsa memos, not the database — so the logs read "collected
+    // garbage" every five minutes while nothing came back.
+    if !retiring && limits.hard_mb > 0 && rss_mb >= limits.hard_mb {
         return WatchdogAction::Retire;
     }
 
@@ -947,9 +954,13 @@ pub async fn run_daemon(
                     // Which of the two reasons fired is worth naming: "RSS 3 GB,
                     // unloading" would read as a bug in the threshold rather
                     // than as the machine-wide floor doing its job.
+                    // `retiring` is named too: a retired daemon unloading at 21 GB
+                    // reads as a broken soft limit unless the line says which
+                    // daemon it came from, and both daemons write to one log file.
                     tracing::warn!(
-                        "unloading analysis contexts: RSS {} MB (soft limit {} MB), \
+                        "unloading analysis contexts{}: RSS {} MB (soft limit {} MB), \
                          machine has {:?} MB available (floor {} MB)",
+                        if retiring { " (retired, draining)" } else { "" },
                         rss_mb,
                         limits.soft_mb,
                         available_mb,
@@ -1110,12 +1121,52 @@ mod watchdog_tests {
         );
     }
 
-    /// Deciding twice would unlink a socket that by then may belong to the
+    /// Retiring twice would unlink a socket that by then belongs to the
     /// successor daemon.
     #[test]
-    fn a_retiring_daemon_decides_nothing_further() {
+    fn a_retiring_daemon_never_retires_again() {
+        assert_ne!(
+            decide_watchdog_action(11000, ROOMY, LIMITS, None, true),
+            WatchdogAction::Retire
+        );
+    }
+
+    /// And it is the one daemon that most needs to unload. It is past the hard
+    /// limit by definition, no new client will ever reach it, and its contexts
+    /// serve only the sessions still draining — while a successor is already
+    /// loading an analysis of its own beside it. On 2026-08-29 this returned
+    /// `None` and a retired daemon held 21.6 GB for the full grace period,
+    /// taking the machine's swap to zero.
+    #[test]
+    fn a_retiring_daemon_still_unloads() {
         assert_eq!(
             decide_watchdog_action(11000, ROOMY, LIMITS, None, true),
+            WatchdogAction::Unload
+        );
+    }
+
+    /// The rate limit is not lifted by retiring: an unload that just ran freed
+    /// what it was going to free, and repeating it every tick would only spend
+    /// the reload cost again on the sessions that are draining.
+    #[test]
+    fn a_retiring_daemon_still_respects_the_cooldown() {
+        assert_eq!(
+            decide_watchdog_action(11000, ROOMY, LIMITS, Some(Duration::from_secs(60)), true),
+            WatchdogAction::None
+        );
+        assert_eq!(
+            decide_watchdog_action(11000, ROOMY, LIMITS, Some(Duration::from_secs(600)), true),
+            WatchdogAction::Unload
+        );
+    }
+
+    /// Retiring is not itself a reason to unload — the thresholds still decide.
+    /// A daemon retired by the hard limit and since brought back under the soft
+    /// one by its own unload has nothing left to do but drain.
+    #[test]
+    fn a_retiring_daemon_below_the_limits_does_nothing() {
+        assert_eq!(
+            decide_watchdog_action(3000, ROOMY, LIMITS, None, true),
             WatchdogAction::None
         );
     }
