@@ -203,10 +203,19 @@ async fn mcp_round_trip_against_self() {
     assert!(body.contains("\"node_count\""), "build response: {body}");
     assert!(body.contains("\"binding_count\""));
 
+    // The assertion below is about `load` being IN the graph, so the call has
+    // to see every binding. `imports_of` returns them in node-id order — a
+    // content hash — and there are ~90 of them, so with the default page of 50
+    // whether `load` shows up is decided by hashes: any edit anywhere in
+    // rmc-graph reshuffles the page and this test fails for no reason related
+    // to what it checks.
     let imports = get_imports(GraphImportsParams {
         directory: manifest_dir.to_string(),
         module: "rmc_graph::graph".to_string(),
-        pagination: ListPaginationParams::default(),
+        pagination: ListPaginationParams {
+            limit: Some(1000),
+            ..ListPaginationParams::default()
+        },
     })
     .await
     .expect("get_imports");
