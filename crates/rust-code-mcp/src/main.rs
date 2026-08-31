@@ -5,8 +5,9 @@
 #![recursion_limit = "512"]
 
 use rmc_server::mcp::{
-    automatic_embedding_profile_name, cuda_capable_features_compiled,
-    parse_background_sync_env, ServerRuntime, BACKGROUND_SYNC_ENABLED_VALUES, BACKGROUND_SYNC_ENV,
+    cuda_capable_features_compiled, install_automatic_backend, parse_background_sync_env,
+    resolve_automatic_profile_name, validate_automatic_profile, ServerRuntime,
+    BACKGROUND_SYNC_ENABLED_VALUES, BACKGROUND_SYNC_ENV, EMBEDDING_PROFILE_ENV,
 };
 use rmc_server::tools::SearchTool;
 use rmcp::{ServiceExt, transport::stdio};
@@ -39,13 +40,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let background_sync_env = std::env::var(BACKGROUND_SYNC_ENV).ok();
     let background_sync_enabled = parse_background_sync_env(background_sync_env.as_deref());
+
+    // A statement, not a log argument: `tracing` evaluates arguments only when
+    // the callsite level is enabled, so `RUST_LOG=error` would skip the check.
+    let requested_profile = std::env::var(EMBEDDING_PROFILE_ENV).ok();
+    let automatic_backend =
+        validate_automatic_profile(resolve_automatic_profile_name(requested_profile.as_deref()))
+            .unwrap_or_else(|err| {
+                eprintln!("{EMBEDDING_PROFILE_ENV}: {err}");
+                std::process::exit(2);
+            });
+    let automatic_profile = automatic_backend.profile.name().to_string();
+    if install_automatic_backend(automatic_backend).is_err() {
+        eprintln!("{EMBEDDING_PROFILE_ENV}: the default backend was already resolved before startup");
+        std::process::exit(2);
+    }
+
     tracing::info!(
-        "MCP startup defaults: background sync {} ({}='{}'; enabled only for {}, case-insensitive); automatic/background embedding profile default {}; CUDA-capable features compiled: {}",
+        "MCP startup defaults: background sync {} ({}='{}'; enabled only for {}, case-insensitive); automatic/background embedding profile default {} ({}='{}'); CUDA-capable features compiled: {}",
         if background_sync_enabled { "enabled" } else { "disabled" },
         BACKGROUND_SYNC_ENV,
         background_sync_env.as_deref().unwrap_or("<unset>"),
         BACKGROUND_SYNC_ENABLED_VALUES,
-        automatic_embedding_profile_name(),
+        automatic_profile,
+        EMBEDDING_PROFILE_ENV,
+        requested_profile.as_deref().unwrap_or("<unset>"),
         cuda_capable_features_compiled(),
     );
 

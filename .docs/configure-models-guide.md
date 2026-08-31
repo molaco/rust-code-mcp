@@ -39,6 +39,10 @@ Select one by **name**:
 
 Switching between existing models requires nothing more than the name.
 
+`RMC_EMBEDDING_PROFILE` changes the default for calls that omit
+`embedding_profile`, with no recompile. Built-in names only, read once at
+startup; an unusable name stops the server with exit code 2.
+
 ## 2. Adding a new API model — config only, no recompile
 
 Create an **`embedding_profiles.toml`**. It is discovered two ways; the
@@ -48,6 +52,9 @@ environment variable wins when both are present:
    (global, applies to every indexed project).
 2. `embedding_profiles.toml` in the root of the project being indexed
    (per-project).
+
+`RUST_CODE_MCP_EMBEDDING_PROFILES` names a file of extra profiles;
+`RMC_EMBEDDING_PROFILE` picks the default built-in profile.
 
 ### TOML schema
 
@@ -174,3 +181,4 @@ Note: for a large compute-bound model, raising concurrency can make indexing
 | Add a local model | Code change in `src/embeddings/` + recompile |
 | Set the API key | `OPENROUTER_API_KEY` environment variable |
 | Tune OpenRouter speed | `RUST_CODE_MCP_OPENROUTER_*` environment variables |
+| Change the default profile | `RMC_EMBEDDING_PROFILE` environment variable (built-in names only) |
