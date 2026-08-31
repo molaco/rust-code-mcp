@@ -48,8 +48,8 @@ mod tests {
 
     #[test]
     fn an_absolute_path_passes_through_unchanged() {
-        let got = require_absolute("directory", "/home/sc/t/bur/rust_app").unwrap();
-        assert_eq!(got, PathBuf::from("/home/sc/t/bur/rust_app"));
+        let got = require_absolute("directory", "/home/user/projects/example").unwrap();
+        assert_eq!(got, PathBuf::from("/home/user/projects/example"));
     }
 
     #[test]
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn a_tilde_path_is_refused_with_the_reason_it_looks_absolute() {
-        let err = require_absolute("directory", "~/t/bur/rust_app").unwrap_err();
+        let err = require_absolute("directory", "~/projects/example").unwrap_err();
         assert!(err.message.contains("not expanded"), "{}", err.message);
     }
 }

@@ -330,8 +330,8 @@ pub struct WatchdogLimits {
 /// A freshly started daemon that has done *nothing* — no project loaded, no
 /// query answered — already sits at **2.3 GB**: the ONNX runtime, the embedding
 /// model and the GPU probe are paid for at startup. One `Fast`-loaded workspace
-/// of ~4000 files adds ~3 GB, which is why a healthy daemon serving
-/// `bur/rust_app` measures ~5.3 GB.
+/// of ~4000 files adds ~3 GB, which is why a healthy daemon serving one such
+/// workspace measures ~5.3 GB.
 ///
 /// So the ordinary working point is above 5 GB, and the first draft of this
 /// constant — 4 GB, picked from the workspace cost alone and forgetting the

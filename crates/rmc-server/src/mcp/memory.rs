@@ -4,7 +4,7 @@
 //!
 //! Dropping a loaded rust-analyzer context frees the objects but does not give
 //! the pages back to the kernel. Measured on a live daemon (24-core machine,
-//! one `bur/rust_app` workspace loaded):
+//! one ~4000-file workspace loaded):
 //!
 //! ```text
 //! before                       5291 MB RSS

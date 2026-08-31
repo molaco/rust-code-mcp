@@ -1087,8 +1087,8 @@ pub fn first() {
     /// # Running it
     ///
     /// ```text
-    /// RMC_RSS_CYCLE_PROJECT=/home/sc/t/bur/rust_app \
-    ///   cargo test -p rmc-server --features migraphx -- --ignored --nocapture rss_across
+    /// RMC_RSS_CYCLE_PROJECT=/absolute/path/to/a/real/workspace \
+    ///   cargo test -p rmc-server -- --ignored --nocapture rss_across
     /// ```
     ///
     /// `RMC_RSS_CYCLE_COUNT` (default 4) and `RMC_RSS_CYCLE_TOLERANCE_MB`

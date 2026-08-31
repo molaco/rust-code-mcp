@@ -164,7 +164,7 @@ For Rust-specific workspace analysis, first call `build_hypergraph` once (reuses
 
 Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/` (macOS) or `~/.local/share/search/` (Linux), keyed by a hash of the project path **and the active embedding profile** — so different profiles get independent indexes. It does not write index/cache data to your project directory; `crate_skeleton` is the explicit exception and writes generated files under `.skeleton/`. The persisted hypergraph lives alongside the index data (under `graph/<workspace_hash>/`, in LMDB). `clear_cache` with `include_hypergraph=true` wipes both.
 
-## Shared daemon (one server per project)
+## Shared daemon (one server per user)
 
 The stdio transport is 1:1 with its client by construction: every editor window or
 agent session spawns its own server process — and with it another copy of the loaded
