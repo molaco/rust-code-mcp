@@ -9,13 +9,15 @@
 //!
 //! This achieves 100-1000x speedup vs full reindexing for unchanged codebases.
 
-use rmc_engine::embeddings::EmbeddingBackend;
 use crate::indexing::identity::{
     active_chunking_identity_for_backend, identity_hash, indexing_identity,
 };
 use crate::indexing::merkle::{ChangeSet, FileSystemMerkle};
-use crate::indexing::unified::{IndexFileResult, IndexStats, UnifiedIndexer};
+use crate::indexing::unified::{
+    IndexFileResult, IndexStats, UnifiedIndexer, ensure_index_disk_headroom,
+};
 use anyhow::Result;
+use rmc_engine::embeddings::EmbeddingBackend;
 use std::path::{Path, PathBuf};
 use tracing;
 
@@ -163,6 +165,7 @@ impl IncrementalIndexer {
             "Starting incremental indexing for {}",
             codebase_path.display()
         );
+        ensure_index_disk_headroom(&self.config.cache_path)?;
 
         let snapshot_path = get_snapshot_path_for_backend(codebase_path, &self.config.backend);
         tracing::debug!("Snapshot path: {}", snapshot_path.display());
@@ -189,7 +192,7 @@ impl IncrementalIndexer {
         tracing::info!("Built Merkle tree with {} files", new_merkle.file_count());
 
         // Step 3: Determine indexing strategy
-        let stats = if let Some(old) = old_merkle {
+        let stats = if let Some(old) = old_merkle.as_ref() {
             // Incremental: compare trees and index only changes
             self.incremental_update(codebase_path, &old, &new_merkle)
                 .await?
@@ -202,11 +205,16 @@ impl IncrementalIndexer {
                 .await?
         };
 
-        // Step 4: Save new snapshot for next time
-        new_merkle.save_snapshot(&snapshot_path)?;
+        // Step 4: commit only the paths whose index writes completed. Failed
+        // additions stay absent and failed modifications/deletions retain the
+        // old hash, so the next background tick retries them automatically.
+        let committed_merkle =
+            new_merkle.snapshot_with_retries(old_merkle.as_ref(), &stats.retry_files);
+        committed_merkle.save_snapshot(&snapshot_path)?;
         tracing::info!(
-            "Saved new Merkle snapshot to {}",
-            snapshot_path.display()
+            "Saved Merkle snapshot to {} ({} retryable file failure(s) retained)",
+            snapshot_path.display(),
+            stats.failed_files,
         );
 
         Ok(stats)
@@ -261,12 +269,27 @@ impl IncrementalIndexer {
         changes: ChangeSet,
     ) -> Result<IndexStats> {
         let mut stats = IndexStats::default();
+        let storage_path = self.config.cache_path.clone();
         let indexer = self.ensure_indexer().await?;
 
         // Handle deletions
         for deleted_path in &changes.deleted {
-            tracing::info!("Deleting chunks for removed file: {}", deleted_path.display());
-            indexer.delete_file_chunks(deleted_path).await?;
+            ensure_index_disk_headroom(&storage_path)?;
+            tracing::info!(
+                "Deleting chunks for removed file: {}",
+                deleted_path.display()
+            );
+            if let Err(error) = indexer.delete_file_chunks(deleted_path).await {
+                stats.failed_files += 1;
+                stats.retry_files.push(deleted_path.clone());
+                tracing::warn!(
+                    "Failed to delete {} from the index (will retry): {}",
+                    deleted_path.display(),
+                    error
+                );
+                continue;
+            }
+
             stats.skipped_files += 1;
         }
 
@@ -274,17 +297,25 @@ impl IncrementalIndexer {
         for modified_path in &changes.modified {
             tracing::info!("Reindexing modified file: {}", modified_path.display());
             // Delete old chunks first
-            indexer.delete_file_chunks(modified_path).await?;
+            if let Err(error) = indexer.delete_file_chunks(modified_path).await {
+                stats.failed_files += 1;
+                stats.retry_files.push(modified_path.clone());
+                tracing::warn!(
+                    "Failed to clear old chunks for {} (will retry): {}",
+                    modified_path.display(),
+                    error
+                );
+                continue;
+            }
 
-            match indexer.index_file(modified_path).await {
+            match indexer.reindex_file(modified_path).await {
                 Ok(IndexFileResult::Indexed { chunks_count }) => {
                     stats.indexed_files += 1;
                     stats.total_chunks += chunks_count;
                 }
                 Ok(_) => stats.skipped_files += 1,
                 Err(e) => {
-                    tracing::error!("Failed to index {}: {}", modified_path.display(), e);
-                    stats.skipped_files += 1;
+                    stats.record_error(modified_path, &e);
                 }
             }
         }
@@ -300,8 +331,7 @@ impl IncrementalIndexer {
                 }
                 Ok(_) => stats.skipped_files += 1,
                 Err(e) => {
-                    tracing::error!("Failed to index {}: {}", added_path.display(), e);
-                    stats.skipped_files += 1;
+                    stats.record_error(added_path, &e);
                 }
             }
         }
@@ -310,9 +340,10 @@ impl IncrementalIndexer {
         indexer.commit()?;
 
         tracing::info!(
-            "✓ Incremental update complete: {} files indexed, {} chunks",
+            "✓ Incremental update complete: {} files indexed, {} chunks, {} retryable failures",
             stats.indexed_files,
-            stats.total_chunks
+            stats.total_chunks,
+            stats.failed_files,
         );
 
         Ok(stats)
@@ -362,16 +393,8 @@ mod tests {
     fn snapshot_path_changes_by_chunking_identity() {
         let codebase_path = Path::new("/tmp/rust-code-mcp-snapshot-test");
         let backend = EmbeddingBackend::default();
-        let first = indexing_identity(
-            codebase_path,
-            &backend,
-            "chunk-split:v1:target768:hard1024",
-        );
-        let second = indexing_identity(
-            codebase_path,
-            &backend,
-            "chunk-split:v1:target512:hard768",
-        );
+        let first = indexing_identity(codebase_path, &backend, "chunk-split:v1:target768:hard1024");
+        let second = indexing_identity(codebase_path, &backend, "chunk-split:v1:target512:hard768");
 
         assert_ne!(
             get_snapshot_path_for_identity(&first),

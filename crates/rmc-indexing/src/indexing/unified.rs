@@ -5,19 +5,20 @@
 //! - VectorStore: Vector indexing operations (LanceDB embedded backend)
 //! - IndexerCore: Core file processing and embedding generation
 
-use rmc_engine::chunker::{ChunkId, CodeChunk};
-use rmc_config::config::IndexerConfig;
-use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
-use rmc_engine::search::Bm25Search;
+use crate::indexing::error_collection::{ErrorCategory, categorize_error};
 use crate::indexing::indexer_core::IndexerCore;
 use crate::indexing::tantivy_adapter::TantivyAdapter;
 use crate::indexing::unified_parallel::{
     collect_rust_files, parallel_parse_batch, process_batch_errors,
 };
 use crate::metrics::IndexingMetrics;
-use rmc_engine::vector_store::VectorStore;
 use anyhow::{Context, Result};
-use std::path::Path;
+use rmc_config::config::IndexerConfig;
+use rmc_engine::chunker::{ChunkId, CodeChunk};
+use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
+use rmc_engine::search::Bm25Search;
+use rmc_engine::vector_store::VectorStore;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tantivy::Index;
 
@@ -28,10 +29,15 @@ pub struct IndexStats {
     pub total_files: usize,
     /// Number of files that were indexed
     pub indexed_files: usize,
-    /// Number of files skipped (unchanged)
+    /// Number of unchanged files skipped through the metadata cache.
     pub unchanged_files: usize,
-    /// Number of files that failed to index
+    /// Number of files intentionally skipped or removed.
     pub skipped_files: usize,
+    /// Number of transient failures that must be retried.
+    pub failed_files: usize,
+    /// Paths that the Merkle snapshot must leave at their previous state.
+    #[doc(hidden)]
+    pub retry_files: Vec<PathBuf>,
     /// Total number of chunks generated
     pub total_chunks: usize,
 }
@@ -40,6 +46,20 @@ impl IndexStats {
     /// Create stats indicating no changes
     pub fn unchanged() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn record_error(&mut self, file_path: &Path, error: &anyhow::Error) {
+        match categorize_error(error.as_ref()) {
+            ErrorCategory::Permanent => {
+                tracing::debug!("Skipped {}: {}", file_path.display(), error);
+                self.skipped_files += 1;
+            }
+            ErrorCategory::Transient => {
+                tracing::warn!("Failed {} (will retry): {}", file_path.display(), error);
+                self.failed_files += 1;
+                self.retry_files.push(file_path.to_path_buf());
+            }
+        }
     }
 }
 
@@ -68,6 +88,53 @@ pub struct UnifiedIndexer {
     /// callers (e.g. cache-version checks) that need to reconcile
     /// against the model that built this index.
     backend: EmbeddingBackend,
+    /// Existing path on the filesystem that stores the persistent indexes.
+    storage_root: PathBuf,
+}
+
+const MIN_INDEX_FREE_ENV: &str = "RMC_MIN_INDEX_FREE_MB";
+const DEFAULT_MIN_INDEX_FREE_MB: u64 = 2048;
+
+fn configured_min_index_free_mb() -> u64 {
+    std::env::var(MIN_INDEX_FREE_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(DEFAULT_MIN_INDEX_FREE_MB)
+}
+
+fn has_disk_headroom(available_bytes: u64, minimum_mb: u64) -> bool {
+    minimum_mb == 0 || available_bytes >= minimum_mb.saturating_mul(1024 * 1024)
+}
+
+fn nearest_existing_path(path: &Path) -> &Path {
+    let mut candidate = path;
+    while !candidate.exists() {
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        candidate = parent;
+    }
+    candidate
+}
+
+pub(crate) fn ensure_index_disk_headroom(path: &Path) -> Result<()> {
+    let minimum_mb = configured_min_index_free_mb();
+    if minimum_mb == 0 {
+        return Ok(());
+    }
+    let probe = nearest_existing_path(path);
+    let available = fs2::available_space(probe)
+        .with_context(|| format!("Failed to read free space at {}", probe.display()))?;
+    if !has_disk_headroom(available, minimum_mb) {
+        anyhow::bail!(
+            "index write refused: {} MiB free at {}, below {}={} MiB; free disk space or set the threshold to 0 to disable",
+            available / (1024 * 1024),
+            probe.display(),
+            MIN_INDEX_FREE_ENV,
+            minimum_mb,
+        );
+    }
+    Ok(())
 }
 
 impl UnifiedIndexer {
@@ -142,7 +209,7 @@ impl UnifiedIndexer {
             .join("vectors")
             .join(collection_name);
         let vector_store =
-            VectorStore::new_embedded(vector_path, vector_size, embedder_identity)
+            VectorStore::new_embedded(vector_path.clone(), vector_size, embedder_identity)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to initialize VectorStore: {}", e))?;
 
@@ -154,6 +221,7 @@ impl UnifiedIndexer {
             vector_store,
             metrics: IndexingMetrics::new(),
             backend,
+            storage_root: vector_path,
         })
     }
 
@@ -164,6 +232,25 @@ impl UnifiedIndexer {
 
     /// Index a single file to both Tantivy and vector store
     pub async fn index_file(&mut self, file_path: &Path) -> Result<IndexFileResult> {
+        self.index_file_impl(file_path, true).await
+    }
+
+    /// Reindex a path that the Merkle tree proved was modified.
+    ///
+    /// This deliberately bypasses the metadata-cache fast path. If a previous
+    /// multi-file run wrote this file successfully but failed before committing
+    /// its Merkle snapshot, the cache already describes the new bytes. The next
+    /// run still has to rebuild after deleting the path's old chunks.
+    pub(crate) async fn reindex_file(&mut self, file_path: &Path) -> Result<IndexFileResult> {
+        self.index_file_impl(file_path, false).await
+    }
+
+    async fn index_file_impl(
+        &mut self,
+        file_path: &Path,
+        consult_metadata_cache: bool,
+    ) -> Result<IndexFileResult> {
+        ensure_index_disk_headroom(&self.storage_root)?;
         let file_start = Instant::now();
 
         // Check if file should be processed
@@ -172,9 +259,11 @@ impl UnifiedIndexer {
         }
 
         // Fast stat-based change detection (avoids reading file content)
-        if !self.core.has_stat_changed(file_path)? {
-            tracing::debug!("File unchanged (stat): {}", file_path.display());
-            return Ok(IndexFileResult::Unchanged);
+        if consult_metadata_cache {
+            if !self.core.has_stat_changed(file_path)? {
+                tracing::debug!("File unchanged (stat): {}", file_path.display());
+                return Ok(IndexFileResult::Unchanged);
+            }
         }
 
         // Read file content (only if stat suggests change)
@@ -182,7 +271,7 @@ impl UnifiedIndexer {
             .context(format!("Failed to read file: {}", file_path.display()))?;
 
         // Content hash check (confirms stat-based detection)
-        if !self.core.has_file_changed(file_path, &content)? {
+        if consult_metadata_cache && !self.core.has_file_changed(file_path, &content)? {
             tracing::debug!("File unchanged (hash): {}", file_path.display());
             return Ok(IndexFileResult::Unchanged);
         }
@@ -222,7 +311,9 @@ impl UnifiedIndexer {
             .zip(embeddings.into_iter())
             .map(|(chunk, embedding)| (chunk.id, embedding, chunk))
             .collect();
-        self.vector_store.upsert_chunks(chunk_data).await
+        self.vector_store
+            .upsert_chunks(chunk_data)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to index chunks to vector store: {}", e))?;
 
         // Update metadata cache
@@ -232,11 +323,14 @@ impl UnifiedIndexer {
         let file_duration = file_start.elapsed();
         self.metrics.file_latencies.push(file_duration);
 
-        self.core.refresh_memory_monitor()?;
-        self.metrics.peak_memory_bytes = self
-            .metrics
-            .peak_memory_bytes
-            .max(self.core.memory_used_bytes()?);
+        // Persistence is complete at this point. A best-effort metrics probe
+        // must not turn that success into an indexing failure: a retry of a
+        // modification deletes its chunks before consulting the metadata cache.
+        if let Err(error) = self.core.refresh_memory_monitor() {
+            tracing::warn!("Could not refresh indexing memory metrics: {error}");
+        } else if let Ok(memory_used) = self.core.memory_used_bytes() {
+            self.metrics.peak_memory_bytes = self.metrics.peak_memory_bytes.max(memory_used);
+        }
 
         tracing::info!(
             "✓ Indexed {} chunks from {} in {:?}",
@@ -263,7 +357,11 @@ impl UnifiedIndexer {
             return Ok(stats);
         }
 
-        tracing::info!("Found {} Rust files in {}", rust_files.len(), dir_path.display());
+        tracing::info!(
+            "Found {} Rust files in {}",
+            rust_files.len(),
+            dir_path.display()
+        );
 
         // Index each file
         for file in rust_files {
@@ -279,24 +377,26 @@ impl UnifiedIndexer {
                     stats.skipped_files += 1;
                 }
                 Err(e) => {
-                    tracing::error!("Failed to index {}: {}", file.display(), e);
-                    stats.skipped_files += 1;
+                    stats.record_error(&file, &e);
                 }
             }
         }
 
         // Commit Tantivy changes
-        self.tantivy.commit().context("Failed to commit Tantivy index")?;
+        self.tantivy
+            .commit()
+            .context("Failed to commit Tantivy index")?;
 
         // Finalize metrics
         self.finalize_metrics(&stats, total_start.elapsed());
 
         tracing::info!(
-            "✓ Indexing complete: {} files indexed, {} chunks, {} unchanged, {} skipped",
+            "✓ Indexing complete: {} files indexed, {} chunks, {} unchanged, {} skipped, {} failed",
             stats.indexed_files,
             stats.total_chunks,
             stats.unchanged_files,
-            stats.skipped_files
+            stats.skipped_files,
+            stats.failed_files
         );
 
         Ok(stats)
@@ -348,7 +448,10 @@ impl UnifiedIndexer {
             return Ok(stats);
         }
 
-        tracing::info!("Found {} Rust files, processing in parallel", rust_files.len());
+        tracing::info!(
+            "Found {} Rust files, processing in parallel",
+            rust_files.len()
+        );
 
         // Calculate safe batch size
         let batch_size = self.core.calculate_safe_batch_size()?;
@@ -356,6 +459,7 @@ impl UnifiedIndexer {
 
         // Process in batches
         for (batch_idx, file_batch) in rust_files.chunks(batch_size).enumerate() {
+            ensure_index_disk_headroom(&self.storage_root)?;
             tracing::info!(
                 "Processing batch {}/{} ({} files)",
                 batch_idx + 1,
@@ -403,10 +507,11 @@ impl UnifiedIndexer {
         self.finalize_metrics(&stats, total_start.elapsed());
 
         tracing::info!(
-            "✓ Parallel indexing complete: {} files indexed, {} chunks, {} skipped",
+            "✓ Parallel indexing complete: {} files indexed, {} chunks, {} skipped, {} failed",
             stats.indexed_files,
             stats.total_chunks,
-            stats.skipped_files
+            stats.skipped_files,
+            stats.failed_files
         );
 
         Ok(stats)
@@ -416,7 +521,9 @@ impl UnifiedIndexer {
     pub async fn delete_file_chunks(&mut self, file_path: &Path) -> Result<()> {
         self.tantivy.delete_file_chunks(file_path)?;
         let file_path_str = file_path.to_string_lossy().to_string();
-        self.vector_store.delete_by_file_path(&file_path_str).await
+        self.vector_store
+            .delete_by_file_path(&file_path_str)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to delete chunks from vector store: {}", e))?;
         tracing::debug!("Deleted chunks for file: {}", file_path.display());
         Ok(())
@@ -438,7 +545,9 @@ impl UnifiedIndexer {
         self.tantivy.commit()?;
         tracing::info!("✓ Cleared Tantivy index");
 
-        self.vector_store.clear_collection().await
+        self.vector_store
+            .clear_collection()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to clear vector store: {}", e))?;
         tracing::info!("✓ Cleared vector store");
 
@@ -502,10 +611,7 @@ impl UnifiedIndexer {
         );
 
         // Generate embeddings in GPU-optimized batches
-        let all_embeddings = self
-            .core
-            .generate_embeddings_batched(&all_chunks)
-            .await?;
+        let all_embeddings = self.core.generate_embeddings_batched(&all_chunks).await?;
 
         let embed_duration = embed_start.elapsed();
         self.metrics.embed_duration += embed_duration;
@@ -533,7 +639,10 @@ impl UnifiedIndexer {
             .collect();
 
         // Single batched upsert to vector store (instead of N calls)
-        tracing::debug!("Upserting {} chunks to vector store...", all_chunk_data.len());
+        tracing::debug!(
+            "Upserting {} chunks to vector store...",
+            all_chunk_data.len()
+        );
         self.vector_store
             .upsert_chunks(all_chunk_data)
             .await
@@ -593,6 +702,25 @@ impl Drop for UnifiedIndexer {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn disk_headroom_guard_is_inclusive_and_can_be_disabled() {
+        let mib = 1024 * 1024;
+        assert!(!has_disk_headroom(2047 * mib, 2048));
+        assert!(has_disk_headroom(2048 * mib, 2048));
+        assert!(has_disk_headroom(0, 0));
+    }
+
+    #[test]
+    fn transient_file_errors_are_reported_for_retry() {
+        let mut stats = IndexStats::default();
+        let path = Path::new("/workspace/src/lib.rs");
+        stats.record_error(path, &anyhow::anyhow!("No space left on device"));
+
+        assert_eq!(stats.failed_files, 1);
+        assert_eq!(stats.skipped_files, 0);
+        assert_eq!(stats.retry_files, vec![path.to_path_buf()]);
+    }
 
     #[tokio::test]
     #[ignore] // Requires embedding model
