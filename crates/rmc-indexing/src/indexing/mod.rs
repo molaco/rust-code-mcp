@@ -15,6 +15,7 @@ pub mod project_paths;
 mod retry;
 pub mod search;
 mod tantivy_adapter;
+mod traversal;
 mod unified;
 mod unified_parallel;
 
@@ -30,4 +31,5 @@ pub use project_paths::{
 };
 pub use search::open_bm25_search;
 pub use tantivy_adapter::TantivyAdapter;
+pub use traversal::collect_project_rust_files;
 pub use unified::{IndexFileResult, IndexStats, UnifiedIndexer};

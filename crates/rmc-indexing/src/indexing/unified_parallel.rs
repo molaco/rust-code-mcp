@@ -8,11 +8,11 @@
 
 use crate::indexing::error_collection::{categorize_error, ErrorCollector, ErrorDetail};
 use crate::indexing::indexer_core::{IndexerCore, ProcessedFile};
+use crate::indexing::traversal::collect_project_rust_files;
 use crate::indexing::unified::IndexStats;
 use anyhow::Result;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// Walk `dir_path` and return all reachable `*.rs` files, skipping common
 /// VCS / build / generated directories (`target`, `vendor`, `.git`, `.jj`,
@@ -24,36 +24,7 @@ pub(super) fn collect_rust_files(
     dir_path: &Path,
     stats: &mut IndexStats,
 ) -> Result<Vec<PathBuf>> {
-    let mut rust_files = Vec::new();
-    let mut walk_errors = 0;
-
-    let walker = WalkDir::new(dir_path)
-        .into_iter()
-        .filter_entry(|entry| {
-            let name = entry.file_name().to_string_lossy();
-            !(entry.file_type().is_dir()
-                && matches!(
-                    name.as_ref(),
-                    "target" | "vendor" | ".git" | ".jj" | ".direnv" | ".skeleton"
-                ))
-        });
-
-    for entry in walker {
-        match entry {
-            Ok(e)
-                if e.file_type().is_file()
-                    && e.path().extension() == Some(std::ffi::OsStr::new("rs")) =>
-            {
-                rust_files.push(e.path().to_path_buf());
-            }
-            Ok(_) => {}
-            Err(err) => {
-                let path = err.path().unwrap_or_else(|| Path::new("<unknown>"));
-                tracing::warn!("Failed to access {}: {}", path.display(), err);
-                walk_errors += 1;
-            }
-        }
-    }
+    let (rust_files, walk_errors) = collect_project_rust_files(dir_path);
 
     if walk_errors > 0 {
         tracing::warn!(
