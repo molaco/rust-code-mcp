@@ -208,9 +208,9 @@ against a directory nobody chose.
 
 Memory watchdog (daemon only; 0 disables a threshold):
   RMC_RSS_SOFT_MB=12288      unload the analysis contexts above this RSS
-  RMC_RSS_HARD_MB=20480      above this, retire: stop taking new clients, let
-                             the current ones finish, exit — a successor is
-                             started on demand, so no session is cut off
+  RMC_RSS_HARD_MB=28672      above this, retire: stop taking new clients,
+                             unload contexts, let the current clients finish;
+                             a successor is started on demand
   RMC_RSS_COOLDOWN_SECS=300  minimum gap between two unloads
   RMC_MIN_AVAILABLE_MB=6144  unload when the MACHINE has less than this free,
                              whatever this daemon's own RSS is — the only
@@ -222,6 +222,11 @@ Memory watchdog (daemon only; 0 disables a threshold):
                              evict anything at all
   RMC_MAX_PROJECTS=3         how many analysis contexts stay loaded; past the
                              cap the least recently used one is dropped
+
+Index durability (0 disables the guard):
+  RMC_MIN_INDEX_FREE_MB=2048 refuse persistent index writes below this much
+                             free disk space; failed files remain queued in
+                             the Merkle snapshot for the next sync
 ";
 
 fn daemon_disabled() -> bool {
@@ -260,7 +265,7 @@ pub enum WatchdogAction {
     /// will give back. Costs the next semantic query a reload (~1.5 s for a
     /// `Fast` load of a 4000-file workspace), which is why it is rate-limited.
     Unload,
-    /// Unloading cannot fix this one: retire the daemon.
+    /// Retire the daemon and immediately unload its analysis contexts.
     ///
     /// Retiring is *not* killing the connections. The socket file is unlinked,
     /// so new clients no longer find this daemon and start a fresh one, while
@@ -271,7 +276,7 @@ pub enum WatchdogAction {
     /// failure we are trying to avoid.
     ///
     /// The waiting is bounded, and it has to be — see [`retire_grace_expired`].
-    Retire,
+    RetireAndUnload,
 }
 
 /// Thirty minutes, deliberately the same number as [`DEFAULT_IDLE_SECS`].
@@ -289,7 +294,7 @@ const DEFAULT_RETIRE_GRACE_SECS: u64 = 1800;
 ///
 /// # Why the wait needs an end at all
 ///
-/// [`WatchdogAction::Retire`] hands the socket to a successor and then waits for
+/// [`WatchdogAction::RetireAndUnload`] hands the socket to a successor and then waits for
 /// `live == 0`. That wait is unbounded, and its length is decided by something
 /// the daemon does not control: how long a client session lasts. A Claude Code
 /// session runs for hours, so the mechanism meant to *free* memory produced its
@@ -346,11 +351,17 @@ pub struct WatchdogLimits {
 /// them held between them on the machine that prompted this, and unlike that
 /// fleet it is a number something actually enforces.
 const DEFAULT_RSS_SOFT_MB: u64 = 12288;
-/// Twenty gigabytes: past this, unloading has already been tried and the memory
-/// is stuck in the allocator, so only a fresh process gets it back. Kept at a
-/// ratio to the soft limit rather than at a fixed distance — the escalation
-/// wants room for a peak above the working point, not a constant.
-const DEFAULT_RSS_HARD_MB: u64 = 20480;
+/// Twenty-eight gigabytes: past this, unloading has already been tried and the
+/// memory is stuck in the allocator, so only a fresh process gets it back.
+///
+/// The previous 20 GiB default sat inside the measured 15--22 GiB working range
+/// of one `Full` rust-analyzer context and retired a healthy daemon three times
+/// in two hours. `Full` is required for complete cross-crate and `#[cfg(test)]`
+/// reference answers, so the hard limit must leave that normal peak alone. The
+/// 12 GiB soft limit still unloads first; 28 GiB keeps a sizeable escalation
+/// gap while the machine-wide availability floor remains the final guard when
+/// other processes consume the RAM.
+const DEFAULT_RSS_HARD_MB: u64 = 28672;
 /// Five minutes between unloads. Without a floor the watchdog would unload on
 /// every tick — RSS usually does *not* drop after an unload (see
 /// `rmc_server::mcp::memory`), so the trigger stays true and the next tick would
@@ -471,7 +482,7 @@ pub fn decide_watchdog_action(
     // reclaims salsa memos, not the database — so the logs read "collected
     // garbage" every five minutes while nothing came back.
     if !retiring && limits.hard_mb > 0 && rss_mb >= limits.hard_mb {
-        return WatchdogAction::Retire;
+        return WatchdogAction::RetireAndUnload;
     }
 
     let over_own_limit = limits.soft_mb > 0 && rss_mb >= limits.soft_mb;
@@ -829,6 +840,38 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+async fn unload_analysis_contexts(
+    runtime: &ServerRuntime,
+    retiring: bool,
+    rss_mb: u64,
+    available_mb: Option<u64>,
+    limits: WatchdogLimits,
+) {
+    tracing::warn!(
+        "unloading analysis contexts{}: RSS {} MB (soft limit {} MB), \
+         machine has {:?} MB available (floor {} MB)",
+        if retiring { " (retired, draining)" } else { "" },
+        rss_mb,
+        limits.soft_mb,
+        available_mb,
+        limits.min_available_mb
+    );
+    let report = runtime
+        .state()
+        .clear(RuntimeClearRequest {
+            scope: RuntimeClearScope::SemanticOnly,
+            workspace: None,
+        })
+        .await;
+    tracing::warn!(
+        "unloaded {} project(s); RSS {:?} -> {:?} KiB, {:?} KiB released",
+        report.semantic_projects_cleared,
+        report.memory.rss_kib_before,
+        report.memory.rss_kib_after,
+        report.memory.released_kib,
+    );
+}
+
 /// Daemon: listen on the socket, serve every connection from one `RuntimeState`.
 pub async fn run_daemon(
     socket: &Path,
@@ -957,38 +1000,12 @@ pub async fn run_daemon(
                     // `retiring` is named too: a retired daemon unloading at 21 GB
                     // reads as a broken soft limit unless the line says which
                     // daemon it came from, and both daemons write to one log file.
-                    tracing::warn!(
-                        "unloading analysis contexts{}: RSS {} MB (soft limit {} MB), \
-                         machine has {:?} MB available (floor {} MB)",
-                        if retiring { " (retired, draining)" } else { "" },
-                        rss_mb,
-                        limits.soft_mb,
-                        available_mb,
-                        limits.min_available_mb
-                    );
-                    let report = runtime
-                        .state()
-                        .clear(RuntimeClearRequest {
-                            scope: RuntimeClearScope::SemanticOnly,
-                            workspace: None,
-                        })
-                        .await;
+                    unload_analysis_contexts(runtime, retiring, rss_mb, available_mb, limits).await;
                     last_unload = Some(SystemTime::now());
-                    // Report what the release actually achieved, not that it
-                    // ran. On glibc this line is routinely "0 MB released",
-                    // and that fact belongs in the log rather than in a later
-                    // investigation.
-                    tracing::warn!(
-                        "unloaded {} project(s); RSS {:?} -> {:?} KiB, {:?} KiB released",
-                        report.semantic_projects_cleared,
-                        report.memory.rss_kib_before,
-                        report.memory.rss_kib_after,
-                        report.memory.released_kib,
-                    );
                 }
-                WatchdogAction::Retire => {
+                WatchdogAction::RetireAndUnload => {
                     tracing::warn!(
-                        "RSS {} MB is over the {} MB hard limit; retiring: new clients will start a fresh daemon, current ones finish here",
+                        "RSS {} MB is over the {} MB hard limit; retiring and unloading analysis contexts: new clients will start a fresh daemon, current ones finish here",
                         rss_mb,
                         limits.hard_mb
                     );
@@ -998,6 +1015,13 @@ pub async fn run_daemon(
                     let _ = fs::remove_file(socket);
                     retiring = true;
                     retiring_since = Some(SystemTime::now());
+                    // Retirement changes the economics of unloading: the
+                    // daemon accepts no new work and a successor is about to
+                    // load its own context. Do not carry an old five-minute
+                    // cooldown into that state; release the retired daemon's
+                    // contexts on this very tick.
+                    unload_analysis_contexts(runtime, true, rss_mb, available_mb, limits).await;
+                    last_unload = Some(SystemTime::now());
                 }
             }
         }
@@ -1117,7 +1141,7 @@ mod watchdog_tests {
     fn the_hard_limit_outranks_the_cooldown() {
         assert_eq!(
             decide_watchdog_action(11000, ROOMY, LIMITS, Some(Duration::from_secs(1)), false),
-            WatchdogAction::Retire
+            WatchdogAction::RetireAndUnload
         );
     }
 
@@ -1127,7 +1151,7 @@ mod watchdog_tests {
     fn a_retiring_daemon_never_retires_again() {
         assert_ne!(
             decide_watchdog_action(11000, ROOMY, LIMITS, None, true),
-            WatchdogAction::Retire
+            WatchdogAction::RetireAndUnload
         );
     }
 
@@ -1234,7 +1258,13 @@ mod watchdog_tests {
     #[test]
     fn the_floor_respects_the_cooldown() {
         assert_eq!(
-            decide_watchdog_action(3000, Some(2000), LIMITS, Some(Duration::from_secs(60)), false),
+            decide_watchdog_action(
+                3000,
+                Some(2000),
+                LIMITS,
+                Some(Duration::from_secs(60)),
+                false
+            ),
             WatchdogAction::None
         );
     }
@@ -1302,6 +1332,25 @@ mod watchdog_tests {
         );
     }
 
+    /// A complete cross-crate/reference query requires the measured `Full`
+    /// context. The old 20 GiB default sat inside this normal range and retired
+    /// a healthy daemon repeatedly.
+    #[test]
+    fn defaults_do_not_retire_at_the_measured_full_context_peak() {
+        const MEASURED_FULL_PEAK_MB: u64 = 22 * 1024;
+        let defaults = WatchdogLimits {
+            soft_mb: DEFAULT_RSS_SOFT_MB,
+            hard_mb: DEFAULT_RSS_HARD_MB,
+            min_available_mb: DEFAULT_MIN_AVAILABLE_MB,
+            cooldown: Duration::from_secs(DEFAULT_RSS_COOLDOWN_SECS),
+        };
+
+        assert_ne!(
+            decide_watchdog_action(MEASURED_FULL_PEAK_MB, ROOMY, defaults, None, false),
+            WatchdogAction::RetireAndUnload
+        );
+    }
+
     /// The machine-wide floor has to sit above where an OOM killer starts
     /// choosing victims, or it only ever fires after something has been killed —
     /// which is not a guard. `earlyoom -m 8,4` on a 61 GB desktop kills near
@@ -1327,7 +1376,7 @@ mod watchdog_tests {
         );
         assert_eq!(
             decide_watchdog_action(10240, ROOMY, LIMITS, None, false),
-            WatchdogAction::Retire
+            WatchdogAction::RetireAndUnload
         );
     }
 
