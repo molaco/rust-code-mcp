@@ -224,13 +224,33 @@ to. Six knobs do that instead, all in seconds or MB, all with `0` meaning *off*:
 | `RMC_GC_INTERVAL_SECS` | 300 | How often loaded analyses are garbage-collected. This is also what makes salsa's LRU capacities do anything: they only evict while the revision bumps, and a project nobody edits never bumps on its own. |
 | `RMC_RSS_SOFT_MB` | 12288 | RSS above which the daemon unloads *all* contexts (at most one unload per `RMC_RSS_COOLDOWN_SECS`, default 300). Sized for the three workspaces above: ~2.3 GB of fixed startup cost plus ~3 GB each. |
 | `RMC_MIN_AVAILABLE_MB` | 6144 | Machine-wide floor on `MemAvailable`: below it the daemon unloads even though its own RSS is fine. The only reading here that sees pressure the daemon did not cause — a build, a second analyser, the application under development — and the caches belong to whoever needs the memory more. It never retires the daemon; that pressure usually passes with the build that caused it. |
-| `RMC_RSS_HARD_MB` | 20480 | RSS above which unloading is judged hopeless: the daemon unlinks its socket so new clients start a fresh one, and finishes serving the clients it has. |
+| `RMC_RSS_HARD_MB` | 28672 | RSS above which unloading is judged hopeless: the daemon unlinks its socket so new clients start a fresh one, unloads its contexts on that same tick, and finishes serving the clients it has. Sized above the measured 15–21 GB working range of one `Full` context — at 20480 it retired a *healthy* daemon three times in two hours. |
 | `RMC_RETIRE_GRACE_SECS` | 1800 | How long a retired daemon waits for those clients before exiting anyway. It has to end: a client session runs for hours, and a retired daemon holding 24 GB next to its successor is the failure this bounds. Exiting on the deadline **drops those connections** — the affected session loses its MCP tools until restarted. |
 
 The first two keep the working set from growing; the rest are the guard for when it
 grows anyway. Note which question each asks: three of them ask "is this process too
 big?", and `RMC_MIN_AVAILABLE_MB` asks "does the machine still have room?" — a daemon
 can answer the first comfortably while the machine around it goes to swap.
+
+The cooldown does not apply to a retired daemon's *first* unload. Retirement changes the
+economics of unloading rather than its nature: that daemon takes no new clients and its
+successor is already loading its own context, so it must not sit on 20+ GB waiting out a
+countdown that was armed for a different situation.
+
+### Keeping the index honest when the disk fills
+
+| Knob | Default | What it does |
+|---|---:|---|
+| `RMC_MIN_INDEX_FREE_MB` | 2048 | Refuse persistent index writes below this much free space, checked before a run, before each file and before every batch. `0` disables the guard. |
+
+The failure this prevents is not "indexing stops" but "indexing stops and says it
+finished": an `ENOSPC` mid-run used to leave a *complete* Merkle snapshot behind, so
+every later background sync compared the tree against it and found nothing to do, while
+the files whose writes had failed stayed missing from the vector store. The snapshot now
+keeps the previous node for every path whose write failed — the retry falls out of the
+comparison itself — and it is written to a temporary file and renamed rather than
+truncating the last good one. `index_codebase` reports `⚠ Partially indexed` with the
+number of retryable failures instead of a checkmark.
 
 ## Embedding Models
 
