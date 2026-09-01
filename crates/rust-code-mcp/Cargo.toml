@@ -17,6 +17,8 @@ fs2 = { workspace = true }
 libc = { workspace = true }
 # Socket key (project + env + binary identity).
 sha2 = { workspace = true }
+# The XDG state directory: daemon logs go on disk, never beside the socket.
+directories = { workspace = true }
 
 [dev-dependencies]
 # Examples and integration tests moved here with the executable package, so they
@@ -38,7 +40,6 @@ reqwest = { workspace = true }
 notify = { workspace = true }
 sled = { workspace = true }
 sha2 = { workspace = true }
-directories = { workspace = true }
 ra_ap_syntax = { workspace = true }
 ra_ap_ide = { workspace = true }
 ra_ap_ide_db = { workspace = true }

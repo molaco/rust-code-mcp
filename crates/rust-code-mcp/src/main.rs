@@ -21,22 +21,6 @@ use tracing_subscriber::{self, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Default to WARN for everything, INFO for our own crate. Users who want
-    // RA's internal debug logs can set `RUST_LOG=ra_ap_hir=debug,...`.
-    //
-    // Why this matters: RA emits millions of `tracing::debug!` events during
-    // name resolution. With Level::DEBUG enabled globally, the formatter +
-    // socket-stderr write pipeline becomes the bottleneck — `build_hypergraph`
-    // on a multi-crate workspace went from ~7s to 7+ minutes purely from log
-    // formatting overhead. Keep this at WARN unless explicitly overridden.
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,rust_code_mcp=info,rmc_server=info,rmc_indexing=info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .init();
-
     // Resolve the mode before the expensive startup: a client of the shared
     // daemon needs neither a `ServerRuntime` nor a background sync task — it is
     // a pipe between stdio and the socket.
@@ -71,6 +55,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         daemon::Mode::Client { .. } | daemon::Mode::Daemon { .. } | daemon::Mode::InProcess => {}
     }
+
+    // Default to WARN for everything, INFO for our own crate. Users who want
+    // RA's internal debug logs can set `RUST_LOG=ra_ap_hir=debug,...`.
+    //
+    // Why this matters: RA emits millions of `tracing::debug!` events during
+    // name resolution. With Level::DEBUG enabled globally, the formatter +
+    // socket-stderr write pipeline becomes the bottleneck — `build_hypergraph`
+    // on a multi-crate workspace went from ~7s to 7+ minutes purely from log
+    // formatting overhead. Keep this at WARN unless explicitly overridden.
+    //
+    // After the mode, because the daemon writes elsewhere: a bounded file on
+    // disk instead of the stderr it inherited. `log_internal_errors(false)` for
+    // every mode: a writer that fails must not be reported through `eprintln!`,
+    // which panics when stderr is what failed — and stderr is what failed when
+    // the daemon's log filled its disk.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("warn,rust_code_mcp=info,rmc_server=info,rmc_indexing=info"));
+    let fmt = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_ansi(false)
+        .log_internal_errors(false);
+    #[cfg(unix)]
+    if let daemon::Mode::Daemon { socket, .. } = &mode {
+        fmt.with_writer(daemon::daemon_log_writer(socket)).init();
+    } else {
+        fmt.with_writer(std::io::stderr).init();
+    }
+    #[cfg(not(unix))]
+    {
+        fmt.with_writer(std::io::stderr).init();
+    }
+    #[cfg(unix)]
+    tracing::debug!("mode {mode:?}");
 
     // A statement, not a log argument: `tracing` evaluates arguments only when
     // the callsite level is enabled, so `RUST_LOG=error` would skip the check.

@@ -33,6 +33,11 @@ use tempfile::TempDir;
 const PROFILE_ENV: &str = "RMC_EMBEDDING_PROFILE";
 const BAD_PROFILE: &str = "local-cpu-small-typo";
 
+/// Where a test's daemon logs go, under its socket directory so one temp dir
+/// removes both. Only here: in production the log directory is on disk and the
+/// socket directory is a tmpfs, and keeping them apart is the point.
+const LOG_SUBDIR: &str = "logs";
+
 /// A client to start: the binary as every test here needs it, plus the parts of
 /// the environment that take part in the daemon key.
 #[derive(Clone, Default)]
@@ -54,6 +59,7 @@ impl Client {
     fn command(&self, socket_dir: &Path) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rust-code-mcp"));
         command.env("RUST_LOG", "error").env("RMC_DAEMON_DIR", socket_dir)
+            .env("RMC_DAEMON_LOG_DIR", socket_dir.join(LOG_SUBDIR))
             .env("RMC_DAEMON_IDLE_SECS", "5").env_remove("RMC_DAEMON")
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         if let Some(cwd) = &self.cwd { command.current_dir(cwd); }
@@ -355,6 +361,8 @@ fn an_existing_socket_directory_keeps_its_mode() -> Result<()> {
 }
 
 /// The socket carries the whole session and the log carries what the daemon saw.
+/// The log lives in the log directory, never beside the socket: the runtime
+/// directory is a small tmpfs, and one daemon log once filled all of it.
 #[test]
 fn the_files_a_session_leaves_are_owner_only() -> Result<()> {
     let socket_dir = TempDir::new()?;
@@ -363,22 +371,32 @@ fn the_files_a_session_leaves_are_owner_only() -> Result<()> {
     assert_ne!(serving_pid, session.child.id(),
         "no daemon came up, so no socket, lock or log was written");
 
-    let mut files = Vec::new();
-    for entry in fs::read_dir(socket_dir.path())? {
-        let path = entry?.path();
-        let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
-        files.push((path.to_string_lossy().into_owned(), mode));
-    }
+    let listing = |dir: &Path| -> Result<Vec<(String, u32)>> {
+        let mut files = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
+            files.push((path.to_string_lossy().into_owned(), mode));
+        }
+        Ok(files)
+    };
+    let log_dir = socket_dir.path().join(LOG_SUBDIR);
+    let beside_socket = listing(socket_dir.path())?;
+    let logs = listing(&log_dir)?;
+    let log_dir_mode = fs::metadata(&log_dir)?.permissions().mode() & 0o777;
     drop(session);
     signal_pid(serving_pid, "-TERM");
 
-    for suffix in [".sock", ".lock", ".log"] {
+    for (files, suffix) in [(&beside_socket, ".sock"), (&beside_socket, ".lock"), (&logs, ".log")] {
         let found: Vec<_> = files.iter().filter(|(name, _)| name.ends_with(suffix)).collect();
-        assert_eq!(found.len(), 1, "expected one {suffix} beside the session, found {files:?}");
+        assert_eq!(found.len(), 1, "expected one {suffix}, found {files:?}");
         let (name, mode) = found[0];
         assert_eq!(*mode, 0o600,
             "{name} is 0o{mode:o}, so another account on this machine reaches the session");
     }
+    assert!(!beside_socket.iter().any(|(name, _)| name.ends_with(".log")),
+        "a log beside the socket is a log on the runtime tmpfs: {beside_socket:?}");
+    assert_eq!(log_dir_mode, 0o700, "the log directory the daemon creates is owner-only");
     Ok(())
 }
 

@@ -196,9 +196,9 @@ outer manifest cannot merge two repositories into one — the binary's size and 
 resolved index root (`data_dir()`), because it decides where the index lives and is itself
 resolved from `XDG_DATA_HOME` and then `HOME`, `LD_LIBRARY_PATH`, because it decides which
 CUDA and ONNX libraries the daemon links at start, and every `RMC_*` and `RUST_CODE_MCP_*`
-variable plus `OPENROUTER_API_KEY`. The three transport knobs (`RMC_DAEMON`,
-`RMC_DAEMON_DIR`, `RMC_DAEMON_IDLE_SECS`) are excluded, because they
-choose which daemon a client talks to rather than what it answers. A rebuilt binary, or a
+variable plus `OPENROUTER_API_KEY`. The four transport knobs (`RMC_DAEMON`,
+`RMC_DAEMON_DIR`, `RMC_DAEMON_LOG_DIR`, `RMC_DAEMON_IDLE_SECS`) are excluded, because they
+choose which daemon a client talks to, or where it logs, rather than what it answers. A rebuilt binary, or a
 differently configured one, therefore gets its own daemon instead of silently attaching to
 one that answers differently.
 
@@ -214,13 +214,21 @@ rust-code-mcp --in-process     # previous behaviour (same as RMC_DAEMON=0)
 rust-code-mcp --daemon         # run the daemon in the foreground
 ```
 
-Sockets and daemon logs live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
-`RMC_DAEMON_DIR`). The log sits next to the socket under the same name with a `.log`
-extension, and it is appended rather than replaced, so the crash of an earlier daemon
-stays readable after a new one starts. A directory that already exists is used as it is
-and never re-permissioned; only a directory the daemon creates gets owner-only access. A
-symlink, a path that is not a directory, and a directory owned by another user are
-refused. Unix only; on other platforms the server stays in-process.
+Sockets and locks live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
+`RMC_DAEMON_DIR`). Daemon logs live on disk in `$XDG_STATE_HOME/rust-code-mcp/logs/`,
+normally `~/.local/state/rust-code-mcp/logs/` (override with `RMC_DAEMON_LOG_DIR`), named
+after the socket plus a short hash of its full path, with a `.log` extension, so two
+user-named sockets that share a name do not share a log — never in the runtime directory,
+which is a small tmpfs meant for sockets. The log is appended rather than replaced, so the crash of an earlier daemon stays readable
+after a new one starts, and the daemon truncates it in place before any tracing event that
+would take it past 32 MiB, so a long-lived daemon cannot fill a disk however verbose its
+`RUST_LOG`. The bound is read from the file, not counted: panic output, which reaches the
+same file through the daemon's raw stderr, counts at the next event. A write the log
+cannot take is dropped, never reported through stderr. Either
+directory, when it already exists, is used as it is and never re-permissioned; only a
+directory the daemon creates gets owner-only access. A symlink, a path that is not a
+directory, and a directory owned by another user are refused. Unix only; on other
+platforms the server stays in-process.
 
 ## Embedding Models
 

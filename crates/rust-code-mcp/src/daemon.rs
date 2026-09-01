@@ -31,8 +31,12 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// `RMC_DAEMON=0` (`off`/`false`/`no`) keeps the server inside the client.
 pub const DAEMON_ENV: &str = "RMC_DAEMON";
-/// Sockets and daemon logs. Defaults to `$XDG_RUNTIME_DIR/rust-code-mcp`.
+/// Sockets and locks. Defaults to `$XDG_RUNTIME_DIR/rust-code-mcp`.
 pub const DAEMON_DIR_ENV: &str = "RMC_DAEMON_DIR";
+/// Daemon logs. Defaults to `$XDG_STATE_HOME/rust-code-mcp/logs`: on disk, never
+/// beside the socket. `XDG_RUNTIME_DIR` is a tmpfs of a few gigabytes meant for
+/// sockets, and one daemon log filled the whole of it (3.3 GB, 2026-09-02).
+pub const DAEMON_LOG_DIR_ENV: &str = "RMC_DAEMON_LOG_DIR";
 /// Seconds a daemon stays alive with no clients. `0` means forever.
 pub const IDLE_ENV: &str = "RMC_DAEMON_IDLE_SECS";
 
@@ -45,9 +49,10 @@ const KEYED_ENV_PREFIXES: [&str; 2] = ["RMC_", "RUST_CODE_MCP_"];
 /// and ONNX libraries the daemon links when it starts.
 const KEYED_ENV_EXTRA: [&str; 2] = ["OPENROUTER_API_KEY", "LD_LIBRARY_PATH"];
 
-/// Keyed prefix, excluded anyway: these three select which daemon a client talks
-/// to rather than what it answers, and keying them would split one daemon in two.
-const UNKEYED_ENV: [&str; 3] = [DAEMON_ENV, DAEMON_DIR_ENV, IDLE_ENV];
+/// Keyed prefix, excluded anyway: these four select which daemon a client talks
+/// to, or where it writes its log, rather than what it answers, and keying them
+/// would split one daemon in two.
+const UNKEYED_ENV: [&str; 4] = [DAEMON_ENV, DAEMON_DIR_ENV, IDLE_ENV, DAEMON_LOG_DIR_ENV];
 
 /// Long enough to survive a pause between questions, short enough that a closed
 /// editor does not hold gigabytes all day.
@@ -143,7 +148,8 @@ With no arguments: a client of this project's shared daemon, started on demand.
                       a client passes the flag on to the daemon it starts
 
 Env: RMC_DAEMON=0 makes in-process the default mode; RMC_DAEMON_DIR sets the
-     socket directory; RMC_DAEMON_IDLE_SECS is the same as --idle-secs.
+     socket directory; RMC_DAEMON_LOG_DIR sets the log directory;
+     RMC_DAEMON_IDLE_SECS is the same as --idle-secs.
 ";
 
 fn daemon_disabled() -> bool {
@@ -185,15 +191,16 @@ fn process_uid() -> u32 {
 
 /// A refusal naming the path, so the warning the client logs before it falls
 /// back in-process says what to fix.
-fn refuse_socket_dir(dir: &Path, reason: &str) -> io::Error {
-    io::Error::other(format!("socket directory {}: {reason}", dir.display()))
+fn refuse_dir(dir: &Path, reason: &str) -> io::Error {
+    io::Error::other(format!("directory {}: {reason}", dir.display()))
 }
 
-/// The socket directory: created `0o700`, because the socket is an entry point
-/// into analysing someone's code — and otherwise checked, never chmodded. It may
-/// be a directory the user named through `--socket`, and turning someone's
-/// project directory into `0o700` behind their back is a change nobody asked for.
-fn ensure_socket_dir(dir: &Path) -> io::Result<()> {
+/// The socket or log directory: created `0o700`, because the socket is an entry
+/// point into analysing someone's code and the log carries its paths — and
+/// otherwise checked, never chmodded. It may be a directory the user named
+/// through `--socket`, and turning someone's project directory into `0o700`
+/// behind their back is a change nobody asked for.
+fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     // `symlink_metadata`: a symlink here decides where the socket really lands,
     // so it has to be seen rather than followed.
     let meta = match fs::symlink_metadata(dir) {
@@ -202,18 +209,18 @@ fn ensure_socket_dir(dir: &Path) -> io::Result<()> {
             fs::create_dir_all(dir)?;
             return fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
         }
-        Err(e) => return Err(refuse_socket_dir(dir, &format!("cannot be inspected: {e}"))),
+        Err(e) => return Err(refuse_dir(dir, &format!("cannot be inspected: {e}"))),
     };
     let uid = process_uid();
     if meta.file_type().is_symlink() {
-        return Err(refuse_socket_dir(dir, "is a symlink"));
+        return Err(refuse_dir(dir, "is a symlink"));
     }
     if !meta.is_dir() {
-        return Err(refuse_socket_dir(dir, "is not a directory"));
+        return Err(refuse_dir(dir, "is not a directory"));
     }
     if meta.uid() != uid {
         let owner = format!("is owned by uid {}, not by uid {uid}", meta.uid());
-        return Err(refuse_socket_dir(dir, &owner));
+        return Err(refuse_dir(dir, &owner));
     }
     Ok(())
 }
@@ -355,8 +362,91 @@ fn lock_path(socket: &Path) -> PathBuf {
     socket.with_extension("lock")
 }
 
-fn log_path(socket: &Path) -> PathBuf {
-    socket.with_extension("log")
+/// Where daemon logs go: [`DAEMON_LOG_DIR_ENV`], else the XDG state directory,
+/// else next to the index. Never the socket directory: that is a tmpfs of a few
+/// gigabytes meant for sockets, and a log there is bounded by the machine's RAM
+/// rather than by anything this code does.
+fn log_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var(DAEMON_LOG_DIR_ENV) {
+        return PathBuf::from(dir);
+    }
+    directories::BaseDirs::new()
+        .and_then(|base| base.state_dir().map(|state| state.join("rust-code-mcp").join("logs")))
+        .unwrap_or_else(|| rmc_server::mcp::project_paths::data_dir().join("logs"))
+}
+
+/// `<dir>/<stem>-<hash>.log`: the socket's stem for the eye, eight hex digits
+/// of the whole path so that two sockets sharing a stem — `--socket` names are
+/// the user's to choose — never share a log. Pure, no environment: the spawner
+/// opening stderr and the daemon opening its writer must agree on the name.
+fn log_path(dir: &Path, socket: &Path) -> PathBuf {
+    let stem = socket.file_stem().unwrap_or_default().to_string_lossy();
+    let digest = Sha256::digest(socket.as_os_str().as_encoded_bytes());
+    let suffix: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    dir.join(format!("{stem}-{suffix}.log"))
+}
+
+/// The most a daemon log may hold. Truncation, not rotation: one bound, one file
+/// to read, and no generations to expire.
+const LOG_CAP: u64 = 32 * 1024 * 1024;
+
+/// The daemon's tracing writer: an owner-only append file, truncated in place
+/// once a write would take it past [`LOG_CAP`], and every error swallowed.
+///
+/// The bound is enforced on the write path, not at spawn: the daemon that filled
+/// a 3.2 GB tmpfs was one long-lived process, which a check at the next spawn
+/// would never have reached. Errors are swallowed because a log that cannot be
+/// written is a log lost, never a request failed: that same full disk made
+/// `tracing-subscriber` report the failed write through `eprintln!`, whose own
+/// failure panicked a request's blocking task.
+///
+/// The daemon's raw stderr — panic messages, which do not go through tracing —
+/// is the same file, opened `O_APPEND` by the spawner. Both descriptors write at
+/// the end of the file, so both follow a truncation; and the bound is measured
+/// on the file rather than counted here, so what stderr wrote counts at the next
+/// event. One `fstat` per event, which is cheap next to formatting it.
+pub struct CappedLog {
+    file: Option<File>,
+}
+
+/// Everything that can fail, so that `write` has one place to give up.
+fn append_bounded(file: &mut File, buf: &[u8]) -> io::Result<()> {
+    if file.metadata()?.len() + buf.len() as u64 > LOG_CAP {
+        file.set_len(0)?;
+    }
+    file.write_all(buf)
+}
+
+impl Write for CappedLog {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // An event larger than the whole cap is cut, not skipped: its head is
+        // worth more than nothing, and the bound holds either way.
+        let cut = &buf[..buf.len().min(LOG_CAP as usize)];
+        // A full or vanished disk: stop. The next spawn opens a new file.
+        if let Some(file) = self.file.as_mut()
+            && append_bounded(file, cut).is_err()
+        {
+            self.file = None;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The tracing writer for the daemon serving `socket`. `Mutex<W: Write>` is a
+/// `MakeWriter` already. A directory or file that cannot be opened leaves the
+/// daemon running without a log: the same trade as a failed write.
+pub fn daemon_log_writer(socket: &Path) -> std::sync::Mutex<CappedLog> {
+    let dir = log_dir();
+    let file = ensure_private_dir(&dir)
+        .and_then(|()| {
+            open_owner_only(&log_path(&dir, socket), OpenOptions::new().create(true).append(true))
+        })
+        .ok();
+    std::sync::Mutex::new(CappedLog { file })
 }
 
 /// Open `path` through `options` as an owner-only regular file.
@@ -422,7 +512,7 @@ async fn poll_connect(
         if let Some(child) = child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let log = log_path(socket);
+                    let log = log_path(&log_dir(), socket);
                     tracing::warn!("daemon exited before accepting ({status}); see {}", log.display());
                     return Err(None);
                 }
@@ -459,7 +549,7 @@ pub async fn run_client(socket: &Path, idle: Option<Duration>) -> Result<bool, B
     // foreign-owned directory used to skip the guard entirely. One
     // `symlink_metadata` per startup is nothing beside a connect.
     if let Some(parent) = socket.parent()
-        && let Err(e) = ensure_socket_dir(parent)
+        && let Err(e) = ensure_private_dir(parent)
     {
         tracing::warn!("socket dir {} unusable: {e}", parent.display());
         return Ok(false);
@@ -510,7 +600,7 @@ pub async fn run_client(socket: &Path, idle: Option<Duration>) -> Result<bool, B
                 // Nothing there: the ordinary first-start case.
                 Err(_) => {}
             }
-            match spawn_daemon(socket, idle) {
+            match spawn_daemon(socket, idle, &log_dir()) {
                 Ok(child) => wait_for_daemon(socket, child).await,
                 Err(e) => {
                     tracing::warn!("failed to spawn daemon: {e}; serving in-process");
@@ -527,12 +617,15 @@ pub async fn run_client(socket: &Path, idle: Option<Duration>) -> Result<bool, B
     }
 }
 
-/// Start the daemon for `socket`, forwarding `--idle-secs` when given one.
-fn spawn_daemon(socket: &Path, idle: Option<Duration>) -> io::Result<Child> {
+/// Start the daemon for `socket`, forwarding `--idle-secs` when given one. Its
+/// stderr goes to the log under `logs`, on disk.
+fn spawn_daemon(socket: &Path, idle: Option<Duration>, logs: &Path) -> io::Result<Child> {
     let exe = std::env::current_exe()?;
-    let log_file = log_path(socket);
+    ensure_private_dir(logs)?;
+    let log_file = log_path(logs, socket);
     // Append, never truncate: the log of the daemon that just died is the only
-    // record of why this spawn is happening.
+    // record of why this spawn is happening. The daemon bounds the file itself;
+    // see [`CappedLog`].
     let mut log = open_owner_only(&log_file, OpenOptions::new().create(true).append(true))?;
     // One header per spawn keeps consecutive lifetimes in one file apart. Unix
     // seconds, because this crate carries no date formatter.
@@ -546,8 +639,8 @@ fn spawn_daemon(socket: &Path, idle: Option<Duration>) -> io::Result<Child> {
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
-        // To a file next to the socket: otherwise the diagnostics of a shared
-        // process die with the session that spawned it.
+        // To a file on disk: otherwise the diagnostics of a shared process die
+        // with the session that spawned it.
         .stderr(Stdio::from(log))
         // Its own process group, so Ctrl-C in one client's session does not take
         // down a server other sessions are using.
@@ -673,7 +766,7 @@ pub async fn run_daemon(
     tracing::info!("daemon working directory {}", root.display());
 
     if let Some(parent) = socket.parent() {
-        ensure_socket_dir(parent)?;
+        ensure_private_dir(parent)?;
     }
     let path = socket.display();
     let listener = UnixListener::bind(socket)
@@ -991,14 +1084,106 @@ mod tests {
         // The log and its header are written before the child starts, so the
         // child is of no interest beyond being reaped. It is this test binary,
         // which rejects `--daemon` and exits at once.
-        let mut child = spawn_daemon(&socket, None).expect("spawn");
+        let logs = tempfile::TempDir::new().expect("log dir");
+        let mut child = spawn_daemon(&socket, None, logs.path()).expect("spawn");
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(
-            permission_bits(&log_path(&socket)),
+            permission_bits(&log_path(logs.path(), &socket)),
             0o600,
             "the daemon log is owner-only"
         );
+        let in_socket_dir: Vec<_> = fs::read_dir(tmp.path())
+            .expect("socket dir")
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
+            .collect();
+        assert!(
+            in_socket_dir.is_empty(),
+            "the socket directory holds sockets and locks, never a log: {in_socket_dir:?}"
+        );
+    }
+
+    /// The bound holds on the write path, while the daemon runs: 100 MiB written
+    /// never leaves more than `LOG_CAP` on disk, and the file keeps being written
+    /// after each truncation.
+    #[test]
+    fn the_capped_log_never_grows_past_the_cap() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let path = tmp.path().join("probe.log");
+        let file =
+            open_owner_only(&path, OpenOptions::new().create(true).append(true)).expect("open");
+        let mut log = CappedLog { file: Some(file) };
+        let chunk = [b'x'; 4096];
+        let mut largest = 0;
+        for _ in 0..(100 * 1024 * 1024 / chunk.len()) {
+            assert_eq!(log.write(&chunk).expect("a write never fails"), chunk.len());
+            largest = largest.max(fs::metadata(&path).expect("metadata").len());
+        }
+        assert!(largest <= LOG_CAP, "the log reached {largest} bytes; the cap is {LOG_CAP}");
+        let len = fs::metadata(&path).expect("metadata").len();
+        assert!(len > 0, "the log must still be written after a truncation");
+    }
+
+    /// One event larger than the cap is cut to it, and bytes another descriptor
+    /// appends — the daemon's raw stderr — count towards the bound at the next
+    /// event, because the bound is read from the file rather than counted.
+    #[test]
+    fn the_cap_holds_for_one_huge_write_and_for_the_raw_stderr() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let path = tmp.path().join("probe.log");
+        let open = || {
+            open_owner_only(&path, OpenOptions::new().create(true).append(true)).expect("open")
+        };
+        let len = || fs::metadata(&path).expect("metadata").len();
+        let mut log = CappedLog { file: Some(open()) };
+
+        let huge = vec![b'x'; LOG_CAP as usize + 1];
+        assert_eq!(log.write(&huge).expect("never an error"), huge.len());
+        assert_eq!(len(), LOG_CAP, "an event past the cap is cut to it");
+
+        let mut stderr = open();
+        stderr.write_all(&[b'e'; 1000]).expect("the raw stderr appends");
+        assert_eq!(log.write(b"tracing").expect("never an error"), 7);
+        assert_eq!(len(), 7, "the next event sees the file past the cap and truncates");
+    }
+
+    /// `--socket` names are the user's to choose, so two sockets may share a
+    /// stem — in different directories, or in one directory under different
+    /// extensions — and must not share a log. One socket always maps to one
+    /// name, or the spawner's stderr and the daemon's writer would land in
+    /// different files.
+    #[test]
+    fn log_names_do_not_collide() {
+        let logs = Path::new("/logs");
+        let sockets = ["/a/foo.sock", "/b/foo.sock", "/a/foo.socket", "/a/foo"];
+        let names: Vec<PathBuf> =
+            sockets.iter().map(|socket| log_path(logs, Path::new(socket))).collect();
+        for (i, name) in names.iter().enumerate() {
+            assert_eq!(name, &log_path(logs, Path::new(sockets[i])), "one socket, one name");
+            let file = name.file_name().expect("name").to_string_lossy();
+            assert!(
+                file.starts_with("foo-") && file.ends_with(".log"),
+                "stem kept, suffix added: {file}"
+            );
+            for other in &names[i + 1..] {
+                assert_ne!(name, other, "same stem, different sockets, different logs");
+            }
+        }
+    }
+
+    /// A write that fails is dropped, not reported: the disk that filled was the
+    /// log's own, and reporting that through stderr panicked a request.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_capped_log_swallows_write_errors() {
+        let full = OpenOptions::new().write(true).open("/dev/full").expect("/dev/full");
+        let mut log = CappedLog { file: Some(full) };
+        for _ in 0..3 {
+            assert_eq!(log.write(b"dropped").expect("never an error"), 7);
+            assert!(log.flush().is_ok());
+        }
+        assert!(log.file.is_none(), "after the first failure the file is closed");
     }
 
     /// Created private, and otherwise left exactly as it is: the directory may be
@@ -1009,13 +1194,13 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("temp dir");
 
         let created = tmp.path().join("nested").join("sockets");
-        ensure_socket_dir(&created).expect("create");
+        ensure_private_dir(&created).expect("create");
         assert_eq!(permission_bits(&created), 0o700, "a created directory is owner-only");
 
         let existing = tmp.path().join("existing");
         fs::create_dir(&existing).expect("create dir");
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).expect("chmod");
-        ensure_socket_dir(&existing).expect("a directory this user owns is accepted");
+        ensure_private_dir(&existing).expect("a directory this user owns is accepted");
         assert_eq!(
             permission_bits(&existing),
             0o755,
@@ -1024,7 +1209,7 @@ mod tests {
 
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(&existing, &link).expect("symlink");
-        let error = ensure_socket_dir(&link).expect_err("a symlink must be refused");
+        let error = ensure_private_dir(&link).expect_err("a symlink must be refused");
         assert!(
             error.to_string().contains(&link.display().to_string()),
             "the refusal must name the path: {error}"
