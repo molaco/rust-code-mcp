@@ -15,6 +15,7 @@ use rmc_graph::graph::{
     ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount, UsageSummaryRow,
     WorkspaceStats, build_and_persist,
 };
+use crate::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
@@ -40,11 +41,12 @@ pub(crate) async fn build_hypergraph(
         ..Default::default()
     };
     // build_and_persist runs `loader::load` + the full extract pass + LMDB
-    // writes synchronously (4-18s wall-clock). Hand off to a blocking thread
-    // so the tokio runtime worker stays free to handle other tool calls.
-    let result = tokio::task::spawn_blocking(move || build_and_persist(&dir, opts))
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+    // writes synchronously (4-18s wall-clock), so it must leave the runtime
+    // worker. It goes to an analysis thread rather than the blocking pool
+    // because the extract pass recurses over HIR: this is the call that
+    // overflowed a 2 MiB pool stack and aborted the server.
+    let result = run_analysis("build_hypergraph", move || build_and_persist(&dir, opts))
+        .await?
         .map_err(|e| McpError::internal_error(format!("build_hypergraph failed: {e:#}"), None))?;
 
     json_result(&BuildHypergraphResponse {

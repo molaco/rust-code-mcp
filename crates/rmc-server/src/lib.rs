@@ -13,4 +13,5 @@
 
 pub mod tools;
 pub mod mcp;
+mod deep_stack;
 pub mod semantic;
