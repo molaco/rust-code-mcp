@@ -91,6 +91,7 @@ use tracing;
 
 use rmc_engine::parser::RustParser;
 
+use crate::deep_stack::with_semantic;
 use crate::semantic::SemanticService;
 
 fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError> {
@@ -130,11 +131,14 @@ pub(crate) async fn find_definition_with_semantic(
 
     tracing::debug!("Searching for definition of '{}' (exact={})", symbol_name, exact);
 
-    let locations = semantic
-        .lock()
-        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .symbol_search_with_exact(project_path, symbol_name, 50, exact)
-        .map_err(|e| McpError::internal_error(format!("Symbol search failed: {}", e), None))?;
+    let project_path = project_path.to_path_buf();
+    let symbol = symbol_name.to_string();
+    let locations = with_semantic(semantic, "find_definition", move |service| {
+        service
+            .symbol_search_with_exact(&project_path, &symbol, 50, exact)
+            .map_err(|e| McpError::internal_error(format!("Symbol search failed: {}", e), None))
+    })
+    .await?;
 
     if locations.is_empty() {
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -169,11 +173,14 @@ pub(crate) async fn find_references_with_semantic(
 
     tracing::debug!("Searching for references to '{}' (exact={})", symbol_name, exact);
 
-    let locations = semantic
-        .lock()
-        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .find_references_by_name_with_exact(project_path, symbol_name, exact)
-        .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))?;
+    let project_path = project_path.to_path_buf();
+    let symbol = symbol_name.to_string();
+    let locations = with_semantic(semantic, "find_references", move |service| {
+        service
+            .find_references_by_name_with_exact(&project_path, &symbol, exact)
+            .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))
+    })
+    .await?;
 
     if locations.is_empty() {
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -227,24 +234,34 @@ pub(crate) async fn rename_symbol_with_semantic(
                 project_path.join(input_path)
             };
 
-            semantic
-                .lock()
-                .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-                .rename_by_position(
-                    project_path,
-                    &resolved_file_path,
-                    line,
-                    column,
-                    symbol_name,
-                    new_name,
-                )
-                .map_err(rename_mcp_error)?
+            let project_path = project_path.to_path_buf();
+            let symbol = symbol_name.to_string();
+            let new_name = new_name.to_string();
+            with_semantic(semantic, "rename_symbol", move |service| {
+                service
+                    .rename_by_position(
+                        &project_path,
+                        &resolved_file_path,
+                        line,
+                        column,
+                        &symbol,
+                        &new_name,
+                    )
+                    .map_err(rename_mcp_error)
+            })
+            .await?
         }
-        (None, None, None) => semantic
-            .lock()
-            .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-            .rename_by_name(project_path, symbol_name, new_name)
-            .map_err(rename_mcp_error)?,
+        (None, None, None) => {
+            let project_path = project_path.to_path_buf();
+            let symbol = symbol_name.to_string();
+            let new_name = new_name.to_string();
+            with_semantic(semantic, "rename_symbol", move |service| {
+                service
+                    .rename_by_name(&project_path, &symbol, &new_name)
+                    .map_err(rename_mcp_error)
+            })
+            .await?
+        }
         _ => {
             return Err(McpError::invalid_params(
                 "file_path, line, and column must be provided together for position-based rename",

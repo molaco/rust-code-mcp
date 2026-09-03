@@ -12,6 +12,7 @@ use serde::Serialize;
 use rmc_graph::graph::{
     SkeletonFile, SkeletonOptions, render_crate_skeletons,
 };
+use crate::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::CrateSkeletonParams;
 
@@ -39,7 +40,7 @@ pub(crate) async fn crate_skeleton(
     let page_req = list_page(&params.pagination);
     let opts = graph_options(&params);
 
-    let response = tokio::task::spawn_blocking(move || {
+    let response = run_analysis("crate_skeleton", move || {
         let snap = open_workspace_snapshot(&directory)?;
         if clean && skeleton_dir.exists() {
             fs::remove_dir_all(&skeleton_dir).map_err(|e| {
@@ -113,8 +114,7 @@ pub(crate) async fn crate_skeleton(
                 .collect(),
         })
     })
-    .await
-    .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))??;
+    .await??;
 
     json_result(&response)
 }
