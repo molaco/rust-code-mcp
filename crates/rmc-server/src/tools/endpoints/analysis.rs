@@ -86,14 +86,20 @@ use rmcp::{
 };
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing;
 
 use rmc_engine::parser::RustParser;
 
+use crate::deep_stack::with_semantic;
 use crate::semantic::SemanticService;
+use crate::tools::paths::require_absolute;
 
 fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError> {
+    // Absolute first: the daemon does not share a cwd with the caller, so a
+    // relative directory would resolve — and then quietly answer — elsewhere.
+    require_absolute("directory", project_path)?;
+
     if !project_path.exists() {
         return Err(McpError::invalid_params(
             format!("directory does not exist: {}", project_path.display()),
@@ -110,7 +116,10 @@ fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError>
 
     if !project_path.join("Cargo.toml").is_file() {
         return Err(McpError::invalid_params(
-            format!("directory is not a Cargo project: {}", project_path.display()),
+            format!(
+                "directory is not a Cargo project: {}",
+                project_path.display()
+            ),
             None,
         ));
     }
@@ -120,7 +129,7 @@ fn validate_cargo_project_directory(project_path: &Path) -> Result<(), McpError>
 
 /// Find the definition of a symbol using an explicit semantic service.
 pub(crate) async fn find_definition_with_semantic(
-    semantic: &Arc<Mutex<SemanticService>>,
+    semantic: &Arc<SemanticService>,
     symbol_name: &str,
     directory: &str,
     exact: bool,
@@ -128,13 +137,20 @@ pub(crate) async fn find_definition_with_semantic(
     let project_path = Path::new(directory);
     validate_cargo_project_directory(project_path)?;
 
-    tracing::debug!("Searching for definition of '{}' (exact={})", symbol_name, exact);
+    tracing::debug!(
+        "Searching for definition of '{}' (exact={})",
+        symbol_name,
+        exact
+    );
 
-    let locations = semantic
-        .lock()
-        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .symbol_search_with_exact(project_path, symbol_name, 50, exact)
-        .map_err(|e| McpError::internal_error(format!("Symbol search failed: {}", e), None))?;
+    let project = project_path.to_path_buf();
+    let symbol = symbol_name.to_string();
+    let locations = with_semantic(semantic, "find_definition", move |service| {
+        service
+            .symbol_search_with_exact(&project, &symbol, 50, exact)
+            .map_err(|e| McpError::internal_error(format!("Symbol search failed: {}", e), None))
+    })
+    .await?;
 
     if locations.is_empty() {
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -159,7 +175,7 @@ pub(crate) async fn find_definition_with_semantic(
 
 /// Find all references to a symbol using an explicit semantic service.
 pub(crate) async fn find_references_with_semantic(
-    semantic: &Arc<Mutex<SemanticService>>,
+    semantic: &Arc<SemanticService>,
     symbol_name: &str,
     directory: &str,
     exact: bool,
@@ -167,13 +183,20 @@ pub(crate) async fn find_references_with_semantic(
     let project_path = Path::new(directory);
     validate_cargo_project_directory(project_path)?;
 
-    tracing::debug!("Searching for references to '{}' (exact={})", symbol_name, exact);
+    tracing::debug!(
+        "Searching for references to '{}' (exact={})",
+        symbol_name,
+        exact
+    );
 
-    let locations = semantic
-        .lock()
-        .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-        .find_references_by_name_with_exact(project_path, symbol_name, exact)
-        .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))?;
+    let project = project_path.to_path_buf();
+    let symbol = symbol_name.to_string();
+    let locations = with_semantic(semantic, "find_references", move |service| {
+        service
+            .find_references_by_name_with_exact(&project, &symbol, exact)
+            .map_err(|e| McpError::internal_error(format!("Find references failed: {}", e), None))
+    })
+    .await?;
 
     if locations.is_empty() {
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -198,7 +221,7 @@ pub(crate) async fn find_references_with_semantic(
 
 /// Preview a rename using an explicit semantic service.
 pub(crate) async fn rename_symbol_with_semantic(
-    semantic: &Arc<Mutex<SemanticService>>,
+    semantic: &Arc<SemanticService>,
     symbol_name: &str,
     new_name: &str,
     directory: &str,
@@ -211,7 +234,9 @@ pub(crate) async fn rename_symbol_with_semantic(
 
     tracing::debug!("Previewing rename '{}' → '{}'", symbol_name, new_name);
 
-    let preview = match (file_path, line, column) {
+    // Argument validation stays on the caller's thread: it is the cheap half,
+    // and rejecting a malformed request must not cost an analysis thread.
+    let position = match (file_path, line, column) {
         (Some(file_path), Some(line), Some(column)) => {
             if line == 0 || column == 0 {
                 return Err(McpError::invalid_params(
@@ -227,24 +252,9 @@ pub(crate) async fn rename_symbol_with_semantic(
                 project_path.join(input_path)
             };
 
-            semantic
-                .lock()
-                .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-                .rename_by_position(
-                    project_path,
-                    &resolved_file_path,
-                    line,
-                    column,
-                    symbol_name,
-                    new_name,
-                )
-                .map_err(rename_mcp_error)?
+            Some((resolved_file_path, line, column))
         }
-        (None, None, None) => semantic
-            .lock()
-            .map_err(|e| McpError::internal_error(format!("Failed to acquire lock: {}", e), None))?
-            .rename_by_name(project_path, symbol_name, new_name)
-            .map_err(rename_mcp_error)?,
+        (None, None, None) => None,
         _ => {
             return Err(McpError::invalid_params(
                 "file_path, line, and column must be provided together for position-based rename",
@@ -252,6 +262,20 @@ pub(crate) async fn rename_symbol_with_semantic(
             ));
         }
     };
+
+    let project = project_path.to_path_buf();
+    let symbol = symbol_name.to_string();
+    let new = new_name.to_string();
+    let preview = with_semantic(semantic, "rename_symbol", move |service| {
+        match position {
+            Some((file, line, column)) => {
+                service.rename_by_position(&project, &file, line, column, &symbol, &new)
+            }
+            None => service.rename_by_name(&project, &symbol, &new),
+        }
+        .map_err(rename_mcp_error)
+    })
+    .await?;
 
     if preview.edits.is_empty() && preview.file_moves.is_empty() {
         return Ok(CallToolResult::success(vec![Content::text(format!(
@@ -273,11 +297,21 @@ pub(crate) async fn rename_symbol_with_semantic(
     }
 
     if !preview.file_moves.is_empty() {
-        out.push_str(&format!("\nFile system changes ({}):\n", preview.file_moves.len()));
+        out.push_str(&format!(
+            "\nFile system changes ({}):\n",
+            preview.file_moves.len()
+        ));
         for mv in &preview.file_moves {
             out.push_str(&format!("  {}\n", mv));
         }
     }
+
+    // A rename that silently misses call sites is worse than a refusal: the preview
+    // reads as complete, and what it left behind surfaces only at the next build.
+    out.push_str(
+        "\nNote: rust-analyzer's rename can miss occurrences inside macro bodies \
+         (e.g. vec![Foo { .. }]). Cross-check with `grep -rn '\\bsymbol\\b'` before applying.\n",
+    );
 
     Ok(CallToolResult::success(vec![Content::text(out)]))
 }
@@ -526,7 +560,7 @@ pub(crate) async fn analyze_complexity(file_path: &str) -> Result<CallToolResult
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_find_definition_invalid_project() {
@@ -642,19 +676,44 @@ mod tests {
 name = "rename_param_test"
 version = "0.1.0"
 edition = "2021"
-"#.trim_start(),
+"#
+            .trim_start(),
         )
         .expect("write manifest");
         fs::create_dir_all(dir.path().join("src")).expect("create src dir");
-        fs::write(
-            dir.path().join("src/lib.rs"),
-            "pub trait Engine {}\n",
-        )
-        .expect("write lib");
+        fs::write(dir.path().join("src/lib.rs"), "pub trait Engine {}\n").expect("write lib");
         dir
     }
 
-    fn test_semantic() -> Arc<Mutex<SemanticService>> {
-        Arc::new(Mutex::new(SemanticService::new()))
+    fn test_semantic() -> Arc<SemanticService> {
+        Arc::new(SemanticService::new())
+    }
+
+    /// `find_definition`, `find_references`, `rename_symbol`, `get_dependencies`,
+    /// `get_call_graph` and `analyze_complexity` all reach the filesystem through
+    /// this one validator, so the gate lives here rather than six times over.
+    ///
+    /// Mutation that must fail it: drop the `require_absolute` call — a relative
+    /// directory then passes whenever the daemon's own tree happens to contain a
+    /// `Cargo.toml`, and the tool answers about that project instead.
+    #[test]
+    fn a_relative_project_directory_is_refused() {
+        let err = validate_cargo_project_directory(Path::new("crates/rmc-server"))
+            .expect_err("a relative directory must be refused");
+
+        assert!(
+            err.message.contains("must be an absolute path"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// Positive control: a real absolute project still validates, so the test
+    /// above is about relativeness and not about rejecting everything.
+    #[test]
+    fn an_absolute_project_directory_still_validates() {
+        let project = valid_temp_project();
+
+        validate_cargo_project_directory(project.path()).expect("an absolute project is fine");
     }
 }

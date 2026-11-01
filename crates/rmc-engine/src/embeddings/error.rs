@@ -19,6 +19,24 @@ pub enum EmbeddingError {
     #[error("No embedding generated")]
     NoEmbeddingGenerated,
 
+    /// The model answered, but the vector contains NaN or infinity.
+    ///
+    /// A separate variant rather than [`EmbeddingError::EmbedFailed`] because
+    /// it is a different kind of failure: nothing errored, the model produced
+    /// a result, and without a check that result would have been written to
+    /// the index — where it costs not a crash but silent rot, since a
+    /// non-finite vector loses every cosine comparison and the chunk simply
+    /// stops being findable.
+    #[error(
+        "Model returned a non-finite embedding: item {index} of {batch_len}, component {component} = {value}"
+    )]
+    NonFiniteEmbedding {
+        index: usize,
+        batch_len: usize,
+        component: usize,
+        value: f32,
+    },
+
     /// Async task join failed
     #[error("Async task failed: {0}")]
     TaskJoin(String),

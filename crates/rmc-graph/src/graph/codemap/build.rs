@@ -21,6 +21,7 @@ use crate::graph::codemap::seeds::{
     SeedHit, build_bm25_by_node, resolve_override_seeds, resolve_search_seeds,
 };
 use crate::graph::ids::NodeId;
+use crate::graph::model::UsageRelation;
 use crate::graph::snapshot::OpenedSnapshot;
 use crate::graph::storage::is_source_walk_excluded;
 
@@ -126,20 +127,13 @@ pub async fn build_codemap(
             ordered.sort_by_key(|n| node_qualified_name(snap, &rtxn, *n));
             for n in ordered {
                 // Outgoing edges.
-                let callees = snap.callees_of(n).unwrap_or_default();
-                let mut callees_sorted: Vec<NodeId> = callees;
-                callees_sorted.sort_by_key(|t| node_qualified_name(snap, &rtxn, *t));
-                for target_id in callees_sorted {
-                    let target_kind = snap
-                        .node(&rtxn, target_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|nd| nd.item_kind);
-                    let kind = if target_kind.map_or(false, |k| k.is_callable()) {
-                        EdgeKind::Calls
-                    } else {
-                        EdgeKind::Uses
-                    };
+                let mut outgoing = HashSet::new();
+                for usage in snap.usages_from_item(n)? {
+                    outgoing.insert((usage.target, edge_kind(usage.relation)));
+                }
+                let mut outgoing: Vec<_> = outgoing.into_iter().collect();
+                outgoing.sort_by_key(|(id, kind)| (node_qualified_name(snap, &rtxn, *id), format!("{kind:?}")));
+                for (target_id, kind) in outgoing {
                     edges.entry((n, target_id, kind)).or_insert(1);
                     if retained.insert(target_id) {
                         dist_from_seed.entry(target_id).or_insert(next_dist);
@@ -147,28 +141,22 @@ pub async fn build_codemap(
                     }
                 }
 
-                // Incoming edges — branch on `n`'s item kind.
-                let n_kind = snap
-                    .node(&rtxn, n)
-                    .ok()
-                    .flatten()
-                    .and_then(|nd| nd.item_kind);
-                let record_kind = match n_kind {
-                    Some(k) if k.is_callable() => Some(EdgeKind::Calls),
-                    Some(k) if k.is_type() => Some(EdgeKind::Uses),
-                    _ => None,
-                };
-                if let Some(record_kind) = record_kind {
-                    let mut refs = snap.referrers_of(n).unwrap_or_default();
-                    refs.sort_by_key(|r| rank_referrer(*r, &bm25_by_node, snap, &rtxn));
-                    for r in refs.into_iter().take(opts.max_incoming_per_node) {
+                let mut refs = HashSet::new();
+                for entry in snap.usages_for_target(&rtxn, n)? {
+                    let usage = entry?;
+                    if let Some(owner) = usage.consumer_item {
+                        refs.insert((owner, edge_kind(usage.relation)));
+                    }
+                }
+                let mut refs: Vec<_> = refs.into_iter().collect();
+                refs.sort_by_key(|(r, kind)| (rank_referrer(*r, &bm25_by_node, snap, &rtxn), format!("{kind:?}")));
+                for (r, record_kind) in refs.into_iter().take(opts.max_incoming_per_node) {
                         edges.entry((r, n, record_kind)).or_insert(1);
                         if retained.insert(r) {
                             dist_from_seed.entry(r).or_insert(next_dist);
                             next.insert(r);
                         }
                     }
-                }
             }
             frontier = next;
         }
@@ -260,7 +248,9 @@ pub async fn build_codemap(
             if opts.embedding_policy == EmbeddingPolicy::NoRerank || prompt.unwrap_or("").is_empty() {
                 None
             } else {
-                let generator = rmc_engine::embeddings::EmbeddingGenerator::new()
+                let generator = rmc_engine::embeddings::EmbeddingGenerator::new(
+                    rmc_engine::embeddings::EmbeddingOwner::CodemapRerank,
+                )
                     .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
                 // Query-side: the prompt is a retrieval query scored against
                 // cached document vectors — apply the instruction prefix.
@@ -450,6 +440,20 @@ pub async fn build_codemap(
         stats,
         diagnostics,
     })
+}
+
+fn edge_kind(relation: UsageRelation) -> EdgeKind {
+    match relation {
+        UsageRelation::Call => EdgeKind::Calls,
+        UsageRelation::TraitDispatch => EdgeKind::TraitDispatch,
+        UsageRelation::FunctionReference => EdgeKind::FunctionReference,
+        UsageRelation::TypeRef => EdgeKind::TypeRef,
+        UsageRelation::Construct => EdgeKind::Constructs,
+        UsageRelation::Read => EdgeKind::Reads,
+        UsageRelation::Write => EdgeKind::Writes,
+        UsageRelation::Implements => EdgeKind::Implements,
+        UsageRelation::Use | UsageRelation::Unknown => EdgeKind::Uses,
+    }
 }
 
 /// Deterministic ranking key for `referrers_of` results. Primary: negative
@@ -907,9 +911,15 @@ mod tests {
         // One name resolves, one doesn't — so we get 1 seed + 1 diagnostic.
         assert_eq!(cm.stats.seed_count, 1);
         assert_eq!(cm.diagnostics.len(), 1);
-        assert_eq!(
-            cm.diagnostics[0],
-            "unresolved seed: synthetic_codemap_crate::does_not_exist_xyzzy",
+        // The parent is the crate root, so the diagnostic carries the
+        // "not indexed" hint whichever of the crate and root-module nodes the
+        // name lookup lands on.
+        let diagnostic = &cm.diagnostics[0];
+        assert!(
+            diagnostic.starts_with(
+                "unresolved seed: synthetic_codemap_crate::does_not_exist_xyzzy (parent module resolves;"
+            ),
+            "{diagnostic}",
         );
     }
 

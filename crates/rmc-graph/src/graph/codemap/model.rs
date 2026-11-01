@@ -46,10 +46,8 @@ pub struct CodemapEdge {
     pub from: NodeId,
     pub to: NodeId,
     pub kind: EdgeKind,
-    /// Edge multiplicity. v1: always 1, since the raw-ID graph adapters
-    /// (callees_of / referrers_of) deduplicate by NodeId and the BFS
-    /// dedups re-visits. Future versions may carry call-site multiplicity
-    /// once the adapters expose counts.
+    /// Set membership: always 1 per (from, to, kind). This bounded projection
+    /// deduplicates raw sites and is not a multiplicity/frequency measure.
     pub weight: u32,
 }
 
@@ -60,6 +58,13 @@ pub struct CodemapEdge {
 #[non_exhaustive]
 pub enum EdgeKind {
     Calls,
+    TraitDispatch,
+    FunctionReference,
+    TypeRef,
+    Constructs,
+    Reads,
+    Writes,
+    Implements,
     Uses,
     Imports,
     Contains,

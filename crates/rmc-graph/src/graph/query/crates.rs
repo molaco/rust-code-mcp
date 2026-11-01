@@ -25,6 +25,7 @@ impl OpenedSnapshot {
     pub fn crate_dependency_metric(&self) -> Result<Vec<CrateMetric>> {
         let edges = self.crate_edges()?;
         let rtxn = self.env.read_txn()?;
+        let labels = self.target_labels(&rtxn)?;
 
         // Collect every local crate: (crate_id, crate_name).
         let mut crates: Vec<(NodeId, String)> = Vec::new();
@@ -36,7 +37,7 @@ impl OpenedSnapshot {
             id.copy_from_slice(key);
             let nid = NodeId(id);
             if node.kind == NodeKind::Crate {
-                crates.push((nid, node.qualified_name.clone()));
+                crates.push((nid, labels[&nid].clone()));
             } else if node.kind == NodeKind::Item {
                 if let Some(crate_id) = node.crate_id {
                     let counts = item_counts.entry(crate_id).or_insert((0, 0, 0));
@@ -125,7 +126,7 @@ impl OpenedSnapshot {
 
         // Build crate index: every node → its crate id; every crate id → name.
         let mut node_to_crate: HashMap<NodeId, NodeId> = HashMap::new();
-        let mut crate_name: HashMap<NodeId, String> = HashMap::new();
+        let crate_name = self.target_labels(&rtxn)?;
         let mut node_qual: HashMap<NodeId, String> = HashMap::new();
         let mut node_kind_label_map: HashMap<NodeId, String> = HashMap::new();
         for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
@@ -133,9 +134,6 @@ impl OpenedSnapshot {
             let mut id = [0u8; 32];
             id.copy_from_slice(key);
             let nid = NodeId(id);
-            if node.kind == NodeKind::Crate {
-                crate_name.insert(nid, node.qualified_name.clone());
-            }
             if let Some(cid) = node.crate_id {
                 node_to_crate.insert(nid, cid);
             }
@@ -323,12 +321,13 @@ impl OpenedSnapshot {
 
     fn crate_target_kind_by_name(&self) -> Result<HashMap<String, String>> {
         let rtxn = self.read_txn()?;
+        let labels = self.target_labels(&rtxn)?;
         let mut out = HashMap::new();
         for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
             let (_key, node) = entry?;
             if node.kind == NodeKind::Crate {
                 out.insert(
-                    node.qualified_name,
+                    labels[&node.id].clone(),
                     node.crate_target_kind.unwrap_or_else(|| "lib".to_string()),
                 );
             }

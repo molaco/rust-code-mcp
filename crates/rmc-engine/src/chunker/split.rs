@@ -67,12 +67,6 @@ impl Chunker {
             }
         }
 
-        for chunk in &mut output {
-            chunk.overlap_prev = None;
-            chunk.overlap_next = None;
-        }
-        self.add_overlap(&mut output);
-
         output
     }
 
@@ -94,6 +88,10 @@ impl Chunker {
         let mut part_start = 0usize;
         let mut current_lines: Vec<&str> = Vec::new();
 
+        // Whether the part about to be cut drops the symbol's context: only a
+        // part after the first, and only under `context_in_first_part_only`.
+        let bare = |parts: &Vec<CodeChunk>| config.context_in_first_part_only && !parts.is_empty();
+
         for (line_idx, line) in lines.iter().enumerate() {
             let mut candidate_lines = current_lines.clone();
             candidate_lines.push(*line);
@@ -102,12 +100,14 @@ impl Chunker {
                 part_start,
                 line_idx + 1,
                 &candidate_lines.join("\n"),
+                bare(&parts),
             );
             let candidate_tokens = token_count_or_estimate(&candidate, token_count);
 
             if !current_lines.is_empty() && candidate_tokens > config.target_tokens {
                 let content = current_lines.join("\n");
-                parts.push(make_part_chunk(&chunk, part_start, line_idx, &content));
+                let part = make_part_chunk(&chunk, part_start, line_idx, &content, bare(&parts));
+                parts.push(part);
                 part_start = line_idx;
                 current_lines.clear();
             }
@@ -117,7 +117,8 @@ impl Chunker {
 
         if !current_lines.is_empty() {
             let content = current_lines.join("\n");
-            parts.push(make_part_chunk(&chunk, part_start, lines.len(), &content));
+            let part = make_part_chunk(&chunk, part_start, lines.len(), &content, bare(&parts));
+            parts.push(part);
         }
 
         if parts.len() <= 1 {
@@ -134,19 +135,26 @@ impl Chunker {
     }
 }
 
+/// A part of `source` holding `content`. A `bare` part keeps the symbol's
+/// name, place and part number but not its docstring, imports and calls —
+/// those stay with the first part.
 fn make_part_chunk(
     source: &CodeChunk,
     start_line_offset: usize,
     end_line_offset: usize,
     content: &str,
+    bare: bool,
 ) -> CodeChunk {
     let mut part = source.clone();
     part.id = ChunkId::new();
     part.content = content.to_string();
     part.context.line_start = source.context.line_start + start_line_offset;
     part.context.line_end = source.context.line_start + end_line_offset.saturating_sub(1);
-    part.overlap_prev = None;
-    part.overlap_next = None;
+    if bare {
+        part.context.docstring = None;
+        part.context.imports.clear();
+        part.context.outgoing_calls.clear();
+    }
     part
 }
 
@@ -214,14 +222,12 @@ mod tests {
                 line_start: start,
                 line_end: end,
             },
-            overlap_prev: None,
-            overlap_next: None,
         }
     }
 
     #[test]
     fn test_split_oversized_container_uses_child_chunks() {
-        let chunker = Chunker::with_overlap(0.0);
+        let chunker = Chunker::new();
         let parent = synthetic_chunk("impl Foo", "impl", 1, 12);
         let child_a = synthetic_chunk("a", "function", 2, 4);
         let child_b = synthetic_chunk("b", "function", 6, 8);
@@ -247,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_split_oversized_leaf_by_lines() {
-        let chunker = Chunker::with_overlap(0.0);
+        let chunker = Chunker::new();
         let leaf = synthetic_chunk("large_fn", "function", 10, 18);
 
         let chunks = chunker.split_oversized_chunks(
@@ -267,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_splitter_keeps_small_chunks_unchanged() {
-        let chunker = Chunker::with_overlap(0.0);
+        let chunker = Chunker::new();
         let leaf = synthetic_chunk("small_fn", "function", 1, 2);
         let id = leaf.id;
 
@@ -280,5 +286,51 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].id, id);
         assert_eq!(chunks[0].context.split_part, None);
+    }
+
+    /// With `context_in_first_part_only` the docstring, imports and calls
+    /// ride the first part only, so they stop eating every later part's
+    /// budget: a documented function is cut into fewer, larger parts, and
+    /// every line of it is still in exactly one part.
+    #[test]
+    fn context_in_the_first_part_only_leaves_the_budget_to_code() {
+        let mut leaf = synthetic_chunk("documented_fn", "function", 1, 40);
+        leaf.context.docstring = Some("explains ".repeat(40));
+        leaf.context.imports = vec!["std::io::Read".to_string()];
+        leaf.context.outgoing_calls = vec!["line_1".to_string()];
+        // Lines of formatted text, with the docstring's own weight: a line
+        // per 40 bytes of it.
+        let tokens = |chunk: &CodeChunk| {
+            let doc = chunk.context.docstring.as_ref().map_or(0, |d| d.len() / 40);
+            Some(chunk.format_for_embedding().lines().count() + doc)
+        };
+        let budget = ChunkSplitConfig::new(20, 24);
+
+        let repeated = Chunker::new().split_oversized_chunks(vec![leaf.clone()], budget, tokens);
+        let first_only = Chunker::new().split_oversized_chunks(
+            vec![leaf],
+            budget.with_context_in_first_part_only(true),
+            tokens,
+        );
+
+        assert!(
+            first_only.len() < repeated.len(),
+            "{} parts, repeating the context {}",
+            first_only.len(),
+            repeated.len()
+        );
+        assert!(repeated.iter().all(|p| p.context.docstring.is_some()));
+        assert!(first_only[0].context.docstring.is_some());
+        assert_eq!(first_only[0].context.imports, ["std::io::Read"]);
+        for part in &first_only[1..] {
+            assert!(part.context.docstring.is_none());
+            assert!(part.context.imports.is_empty() && part.context.outgoing_calls.is_empty());
+            assert_eq!(part.context.symbol_name, "documented_fn");
+        }
+        let lines: Vec<usize> = first_only
+            .iter()
+            .flat_map(|p| p.context.line_start..=p.context.line_end)
+            .collect();
+        assert_eq!(lines, (1..=40).collect::<Vec<_>>());
     }
 }

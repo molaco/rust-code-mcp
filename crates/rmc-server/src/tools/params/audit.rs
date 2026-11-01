@@ -27,7 +27,7 @@ pub(crate) struct MissingDocsAuditParams {
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
     #[serde(default)]
     pub crate_name: Option<String>,
-    #[schemars(description = "Optional list of item kinds to audit (e.g. [\"Function\", \"Struct\", \"Enum\", \"Trait\", \"TypeAlias\", \"Const\", \"Static\"]). Default: all 'documentable' kinds (Function, Struct, Enum, Union, Trait, TypeAlias, Const, Static, Method) — excludes EnumVariant, AssocConst, AssocType which rarely carry standalone docs.")]
+    #[schemars(description = "Item kinds to audit; default Function, Struct, Enum, Union, Trait, TypeAlias, Const, Static, Method.")]
     #[serde(default)]
     pub item_kind: Option<Vec<String>>,
     #[schemars(description = "Drop items inside `::tests::` modules. Default true.")]
@@ -94,7 +94,7 @@ pub(crate) struct FnBodyAuditParams {
     #[schemars(description = "Optional crate qualified name to scope the scan. Default: all local crates.")]
     #[serde(default)]
     pub crate_name: Option<String>,
-    #[schemars(description = "Patterns to check. Default: all 8 built-ins. Available: \"unwrap\", \"expect\", \"panic_macros\", \"unwrap_unchecked\", \"transmute\", \"await_in_guard_scope\", \"self_recursion\", \"unbounded_loop\".")]
+    #[schemars(description = "Subset of the 8 pattern names in the tool description; default all.")]
     #[serde(default)]
     pub patterns: Option<Vec<String>>,
     #[schemars(description = "Drop findings inside `#[cfg(test)]` modules / fns. Default true.")]

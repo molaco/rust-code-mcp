@@ -1,21 +1,12 @@
 #[cfg(feature = "hf-hub")]
-use anyhow::Context;
-use anyhow::Result;
-use ort::{
-    session::{builder::GraphOptimizationLevel, Session},
-    value::Value,
-};
-use std::thread::available_parallelism;
-
-#[cfg(feature = "hf-hub")]
 use crate::common::load_tokenizer_hf_hub;
 use crate::{
-    common::load_tokenizer, models::reranking::reranker_model_list, RerankerModel,
-    RerankerModelInfo,
+    common::{init_session_builder, load_tokenizer, Error, Result},
+    models::reranking::reranker_model_list,
+    RerankerModel, RerankerModelInfo,
 };
-#[cfg(feature = "hf-hub")]
-use hf_hub::{api::sync::ApiBuilder, Cache};
 use ndarray::{s, Array};
+use ort::{session::Session, value::Value};
 use tokenizers::Tokenizer;
 
 #[cfg(feature = "hf-hub")]
@@ -26,10 +17,6 @@ use super::{
 };
 
 impl TextRerank {
-    fn builder_error(err: ort::Error<ort::session::builder::SessionBuilder>) -> anyhow::Error {
-        anyhow::Error::msg(err.to_string())
-    }
-
     fn new(tokenizer: Tokenizer, session: Session) -> Self {
         let need_token_type_ids = session
             .inputs()
@@ -56,6 +43,7 @@ impl TextRerank {
     #[cfg(feature = "hf-hub")]
     pub fn try_new(options: RerankInitOptions) -> Result<TextRerank> {
         use super::RerankInitOptions;
+        use crate::common::pull_from_hf;
 
         let RerankInitOptions {
             max_length,
@@ -63,37 +51,32 @@ impl TextRerank {
             execution_providers,
             cache_dir,
             show_download_progress,
+            intra_threads,
+            profiling_file,
         } = options;
 
-        let threads = available_parallelism()?.get();
-
-        let cache = Cache::new(cache_dir);
-        let api = ApiBuilder::from_cache(cache)
-            .with_progress(show_download_progress)
-            .build()
-            .map_err(|e| anyhow::Error::msg(format!("Failed to build API from cache: {}", e)))?;
-        let model_repo = api.model(model_name.to_string());
+        let model_repo = pull_from_hf(model_name.to_string(), cache_dir, show_download_progress)?;
 
         let model_file_name = TextRerank::get_model_info(&model_name).model_file;
-        let model_file_reference = model_repo.get(&model_file_name).context(format!(
-            "Failed to retrieve model file: {}",
-            model_file_name
-        ))?;
+        let model_file_reference =
+            model_repo
+                .get(&model_file_name)
+                .map_err(|e| Error::ModelRetrieval {
+                    file: model_file_name.clone(),
+                    source: Box::new(e),
+                })?;
         let additional_files = TextRerank::get_model_info(&model_name).additional_files;
         for additional_file in additional_files {
-            let _additional_file_reference = model_repo.get(&additional_file).context(format!(
-                "Failed to retrieve additional file: {}",
-                additional_file
-            ))?;
+            let _additional_file_reference =
+                model_repo
+                    .get(&additional_file)
+                    .map_err(|e| Error::ModelRetrieval {
+                        file: additional_file.clone(),
+                        source: Box::new(e),
+                    })?;
         }
 
-        let session = Session::builder()?
-            .with_execution_providers(execution_providers)
-            .map_err(Self::builder_error)?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(Self::builder_error)?
-            .with_intra_threads(threads)
-            .map_err(Self::builder_error)?
+        let session = init_session_builder(execution_providers, intra_threads, profiling_file)?
             .commit_from_file(model_file_reference)?;
 
         let tokenizer = load_tokenizer_hf_hub(model_repo, max_length)?;
@@ -110,21 +93,13 @@ impl TextRerank {
         let RerankInitOptionsUserDefined {
             execution_providers,
             max_length,
+            intra_threads,
         } = options;
 
-        let threads = available_parallelism()?.get();
-
-        let mut session = Session::builder()?
-            .with_execution_providers(execution_providers)
-            .map_err(Self::builder_error)?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(Self::builder_error)?
-            .with_intra_threads(threads)
-            .map_err(Self::builder_error)?;
-
+        let mut session_builder = init_session_builder(execution_providers, intra_threads, None)?;
         let session = match &model.onnx_source {
-            OnnxSource::Memory(bytes) => session.commit_from_memory(bytes)?,
-            OnnxSource::File(path) => session.commit_from_file(path)?,
+            OnnxSource::Memory(bytes) => session_builder.commit_from_memory(bytes)?,
+            OnnxSource::File(path) => session_builder.commit_from_file(path)?,
         };
 
         let tokenizer = load_tokenizer(model.tokenizer_files, max_length)?;
@@ -143,6 +118,11 @@ impl TextRerank {
     ) -> Result<Vec<RerankResult>> {
         let documents = documents.as_ref();
         let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+        if batch_size == 0 {
+            return Err(Error::InvalidArgument(
+                "batch_size must be greater than 0".into(),
+            ));
+        }
         let q = query.as_ref();
 
         let mut scores: Vec<f32> = Vec::with_capacity(documents.len());
@@ -151,12 +131,9 @@ impl TextRerank {
             let encodings = self
                 .tokenizer
                 .encode_batch(inputs, true)
-                .map_err(|e| anyhow::Error::msg(e.to_string()).context("Failed to encode batch"))?;
+                .map_err(|e| Error::Tokenization(format!("Failed to encode batch: {e}")))?;
 
-            let encoding_length = encodings
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("Tokenizer returned empty encodings"))?
-                .len();
+            let encoding_length = encodings.first().ok_or(Error::EmptyTokenizations)?.len();
             let batch_size = batch.len();
             let max_size = encoding_length * batch_size;
 
@@ -174,30 +151,42 @@ impl TextRerank {
                 type_ids_array.extend(type_ids.iter().map(|x| *x as i64));
             });
 
-            let inputs_ids_array = Array::from_shape_vec((batch_size, encoding_length), ids_array)?;
+            let inputs_ids_array = Array::from_shape_vec((batch_size, encoding_length), ids_array)
+                .map_err(|e| Error::InvalidShape(e.to_string()))?;
             let attention_mask_array =
-                Array::from_shape_vec((batch_size, encoding_length), mask_array)?;
+                Array::from_shape_vec((batch_size, encoding_length), mask_array)
+                    .map_err(|e| Error::InvalidShape(e.to_string()))?;
             let token_type_ids_array =
-                Array::from_shape_vec((batch_size, encoding_length), type_ids_array)?;
+                Array::from_shape_vec((batch_size, encoding_length), type_ids_array)
+                    .map_err(|e| Error::InvalidShape(e.to_string()))?;
 
             let mut session_inputs = ort::inputs![
-                "input_ids" => Value::from_array(inputs_ids_array)?,
-                "attention_mask" => Value::from_array(attention_mask_array)?,
+                "input_ids" => Value::from_array(inputs_ids_array)
+                    .map_err(|e| Error::OrtSession(e.to_string()))?,
+                "attention_mask" => Value::from_array(attention_mask_array)
+                    .map_err(|e| Error::OrtSession(e.to_string()))?,
             ];
             if self.need_token_type_ids {
                 session_inputs.push((
                     "token_type_ids".into(),
-                    Value::from_array(token_type_ids_array)?.into(),
+                    Value::from_array(token_type_ids_array)
+                        .map_err(|e| Error::OrtSession(e.to_string()))?
+                        .into(),
                 ));
             }
 
-            let outputs = self.session.run(session_inputs)?;
+            let outputs = self
+                .session
+                .run(session_inputs)
+                .map_err(|e| Error::OrtSession(e.to_string()))?;
             let outputs = outputs
                 .get("logits")
-                .ok_or_else(|| anyhow::Error::msg("Output does not contain 'logits' key"))?
+                .ok_or_else(|| Error::OutputKeyMissing {
+                    key: "logits".into(),
+                })?
                 .try_extract_array()
                 .map_err(|e| {
-                    anyhow::Error::msg(format!("Failed to extract logits tensor: {}", e))
+                    Error::TensorExtraction(format!("Failed to extract logits tensor: {e}"))
                 })?;
             let batch_scores: Vec<f32> = outputs
                 .slice(s![.., 0])
@@ -220,5 +209,19 @@ impl TextRerank {
             .collect();
         top_n_result.sort_by(|a, b| a.score.total_cmp(&b.score).reverse());
         Ok(top_n_result)
+    }
+}
+
+impl TextRerank {
+    /// Close the ONNX Runtime profile and return the FULL name of the written file.
+    ///
+    /// ORT appends a timestamp to the requested prefix, so the path
+    /// is known only from here. Without this call the profile stays unclosed:
+    /// a session built with profiling must finish it.
+    ///
+    /// Errors if profiling was not requested at initialization
+    /// (see [`crate::InitOptionsWithLength::with_profiling`]).
+    pub fn end_profiling(&mut self) -> crate::common::Result<String> {
+        Ok(self.session.end_profiling()?)
     }
 }

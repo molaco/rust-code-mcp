@@ -7,22 +7,46 @@ use rmcp::{
     schemars, tool,
 };
 
-use rmc_engine::embeddings::EmbeddingBackend;
 use crate::mcp::project_paths::{
     ProjectPaths, data_dir, read_embedder_identity, resolve_embedding_backend_for_mcp,
 };
+use rmc_engine::embeddings::EmbeddingBackend;
 use rmc_engine::vector_store::VectorStore;
 use rmc_indexing::{
     indexing::open_bm25_search,
     monitoring::{HealthMonitor, Status},
 };
 
+/// Share of deleted documents in a project's BM25 index above which the
+/// health check warns.
+///
+/// The merge policy expunges any segment past 30 % deleted
+/// (`RMC_BM25_DEL_DOCS_RATIO`), so a whole index above half dead means its
+/// merges are not landing — the state a daemon reached when every sync threw
+/// its merges away (71 %). Between the two leaves room for the segments that
+/// sit just under the policy's threshold.
+const BM25_DELETED_WARN_ENV: &str = "RMC_BM25_DELETED_WARN_RATIO";
+const DEFAULT_BM25_DELETED_WARN_RATIO: f64 = 0.5;
+
+fn bm25_deleted_warn_ratio() -> Result<f64, McpError> {
+    match std::env::var(BM25_DELETED_WARN_ENV) {
+        Ok(value) => value.trim().parse().map_err(|e| {
+            McpError::invalid_params(format!("{BM25_DELETED_WARN_ENV}={value:?}: {e}"), None)
+        }),
+        Err(_) => Ok(DEFAULT_BM25_DELETED_WARN_RATIO),
+    }
+}
+
 /// Health check parameters (optional directory to check specific project)
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct HealthCheckParams {
-    #[schemars(description = "Optional: project directory to check (checks system-wide if not provided)")]
+    #[schemars(
+        description = "Optional: project directory to check (checks system-wide if not provided)"
+    )]
     pub directory: Option<String>,
-    #[schemars(description = "Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: local-cpu-small.")]
+    #[schemars(
+        description = "Profile the directory was indexed with; default local-cpu-small."
+    )]
     #[serde(default)]
     pub embedding_profile: Option<String>,
 }
@@ -51,7 +75,9 @@ async fn open_vector_store_for_health(
 }
 
 /// Check system health status
-#[tool(description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)")]
+#[tool(
+    description = "Check the health status of the code search system (BM25, Vector store, Merkle tree, index coverage and freshness). Pass 'directory': without it neither coverage nor freshness can be judged."
+)]
 pub(crate) async fn health_check(
     Parameters(HealthCheckParams {
         directory,
@@ -67,37 +93,57 @@ pub(crate) async fn health_check(
     // profile (automatic CPU default when unset); further down we still read the
     // on-disk `metadata.json` so the report reflects the real cached
     // identity.
-    let root = directory.as_deref().unwrap_or(".");
-    let backend =
-        resolve_embedding_backend_for_mcp(embedding_profile.as_deref(), std::path::Path::new(root))?;
+    // A system-wide check (no `directory`) deliberately looks at no project's
+    // `embedding_profiles.toml`: the filesystem root has none, so the probe
+    // falls back to the built-in default. It used to pass `"."`, which after
+    // the daemon stopped sharing a cwd with its clients would have meant
+    // "whatever directory the daemon happens to sit in".
+    let root = match directory.as_deref() {
+        Some(dir) => crate::tools::paths::require_absolute("directory", dir)?,
+        None => std::path::PathBuf::from("/"),
+    };
+    let backend = resolve_embedding_backend_for_mcp(embedding_profile.as_deref(), &root)?;
     let embedder_identity = backend.identity();
 
     // Determine paths using the same shared helper as index_tool.
-    let (bm25_path, merkle_path, collection_name) = if let Some(ref dir) = directory {
-        let dir_path = std::path::Path::new(dir);
-        let paths = ProjectPaths::from_directory(dir_path, &backend);
+    // `coverage_inputs` carries the project's metadata cache and the salt
+    // its keys are prefixed with — without them the coverage check has
+    // nothing to compare the store against and reports "unknown".
+    let (bm25_path, merkle_path, collection_name, coverage_inputs) =
+        if let Some(ref dir) = directory {
+            let dir_path = std::path::Path::new(dir);
+            // The index search reads, not merely the one this identity
+            // would name: they differ while a store built under an earlier
+            // identity is still the one in use.
+            let paths = ProjectPaths::in_use(dir_path, &backend)
+                .map_err(|msg| McpError::invalid_params(msg, None))?;
 
-        (
-            paths.tantivy_path,
-            paths.snapshot_path,
-            paths.collection_name,
-        )
-    } else {
-        // System-wide check: can't determine specific snapshot path
-        // Merkle snapshots are directory-specific, so this will report as missing
-        (
-            data_dir().join("index"),
-            std::path::PathBuf::from("/nonexistent/merkle.snapshot"),  // Sentinel value
-            "code_chunks_default".to_string(),
-        )
-    };
+            (
+                paths.tantivy_path,
+                paths.snapshot_path,
+                paths.collection_name,
+                Some((paths.cache_path, paths.metadata_cache_salt)),
+            )
+        } else {
+            // System-wide check: can't determine specific snapshot path
+            // Merkle snapshots are directory-specific, so this will report as missing
+            (
+                data_dir().join("index"),
+                std::path::PathBuf::from("/nonexistent/merkle.snapshot"), // Sentinel value
+                "code_chunks_default".to_string(),
+                None,
+            )
+        };
 
     // Initialize components (optional)
     let bm25 = open_bm25_search(&bm25_path).ok().map(std::sync::Arc::new);
 
     // Initialize embedded vector store (LanceDB)
     // Path must match unified.rs: cache_path.parent().join("vectors").join(collection_name)
-    let vector_path = data_dir().join("cache").join("vectors").join(&collection_name);
+    let vector_path = data_dir()
+        .join("cache")
+        .join("vectors")
+        .join(&collection_name);
 
     // On-disk identity, if any: the actual model that wrote this
     // index. May differ from `embedder_identity` (the configured
@@ -113,7 +159,15 @@ pub(crate) async fn health_check(
     .await;
 
     // Create health monitor
-    let monitor = HealthMonitor::new(bm25, vector_store, merkle_path);
+    let mut monitor = HealthMonitor::new(bm25, vector_store, merkle_path);
+    if let Some((cache_path, chunking_identity)) = coverage_inputs {
+        monitor = monitor.with_metadata_cache(cache_path, chunking_identity);
+    }
+    // Freshness needs the working tree itself — the snapshot alone only says
+    // what the code looked like at index time, never what it looks like now.
+    if let Some(ref dir) = directory {
+        monitor = monitor.with_project_root(std::path::PathBuf::from(dir));
+    }
 
     // Run health check
     let health = monitor.check_health().await;
@@ -122,8 +176,8 @@ pub(crate) async fn health_check(
     // operators can confirm which model the cache will be keyed against.
     // Report both the configured default (what a fresh index would use)
     // and the on-disk model (what the existing index was built with).
-    let mut health_value = serde_json::to_value(&health)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let mut health_value =
+        serde_json::to_value(&health).map_err(|e| McpError::internal_error(e.to_string(), None))?;
     if let Some(obj) = health_value.as_object_mut() {
         // `embedder` keeps its existing meaning: the currently configured
         // default. `embedder_on_disk` is new and reflects the actual
@@ -147,6 +201,41 @@ pub(crate) async fn health_check(
             );
         }
     }
+    // The keyword index's own shape: how much of it is dead. Reported for a
+    // project only — the system-wide probe has no single index to look at.
+    let mut bm25_warning = None;
+    if directory.is_some() {
+        let probe = rmc_indexing::indexing::index_stats::probe_bm25_index(&bm25_path);
+        if let Ok(stats) = &probe {
+            let threshold = bm25_deleted_warn_ratio()?;
+            if let Some(ratio) = stats.deleted_ratio.filter(|ratio| *ratio > threshold) {
+                bm25_warning = Some(format!(
+                    "BM25 index is {:.0} % deleted documents ({} segments, {:.2} GB on disk); \
+                     above {BM25_DELETED_WARN_ENV}={threshold}: merges are not landing",
+                    ratio * 100.0,
+                    stats.segment_count,
+                    stats.total_bytes_on_disk as f64 / 1e9,
+                ));
+            }
+        }
+        if let Some(obj) = health_value.as_object_mut() {
+            obj.insert(
+                "bm25_index".to_string(),
+                match probe {
+                    Ok(stats) => serde_json::to_value(&stats)
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+                    Err(e) => serde_json::json!({ "error": format!("{e:#}") }),
+                },
+            );
+            if let Some(warning) = &bm25_warning {
+                obj.insert(
+                    "bm25_warning".to_string(),
+                    serde_json::Value::String(warning.clone()),
+                );
+            }
+        }
+    }
+
     let status_json = serde_json::to_string_pretty(&health_value)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -158,19 +247,30 @@ pub(crate) async fn health_check(
             response.push_str("✓ System Status: HEALTHY\n\n");
         }
         Status::Degraded => {
-            response.push_str("⚠ System Status: DEGRADED (some components unavailable but system functional)\n\n");
+            response.push_str(
+                "⚠ System Status: DEGRADED (some components unavailable but system functional)\n\n",
+            );
         }
         Status::Unhealthy => {
             response.push_str("✗ System Status: UNHEALTHY (critical components failing)\n\n");
         }
     }
 
+    if let Some(warning) = &bm25_warning {
+        response.push_str(&format!("⚠ {warning}\n\n"));
+    }
     response.push_str(&status_json);
     response.push_str("\n\n=== Health Check Guide ===\n");
     response.push_str("- Healthy: All components operational\n");
     response.push_str("- Degraded: One search engine down OR Merkle snapshot missing\n");
     response.push_str("- Unhealthy: Both BM25 and Vector search are down\n");
-    response.push_str("\nNote: Merkle snapshots are directory-specific. Use 'directory' parameter for accurate check.\n");
+    response.push_str("- Coverage: files the indexer will SKIP as unchanged, but for which the store holds no vectors.\n");
+    response.push_str("  Non-zero `stale_skips` = index silently incomplete (a run died halfway); fix with index_codebase force_reindex: true.\n");
+    response.push_str("- Freshness: does the index still describe the code ON DISK? Compares the snapshot against the\n");
+    response.push_str("  working tree by CONTENT, so a rebuild or branch switch that only moves mtimes is not an alarm.\n");
+    response.push_str("  Non-zero counts = answers describe old code; fix with a plain index_codebase run.\n");
+    response.push_str("\nNote: Merkle snapshots are directory-specific, and both coverage and freshness need a project.\n");
+    response.push_str("Without 'directory' this reports on system-wide components only and cannot judge either one.\n");
 
     if let Some(ref dir) = directory {
         response.push_str(&format!("\nChecked project: {}\n", dir));
@@ -193,13 +293,9 @@ mod tests {
         let backend = EmbeddingBackend::default();
         let embedder_identity = backend.identity();
 
-        let vector_store = open_vector_store_for_health(
-            vector_path.clone(),
-            &backend,
-            &embedder_identity,
-            None,
-        )
-        .await;
+        let vector_store =
+            open_vector_store_for_health(vector_path.clone(), &backend, &embedder_identity, None)
+                .await;
 
         assert!(vector_store.is_none());
         assert!(!vector_path.exists());

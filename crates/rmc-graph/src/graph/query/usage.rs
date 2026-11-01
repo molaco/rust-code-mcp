@@ -15,6 +15,19 @@ use super::super::snapshot::OpenedSnapshot;
 use super::model::UsageSummaryRow;
 
 impl OpenedSnapshot {
+    pub fn unresolved_calls_from(&self, owner: NodeId) -> Result<Vec<super::super::model::UnresolvedCall>> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.dbs.unresolved_calls_by_owner.get(&rtxn, owner.as_bytes())?.unwrap_or_default())
+    }
+
+    pub fn usages_from_item(&self, owner: NodeId) -> Result<Vec<Usage>> {
+        let rtxn = self.env.read_txn()?;
+        self.dbs.usages_by_consumer_item.get_duplicates(&rtxn, owner.as_bytes())?
+            .into_iter().flatten().map(|entry| {
+                let (_, id) = entry?;
+                self.dbs.usages_by_id.get(&rtxn, id)?.ok_or_else(|| anyhow::anyhow!("dangling UsageId in usages_by_consumer_item"))
+            }).collect()
+    }
     /// All bindings in the workspace whose target is `target` (and that aren't
     /// the target's own declaration). Useful for "who imports symbol X".
     pub fn who_imports(&self, target: NodeId) -> Result<Vec<Binding>> {

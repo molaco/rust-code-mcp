@@ -16,3 +16,18 @@
 .claude
 .codex
 .test/
+
+# The built binary and its backups: 300 MB each, copied to the repo root,
+# because that is where .mcp.json and ~/.codex/config.toml pick it up.
+/rust-code-mcp
+/rust-code-mcp.bak-*
+# Deliberately `.prev*`, not `.prev-*`: a bare `rust-code-mcp.prev` (no suffix)
+# slipped past the hyphenated pattern and sat untracked — i.e. 300 MB waiting for
+# the first `git add -A`.
+/rust-code-mcp.prev*
+# A second target for the allocator measurement (the mimalloc feature).
+/target-mimalloc/
+# Local data and caches: vectors, the embedder model cache, measurements.
+/vectors/
+/.cache_bench/
+.fastembed_cache/

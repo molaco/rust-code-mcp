@@ -1,12 +1,10 @@
 #[cfg(feature = "hf-hub")]
-use crate::common::load_tokenizer_hf_hub;
+use crate::common::{init_session_builder, load_tokenizer_hf_hub};
 use crate::{
+    common::{Error, Result},
     models::sparse::{models_list, SparseModel},
     ModelInfo, SparseEmbedding,
 };
-#[cfg(feature = "hf-hub")]
-use anyhow::Context;
-use anyhow::Result;
 #[cfg(feature = "hf-hub")]
 use hf_hub::api::sync::ApiRepo;
 use ndarray::{Array, ArrayViewD, Axis, CowArray, Dim};
@@ -17,19 +15,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
-#[cfg_attr(not(feature = "hf-hub"), allow(unused_imports))]
-use std::thread::available_parallelism;
-
 #[cfg(feature = "hf-hub")]
 use super::SparseInitOptions;
 use super::{SparseTextEmbedding, DEFAULT_BATCH_SIZE};
 
 impl SparseTextEmbedding {
-    #[cfg(feature = "hf-hub")]
-    fn builder_error(err: ort::Error<ort::session::builder::SessionBuilder>) -> anyhow::Error {
-        anyhow::Error::msg(err.to_string())
-    }
-
     /// Try to generate a new SparseTextEmbedding Instance
     ///
     /// Uses the highest level of Graph optimization
@@ -38,7 +28,6 @@ impl SparseTextEmbedding {
     #[cfg(feature = "hf-hub")]
     pub fn try_new(options: SparseInitOptions) -> Result<Self> {
         use super::SparseInitOptions;
-        use ort::{session::builder::GraphOptimizationLevel, session::Session};
 
         let SparseInitOptions {
             max_length,
@@ -46,9 +35,9 @@ impl SparseTextEmbedding {
             cache_dir,
             show_download_progress,
             execution_providers,
+            intra_threads,
+            profiling_file,
         } = options;
-
-        let threads = available_parallelism()?.get();
 
         let model_repo = SparseTextEmbedding::retrieve_model(
             model_name.clone(),
@@ -58,26 +47,25 @@ impl SparseTextEmbedding {
 
         let model_info = SparseTextEmbedding::get_model_info(&model_name);
         let model_file_name = &model_info.model_file;
-        let model_file_reference = model_repo
-            .get(model_file_name)
-            .context(format!("Failed to retrieve {} ", model_file_name))?;
+        let model_file_reference =
+            model_repo
+                .get(model_file_name)
+                .map_err(|e| Error::ModelRetrieval {
+                    file: model_file_name.clone(),
+                    source: Box::new(e),
+                })?;
 
         // Download additional files if needed (e.g., model.onnx.data for large models)
         if !model_info.additional_files.is_empty() {
             for file in &model_info.additional_files {
-                model_repo
-                    .get(file)
-                    .context(format!("Failed to retrieve {}", file))?;
+                model_repo.get(file).map_err(|e| Error::ModelRetrieval {
+                    file: file.clone(),
+                    source: Box::new(e),
+                })?;
             }
         }
 
-        let session = Session::builder()?
-            .with_execution_providers(execution_providers)
-            .map_err(Self::builder_error)?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(Self::builder_error)?
-            .with_intra_threads(threads)
-            .map_err(Self::builder_error)?
+        let session = init_session_builder(execution_providers, intra_threads, profiling_file)?
             .commit_from_file(model_file_reference)?;
 
         let tokenizer = load_tokenizer_hf_hub(model_repo, max_length)?;
@@ -135,21 +123,24 @@ impl SparseTextEmbedding {
         let texts = texts.as_ref();
         // Determine the batch size, default if not specified
         let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+        if batch_size == 0 {
+            return Err(Error::InvalidArgument(
+                "batch_size must be greater than 0".into(),
+            ));
+        }
 
         let output = texts
             .chunks(batch_size)
             .map(|batch| {
                 // Encode the texts in the batch
                 let inputs = batch.iter().map(|text| text.as_ref()).collect();
-                let encodings = self.tokenizer.encode_batch(inputs, true).map_err(|e| {
-                    anyhow::Error::msg(e.to_string()).context("Failed to encode the batch.")
-                })?;
+                let encodings = self
+                    .tokenizer
+                    .encode_batch(inputs, true)
+                    .map_err(|e| Error::Tokenization(format!("Failed to encode the batch: {e}")))?;
 
                 // Extract the encoding length and batch size
-                let encoding_length = encodings
-                    .first()
-                    .ok_or_else(|| anyhow::anyhow!("Tokenizer returned empty encodings"))?
-                    .len();
+                let encoding_length = encodings.first().ok_or(Error::EmptyTokenizations)?.len();
                 let batch_size = batch.len();
 
                 let max_size = encoding_length * batch_size;
@@ -170,54 +161,74 @@ impl SparseTextEmbedding {
                 });
 
                 let inputs_ids_array =
-                    Array::from_shape_vec((batch_size, encoding_length), ids_array)?;
+                    Array::from_shape_vec((batch_size, encoding_length), ids_array)
+                        .map_err(|e| Error::InvalidShape(e.to_string()))?;
                 let attention_mask_array =
-                    Array::from_shape_vec((batch_size, encoding_length), mask_array)?;
+                    Array::from_shape_vec((batch_size, encoding_length), mask_array)
+                        .map_err(|e| Error::InvalidShape(e.to_string()))?;
 
                 let token_type_ids_array =
-                    Array::from_shape_vec((batch_size, encoding_length), type_ids_array)?;
+                    Array::from_shape_vec((batch_size, encoding_length), type_ids_array)
+                        .map_err(|e| Error::InvalidShape(e.to_string()))?;
 
                 let mut session_inputs = ort::inputs![
-                    "input_ids" => Value::from_array(inputs_ids_array.clone())?,
-                    "attention_mask" => Value::from_array(attention_mask_array.clone())?,
+                    "input_ids" => Value::from_array(inputs_ids_array.clone())
+                        .map_err(|e| Error::OrtSession(e.to_string()))?,
+                    "attention_mask" => Value::from_array(attention_mask_array.clone())
+                        .map_err(|e| Error::OrtSession(e.to_string()))?,
                 ];
 
                 if self.need_token_type_ids {
                     session_inputs.push((
                         "token_type_ids".into(),
-                        Value::from_array(token_type_ids_array)?.into(),
+                        Value::from_array(token_type_ids_array)
+                            .map_err(|e| Error::OrtSession(e.to_string()))?
+                            .into(),
                     ));
                 }
 
-                let outputs = self.session.run(session_inputs)?;
+                let outputs = self
+                    .session
+                    .run(session_inputs)
+                    .map_err(|e| Error::OrtSession(e.to_string()))?;
 
                 let embeddings = match self.model {
                     SparseModel::SPLADEPPV1 => {
                         let last_hidden_state_key = match outputs.len() {
-                            1 => outputs.keys().next().ok_or_else(|| {
-                                anyhow::anyhow!("Expected one output but found none")
-                            })?,
+                            1 => outputs
+                                .keys()
+                                .next()
+                                .ok_or_else(|| Error::OutputKeyMissing {
+                                    key: "<only output>".into(),
+                                })?,
                             _ => "last_hidden_state",
                         };
 
-                        let (shape, data) =
-                            outputs[last_hidden_state_key].try_extract_tensor::<f32>()?;
+                        let (shape, data) = outputs[last_hidden_state_key]
+                            .try_extract_tensor::<f32>()
+                            .map_err(|e| Error::TensorExtraction(e.to_string()))?;
                         let shape: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
-                        let output_array = ndarray::ArrayViewD::from_shape(shape.as_slice(), data)?;
+                        let output_array = ndarray::ArrayViewD::from_shape(shape.as_slice(), data)
+                            .map_err(|e| Error::InvalidShape(e.to_string()))?;
                         let attention_mask_cow = ndarray::CowArray::from(&attention_mask_array);
 
                         Self::post_process_splade(&output_array, &attention_mask_cow)
                     }
                     SparseModel::BGEM3 => {
-                        let output_key = outputs
-                            .keys()
-                            .next()
-                            .ok_or_else(|| anyhow::anyhow!("Expected at least one output"))?;
+                        let output_key =
+                            outputs
+                                .keys()
+                                .next()
+                                .ok_or_else(|| Error::OutputKeyMissing {
+                                    key: "<first output>".into(),
+                                })?;
 
-                        let (shape, data) = outputs[output_key].try_extract_tensor::<f32>()?;
+                        let (shape, data) = outputs[output_key]
+                            .try_extract_tensor::<f32>()
+                            .map_err(|e| Error::TensorExtraction(e.to_string()))?;
                         let shape: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
-                        let hidden_states =
-                            ndarray::ArrayViewD::from_shape(shape.as_slice(), data)?;
+                        let hidden_states = ndarray::ArrayViewD::from_shape(shape.as_slice(), data)
+                            .map_err(|e| Error::InvalidShape(e.to_string()))?;
 
                         Self::post_process_bgem3(
                             &hidden_states,
@@ -316,5 +327,19 @@ impl SparseTextEmbedding {
                 SparseEmbedding { values, indices }
             })
             .collect()
+    }
+}
+
+impl SparseTextEmbedding {
+    /// Close the ONNX Runtime profile and return the FULL name of the written file.
+    ///
+    /// ORT appends a timestamp to the requested prefix, so the path
+    /// is known only from here. Without this call the profile stays unclosed:
+    /// a session built with profiling must finish it.
+    ///
+    /// Errors if profiling was not requested at initialization
+    /// (see [`crate::InitOptionsWithLength::with_profiling`]).
+    pub fn end_profiling(&mut self) -> crate::common::Result<String> {
+        Ok(self.session.end_profiling()?)
     }
 }

@@ -49,6 +49,19 @@ pub(crate) const CHUNK_TARGET_TOKENS_ENV: &str = "RUST_CODE_MCP_CHUNK_TARGET_TOK
 /// Environment variable for the hard formatted chunk token length.
 pub(crate) const CHUNK_HARD_MAX_TOKENS_ENV: &str =
     "RUST_CODE_MCP_CHUNK_HARD_MAX_TOKENS";
+/// Environment variable for `chunk_context_first_part_only`: `1` or `0`.
+pub(crate) const CHUNK_CONTEXT_FIRST_PART_ONLY_ENV: &str =
+    "RUST_CODE_MCP_CHUNK_CONTEXT_FIRST_PART_ONLY";
+/// Whether only the first part of a line-split symbol carries its docstring,
+/// imports and calls (see `ChunkSplitConfig::context_in_first_part_only`).
+///
+/// On, measured 2026-10-29 with `local-gpu-bge` (384/512 split): a 6439-file
+/// workspace went from 924k chunks (94 % of them parts of split symbols)
+/// and 412M model tokens to 241k chunks and 77M tokens; on this repository's
+/// labelled queries (`profile_relevance`, 36 queries) 12116 -> 6298 chunks
+/// and every score rose — vector recall@10 0.708 -> 0.778, MRR 0.644 ->
+/// 0.690; hybrid recall@10 0.611 -> 0.653, MRR 0.536 -> 0.568.
+const DEFAULT_CHUNK_CONTEXT_FIRST_PART_ONLY: bool = true;
 
 const DEFAULT_GPU_BATCH_SIZE: usize = 32;
 const DEFAULT_MAX_TOKENS_PER_BATCH: usize = 32 * 1024;
@@ -107,6 +120,7 @@ impl IndexerConfig {
                 max_tokens_per_batch: DEFAULT_MAX_TOKENS_PER_BATCH,
                 chunk_target_tokens: DEFAULT_CHUNK_TARGET_TOKENS,
                 chunk_hard_max_tokens: DEFAULT_CHUNK_HARD_MAX_TOKENS,
+                chunk_context_first_part_only: DEFAULT_CHUNK_CONTEXT_FIRST_PART_ONLY,
             },
             tantivy: TantivyConfig {
                 index_path: tantivy_path.to_path_buf(),
@@ -126,6 +140,7 @@ impl IndexerConfig {
                 max_tokens_per_batch: DEFAULT_MAX_TOKENS_PER_BATCH,
                 chunk_target_tokens: DEFAULT_CHUNK_TARGET_TOKENS,
                 chunk_hard_max_tokens: DEFAULT_CHUNK_HARD_MAX_TOKENS,
+                chunk_context_first_part_only: DEFAULT_CHUNK_CONTEXT_FIRST_PART_ONLY,
             },
             tantivy: TantivyConfig {
                 index_path: tantivy_path.to_path_buf(),
@@ -151,6 +166,10 @@ pub struct IndexerCoreConfig {
     pub chunk_target_tokens: usize,
     /// Hard formatted chunk length before splitting.
     pub chunk_hard_max_tokens: usize,
+    /// Whether only the first part of a line-split symbol carries its
+    /// docstring, imports and calls. Changes the embedded text, so it is
+    /// part of `chunking_cache_salt`.
+    pub chunk_context_first_part_only: bool,
 }
 
 impl IndexerCoreConfig {
@@ -182,15 +201,39 @@ impl IndexerCoreConfig {
             );
             self.chunk_hard_max_tokens = self.chunk_target_tokens;
         }
+        self.chunk_context_first_part_only = match env::var(CHUNK_CONTEXT_FIRST_PART_ONLY_ENV) {
+            Err(env::VarError::NotPresent) => self.chunk_context_first_part_only,
+            Ok(raw) => parse_switch(&raw).unwrap_or_else(|| {
+                panic!("{CHUNK_CONTEXT_FIRST_PART_ONLY_ENV} must be 0 or 1, not {raw:?}")
+            }),
+            Err(err) => panic!("{CHUNK_CONTEXT_FIRST_PART_ONLY_ENV} is unreadable: {err}"),
+        };
         self
     }
 
     /// Cache-key salt for chunking changes that alter indexed document content.
+    ///
+    /// With `chunk_context_first_part_only` off it is the salt every store
+    /// was built under before the switch existed, so those stores stay valid.
     pub fn chunking_cache_salt(&self) -> String {
+        let context = if self.chunk_context_first_part_only {
+            ":context-first-part"
+        } else {
+            ""
+        };
         format!(
-            "chunk-split:v1:target{}:hard{}",
+            "chunk-split:v1:target{}:hard{}{context}",
             self.chunk_target_tokens, self.chunk_hard_max_tokens
         )
+    }
+}
+
+/// `1` → on, `0` → off; anything else is not a switch.
+fn parse_switch(raw: &str) -> Option<bool> {
+    match raw.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -203,6 +246,7 @@ impl Default for IndexerCoreConfig {
             max_tokens_per_batch: DEFAULT_MAX_TOKENS_PER_BATCH,
             chunk_target_tokens: DEFAULT_CHUNK_TARGET_TOKENS,
             chunk_hard_max_tokens: DEFAULT_CHUNK_HARD_MAX_TOKENS,
+            chunk_context_first_part_only: DEFAULT_CHUNK_CONTEXT_FIRST_PART_ONLY,
         }
     }
 }
@@ -492,8 +536,31 @@ mod tests {
         assert_eq!(core.chunk_hard_max_tokens, 512);
         assert_eq!(
             core.chunking_cache_salt(),
+            "chunk-split:v1:target384:hard512:context-first-part"
+        );
+    }
+
+    /// The switch is part of the chunking identity, and leaves the salt of
+    /// stores built without it as it was.
+    #[test]
+    fn context_in_the_first_part_only_is_its_own_chunking_identity() {
+        let profile = EmbeddingProfile::parse("local-gpu-bge").unwrap();
+        let off = IndexerCoreConfig {
+            chunk_context_first_part_only: false,
+            ..IndexerCoreConfig::default().with_embedding_profile(profile)
+        };
+        let on = IndexerCoreConfig {
+            chunk_context_first_part_only: true,
+            ..off.clone()
+        };
+        assert_eq!(
+            off.chunking_cache_salt(),
             "chunk-split:v1:target384:hard512"
         );
+        assert_ne!(on.chunking_cache_salt(), off.chunking_cache_salt());
+        assert_eq!(parse_switch("1"), Some(true));
+        assert_eq!(parse_switch("0"), Some(false));
+        assert_eq!(parse_switch("yes"), None);
     }
 
     #[test]

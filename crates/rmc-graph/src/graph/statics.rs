@@ -112,6 +112,7 @@ mod tests {
                         visibility: None,
                         attributes: Vec::new(),
                         crate_target_kind: None,
+                        declaration_module: None,
                     },
                 );
                 nodes.insert(
@@ -129,6 +130,7 @@ mod tests {
                         visibility: None,
                         attributes: Vec::new(),
                         crate_target_kind: Some("lib".into()),
+                        declaration_module: None,
                     },
                 );
                 nodes.insert(
@@ -146,6 +148,7 @@ mod tests {
                         visibility: Some("pub".into()),
                         attributes: Vec::new(),
                         crate_target_kind: None,
+                        declaration_module: None,
                     },
                 );
                 for (id, name) in [
@@ -168,6 +171,7 @@ mod tests {
                             visibility: Some("pub".into()),
                             attributes: Vec::new(),
                             crate_target_kind: None,
+                            declaration_module: None,
                         },
                     );
                 }
@@ -178,6 +182,7 @@ mod tests {
                     nodes,
                     bindings: Vec::new(),
                     usages: Vec::new(),
+                    unresolved_calls: Vec::new(),
                     contains: vec![
                         (workspace_id, crate_id),
                         (crate_id, module_id),

@@ -13,7 +13,7 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use super::super::ids::NodeId;
-use super::super::model::{BindingVisibility, FunctionSignature, ItemKind};
+use super::super::model::{BindingVisibility, FunctionSignature, ItemKind, UsageRelation};
 
 /// One result of `dead_pub_in_crate`: a `pub` item with no cross-crate
 /// importers or references.
@@ -65,6 +65,10 @@ pub struct EnrichedUsage {
     pub consumer_module: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_function: Option<String>,
+    pub consumer_item: Option<String>,
+    pub relation: UsageRelation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expansion: Option<super::super::model::ExpansionSite>,
 }
 
 /// Dead public item enriched with display labels and navigable source span.
@@ -394,7 +398,8 @@ pub struct CommonFnName {
 /// return the same shape — the only difference is whether the row's "anchor"
 /// is the caller (`who_calls`) or the callee (`calls_from`); each side
 /// carries the *other* end's qualified name plus the file:byte-range hit and
-/// reference category. References from non-fn scopes (const initializers,
+/// semantic relation and reference category. Only Call/TraitDispatch sites
+/// appear. References from non-fn scopes (const initializers,
 /// trait bounds, enum discriminants) never appear because both queries scan
 /// only `Usage` rows where `consumer_function.is_some()`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -405,6 +410,9 @@ pub struct EnrichedCallSite {
     pub start: u32,
     pub end: u32,
     pub category: String, // "Read" | "Write" | "Test" | "Other"
+    pub relation: UsageRelation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion: Option<super::super::model::ExpansionSite>,
 }
 
 /// Result of `call_graph(root_fn, depth)` — bounded recursive descent through

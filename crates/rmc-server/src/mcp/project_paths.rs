@@ -24,6 +24,8 @@ pub struct ProjectPaths {
     pub indexing_identity: String,
     pub chunking_identity: String,
     pub cache_path: PathBuf,
+    /// Salt prefixing this project+profile's metadata-cache keys.
+    pub metadata_cache_salt: String,
     pub tantivy_path: PathBuf,
     pub snapshot_path: PathBuf,
     pub collection_name: String,
@@ -44,6 +46,7 @@ impl From<IndexingProjectPaths> for ProjectPaths {
             indexing_identity: paths.indexing_identity,
             chunking_identity: paths.chunking_identity,
             cache_path: paths.cache_path,
+            metadata_cache_salt: paths.metadata_cache_salt,
             tantivy_path: paths.tantivy_path,
             snapshot_path: paths.snapshot_path,
             collection_name: paths.collection_name,
@@ -72,6 +75,12 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".rust-code-mcp"))
 }
 
+/// Embedding backend for a tool call.
+///
+/// Priority: explicit tool parameter > `RMC_EMBEDDING_PROFILE` > built-in
+/// `local-cpu-small`. The environment switch is read NOT by this resolver but by
+/// [`automatic_embedding_backend`], once per process: the default profile is
+/// a property of how the server was started, not of the request.
 pub(crate) fn resolve_embedding_backend_for_mcp(
     embedding_profile: Option<&str>,
     directory: &Path,
@@ -135,6 +144,31 @@ impl ProjectPaths {
             .collect())
     }
 
+    /// The index of `dir` that tools working with `backend` actually use:
+    /// the computed paths when that collection exists, else an existing
+    /// collection built by a matching embedder (another identity string, or
+    /// another chunking identity that background sync rewrites in place),
+    /// else the computed paths for a first index.
+    ///
+    /// Search, `health_check` and `runtime_status` all ask this, so they
+    /// report on the index search reads — the BM25 directory belongs to the
+    /// collection, and the computed collection may not be the one on disk.
+    pub fn in_use(dir: &Path, backend: &EmbeddingBackend) -> Result<Self, String> {
+        let computed = Self::from_directory(dir, backend);
+        if computed.vector_metadata_exists() {
+            return Ok(computed);
+        }
+        Ok(Self::indexed_profiles(dir)?
+            .into_iter()
+            .find(|indexed| backend_matches_request(&indexed.backend, backend))
+            .map_or(computed, |indexed| indexed.paths))
+    }
+
+    /// Whether the vector collection has been created (its `metadata.json`).
+    pub fn vector_metadata_exists(&self) -> bool {
+        self.vector_path.join("metadata.json").exists()
+    }
+
     #[cfg(test)]
     fn indexed_profiles_in_root(
         dir: &Path,
@@ -149,6 +183,15 @@ impl ProjectPaths {
     pub fn vectors_root() -> PathBuf {
         IndexingProjectPaths::vectors_root(&data_dir())
     }
+}
+
+/// Whether vectors made by `indexed` answer queries embedded by `requested`.
+fn backend_matches_request(indexed: &EmbeddingBackend, requested: &EmbeddingBackend) -> bool {
+    indexed.runtime == requested.runtime
+        && indexed.model_id() == requested.model_id()
+        && indexed.dim() == requested.dim()
+        && indexed.max_len == requested.max_len
+        && indexed.profile.query_policy == requested.profile.query_policy
 }
 
 pub(crate) fn dir_hash(dir: &Path) -> String {
@@ -179,12 +222,19 @@ mod tests {
         .unwrap();
     }
 
+    /// Asserts the LINK — no explicit profile means the automatic one — not a
+    /// literal name. `RMC_EMBEDDING_PROFILE` legitimately moves that name, and
+    /// a machine with the GPU profile exported would otherwise fail a suite
+    /// over a setting that is working as intended. The literal default lives
+    /// in `defaults::profile_env_absent_or_blank_falls_back_to_cpu_default`,
+    /// which takes the env value as an argument instead of reading it.
     #[test]
-    fn resolve_embedding_backend_defaults_to_automatic_cpu_profile() {
+    fn resolve_embedding_backend_without_a_profile_uses_the_automatic_one() {
+        let automatic = crate::mcp::defaults::automatic_embedding_backend();
         let backend = resolve_embedding_backend_for_mcp(None, Path::new(".")).unwrap();
 
-        assert_eq!(backend.profile.name(), "local-cpu-small");
-        assert_eq!(backend.dim(), 384);
+        assert_eq!(backend.profile.name(), automatic.profile.name());
+        assert_eq!(backend.dim(), automatic.dim());
     }
 
     #[test]

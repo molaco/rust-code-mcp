@@ -88,6 +88,7 @@ async fn call_index_tool_direct(
     let params = IndexCodebaseParams {
         directory: codebase_path.to_string(),
         force_reindex: Some(force_reindex),
+        repair_coverage: None,
         model: None,
         embedding_profile: Some("local-gpu-small".to_string()),
     };

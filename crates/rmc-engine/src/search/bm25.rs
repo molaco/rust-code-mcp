@@ -2,7 +2,7 @@
 //!
 //! Provides chunk-level BM25 search to complement vector search in hybrid scenarios.
 
-use crate::chunker::{ChunkId, CodeChunk};
+use crate::chunker::ChunkId;
 use crate::schema::ChunkSchema;
 use std::path::Path;
 use tantivy::collector::TopDocs;
@@ -62,13 +62,18 @@ impl Bm25Search {
 
     /// Search for chunks matching a query
     ///
-    /// Returns chunks with their BM25 scores, sorted by relevance (highest first).
-    /// The query is parsed against content, symbol_name, and docstring fields.
+    /// Returns the ids of the matching chunks with their BM25 scores, sorted
+    /// by relevance (highest first). The query is parsed against content,
+    /// symbol_name, and docstring fields.
+    ///
+    /// Ids only: the index stores nothing else (see [`ChunkSchema`]). The
+    /// chunks are read from the vector store, and only for the hits that make
+    /// it into the answer.
     pub fn search(
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<(ChunkId, f32, CodeChunk)>, Box<dyn std::error::Error + Send>> {
+    ) -> Result<Vec<(ChunkId, f32)>, Box<dyn std::error::Error + Send>> {
         let searcher = self.reader.searcher();
 
         // Parse query across multiple fields
@@ -104,17 +109,7 @@ impl Bm25Search {
                     as Box<dyn std::error::Error + Send>
             })?;
 
-            // Deserialize CodeChunk from JSON
-            let chunk_json = doc
-                .get_first(self.schema.chunk_json)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "Missing chunk_json field"))
-                        as Box<dyn std::error::Error + Send>
-                })?;
-            let chunk: CodeChunk = serde_json::from_str(chunk_json).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
-
-            results.push((chunk_id, score, chunk));
+            results.push((chunk_id, score));
         }
 
         Ok(results)
@@ -158,7 +153,6 @@ mod tests {
     use super::*;
     use crate::chunker::{ChunkContext, CodeChunk};
     use std::path::PathBuf;
-    use tantivy::doc;
     use tempfile::TempDir;
 
     fn create_test_chunk(id: ChunkId, name: &str, content: &str) -> CodeChunk {
@@ -179,8 +173,6 @@ mod tests {
                 line_start: 1,
                 line_end: 5,
             },
-            overlap_prev: None,
-            overlap_next: None,
         }
     }
 
@@ -219,32 +211,8 @@ mod tests {
         let mut index_writer = bm25_search.index().writer(50_000_000).unwrap();
         let schema = bm25_search.schema();
 
-        // Add chunk1
-        let chunk1_json = serde_json::to_string(&chunk1).unwrap();
-        index_writer.add_document(doc!(
-            schema.chunk_id => chunk1_id.to_string(),
-            schema.content => chunk1.content.clone(),
-            schema.symbol_name => chunk1.context.symbol_name.clone(),
-            schema.symbol_kind => chunk1.context.symbol_kind.clone(),
-            schema.file_path => chunk1.context.file_path.display().to_string(),
-            schema.module_path => chunk1.context.module_path.join("::"),
-            schema.docstring => chunk1.context.docstring.clone().unwrap_or_default(),
-            schema.chunk_json => chunk1_json,
-        )).unwrap();
-
-        // Add chunk2
-        let chunk2_json = serde_json::to_string(&chunk2).unwrap();
-        index_writer.add_document(doc!(
-            schema.chunk_id => chunk2_id.to_string(),
-            schema.content => chunk2.content.clone(),
-            schema.symbol_name => chunk2.context.symbol_name.clone(),
-            schema.symbol_kind => chunk2.context.symbol_kind.clone(),
-            schema.file_path => chunk2.context.file_path.display().to_string(),
-            schema.module_path => chunk2.context.module_path.join("::"),
-            schema.docstring => chunk2.context.docstring.clone().unwrap_or_default(),
-            schema.chunk_json => chunk2_json,
-        )).unwrap();
-
+        index_writer.add_document(schema.document(&chunk1)).unwrap();
+        index_writer.add_document(schema.document(&chunk2)).unwrap();
         index_writer.commit().unwrap();
 
         // Search for "parse"
@@ -256,7 +224,12 @@ mod tests {
         // Should find chunk1 (parse_file)
         assert!(!results.is_empty());
         assert_eq!(results[0].0, chunk1_id);
-        assert_eq!(results[0].2.context.symbol_name, "parse_file");
+
+        // A snake_case identifier tokenizes into several tokens, which the
+        // query parser turns into a phrase query: this is what fails with a
+        // "no positions" error if the schema ever drops positions.
+        let results = bm25_search_mut.search("read_content", 10).unwrap();
+        assert_eq!(results.first().map(|hit| hit.0), Some(chunk2_id));
     }
 
     #[test]
@@ -279,18 +252,7 @@ mod tests {
         let mut index_writer = bm25_search.index().writer(50_000_000).unwrap();
         let schema = bm25_search.schema();
 
-        let chunk_json = serde_json::to_string(&chunk).unwrap();
-        index_writer.add_document(doc!(
-            schema.chunk_id => chunk_id.to_string(),
-            schema.content => chunk.content.clone(),
-            schema.symbol_name => chunk.context.symbol_name.clone(),
-            schema.symbol_kind => chunk.context.symbol_kind.clone(),
-            schema.file_path => chunk.context.file_path.display().to_string(),
-            schema.module_path => chunk.context.module_path.join("::"),
-            schema.docstring => chunk.context.docstring.clone().unwrap(),
-            schema.chunk_json => chunk_json,
-        )).unwrap();
-
+        index_writer.add_document(schema.document(&chunk)).unwrap();
         index_writer.commit().unwrap();
 
         // Search for "error" (in docstring, not in content or symbol name)

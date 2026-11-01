@@ -5,20 +5,27 @@ edition = "2024"
 
 [dependencies]
 rmc-server = { path = "../rmc-server" }
+# `--bm25-stats`: the index probe. Already linked through rmc-server; named
+# here because the binary calls it directly.
+rmc-indexing = { path = "../rmc-indexing" }
 
 rmcp = { workspace = true }
-# net/time/io-util drive the shared-daemon transport (unix socket, spawn wait, proxy).
+# net/time/io-util: shared-daemon transport (unix socket, startup wait, proxy).
 tokio = { workspace = true, features = ["net", "time", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-# Lock around "spawn the daemon": without it two simultaneous sessions spawn two.
+# Lock around starting the daemon: without it two concurrent sessions would start two.
 fs2 = { workspace = true }
-# `geteuid` for the socket-directory ownership check.
+# `geteuid`: check that the socket directory is ours, not someone else's.
 libc = { workspace = true }
-# Socket key (project + env + binary identity).
+# Socket key (index root + env + binary version).
 sha2 = { workspace = true }
-# The XDG state directory: daemon logs go on disk, never beside the socket.
-directories = { workspace = true }
+# The client relay reads JSON-RPC lines to replay a session on a new daemon.
+serde_json = { workspace = true }
+# Who sent SIGTERM: the `siginfo_t` of a handler chained beside tokio's.
+signal-hook-registry = "1.4"
+# Global allocator behind the `mimalloc` feature; see its comment below.
+mimalloc = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # Examples and integration tests moved here with the executable package, so they
@@ -40,6 +47,7 @@ reqwest = { workspace = true }
 notify = { workspace = true }
 sled = { workspace = true }
 sha2 = { workspace = true }
+directories = { workspace = true }
 ra_ap_syntax = { workspace = true }
 ra_ap_ide = { workspace = true }
 ra_ap_ide_db = { workspace = true }
@@ -79,3 +87,43 @@ embedded = []
 # GPU/CUDA embeddings (qwen3 reranker via candle). Requires nvcc/CUDA toolkit at build time.
 # Default build is CPU-only; opt in with `cargo build --release --features cuda`.
 cuda = ["rmc-server/cuda"]
+# AMD GPU (MIGraphX). Requires a system ONNX Runtime built with the MIGraphX EP.
+migraphx = ["rmc-server/migraphx"]
+# GPU on Windows (DirectML). Requires an ORT built with the DirectML EP: the DLL from NuGet
+# `Microsoft.ML.OnnxRuntime.DirectML`; no ROCm needed, it runs on DX12.
+directml = ["rmc-server/directml"]
+# mimalloc allocator instead of the system one.
+#
+# 🚨 MEASURED AND LOST: enable only with a new measurement under your own workload.
+#
+# The same work (loading RA over a workspace of ~4000 files, 13
+# definitions + 120 references), three builds, RSS in MB:
+#
+#             | start |  peak RA | AFTER unload
+#   glibc+trim|  2311 |     2466 |  1357
+#   mimalloc  |  2334 |     3535 |  2763
+#   +purge0   |  2337 |     3558 |  2666
+#
+# That is, glibc with `malloc_trim` settles TWICE as low. mimalloc reserves
+# more aggressively (peak a gigabyte higher) and holds more even with
+# `MIMALLOC_PURGE_DELAY=0`, which otherwise works: there it returned 860 MB
+# by itself, without our call.
+#
+# Measured again 2026-10-22 on a ~49 000-file workspace (mimalloc 3.3,
+# `allocator_floor_after_load_and_work`: load, then 5 min of collections and
+# reference searches), GiB, comparable runs:
+#
+#               | peak load | held after load+release | after work+release
+#   glibc+trim  |      7.85 |                    6.16 |  5.55-5.67
+#   mimalloc    |      6.60 |                    6.89 |  6.21-7.16
+#
+# Lower peak, higher floor, and `mi_collect` released nothing (see
+# `release_free_memory`). Latency on par. Still lost.
+#
+# The feature is kept because the verdict is tied to THIS workload and this machine:
+# under a different profile (many workspaces, long lifetime, a different allocation stream)
+# the picture may flip. But the default is the system allocator.
+#
+# Why mimalloc and not jemalloc: `tikv-jemalloc-sys` does not build on
+# Windows, and the server is needed there too.
+mimalloc = ["dep:mimalloc", "rmc-server/mimalloc"]

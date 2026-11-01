@@ -243,7 +243,11 @@ fn smart_resize(
     Ok((h_bar, w_bar))
 }
 
-fn preprocess_image(img: &DynamicImage, cfg: &Qwen3VLPreprocessorConfig) -> Result<PreparedImage> {
+fn preprocess_image(
+    img: &DynamicImage,
+    cfg: &Qwen3VLPreprocessorConfig,
+    max_image_tokens: usize,
+) -> Result<PreparedImage> {
     if cfg.image_mean.len() != 3 || cfg.image_std.len() != 3 {
         return Err(candle_core::Error::Msg(
             "Expected image_mean and image_std length to be 3".into(),
@@ -258,12 +262,14 @@ fn preprocess_image(img: &DynamicImage, cfg: &Qwen3VLPreprocessorConfig) -> Resu
     let rgb = img.to_rgb8();
     let (orig_w, orig_h) = rgb.dimensions();
     let factor = cfg.patch_size * cfg.merge_size;
+
+    let effective_max_pixels = cfg.max_pixels.min(max_image_tokens * factor * factor);
     let (resized_h, resized_w) = smart_resize(
         orig_h as usize,
         orig_w as usize,
         factor,
         cfg.min_pixels,
-        cfg.max_pixels,
+        effective_max_pixels,
     )?;
 
     let resized = image::imageops::resize(
@@ -278,7 +284,7 @@ fn preprocess_image(img: &DynamicImage, cfg: &Qwen3VLPreprocessorConfig) -> Resu
     let grid_w = resized_w / cfg.patch_size;
     let merge = cfg.merge_size;
 
-    if grid_h % merge != 0 || grid_w % merge != 0 {
+    if !grid_h.is_multiple_of(merge) || !grid_w.is_multiple_of(merge) {
         return Err(candle_core::Error::Msg(
             "grid_h and grid_w must be divisible by merge_size".into(),
         ));
@@ -624,8 +630,8 @@ impl Qwen3RotaryEmbedding {
             let pos = position_ids.to_device(dev)?.to_vec3::<u32>()?;
             let mut freqs = vec![0f32; b * t * d2];
 
-            for batch_idx in 0..b {
-                for tok_idx in 0..t {
+            for (batch_idx, _) in pos.iter().enumerate().take(b) {
+                for (tok_idx, _) in pos.iter().enumerate().take(t) {
                     let base = (batch_idx * t + tok_idx) * d2;
                     let temporal = pos[0][batch_idx][tok_idx] as f32;
                     for i in 0..d2 {
@@ -633,7 +639,7 @@ impl Qwen3RotaryEmbedding {
                     }
 
                     if self.mrope_interleaved {
-                        for dim in 1..=2 {
+                        for (dim, _) in pos.iter().enumerate().take(2 + 1).skip(1) {
                             let pos_dim = pos[dim][batch_idx][tok_idx] as f32;
                             let mut i = dim;
                             let limit = (self.mrope_section[dim] * 3).min(d2);
@@ -949,7 +955,7 @@ impl Qwen3Model {
         };
 
         // position_embeddings = (cos,sin) once
-        let (cos, sin) = self.rotary_emb.forward(&hs, &position_ids)?;
+        let (cos, sin) = self.rotary_emb.forward(&hs, position_ids)?;
 
         // layers
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1149,6 +1155,7 @@ pub struct Qwen3VLEmbedding {
     preprocessor: Qwen3VLPreprocessorConfig,
     image_token_id: u32,
     default_instruction: String,
+    max_image_tokens: usize,
 }
 
 impl Qwen3VLEmbedding {
@@ -1217,6 +1224,18 @@ impl Qwen3VLEmbedding {
             ..Default::default()
         }));
 
+        let max_image_tokens = {
+            let base_prompt = build_vl_prompt(None, true, "Represent the user's input.");
+            let enc = tokenizer.encode(base_prompt, false).map_err(map_err)?;
+            let img_count = enc
+                .get_ids()
+                .iter()
+                .filter(|&&id| id == cfg.image_token_id)
+                .count();
+            let overhead = enc.get_ids().len() - img_count;
+            max_length.saturating_sub(overhead)
+        };
+
         Ok(Self {
             model,
             vision,
@@ -1224,6 +1243,7 @@ impl Qwen3VLEmbedding {
             preprocessor,
             image_token_id: cfg.image_token_id,
             default_instruction: "Represent the user's input.".to_string(),
+            max_image_tokens,
         })
     }
 
@@ -1285,7 +1305,11 @@ impl Qwen3VLEmbedding {
         let mut prepared_images = Vec::with_capacity(images.len());
         for image in &images {
             prepared_images.push(match image {
-                Some(img) => Some(preprocess_image(img, &self.preprocessor)?),
+                Some(img) => Some(preprocess_image(
+                    img,
+                    &self.preprocessor,
+                    self.max_image_tokens,
+                )?),
                 None => None,
             });
         }

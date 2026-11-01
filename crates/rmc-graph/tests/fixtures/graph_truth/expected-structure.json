@@ -1,0 +1,21 @@
+{
+  "modules_by_site": {
+    "inline_outer": "truth_app::inline",
+    "inline_local": "truth_app::inline",
+    "inherent_body": "truth_app::remote",
+    "associated_body": "truth_app::remote",
+    "impl_body": "truth_app::remote"
+  },
+  "method_location": {
+    "qualified_name": "truth_app::model::Device::inherent",
+    "semantic_owner": "truth_app::model::Device",
+    "physical_file": "app/src/remote.rs",
+    "physical_module": "truth_app::remote"
+  },
+  "distinct_targets": [
+    {"package": "truth-app", "name": "truth_app", "kind": "lib", "root": "app/src/lib.rs"},
+    {"package": "truth-app", "name": "truth_app", "kind": "bin", "root": "app/src/main.rs"}
+  ],
+  "source_sites": {"macro_twice": 1},
+  "expanded_sites": {"macro_twice": 2}
+}

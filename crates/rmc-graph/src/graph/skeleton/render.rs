@@ -193,6 +193,7 @@ mod tests {
                 visibility: None,
                 attributes: Vec::new(),
                 crate_target_kind: None,
+                declaration_module: None,
             },
             parent: Some(parent.clone()),
             visibility: Some("pub".to_string()),
@@ -360,6 +361,7 @@ mod tests {
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: None,
         };
         let unsorted = vec![
             item("c", &parent, "src/z.rs", 30, "test_crate::Host::c"),

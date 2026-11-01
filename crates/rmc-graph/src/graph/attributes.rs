@@ -28,8 +28,8 @@ use ra_ap_hir::{
 };
 use ra_ap_hir_def::{AdtId, ModuleDefId};
 use ra_ap_ide_db::RootDatabase;
-use ra_ap_syntax::ast::{HasAttrs, HasDocComments};
-use ra_ap_syntax::{AstNode, AstToken};
+use ra_ap_syntax::ast::HasAttrs;
+use ra_ap_syntax::AstNode;
 use ra_ap_vfs::Vfs;
 
 use super::ids::NodeId;
@@ -118,18 +118,9 @@ fn visit_module(
         }
     }
 
-    // 2. Inherent impls of every local Adt — assoc items inside.
+    // 2. Associated items of local impl blocks, including trait bodies.
     for impl_ in module.impl_defs(db) {
-        // Skip trait impls (their bodies aren't extracted as Item nodes,
-        // matching impls.rs's policy).
-        if impl_.trait_(db).is_some() {
-            continue;
-        }
-        // Defensive: only walk impls whose self-ty is a local ADT.
-        let Some(adt) = impl_.self_ty(db).as_adt() else {
-            continue;
-        };
-        if adt.krate(db) != krate {
+        if impl_.krate(db) != krate {
             continue;
         }
         for assoc in impl_.items(db) {
@@ -223,7 +214,7 @@ fn set_attrs_for<N>(
     def_id: ModuleDefId,
     node: &N,
 ) where
-    N: HasAttrs + HasDocComments,
+    N: HasAttrs,
 {
     let Some(&node_id) = def_to_node.get(&def_id) else {
         return;
@@ -248,12 +239,10 @@ fn set_attrs_for<N>(
         }
     }
     for comment in node.doc_comments() {
-        let text = comment.text();
-        let stripped: &str = text
-            .strip_prefix("///")
-            .or_else(|| text.strip_prefix("//!"))
-            .unwrap_or(&text);
-        // Multi-line `/** ... */` comments arrive as one Comment whose text
+        // `ast::DocComment::text()` hands back the body with the `///`, `//!`,
+        // `/**` or `/*!` markers already taken off, so nothing is stripped here.
+        let stripped = comment.text();
+        // Multi-line `/** ... */` comments arrive as one node whose text
         // contains embedded newlines. Split so each source line lands as its
         // own queryable entry.
         for line in stripped.split('\n') {

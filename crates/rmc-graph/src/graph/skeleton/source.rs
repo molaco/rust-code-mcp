@@ -240,6 +240,7 @@ fn declaration_name(item_kind: ItemKind, syntax: &SyntaxNode) -> Option<String> 
         ItemKind::Const | ItemKind::AssocConst => ast::Const::cast(syntax.clone())?.name(),
         ItemKind::Static => ast::Static::cast(syntax.clone())?.name(),
         ItemKind::EnumVariant => ast::Variant::cast(syntax.clone())?.name(),
+        ItemKind::Field => ast::RecordField::cast(syntax.clone())?.name(),
     }
     .map(|name| name.text().to_string())
 }
@@ -259,6 +260,7 @@ fn is_expected_item_syntax(item_kind: ItemKind, syntax: &SyntaxNode) -> bool {
         ItemKind::Const | ItemKind::AssocConst => ast::Const::cast(syntax.clone()).is_some(),
         ItemKind::Static => ast::Static::cast(syntax.clone()).is_some(),
         ItemKind::EnumVariant => ast::Variant::cast(syntax.clone()).is_some(),
+        ItemKind::Field => ra_ap_hir::FieldSource::cast(syntax.clone()).is_some(),
     }
 }
 
@@ -471,7 +473,7 @@ fn fallback_declaration(item: &SkeletonItem, metadata: &FallbackMetadata) -> Str
                 format!("{vis}static {name}: () = ();")
             }
         }
-        Some(ItemKind::EnumVariant) | None => {
+        Some(ItemKind::EnumVariant | ItemKind::Field) | None => {
             format!("// item `{}` could not be rendered", item.node.qualified_name)
         }
     }
@@ -623,6 +625,7 @@ mod tests {
                 visibility: None,
                 attributes: Vec::new(),
                 crate_target_kind: None,
+                declaration_module: None,
             },
             parent: None,
             visibility: Some("pub".to_string()),

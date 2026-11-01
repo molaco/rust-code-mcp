@@ -54,6 +54,7 @@ pub fn item_kind_short_label(k: ItemKind) -> &'static str {
         ItemKind::AssocType => "AssocType",
         ItemKind::Method => "Method",
         ItemKind::EnumVariant => "EnumVariant",
+        ItemKind::Field => "Field",
     }
 }
 
@@ -72,6 +73,7 @@ pub fn item_kind_display_label(k: ItemKind) -> &'static str {
         ItemKind::AssocType => "AssocType",
         ItemKind::Method => "Method",
         ItemKind::EnumVariant => "EnumVariant",
+        ItemKind::Field => "Field",
     }
 }
 
@@ -90,6 +92,7 @@ pub(crate) fn item_kind_id_label(kind: ItemKind) -> &'static str {
         ItemKind::AssocType => "assoc_type",
         ItemKind::Method => "method",
         ItemKind::EnumVariant => "enum_variant",
+        ItemKind::Field => "field",
     }
 }
 

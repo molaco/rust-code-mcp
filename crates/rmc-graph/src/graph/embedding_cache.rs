@@ -192,7 +192,10 @@ pub async fn embed_prepared_embeddings(
         });
     }
 
-    let embedder = rmc_engine::embeddings::EmbeddingGenerator::with_backend(backend.clone())
+    let embedder = rmc_engine::embeddings::EmbeddingGenerator::with_backend(
+        backend.clone(),
+        rmc_engine::embeddings::EmbeddingOwner::GraphCache,
+    )
         .map_err(|e| anyhow::anyhow!("EmbeddingGenerator init: {e}"))?;
 
     let mut new_vectors: Vec<Vec<f32>> = Vec::with_capacity(pending.len());

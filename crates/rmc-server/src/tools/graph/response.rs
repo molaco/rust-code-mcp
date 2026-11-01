@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use rmcp::{
     ErrorData as McpError,
@@ -20,6 +19,7 @@ use rmc_graph::graph::{
     ItemKind, Node, NodeId, NodeKind, OpenedSnapshot, OverlapScope, open_current_for_workspace,
 };
 use crate::tools::params::ListPaginationParams;
+use crate::tools::paths::require_absolute;
 
 pub(crate) const DEFAULT_LIST_LIMIT: usize = 50;
 
@@ -77,7 +77,7 @@ pub(crate) fn clear_locations_for_summary<T>(
 }
 
 pub(crate) fn open_workspace_snapshot(directory: &str) -> Result<OpenedSnapshot, McpError> {
-    let dir = PathBuf::from(directory);
+    let dir = require_absolute("directory", directory)?;
     let canonical = dir.canonicalize().map_err(|e| {
         McpError::invalid_params(format!("failed to canonicalize {directory}: {e}"), None)
     })?;
@@ -261,4 +261,51 @@ pub(crate) fn resolve_chunk_to_item(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate has to be *in* this function, not merely available: about sixty
+    /// graph and audit tools reach the filesystem through here, and this is the
+    /// one place that decides for all of them.
+    ///
+    /// Mutation that must fail it: drop the `require_absolute` call in
+    /// `open_workspace_snapshot` — the refusal then comes from `canonicalize`
+    /// instead, and says "failed to canonicalize .", which reads as a missing
+    /// directory rather than as a request the daemon cannot answer.
+    /// `OpenedSnapshot` has no `Debug`, so the error is taken by hand rather
+    /// than with `expect_err`.
+    fn refusal_of(directory: &str) -> McpError {
+        match open_workspace_snapshot(directory) {
+            Ok(_) => panic!("{directory} was opened, but it must not be"),
+            Err(err) => err,
+        }
+    }
+
+    #[test]
+    fn a_relative_directory_is_refused_before_anything_touches_the_disk() {
+        let err = refusal_of(".");
+
+        assert!(
+            err.message.contains("must be an absolute path"),
+            "the refusal must name the real problem, got: {}",
+            err.message
+        );
+    }
+
+    /// Positive control: an absolute path gets past the gate and fails, if it
+    /// fails, for its own reasons. Without this the test above would also pass
+    /// if the gate refused everything.
+    #[test]
+    fn an_absolute_directory_gets_past_the_gate() {
+        let err = refusal_of("/nonexistent-workspace-for-tests");
+
+        assert!(
+            !err.message.contains("must be an absolute path"),
+            "an absolute path must not be refused by the gate, got: {}",
+            err.message
+        );
+    }
 }

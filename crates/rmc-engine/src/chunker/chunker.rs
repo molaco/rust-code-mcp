@@ -4,27 +4,15 @@ use std::path::Path;
 
 use crate::parser::{ParseResult, Symbol};
 
-use super::types::{ChunkContext, ChunkId, CodeChunk};
+use super::types::{ChunkContext, ChunkId, CodeChunk, EMBEDDED_CONTEXT_ITEMS};
 
 /// Code chunker that splits by symbols and adds context
-pub struct Chunker {
-    /// Overlap percentage (0.0 to 1.0)
-    overlap_percentage: f64,
-}
+pub struct Chunker;
 
 impl Chunker {
-    /// Create a new chunker with default settings
+    /// Create a new chunker
     pub fn new() -> Self {
-        Self {
-            overlap_percentage: 0.2, // 20% overlap
-        }
-    }
-
-    /// Create a chunker with custom overlap percentage
-    pub fn with_overlap(overlap_percentage: f64) -> Self {
-        Self {
-            overlap_percentage: overlap_percentage.clamp(0.0, 0.5),
-        }
+        Self
     }
 
     /// Chunk a file based on its parse result
@@ -39,10 +27,12 @@ impl Chunker {
         // Get module path from file path
         let module_path = self.extract_module_path(file_path);
 
-        // Convert imports to strings
+        // The file's first imports, the ones the embedded text names (see
+        // `EMBEDDED_CONTEXT_ITEMS`); every chunk of the file carries them.
         let import_strings: Vec<String> = parse_result
             .imports
             .iter()
+            .take(EMBEDDED_CONTEXT_ITEMS)
             .map(|i| i.path.clone())
             .collect();
 
@@ -56,6 +46,7 @@ impl Chunker {
                 .call_graph
                 .get_callees(&symbol.name)
                 .into_iter()
+                .take(EMBEDDED_CONTEXT_ITEMS)
                 .map(String::from)
                 .collect();
 
@@ -75,20 +66,12 @@ impl Chunker {
                 line_end: symbol.range.end_line,
             };
 
-            // Create the chunk
-            let chunk = CodeChunk {
+            chunks.push(CodeChunk {
                 id: ChunkId::new(),
                 content: code,
                 context,
-                overlap_prev: None, // Will be filled in later
-                overlap_next: None, // Will be filled in later
-            };
-
-            chunks.push(chunk);
+            });
         }
-
-        // Add overlap between adjacent chunks
-        self.add_overlap(&mut chunks);
 
         Ok(chunks)
     }
@@ -148,44 +131,6 @@ impl Chunker {
 
         parts
     }
-
-    /// Add overlap between adjacent chunks
-    pub(super) fn add_overlap(&self, chunks: &mut [CodeChunk]) {
-        for i in 0..chunks.len() {
-            // Add overlap from previous chunk
-            if i > 0 {
-                let overlap = self.calculate_overlap(&chunks[i - 1].content, false);
-                chunks[i].overlap_prev = overlap;
-            }
-
-            // Add overlap to next chunk
-            if i < chunks.len() - 1 {
-                let overlap = self.calculate_overlap(&chunks[i].content, true);
-                chunks[i].overlap_next = overlap;
-            }
-        }
-    }
-
-    /// Calculate overlap text from a chunk
-    /// If `from_end` is true, take from the end; otherwise from the beginning
-    fn calculate_overlap(&self, content: &str, from_end: bool) -> Option<String> {
-        let lines: Vec<&str> = content.lines().collect();
-        let overlap_lines = ((lines.len() as f64) * self.overlap_percentage).ceil() as usize;
-
-        if overlap_lines == 0 || lines.is_empty() {
-            return None;
-        }
-
-        let overlap = if from_end {
-            // Take last N lines for next chunk
-            &lines[lines.len().saturating_sub(overlap_lines)..]
-        } else {
-            // Take first N lines from previous chunk
-            &lines[..overlap_lines.min(lines.len())]
-        };
-
-        Some(overlap.join("\n"))
-    }
 }
 
 impl Default for Chunker {
@@ -200,17 +145,99 @@ mod tests {
     use crate::parser::RustParser;
     use std::path::PathBuf;
 
+    /// Chunk-count probe, not a test: what the chunker makes of one real
+    /// file (`RMC_CHUNK_PROBE_FILE`), before the oversize split. Prints the
+    /// count per symbol kind, how many chunks lie inside another chunk's
+    /// line span, how many share their exact span with another, and the
+    /// bytes of code against the file's own size.
     #[test]
-    fn test_chunker_creation() {
-        let chunker = Chunker::new();
-        assert_eq!(chunker.overlap_percentage, 0.2);
+    #[ignore]
+    fn probe_chunks_of_a_real_file() {
+        let path = PathBuf::from(std::env::var("RMC_CHUNK_PROBE_FILE").unwrap());
+        let source = std::fs::read_to_string(&path).unwrap();
+        let parsed = RustParser::new()
+            .unwrap()
+            .parse_source_complete(&source)
+            .unwrap();
+        let chunks = Chunker::new().chunk_file(&path, &source, &parsed).unwrap();
 
-        let chunker = Chunker::with_overlap(0.3);
-        assert_eq!(chunker.overlap_percentage, 0.3);
-
-        // Test clamping
-        let chunker = Chunker::with_overlap(0.8);
-        assert_eq!(chunker.overlap_percentage, 0.5);
+        let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
+        for chunk in &chunks {
+            *by_kind
+                .entry(chunk.context.symbol_kind.as_str())
+                .or_default() += 1;
+        }
+        let spans: Vec<(usize, usize)> = chunks
+            .iter()
+            .map(|c| (c.context.line_start, c.context.line_end))
+            .collect();
+        let nested = spans
+            .iter()
+            .enumerate()
+            .filter(|(i, (s, e))| {
+                spans
+                    .iter()
+                    .enumerate()
+                    .any(|(j, (s2, e2))| j != *i && s2 <= s && e <= e2 && (s2, e2) != (s, e))
+            })
+            .count();
+        let mut sorted = spans.clone();
+        sorted.sort();
+        let same_span = sorted.windows(2).filter(|w| w[0] == w[1]).count();
+        let code_bytes: usize = chunks.iter().map(|c| c.content.len()).sum();
+        let json_bytes: usize = chunks
+            .iter()
+            .map(|c| serde_json::to_string(c).unwrap().len())
+            .sum();
+        eprintln!(
+            "{}: {} lines, {} bytes -> {} chunks; nested in another chunk: {}; same span as another: {}; \
+             code {} bytes ({:.2}x the file), chunk JSON {} bytes",
+            path.display(),
+            source.lines().count(),
+            source.len(),
+            chunks.len(),
+            nested,
+            same_span,
+            code_bytes,
+            code_bytes as f64 / source.len() as f64,
+            json_bytes,
+        );
+        eprintln!("by kind: {by_kind:?}");
+        // The oversize split as bge-small runs it (384 target / 512 hard
+        // tokens), with tokens estimated as a quarter of the formatted
+        // text's bytes — the real counter needs the model's tokenizer; this
+        // is for the order of magnitude.
+        let split = Chunker::new().split_oversized_chunks(
+            chunks.clone(),
+            crate::chunker::ChunkSplitConfig::new(384, 512),
+            |chunk| Some(chunk.format_for_embedding().len() / 4),
+        );
+        let content: usize = split.iter().map(|c| c.content.len()).sum();
+        let formatted: usize = split.iter().map(|c| c.format_for_embedding().len()).sum();
+        let docstring: usize = split
+            .iter()
+            .map(|c| c.context.docstring.as_ref().map_or(0, String::len))
+            .sum();
+        eprintln!(
+            "after the oversize split (≈ tokens): {} chunks; per chunk: content {} B, embedded text {} B, \
+             of it docstring {} B",
+            split.len(),
+            content / split.len(),
+            formatted / split.len(),
+            docstring / split.len(),
+        );
+        let mut small: Vec<_> = chunks.iter().filter(|c| c.content.len() < 80).collect();
+        small.truncate(8);
+        for chunk in small {
+            eprintln!(
+                "  small {} {} L{}-{}: {:?}",
+                chunk.context.symbol_kind,
+                chunk.context.symbol_name,
+                chunk.context.line_start,
+                chunk.context.line_end,
+                chunk.content
+            );
+        }
     }
 
     #[test]
@@ -263,35 +290,40 @@ fn helper() {
         assert!(test_chunk.context.outgoing_calls.contains(&"helper".to_string()));
     }
 
+    /// A chunk keeps the imports and calls its embedded text names, in the
+    /// file's order, and no more.
     #[test]
-    fn test_overlap() {
+    fn a_chunk_keeps_the_imports_and_calls_it_embeds() {
         let source = r#"
-fn first() {
-    line1();
-    line2();
-    line3();
-}
+use std::a::A;
+use std::b::B;
+use std::c::C;
+use std::d::D;
+use std::e::E;
+use std::f::F;
+use std::g::G;
 
-fn second() {
-    other();
+fn caller() {
+    c1(); c2(); c3(); c4(); c5(); c6(); c7();
 }
         "#;
-
-        let mut parser = RustParser::new().unwrap();
-        let parse_result = parser.parse_source_complete(source).unwrap();
-
-        let chunker = Chunker::with_overlap(0.2);
-        let chunks = chunker
-            .chunk_file(Path::new("test.rs"), source, &parse_result)
+        let parse_result = RustParser::new()
+            .unwrap()
+            .parse_source_complete(source)
+            .unwrap();
+        let chunks = Chunker::new()
+            .chunk_file(Path::new("src/lib.rs"), source, &parse_result)
+            .unwrap();
+        let caller = chunks
+            .iter()
+            .find(|c| c.context.symbol_name == "caller")
             .unwrap();
 
-        // Check that chunks have overlap
-        if chunks.len() >= 2 {
-            // First chunk should have overlap_next
-            assert!(chunks[0].overlap_next.is_some(), "First chunk should have overlap_next");
-
-            // Second chunk should have overlap_prev
-            assert!(chunks[1].overlap_prev.is_some(), "Second chunk should have overlap_prev");
-        }
+        assert_eq!(
+            caller.context.imports,
+            ["std::a::A", "std::b::B", "std::c::C", "std::d::D", "std::e::E"]
+        );
+        assert_eq!(caller.context.outgoing_calls.len(), EMBEDDED_CONTEXT_ITEMS);
+        assert!(caller.format_for_embedding().contains("std::e::E"));
     }
 }

@@ -13,7 +13,10 @@ use tracing;
 
 use rmc_engine::embeddings::{EmbeddingBackend, EmbeddingGenerator};
 use rmc_engine::search::{Bm25Search, HybridSearch};
-use rmc_indexing::indexing::{open_bm25_search, IndexStats, UnifiedIndexer};
+use rmc_indexing::indexing::{
+    open_bm25_search, rebuild_bm25_from_existing_store, IndexStats, UnifiedIndexer,
+    VectorMaintenance,
+};
 use crate::mcp::{SearchRuntimeCache, SearchRuntimeCacheEntry, SearchRuntimeCacheKey};
 use crate::mcp::project_paths::{
     ProjectPaths, read_embedder_identity, resolve_embedding_backend_for_mcp,
@@ -22,7 +25,8 @@ use rmc_engine::vector_store::VectorStore;
 
 /// Read and return the content of a specified file
 pub(crate) async fn read_file_content(file_path: &str) -> Result<CallToolResult, McpError> {
-    let file_path_obj = Path::new(file_path);
+    let file_path_obj = crate::tools::paths::require_absolute("file_path", file_path)?;
+    let file_path_obj = file_path_obj.as_path();
 
     if !file_path_obj.exists() {
         return Err(McpError::invalid_params(
@@ -108,47 +112,23 @@ fn clean_stale_index(paths: &ProjectPaths) {
     }
 }
 
-fn vector_metadata_exists(paths: &ProjectPaths) -> bool {
-    paths.vector_path.join("metadata.json").exists()
-}
-
-fn backend_matches_request(indexed: &EmbeddingBackend, requested: &EmbeddingBackend) -> bool {
-    indexed.runtime == requested.runtime
-        && indexed.model_id() == requested.model_id()
-        && indexed.dim() == requested.dim()
-        && indexed.max_len == requested.max_len
-        && indexed.profile.query_policy == requested.profile.query_policy
-}
-
 fn select_index_paths(
     dir_path: &Path,
     requested_backend: &EmbeddingBackend,
 ) -> Result<ProjectPaths, McpError> {
-    let requested_paths = ProjectPaths::from_directory(dir_path, requested_backend);
-    if vector_metadata_exists(&requested_paths) {
-        return Ok(requested_paths);
-    }
-
-    let existing = ProjectPaths::indexed_profiles(dir_path)
-        .map_err(|msg| McpError::invalid_params(msg, None))?;
-    if let Some(indexed) = existing
-        .into_iter()
-        .find(|indexed| backend_matches_request(&indexed.backend, requested_backend))
-    {
-        return Ok(indexed.paths);
-    }
-
-    Ok(requested_paths)
+    ProjectPaths::in_use(dir_path, requested_backend)
+        .map_err(|msg| McpError::invalid_params(msg, None))
 }
 
-/// Initialize indexer and run incremental indexing, returning stats.
-/// Only called when we actually need to index.
+/// Initialize indexer and run incremental indexing, returning stats and the
+/// vector-store maintenance the run calls for (the caller runs it after
+/// releasing its operation lock). Only called when we actually need to index.
 async fn ensure_indexed(
     dir_path: &Path,
     paths: &ProjectPaths,
     backend: EmbeddingBackend,
     sync_manager: Option<&std::sync::Arc<crate::mcp::SyncManager>>,
-) -> Result<IndexStats, McpError> {
+) -> Result<(IndexStats, Option<VectorMaintenance>), McpError> {
     tracing::info!("Initializing unified indexer for {}", dir_path.display());
     let resolved = resolve_query_backend(paths, backend)?;
     let backend = resolved.backend;
@@ -166,10 +146,16 @@ async fn ensure_indexed(
     .await
     .map_err(|e| McpError::invalid_params(format!("Failed to initialize indexer: {}", e), None))?;
 
+    // Its own `mem:` line: a `search` that has to build the index first is
+    // long because of its own work (788 files, 600 s, 2026-10-31), and
+    // `--tool-latency` must be able to tell that from a wait.
+    let mem =
+        rmc_engine::mem_trace::MemSpan::start(format!("index build of {}", dir_path.display()));
     let stats = indexer
         .index_directory(dir_path)
         .await
         .map_err(|e| McpError::invalid_params(format!("Indexing failed: {}", e), None))?;
+    mem.finish();
 
     tracing::info!(
         "Indexed {} files ({} chunks), {} unchanged, {} skipped",
@@ -185,7 +171,10 @@ async fn ensure_indexed(
         }
     }
 
-    Ok(stats)
+    let maintenance = stats
+        .needs_maintenance
+        .then(|| indexer.vector_maintenance());
+    Ok((stats, maintenance))
 }
 
 /// Resolve the embedding backend the query side should use.
@@ -281,7 +270,11 @@ pub(crate) async fn create_hybrid_search(
         collection = paths.collection_name,
         "Creating hybrid search with embedding profile"
     );
-    let embedding_generator = EmbeddingGenerator::with_backend(backend).map_err(|e| {
+    let embedding_generator = EmbeddingGenerator::with_backend(
+        backend,
+        rmc_engine::embeddings::EmbeddingOwner::Search,
+    )
+    .map_err(|e| {
         McpError::invalid_params(
             format!("Failed to initialize embedding generator: {}", e),
             None,
@@ -384,7 +377,8 @@ pub(crate) async fn search(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let dir_path = Path::new(directory);
+    let dir_path = crate::tools::paths::require_absolute("directory", directory)?;
+    let dir_path = dir_path.as_path();
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
             format!("The specified path '{}' is not a directory", directory),
@@ -399,38 +393,84 @@ pub(crate) async fn search(
         ));
     }
 
-    let _workspace_lock = workspace_locks.lock_shared(dir_path).await;
+    let workspace_lock = workspace_locks.lock_shared(dir_path).await;
 
     let requested_backend = resolve_embedding_backend_for_mcp(embedding_profile, dir_path)?;
     let paths = select_index_paths(dir_path, &requested_backend)?;
 
     // Try existing index; if corrupt or missing, rebuild
-    let vector_index_exists = vector_metadata_exists(&paths);
+    let vector_index_exists = paths.vector_metadata_exists();
     let mut bm25 = try_open_bm25(&paths);
+
+    // A BM25 index that does not exist yet next to an existing vector store
+    // is not corruption: it is a new BM25 schema version (its own directory)
+    // and is refilled from the store, which holds every chunk. Treating it as
+    // corruption — the branch below — wipes the Merkle snapshot and the
+    // metadata cache and re-embeds the whole project. A refill that fails
+    // (another writer holds the index) leaves this search on vectors alone;
+    // it never escalates to the wipe.
+    let bm25_missing = !paths.tantivy_path.join("meta.json").exists();
+    if bm25.is_none() && bm25_missing && vector_index_exists {
+        let resolved = resolve_query_backend(&paths, requested_backend.clone())?;
+        match rebuild_bm25_from_existing_store(
+            &paths.cache_path,
+            &paths.tantivy_path,
+            &paths.collection_name,
+            resolved.backend.dim(),
+            &resolved.vector_identity,
+            None,
+        )
+        .await
+        {
+            Ok(_) => bm25 = try_open_bm25(&paths),
+            Err(e) => tracing::warn!(
+                "BM25 index of {} is missing and could not be rebuilt from the vector store \
+                 yet; searching vectors only: {e:#}",
+                dir_path.display()
+            ),
+        }
+    }
+
     let mut rebuilt = false;
-    let stats = if bm25.is_some() && vector_index_exists {
+    // The read side keeps its shared lock for the whole query; the write
+    // side below gives its lock up as soon as the index is built (the query
+    // then reads committed versions, like any reader during maintenance).
+    let (stats, _reader_lock) = if vector_index_exists && (bm25.is_some() || bm25_missing) {
         if let Some(ref sync_mgr) = sync_manager {
             sync_mgr
                 .track_directory_for_backend(dir_path.to_path_buf(), &requested_backend)
                 .await;
         }
-        None
+        (None, Some(workspace_lock))
     } else {
-        // Corrupt or missing — clean stale caches to force full reindex
-        rebuilt = paths.tantivy_path.exists();
-        if let Some(search_cache) = search_cache {
-            search_cache.invalidate_workspace(dir_path);
-        }
-        clean_stale_index(&paths);
-        let st = ensure_indexed(
-            dir_path,
-            &paths,
-            requested_backend.clone(),
-            sync_manager,
-        )
-        .await?;
+        // Corrupt or missing — this search becomes the index's writer. A read
+        // lock does not upgrade: let it go, take the writer's (which also
+        // waits for a maintenance pass in flight before anything is deleted),
+        // and look again — another search may have built the index while this
+        // one waited, and wiping that would re-embed the project for nothing.
+        drop(workspace_lock);
+        let writer = workspace_locks.lock_index_writer(dir_path).await;
         bm25 = try_open_bm25(&paths);
-        Some(st)
+        if paths.vector_metadata_exists() && bm25.is_some() {
+            drop(writer);
+            (None, None)
+        } else {
+            rebuilt = paths.tantivy_path.exists();
+            if let Some(search_cache) = search_cache {
+                search_cache.invalidate_workspace(dir_path);
+            }
+            clean_stale_index(&paths);
+            let (st, maintenance) = ensure_indexed(
+                dir_path,
+                &paths,
+                requested_backend.clone(),
+                sync_manager,
+            )
+            .await?;
+            crate::mcp::finish_index_writer(writer.into_maintenance(), maintenance);
+            bm25 = try_open_bm25(&paths);
+            (Some(st), None)
+        }
     };
 
     // Handle case where first-time indexing produced nothing
@@ -471,7 +511,8 @@ pub(crate) async fn get_similar_code(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let dir_path = Path::new(directory);
+    let dir_path = crate::tools::paths::require_absolute("directory", directory)?;
+    let dir_path = dir_path.as_path();
     if !dir_path.is_dir() {
         return Err(McpError::invalid_params(
             format!("The specified path '{}' is not a directory", directory),
@@ -544,6 +585,7 @@ mod tests {
             indexing_identity: "test-indexing".to_string(),
             chunking_identity: "test-chunking".to_string(),
             cache_path: vector_path.join("cache"),
+            metadata_cache_salt: "test-salt".to_string(),
             tantivy_path: vector_path.join("tantivy"),
             snapshot_path: vector_path.join("snapshot.json"),
             collection_name: "code_chunks_test_legacy".to_string(),
@@ -589,7 +631,7 @@ mod tests {
     async fn get_similar_code_waits_for_workspace_lock() {
         let temp_dir = TempDir::new().unwrap();
         let locks = crate::mcp::WorkspaceLockRegistry::new();
-        let guard = locks.lock_exclusive(temp_dir.path()).await;
+        let guard = locks.lock_index_writer(temp_dir.path()).await;
         let call_locks = locks.clone();
         let directory = temp_dir.path().display().to_string();
 

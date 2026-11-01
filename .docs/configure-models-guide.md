@@ -40,8 +40,11 @@ Select one by **name**:
 Switching between existing models requires nothing more than the name.
 
 `RMC_EMBEDDING_PROFILE` changes the default for calls that omit
-`embedding_profile`, with no recompile. Built-in names only, read once at
-startup; an unusable name stops the server with exit code 2.
+`embedding_profile`, with no recompile. It is resolved by the same resolver as
+an explicit tool parameter, so a PROJECT profile from `embedding_profiles.toml`
+works here too — not only a built-in name. Read once at startup; an unusable
+name stops the server with exit code 2, in every mode including a client of the
+shared daemon.
 
 ## 2. Adding a new API model — config only, no recompile
 

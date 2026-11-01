@@ -14,9 +14,58 @@ pub use traits::VectorStoreBackend;
 
 use crate::chunker::{ChunkId, CodeChunk};
 use crate::embeddings::{Embedding, EmbeddingBackend};
+use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// What one [`VectorStore::maintain`] pass actually reclaimed.
+///
+/// Every field is an OUTCOME, not an intent: a pass that ran and found
+/// nothing to do reports zeros, which is how a caller tells "maintenance
+/// is wired up and the store is already tidy" from "maintenance never
+/// ran". Reporting only "ok" would collapse those two.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VectorStoreMaintenance {
+    /// Fragments compaction merged away.
+    pub fragments_removed: usize,
+    /// Fragments compaction wrote in their place (always fewer, or the
+    /// compaction was not worth running).
+    pub fragments_added: usize,
+    /// Superseded dataset versions the prune pass dropped.
+    pub old_versions_removed: u64,
+    /// Bytes the prune pass freed on disk.
+    pub bytes_removed: u64,
+}
+
+/// How the store's table is laid out on disk right now — the numbers the
+/// write path is supposed to keep small.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VectorStoreLayout {
+    /// Current dataset version: every write (add, delete, compaction,
+    /// index optimisation) publishes one.
+    pub version: u64,
+    /// Data fragments in the current version. Every `add` writes one.
+    pub fragments: usize,
+    /// Rows in the current version.
+    pub rows: usize,
+    /// Every index on the table.
+    pub indices: Vec<VectorIndexCoverage>,
+}
+
+/// One index and how much of the table it actually covers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VectorIndexCoverage {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub indexed_rows: usize,
+    /// Rows a lookup through this index still has to scan for. An index
+    /// that covers nothing is a full scan with extra steps.
+    pub unindexed_rows: usize,
+    /// Deltas the index is stored as: each index pass that found new rows
+    /// adds one until maintenance merges them (`RMC_ANN_MAX_DELTAS`).
+    pub deltas: usize,
+}
 
 /// A search result from vector search
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,12 +169,13 @@ impl VectorStore {
 
     // Delegate all methods to backend
 
-    /// Insert or update chunks with their embeddings
-    pub async fn upsert_chunks(
+    /// Append chunks with their embeddings — see
+    /// [`VectorStoreBackend::insert_chunks`] for the contract on ids.
+    pub async fn insert_chunks(
         &self,
         chunks_with_embeddings: Vec<(ChunkId, Embedding, CodeChunk)>,
     ) -> Result<(), VectorStoreError> {
-        self.backend.upsert_chunks(chunks_with_embeddings).await
+        self.backend.insert_chunks(chunks_with_embeddings).await
     }
 
     /// Search for similar chunks using a query vector
@@ -137,14 +187,42 @@ impl VectorStore {
         self.backend.search(query_vector, limit).await
     }
 
+    /// The stored chunks of `chunk_ids` — see
+    /// [`VectorStoreBackend::chunks_by_ids`].
+    pub async fn chunks_by_ids(
+        &self,
+        chunk_ids: &[ChunkId],
+    ) -> Result<HashMap<ChunkId, CodeChunk>, VectorStoreError> {
+        self.backend.chunks_by_ids(chunk_ids).await
+    }
+
+    /// Every stored chunk, batch by batch — see
+    /// [`VectorStoreBackend::scan_chunks`].
+    pub async fn scan_chunks(
+        &self,
+        sink: &mut (dyn FnMut(Vec<CodeChunk>) -> anyhow::Result<()> + Send),
+    ) -> anyhow::Result<usize> {
+        self.backend.scan_chunks(sink).await
+    }
+
     /// Delete chunks by their IDs
     pub async fn delete_chunks(&self, chunk_ids: Vec<ChunkId>) -> Result<(), VectorStoreError> {
         self.backend.delete_chunks(chunk_ids).await
     }
 
-    /// Delete all chunks from a specific file path
-    pub async fn delete_by_file_path(&self, file_path: &str) -> Result<(), VectorStoreError> {
-        self.backend.delete_by_file_path(file_path).await
+    /// Delete all chunks of these files, in one write — see
+    /// [`VectorStoreBackend::delete_by_file_paths`].
+    pub async fn delete_by_file_paths(
+        &self,
+        file_paths: &[String],
+    ) -> Result<(), VectorStoreError> {
+        self.backend.delete_by_file_paths(file_paths).await
+    }
+
+    /// Version, fragments and index coverage of the table — see
+    /// [`VectorStoreBackend::layout`].
+    pub async fn layout(&self) -> Result<VectorStoreLayout, VectorStoreError> {
+        self.backend.layout().await
     }
 
     /// Get the total number of vectors in the store
@@ -152,9 +230,26 @@ impl VectorStore {
         self.backend.count().await
     }
 
+    /// Distinct source files that have at least one vector in the store.
+    ///
+    /// The "actual" side of the coverage check — see
+    /// [`VectorStoreBackend::indexed_file_paths`].
+    pub async fn indexed_file_paths(&self) -> Result<HashSet<String>, VectorStoreError> {
+        self.backend.indexed_file_paths().await
+    }
+
     /// Clear all vectors (keep collection/table structure)
     pub async fn clear_collection(&self) -> Result<(), VectorStoreError> {
         self.backend.clear().await
+    }
+
+    /// Reclaim disk space left behind by writes — see
+    /// [`VectorStoreBackend::maintain`].
+    pub async fn maintain(
+        &self,
+        prune_keep: std::time::Duration,
+    ) -> Result<VectorStoreMaintenance, VectorStoreError> {
+        self.backend.maintain(prune_keep).await
     }
 
     /// Delete the collection (alias for clear_collection for backward compatibility)
@@ -194,8 +289,6 @@ mod tests {
                 line_start: 10,
                 line_end: 20,
             },
-            overlap_prev: None,
-            overlap_next: None,
         }
     }
 
@@ -213,7 +306,7 @@ mod tests {
         let embedding = vec![0.1, 0.2, 0.3, 0.4];
 
         store
-            .upsert_chunks(vec![(chunk_id, embedding.clone(), chunk)])
+            .insert_chunks(vec![(chunk_id, embedding.clone(), chunk)])
             .await
             .unwrap();
 

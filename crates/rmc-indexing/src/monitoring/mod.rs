@@ -3,4 +3,4 @@
 mod backup;
 mod health;
 
-pub use health::{ComponentHealth, HealthMonitor, HealthStatus, Status};
+pub use health::{ComponentHealth, FreshnessHealth, HealthMonitor, HealthStatus, Status};

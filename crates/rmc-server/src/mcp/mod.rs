@@ -4,6 +4,8 @@
 //! for the rust-code-mcp service.
 
 pub mod defaults;
+pub mod heap_census;
+pub mod memory;
 pub mod project_paths;
 pub mod runtime;
 pub mod search_cache;
@@ -11,6 +13,7 @@ pub mod sync;
 pub mod workspace_locks;
 
 pub use defaults::*;
+pub use memory::*;
 pub use runtime::*;
 pub use search_cache::*;
 pub use sync::*;

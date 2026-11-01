@@ -14,24 +14,33 @@ mod docs_audit;
 #[cfg(feature = "semantic-embeddings")]
 mod embedding_cache;
 mod extract;
+pub mod export;
 mod fn_body_audit;
 mod hir_trim;
+mod identity;
 pub mod ids;
 mod impls;
+mod incremental;
+mod input_slice;
 mod labels;
 mod loader;
 mod math;
 pub mod model;
+mod ownership;
 mod query;
+mod relations;
 mod recursion_check;
 mod signatures;
 mod skeleton;
 pub mod snapshot;
+pub mod snapshot_compare;
 mod statics;
 mod storage;
+mod structure;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod unsafe_audit;
+mod unresolved;
 mod usages;
 
 pub use ids::{BindingId, NodeId};
@@ -71,9 +80,9 @@ pub use skeleton::{
     render_crate_skeletons,
 };
 pub use snapshot::{
-    BuildOptions, GraphSnapshotCleanupEntry, GraphSnapshotCleanupOptions,
+    BuildKind, BuildOptions, GraphSnapshotCleanupEntry, GraphSnapshotCleanupOptions,
     GraphSnapshotCleanupReport, OpenedSnapshot, build_and_persist,
     clear_all_workspace_snapshots, clear_workspace_snapshots, open_current,
     open_current_for_workspace,
 };
-pub use storage::{GraphEnvOptions, GraphPaths};
+pub use storage::{DbTag, GraphEnvOptions, GraphPaths};

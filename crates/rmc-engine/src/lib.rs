@@ -3,6 +3,7 @@
 pub mod chunker;
 #[cfg(feature = "embeddings")]
 pub mod embeddings;
+pub mod mem_trace;
 pub mod parser;
 pub mod schema;
 pub mod search;

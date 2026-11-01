@@ -3,13 +3,15 @@
 //! Extracted from `IndexerCore` to encapsulate embedding pipeline concerns:
 //! GPU-optimized batch embedding generation and memory-aware batch sizing.
 
+use crate::indexing::IndexingError;
+use crate::metrics::MemoryMonitor;
 use rmc_engine::chunker::CodeChunk;
-use rmc_engine::embeddings::batching::{BatchPlan as EmbeddingBatchPlan, plan_batches};
+use rmc_engine::embeddings::batching::{
+    BatchPlan as EmbeddingBatchPlan, BatchingPolicy, FixedInputShape,
+};
 use rmc_engine::embeddings::{
     Embedding, EmbeddingGenerator, EmbeddingRuntime, EmbeddingTextLen, EmbeddingTokenCounter,
 };
-use crate::indexing::IndexingError;
-use crate::metrics::MemoryMonitor;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -19,10 +21,18 @@ pub(crate) struct EmbeddingBatcher {
     embedding_generator: EmbeddingGenerator,
     /// Memory monitor for safe batch sizing
     memory_monitor: Arc<Mutex<MemoryMonitor>>,
-    /// GPU batch size for embedding generation
-    gpu_batch_size: usize,
-    /// Padded token budget for embedding generation
-    max_tokens_per_batch: usize,
+    /// Who dictates the batch shape: the model or the indexer settings.
+    ///
+    /// Decided ONCE when the batcher is built, not on every run: it determines
+    /// the cut, the input sorting, and what padding even means in
+    /// the metrics below.
+    batching_policy: BatchingPolicy,
+    /// Fixed input shape, if the runtime requires one.
+    ///
+    /// Stored whole (rather than as a single length) because an honest padding count
+    /// needs BOTH axes: a run costs `rows × seq_len` regardless of the input
+    /// lengths and of how many rows in the batch are actually used.
+    fixed_shape: Option<FixedInputShape>,
     /// Token counter for Qwen3 model-input metrics.
     token_counter: Option<EmbeddingTokenCounter>,
 }
@@ -56,7 +66,34 @@ impl EmbeddingBatcher {
         } else {
             max_tokens_per_batch
         };
-        let token_counter = match EmbeddingTokenCounter::from_backend(embedding_generator.backend()) {
+
+        // The shape is asked from the MODEL. If it requires one, the indexer settings
+        // do not affect the cut, and that must be said out loud: a silently
+        // ignored setting reads as 'I set it and it didn't work'.
+        let fixed_shape = embedding_generator.backend().fixed_input_shape();
+        let batching_policy = BatchingPolicy::new(
+            fixed_shape.map(|shape| shape.rows),
+            gpu_batch_size,
+            max_tokens_per_batch,
+        );
+        if let Some(shape) = fixed_shape {
+            if shape.rows.0 != gpu_batch_size {
+                tracing::warn!(
+                    configured_gpu_batch_size = gpu_batch_size,
+                    model_batch_rows = shape.rows.0,
+                    "Embedding batch size is dictated by the model's fixed input shape; \
+                     the configured value is NOT applied"
+                );
+            }
+            tracing::info!(
+                rows = shape.rows.0,
+                seq_len = shape.seq_len,
+                "Embedding batch shape is fixed by the model; \
+                 token budget and length sorting are not applied"
+            );
+        }
+        let token_counter = match EmbeddingTokenCounter::from_backend(embedding_generator.backend())
+        {
             Ok(counter) => {
                 tracing::info!(
                     max_len = counter.max_len(),
@@ -73,15 +110,14 @@ impl EmbeddingBatcher {
             }
         };
         tracing::info!(
-            gpu_batch_size,
-            max_tokens_per_batch,
+            policy = %batching_policy,
             "EmbeddingBatcher configured"
         );
         Self {
             embedding_generator,
             memory_monitor: Arc::new(Mutex::new(memory_monitor)),
-            gpu_batch_size,
-            max_tokens_per_batch,
+            batching_policy,
+            fixed_shape,
             token_counter,
         }
     }
@@ -95,10 +131,7 @@ impl EmbeddingBatcher {
         &self,
         chunks: &[CodeChunk],
     ) -> Result<Vec<Embedding>, IndexingError> {
-        let chunk_texts: Vec<String> = chunks
-            .iter()
-            .map(|c| c.format_for_embedding())
-            .collect();
+        let chunk_texts: Vec<String> = chunks.iter().map(|c| c.format_for_embedding()).collect();
 
         let token_lengths = self.count_token_lengths(&chunk_texts);
 
@@ -108,8 +141,10 @@ impl EmbeddingBatcher {
                 .await;
         }
 
-        // Qwen3 batches pad to the longest input, so keep similarly
-        // sized chunks together while restoring original order below.
+        // Without a fixed shape a batch is padded to the longest row IN IT,
+        // so inputs of similar length are kept together (the order is restored
+        // below via `original_idx`). With a fixed shape this is wasted work:
+        // every row is padded to `seq_len` anyway.
         let mut ordered_texts: Vec<(usize, String, Option<EmbeddingTextLen>)> = chunk_texts
             .into_iter()
             .enumerate()
@@ -118,13 +153,11 @@ impl EmbeddingBatcher {
                 (idx, text, token_len)
             })
             .collect();
-        sort_embedding_inputs(&mut ordered_texts);
+        if self.batching_policy.sorts_by_length() {
+            sort_embedding_inputs(&mut ordered_texts);
+        }
 
-        let batch_plan = plan_embedding_batches(
-            &ordered_texts,
-            self.gpu_batch_size,
-            self.max_tokens_per_batch,
-        );
+        let batch_plan = plan_embedding_batches(&ordered_texts, self.batching_policy);
         let total_batches = batch_plan.len();
         let min_chars = ordered_texts
             .iter()
@@ -136,14 +169,13 @@ impl EmbeddingBatcher {
             .map(|(_, text, _)| text.len())
             .max()
             .unwrap_or(0);
-        let token_summary = summarize_token_lengths(&ordered_texts, &batch_plan);
+        let token_summary = summarize_token_lengths(&ordered_texts, &batch_plan, self.fixed_shape);
 
         if let Some(summary) = token_summary {
             tracing::info!(
                 chunks = ordered_texts.len(),
                 sub_batches = total_batches,
-                configured_max_batch_size = self.gpu_batch_size,
-                max_tokens_per_batch = self.max_tokens_per_batch,
+                policy = %self.batching_policy,
                 min_chars,
                 max_chars,
                 raw_tokens_total = summary.raw_tokens_total,
@@ -161,8 +193,7 @@ impl EmbeddingBatcher {
             tracing::info!(
                 chunks = ordered_texts.len(),
                 sub_batches = total_batches,
-                configured_max_batch_size = self.gpu_batch_size,
-                max_tokens_per_batch = self.max_tokens_per_batch,
+                policy = %self.batching_policy,
                 min_chars,
                 max_chars,
                 token_metrics_available = false,
@@ -187,11 +218,11 @@ impl EmbeddingBatcher {
                 .max()
                 .unwrap_or(0);
             tracing::debug!(
-                "Embedding GPU sub-batch {}/{} ({} chunks, configured max {}, chars {}..{})",
+                "Embedding GPU sub-batch {}/{} ({} chunks, policy {}, chars {}..{})",
                 batch_idx + 1,
                 total_batches,
                 chunk_batch.len(),
-                self.gpu_batch_size,
+                self.batching_policy,
                 min_chars,
                 max_chars
             );
@@ -224,8 +255,7 @@ impl EmbeddingBatcher {
             tracing::info!(
                 chunks = embeddings.len(),
                 sub_batches = total_batches,
-                configured_max_batch_size = self.gpu_batch_size,
-                max_tokens_per_batch = self.max_tokens_per_batch,
+                policy = %self.batching_policy,
                 elapsed_secs = embed_duration.as_secs_f64(),
                 chunks_per_sec,
                 min_chars,
@@ -245,8 +275,7 @@ impl EmbeddingBatcher {
             tracing::info!(
                 chunks = embeddings.len(),
                 sub_batches = total_batches,
-                configured_max_batch_size = self.gpu_batch_size,
-                max_tokens_per_batch = self.max_tokens_per_batch,
+                policy = %self.batching_policy,
                 elapsed_secs = embed_duration.as_secs_f64(),
                 chunks_per_sec,
                 min_chars,
@@ -398,9 +427,19 @@ impl EmbeddingBatcher {
     }
 }
 
+/// Summary of input lengths + how many tokens ACTUALLY went through the model.
+///
+/// `fixed_shape`: the fixed input shape, if the runtime requires one.
+/// It changes the meaning of `padded_tokens_total`: with a floating shape a batch costs
+/// rows × the longest row IN IT; with a fixed one, shape rows ×
+/// seq_len, counting shape rows rather than actual ones (the tail is padded with copies).
+/// They cannot be counted the same way: on the GPU profile, counting by actual lengths would
+/// understate the cost of a run several times over, and padding_waste_tokens would show almost zero exactly
+/// where padding is at its maximum.
 fn summarize_token_lengths(
     ordered_texts: &[(usize, String, Option<EmbeddingTextLen>)],
     batch_plan: &[EmbeddingBatchPlan],
+    fixed_shape: Option<FixedInputShape>,
 ) -> Option<TokenLengthSummary> {
     if ordered_texts.is_empty() {
         return Some(TokenLengthSummary {
@@ -428,12 +467,19 @@ fn summarize_token_lengths(
     let mut padded_tokens_total = 0usize;
     for plan in batch_plan {
         let chunk_batch = &ordered_texts[plan.start..plan.end];
-        let batch_max = chunk_batch
-            .iter()
-            .filter_map(|(_, _, token_len)| token_len.map(|len| len.capped_tokens))
-            .max()
-            .unwrap_or(0);
-        padded_tokens_total += batch_max * chunk_batch.len();
+        padded_tokens_total += match fixed_shape {
+            // The shape is fixed: the batch cost depends neither on lengths nor on
+            // how many rows in it are actually used.
+            Some(shape) => shape.rows.0 * shape.seq_len,
+            None => {
+                let batch_max = chunk_batch
+                    .iter()
+                    .filter_map(|(_, _, token_len)| token_len.map(|len| len.capped_tokens))
+                    .max()
+                    .unwrap_or(0);
+                batch_max * chunk_batch.len()
+            }
+        };
     }
 
     Some(TokenLengthSummary {
@@ -482,19 +528,13 @@ fn summarize_unsorted_token_lengths(
 
 fn plan_embedding_batches(
     ordered_texts: &[(usize, String, Option<EmbeddingTextLen>)],
-    max_batch_size: usize,
-    max_tokens_per_batch: usize,
+    policy: BatchingPolicy,
 ) -> Vec<EmbeddingBatchPlan> {
-    plan_batches(
-        ordered_texts,
-        max_batch_size,
-        max_tokens_per_batch,
-        |(_, text, token_len)| {
-            token_len
-                .map(|len| len.capped_tokens)
-                .unwrap_or_else(|| text.len())
-        },
-    )
+    policy.plan(ordered_texts, |(_, text, token_len)| {
+        token_len
+            .map(|len| len.capped_tokens)
+            .unwrap_or_else(|| text.len())
+    })
 }
 
 fn sort_embedding_inputs(ordered_texts: &mut [(usize, String, Option<EmbeddingTextLen>)]) {
@@ -511,6 +551,7 @@ fn sort_embedding_inputs(ordered_texts: &mut [(usize, String, Option<EmbeddingTe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmc_engine::embeddings::batching::BatchRows;
 
     // Note: tests that need EmbeddingGenerator require the model to be loaded,
     // so we only test memory-related functionality here.
@@ -568,8 +609,7 @@ mod tests {
 
         sort_embedding_inputs(&mut inputs);
 
-        let ordered_indices: Vec<usize> =
-            inputs.iter().map(|(idx, _, _)| *idx).collect();
+        let ordered_indices: Vec<usize> = inputs.iter().map(|(idx, _, _)| *idx).collect();
         assert_eq!(ordered_indices, vec![1, 2, 0]);
     }
 
@@ -604,8 +644,7 @@ mod tests {
 
         sort_embedding_inputs(&mut inputs);
 
-        let ordered_indices: Vec<usize> =
-            inputs.iter().map(|(idx, _, _)| *idx).collect();
+        let ordered_indices: Vec<usize> = inputs.iter().map(|(idx, _, _)| *idx).collect();
         assert_eq!(ordered_indices, vec![0, 1, 2]);
     }
 
@@ -638,8 +677,9 @@ mod tests {
             ),
         ];
 
-        let batch_plan = plan_embedding_batches(&ordered, 2, 10);
-        let summary = summarize_token_lengths(&ordered, &batch_plan).unwrap();
+        let policy = BatchingPolicy::new(None, 2, 10);
+        let batch_plan = plan_embedding_batches(&ordered, policy);
+        let summary = summarize_token_lengths(&ordered, &batch_plan, None).unwrap();
 
         assert_eq!(summary.raw_tokens_total, 15);
         assert_eq!(summary.capped_tokens_total, 15);
@@ -707,7 +747,7 @@ mod tests {
             ),
         ];
 
-        let plan = plan_embedding_batches(&ordered, 4, 16);
+        let plan = plan_embedding_batches(&ordered, BatchingPolicy::new(None, 4, 16));
 
         assert_eq!(
             plan,
@@ -739,7 +779,7 @@ mod tests {
             ),
         ];
 
-        let plan = plan_embedding_batches(&ordered, 4, 16);
+        let plan = plan_embedding_batches(&ordered, BatchingPolicy::new(None, 4, 16));
 
         assert_eq!(
             plan,
@@ -748,5 +788,66 @@ mod tests {
                 EmbeddingBatchPlan { start: 1, end: 2 },
             ]
         );
+    }
+
+    /// With a fixed shape the cost of a run is `rows × seq_len` for EACH batch,
+    /// including a partial one: the padding rows go through the model just the same.
+    ///
+    /// A gate on the honesty of the metric, not on arithmetic: counting by the longest
+    /// row in the batch on the GPU profile would understate the cost several times over, and
+    /// `padding_waste_tokens` would show near-zero exactly where padding
+    /// is at its maximum.
+    #[test]
+    fn summarize_counts_the_whole_fixed_shape_including_the_padded_tail() {
+        let ordered: Vec<(usize, String, Option<EmbeddingTextLen>)> = (0..3)
+            .map(|idx| {
+                (
+                    idx,
+                    "x".to_string(),
+                    Some(EmbeddingTextLen {
+                        raw_tokens: 5,
+                        capped_tokens: 5,
+                    }),
+                )
+            })
+            .collect();
+
+        let shape = FixedInputShape {
+            rows: BatchRows(2),
+            seq_len: 512,
+        };
+        let policy = BatchingPolicy::new(Some(shape.rows), 100, 10);
+        let batch_plan = plan_embedding_batches(&ordered, policy);
+        // Three inputs at height 2: two batches, the second one half full.
+        assert_eq!(batch_plan.len(), 2);
+
+        let summary = summarize_token_lengths(&ordered, &batch_plan, Some(shape)).unwrap();
+        assert_eq!(summary.capped_tokens_total, 15);
+        assert_eq!(
+            summary.padded_tokens_total,
+            2 * 2 * 512,
+            "the partial batch was counted cheaper than a full one"
+        );
+    }
+
+    /// Positive control for the previous one: without a fixed shape the count stays
+    /// as before, by the longest row IN THE BATCH.
+    #[test]
+    fn summarize_without_fixed_shape_counts_by_the_longest_row() {
+        let ordered: Vec<(usize, String, Option<EmbeddingTextLen>)> = (0..3)
+            .map(|idx| {
+                (
+                    idx,
+                    "x".to_string(),
+                    Some(EmbeddingTextLen {
+                        raw_tokens: 5,
+                        capped_tokens: 5,
+                    }),
+                )
+            })
+            .collect();
+        let batch_plan = plan_embedding_batches(&ordered, BatchingPolicy::new(None, 2, 1000));
+        let summary = summarize_token_lengths(&ordered, &batch_plan, None).unwrap();
+        assert_eq!(summary.padded_tokens_total, 15);
     }
 }

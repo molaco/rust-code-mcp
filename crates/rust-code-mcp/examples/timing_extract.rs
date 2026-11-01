@@ -107,6 +107,8 @@ fn main() {
                 force_rebuild: true,
                 data_dir_override: Some(tempdir.path().to_path_buf()),
                 env: GraphEnvOptions::default(),
+                // What the daemon passes, so the peak measured here is its peak.
+                release_free_memory: Some(rmc_server::mcp::memory::release_free_memory),
             };
             let t = Instant::now();
             let result = build_and_persist(workspace_path, opts).expect("build_and_persist");

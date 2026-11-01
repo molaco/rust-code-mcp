@@ -1,0 +1,13 @@
+[package]
+name = "truth-app"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "truth_app"
+path = "src/main.rs"
+[dependencies]
+truth-dep = { path = "../dep" }
+truth-macros = { path = "../macros" }
+[features]
+default = []
+extra = []

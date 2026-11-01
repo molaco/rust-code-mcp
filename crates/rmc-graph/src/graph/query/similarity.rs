@@ -607,6 +607,7 @@ mod tests {
                 visibility: Some("pub".to_string()),
                 attributes: Vec::new(),
                 crate_target_kind: None,
+                declaration_module: None,
             },
             content_hash,
             cached_vec,
@@ -770,6 +771,7 @@ mod tests {
             visibility: Some("pub".to_string()),
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: None,
         };
 
         let full = serde_json::to_value(node_to_similarity_item(&node, false)).unwrap();

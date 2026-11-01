@@ -369,8 +369,6 @@ mod tests {
                     line_start: 1,
                     line_end: 10,
                 },
-                overlap_prev: None,
-                overlap_next: None,
             },
         }
     }

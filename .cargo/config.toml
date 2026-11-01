@@ -1,0 +1,12 @@
+[env]
+# rust-analyzer's walks recurse deep enough that the default 2 MiB thread stack
+# aborts on this very workspace — the same measurement that gave the server its
+# 64 MiB analysis thread (`rmc-server/src/deep_stack.rs`). Unit tests call into
+# the analysis directly from a test thread, which gets the default, so without
+# this they abort with `fatal runtime error: stack overflow` rather than fail.
+#
+# It lives here rather than in a runner script for the reason the alias in the
+# neighbouring repo exists: an environment variable you have to remember to set
+# is one you eventually run without. Stacks are mapped lazily, so the headroom
+# costs address space, not memory.
+RUST_MIN_STACK = "67108864"

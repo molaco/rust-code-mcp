@@ -101,6 +101,27 @@ pub(in crate::graph) fn crate_scope_allows(
 }
 
 impl OpenedSnapshot {
+    /// Labels are unqualified only when the Rust crate name is unique. Raw
+    /// ids remain stable when another target appears; human projections must
+    /// not fold independent targets back together by their display names.
+    pub(in crate::graph) fn target_labels(&self, txn: &RoTxn<'_, heed::WithoutTls>) -> Result<HashMap<NodeId, String>> {
+        let mut crates = Vec::new();
+        let mut counts = HashMap::<String, usize>::new();
+        for entry in self.dbs.nodes_by_id.iter(txn)? {
+            let (_, node) = entry?;
+            if node.kind == NodeKind::Crate {
+                *counts.entry(node.qualified_name.clone()).or_default() += 1;
+                crates.push(node);
+            }
+        }
+        Ok(crates.into_iter().map(|node| {
+            let label = if counts[&node.qualified_name] > 1 {
+                format!("{}[{}]@{}", node.qualified_name, node.crate_target_kind.as_deref().unwrap_or("unknown"), node.file.as_deref().unwrap_or("unknown"))
+            } else { node.qualified_name };
+            (node.id, label)
+        }).collect())
+    }
+
     pub(super) fn bindings_for_from_module<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
@@ -152,7 +173,7 @@ impl OpenedSnapshot {
             }))
     }
 
-    pub(super) fn usages_for_target<'txn>(
+    pub(in crate::graph) fn usages_for_target<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         target: NodeId,
@@ -200,7 +221,7 @@ impl OpenedSnapshot {
             }))
     }
 
-    pub(super) fn usages_for_consumer_function<'txn>(
+    pub(in crate::graph) fn usages_for_consumer_function<'txn>(
         &'txn self,
         rtxn: &'txn RoTxn<'_, heed::WithoutTls>,
         caller_fn: NodeId,
@@ -239,7 +260,7 @@ pub(in crate::graph) fn dependency_node_for(
             }
             NodeKind::Workspace => return None,
             NodeKind::Item => {
-                current = node.parent_id?;
+                current = node.declaration_module.or(node.parent_id)?;
                 guard += 1;
                 if guard > 32 {
                     return None;

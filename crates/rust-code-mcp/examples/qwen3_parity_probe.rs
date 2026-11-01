@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn generate_snapshot() -> Result<EmbeddingSnapshot, Box<dyn std::error::Error>> {
-    let generator = EmbeddingGenerator::new()?;
+    let generator = EmbeddingGenerator::new(rmc_engine::embeddings::EmbeddingOwner::Tool)?;
     let documents = generator.embed_documents(document_corpus()).await?;
     let queries = generator.embed_queries(query_corpus()).await?;
     Ok(EmbeddingSnapshot { documents, queries })

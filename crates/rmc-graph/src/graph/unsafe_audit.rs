@@ -286,15 +286,15 @@ mod tests {
         let snap = shared_snapshot();
         let loaded = loader::load(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
         let findings = unsafe_audit_impl(&loaded, snap).unwrap();
-        let in_build_and_persist = findings.iter().find(|f| {
+        let in_build_attempt = findings.iter().find(|f| {
             f.file.ends_with("snapshot.rs")
                 && f.enclosing_function_name
                     .as_deref()
-                    .is_some_and(|n| n.contains("build_and_persist"))
+                    .is_some_and(|n| n.contains("build_attempt"))
         });
         assert!(
-            in_build_and_persist.is_some(),
-            "expected an unsafe block to resolve to build_and_persist; got {findings:#?}"
+            in_build_attempt.is_some(),
+            "expected an unsafe block to resolve to build_attempt; got {findings:#?}"
         );
     }
 

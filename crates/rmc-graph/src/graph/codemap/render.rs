@@ -128,6 +128,13 @@ pub fn render_mermaid(cm: &Codemap) -> String {
     for edge in edges_sorted {
         let (arrow, label_kind) = match edge.kind {
             EdgeKind::Calls => ("-->", "calls"),
+            EdgeKind::TraitDispatch => ("-->", "trait dispatch"),
+            EdgeKind::FunctionReference => ("-.->", "function reference"),
+            EdgeKind::TypeRef => ("-.->", "type"),
+            EdgeKind::Constructs => ("-->", "constructs"),
+            EdgeKind::Reads => ("-.->", "reads"),
+            EdgeKind::Writes => ("-->", "writes"),
+            EdgeKind::Implements => ("-.->", "implements"),
             EdgeKind::Uses => ("-.->", "uses"),
             // Not produced by the current algorithm; if a future version
             // emits them, skip rather than mis-render.

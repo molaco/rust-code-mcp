@@ -27,17 +27,9 @@ impl OpenedSnapshot {
     /// recursion to n levels below the root (root itself is depth 0).
     pub fn module_tree(&self, crate_name: &str, depth: Option<usize>) -> Result<ModuleTreeNode> {
         let rtxn = self.env.read_txn()?;
-        let mut crate_id: Option<NodeId> = None;
-        for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
-            let (key, node) = entry?;
-            if node.kind == NodeKind::Crate && node.qualified_name == crate_name {
-                let mut id = [0u8; 32];
-                id.copy_from_slice(key);
-                crate_id = Some(NodeId(id));
-                break;
-            }
-        }
-        let crate_id = crate_id
+        let crate_id = self.lookup_by_qualified_name(crate_name)?
+            .filter(|(_, node)| matches!(node.kind, NodeKind::Crate | NodeKind::Module))
+            .and_then(|(_, node)| node.crate_id)
             .with_context(|| format!("no Crate node with qualified_name `{crate_name}`"))?;
 
         let mut declared_targets: HashSet<NodeId> = HashSet::new();

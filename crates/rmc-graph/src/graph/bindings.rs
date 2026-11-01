@@ -33,7 +33,6 @@ pub(crate) fn extract_bindings(
     db: &RootDatabase,
     local_crates: &[Crate],
     crate_node_for: &HashMap<Crate, NodeId>,
-    crate_name_for: &HashMap<Crate, String>,
     module_node_for: &HashMap<ModuleId, NodeId>,
 ) -> HashMap<ModuleDefId, NodeId> {
     let mut def_to_node: HashMap<ModuleDefId, NodeId> = HashMap::new();
@@ -45,7 +44,6 @@ pub(crate) fn extract_bindings(
 
     for &krate in local_crates {
         let def_map = crate_def_map(db, krate.base());
-        let crate_name = crate_name_for.get(&krate).cloned().unwrap_or_default();
         let crate_node_id = match crate_node_for.get(&krate).copied() {
             Some(id) => id,
             None => continue,
@@ -73,7 +71,6 @@ pub(crate) fn extract_bindings(
                     module_node_for,
                     module_node_id,
                     crate_node_id,
-                    &crate_name,
                     name.as_str(),
                     Namespace::Type,
                     def,
@@ -94,7 +91,6 @@ pub(crate) fn extract_bindings(
                     module_node_for,
                     module_node_id,
                     crate_node_id,
-                    &crate_name,
                     name.as_str(),
                     Namespace::Value,
                     def,
@@ -118,6 +114,11 @@ pub(crate) fn extract_bindings(
     model
         .bindings
         .retain(|b| seen.insert((b.from_module, b.visible_name.clone(), b.target, b.kind)));
+    // Same for the contains edges `process_entry` adds once per namespace.
+    // Edges added by earlier passes (workspace → crate → module) are unique
+    // already; the first occurrence keeps its place.
+    let mut seen: HashSet<(NodeId, NodeId)> = HashSet::with_capacity(model.contains.len());
+    model.contains.retain(|&edge| seen.insert(edge));
 
     def_to_node
 }
@@ -131,7 +132,6 @@ fn process_entry(
     module_node_for: &HashMap<ModuleId, NodeId>,
     from_module: NodeId,
     from_crate: NodeId,
-    from_crate_name: &str,
     visible_name: &str,
     namespace: Namespace,
     def_id: ModuleDefId,
@@ -155,27 +155,20 @@ fn process_entry(
         def_to_node,
         module_node_for,
         def_id,
-        from_crate_name,
         visible_name,
     ) {
         Some(id) => id,
         None => return,
     };
 
-    // Contains edge for declared local items (only on first declaration encounter).
+    // Contains edge for declared local items. A unit/tuple struct is declared
+    // in both namespaces and gets here twice; `extract_bindings` drops the
+    // second edge after the walk (a linear scan here was O(N²) per workspace).
     if binding_kind == BindingKind::Declared
         && matches!(model.nodes.get(&target_node_id).map(|n| n.kind), Some(NodeKind::Item))
         && model.nodes.get(&target_node_id).and_then(|n| n.parent_id) == Some(from_module)
     {
-        // Skip the contains edge if it would duplicate one already added by this same call.
-        // (Re-encounter via a glob import will hit the early `def_to_node` cache and never get here.)
-        let already = model
-            .contains
-            .iter()
-            .any(|&(p, c)| p == from_module && c == target_node_id);
-        if !already {
-            model.insert_contains(from_module, target_node_id);
-        }
+        model.insert_contains(from_module, target_node_id);
     }
 
     let visibility = encode_visibility(model, db, def_map, vis, from_crate, module_node_for);
@@ -201,7 +194,6 @@ fn resolve_or_create_target(
     def_to_node: &mut HashMap<ModuleDefId, NodeId>,
     module_node_for: &HashMap<ModuleId, NodeId>,
     def_id: ModuleDefId,
-    from_crate_name: &str,
     visible_name: &str,
 ) -> Option<NodeId> {
     if let Some(id) = def_to_node.get(&def_id).copied() {
@@ -225,7 +217,7 @@ fn resolve_or_create_target(
         Some(node_id)
     } else {
         // Non-local item: stub.
-        let stub_qualified = stub_qualified_name(db, def_id, from_crate_name, visible_name);
+        let stub_qualified = stub_qualified_name(db, def_id)?;
         let node_id = NodeId::from_components(&[
             model.workspace_hash.as_str(),
             "external_symbol",
@@ -250,6 +242,7 @@ fn resolve_or_create_target(
                 visibility: None,
                 attributes: Vec::new(),
                 crate_target_kind: None,
+                declaration_module: None,
             });
         }
         def_to_node.insert(def_id, node_id);
@@ -276,14 +269,11 @@ fn create_local_item_node(
 
     let qualified = format!("{module_qual}::{name}");
 
-    let node_id = NodeId::from_components(&[
-        model.workspace_hash.as_str(),
-        "item",
-        from_crate_name,
-        module_qual.as_str(),
-        item_kind_label(item_kind),
+    let node_id = local_item_node_id(
+        module_node_id,
+        item_kind,
         name.as_str(),
-    ]);
+    );
 
     let crate_id = model.nodes.get(&module_node_id).and_then(|n| n.crate_id);
 
@@ -300,12 +290,30 @@ fn create_local_item_node(
         visibility: None,
         attributes: Vec::new(),
         crate_target_kind: None,
+        declaration_module: Some(module_node_id),
     });
 
     Some(node_id)
 }
 
-fn item_kind_for_def(def_id: ModuleDefId) -> Option<ItemKind> {
+/// NodeId of a module-level local item. The one place this id is minted:
+/// the bindings pass creates the node with it, and the consumer-side usages
+/// pass (`usages::TargetIds`) recomputes it for a reference without needing
+/// the producer crate's extracted rows.
+pub(super) fn local_item_node_id(
+    module: NodeId,
+    item_kind: ItemKind,
+    name: &str,
+) -> NodeId {
+    NodeId::from_components(&[
+        &module.to_hex(),
+        "item",
+        item_kind_label(item_kind),
+        name,
+    ])
+}
+
+pub(super) fn item_kind_for_def(def_id: ModuleDefId) -> Option<ItemKind> {
     Some(match def_id {
         ModuleDefId::FunctionId(_) => ItemKind::Function,
         ModuleDefId::AdtId(AdtId::StructId(_)) => ItemKind::Struct,
@@ -319,7 +327,7 @@ fn item_kind_for_def(def_id: ModuleDefId) -> Option<ItemKind> {
     })
 }
 
-fn name_for_def(db: &RootDatabase, def_id: ModuleDefId) -> Option<String> {
+pub(super) fn name_for_def(db: &RootDatabase, def_id: ModuleDefId) -> Option<String> {
     use ra_ap_hir::{Const, Enum, Function, Static, Struct, Trait, TypeAlias, Union};
     Some(match def_id {
         ModuleDefId::FunctionId(id) => Function::from(id).name(db).as_str().to_string(),
@@ -334,7 +342,7 @@ fn name_for_def(db: &RootDatabase, def_id: ModuleDefId) -> Option<String> {
     })
 }
 
-fn module_def_owner_module(db: &RootDatabase, def_id: ModuleDefId) -> Option<ModuleId> {
+pub(super) fn module_def_owner_module(db: &RootDatabase, def_id: ModuleDefId) -> Option<ModuleId> {
     Some(match def_id {
         ModuleDefId::ModuleId(id) => id,
         ModuleDefId::FunctionId(id) => id.module(db),
@@ -349,20 +357,21 @@ fn module_def_owner_module(db: &RootDatabase, def_id: ModuleDefId) -> Option<Mod
     })
 }
 
-fn stub_qualified_name(
-    db: &RootDatabase,
-    def_id: ModuleDefId,
-    from_crate_name: &str,
-    visible_name: &str,
-) -> String {
-    if let Some(owner) = module_def_owner_module(db, def_id) {
-        let qual = module_qualified_path(db, owner);
-        if let Some(n) = name_for_def(db, def_id) {
-            return format!("{qual}::{n}");
-        }
-        return format!("{qual}::{visible_name}");
+/// Qualified name of an external def's stub — a function of the def alone.
+/// It must not depend on which local crate's walk met the def first, nor on
+/// the name it was imported under: the per-crate build walks each crate
+/// separately, and a stub named after the first import (`use std::fmt as f`
+/// ⇒ `alloc::fmt::f`) would split one def into one stub per crate.
+/// `None` for defs without a name path (an unnamed `const _`, which no scope
+/// can bind by name anyway); macros, builtins and variants never get here.
+fn stub_qualified_name(db: &RootDatabase, def_id: ModuleDefId) -> Option<String> {
+    let owner = module_def_owner_module(db, def_id)?;
+    let module_path = module_qualified_path(db, owner);
+    if let ModuleDefId::ModuleId(_) = def_id {
+        // The owner of a module is the module itself.
+        return Some(module_path);
     }
-    format!("extern::{from_crate_name}::{visible_name}")
+    Some(format!("{module_path}::{}", name_for_def(db, def_id)?))
 }
 
 fn classify_type_provenance(p: Option<ImportOrExternCrate>) -> (BindingKind, Option<UseId>) {
@@ -407,15 +416,11 @@ fn encode_visibility(
     match vis {
         HirVisibility::Public => BindingVisibility::Public,
         HirVisibility::PubCrate(crate_id) => {
-            let crate_name = ra_ap_hir::Crate::from(crate_id)
-                .display_name(db)
-                .map(|n| n.canonical_name().as_str().to_string())
-                .unwrap_or_default();
-            let crate_node_id = NodeId::from_components(&[
-                model.workspace_hash.as_str(),
-                "crate",
-                crate_name.as_str(),
-            ]);
+            let root_module = ra_ap_hir::Crate::from(crate_id).root_module(db);
+            let Some(crate_node_id) = module_node_for.get(&root_module.into())
+                .and_then(|id| model.nodes.get(id)).and_then(|n| n.crate_id) else {
+                    return BindingVisibility::Private;
+                };
             if model.nodes.contains_key(&crate_node_id) {
                 BindingVisibility::Crate(crate_node_id)
             } else if from_crate == crate_node_id {

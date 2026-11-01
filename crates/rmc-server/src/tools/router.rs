@@ -30,7 +30,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router,
+    tool, tool_router,
 };
 
 use crate::tools::params::{
@@ -69,6 +69,17 @@ impl SearchToolRouter {
             tool_router: Self::tool_router(),
             runtime,
         }
+    }
+
+    /// Names of every tool this server offers — what `tools/list` answers,
+    /// without a client. The daemon's client checks its list of state-changing
+    /// tools against it.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect()
     }
 }
 
@@ -150,7 +161,7 @@ impl SearchToolRouter {
 
     /// Preview a rename of a symbol across the project (read-only, no files modified)
     #[tool(
-        description = "Preview renaming a Rust symbol project-wide using rust-analyzer. Returns the set of edits and file moves WITHOUT modifying any files. If symbol_name is ambiguous, rerun with file_path, line, and column from the candidate list."
+        description = "Preview renaming a Rust symbol project-wide using rust-analyzer. Returns the set of edits and file moves WITHOUT modifying any files. If symbol_name is ambiguous, rerun with file_path, line, and column from the candidate list. Caveat: rust-analyzer's rename can miss occurrences inside macro bodies (e.g. vec![]) — cross-check with grep before applying."
     )]
     async fn rename_symbol(
         &self,
@@ -210,7 +221,7 @@ impl SearchToolRouter {
 
     /// Check system health status
     #[tool(
-        description = "Check the health status of the code search system (BM25, Vector store, Merkle tree)"
+        description = "Check the health status of the code search system (BM25, Vector store, Merkle tree, index coverage and freshness). Pass 'directory': without it neither coverage nor freshness can be judged."
     )]
     async fn health_check(
         &self,
@@ -260,7 +271,9 @@ impl SearchToolRouter {
     }
 
     /// Clear corrupted cache, index, and vector store files
-    #[tool(description = "Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store. Pass include_hypergraph=true to ALSO wipe the persisted hypergraph snapshot at <data_dir>/graphs/<workspace_hash>/ — forces the next build_hypergraph call to do a full re-index. Pass dry_run=true to report the directories that would be removed without deleting them. The response lists exactly which directories were or would be cleared.")]
+    #[tool(
+        description = "Delete the on-disk metadata cache, tantivy index and vector store (fixes 'Failed to open MetadataCache'). include_hypergraph=true also wipes the persisted graph snapshot, so the next build is full; dry_run=true only lists what would go. The response names every directory cleared."
+    )]
     async fn clear_cache(
         &self,
         Parameters(params): Parameters<crate::tools::endpoints::cache::ClearCacheParams>,
@@ -285,6 +298,17 @@ impl SearchToolRouter {
         crate::tools::endpoints::runtime::runtime_status(&self.runtime, params).await
     }
 
+    /// Report per-query memory of one loaded rust-analyzer analysis
+    #[tool(
+        description = "Memory of an ALREADY LOADED rust-analyzer analysis per salsa ingredient (memo count, heap where measured, largest first), plus a whole-daemon breakdown of rss + swap (mappings, allocator free space, salsa, interners, unattributed). Never loads a workspace to answer. `heap` is a lower bound: compare accounted_bytes with rss_kib. `top` caps the lists."
+    )]
+    async fn analysis_memory(
+        &self,
+        Parameters(params): Parameters<crate::tools::endpoints::runtime::AnalysisMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::endpoints::runtime::analysis_memory(&self.runtime, params).await
+    }
+
     /// Clear runtime-owned in-memory caches and sync tracking
     #[tool(
         description = "Clear MCP runtime caches and sync tracking. scope values: all, workspace, semantic_only, search_cache_only, sync_tracking_only. Pass workspace to target one workspace. This does not stop the background sync task; process shutdown cancels tasks through ServerRuntime."
@@ -299,13 +323,23 @@ impl SearchToolRouter {
     // ----- Hypergraph tools (Layer 7) -----
 
     #[tool(
-        description = "Build or reuse a persisted workspace hypergraph snapshot (HIR-driven, no_deps=false)"
+        description = "Build or reuse the immutable HIR graph that graph and audit tools read (all features, lib/bin targets; no test cfg or build-script outputs). Source edits during the build reload a fresh slice; after three changed attempts it fails without replacing CURRENT. force_rebuild makes a fresh instance. Ambiguous paths take target selectors: app[lib]::helper / app[bin]::helper."
     )]
     async fn build_hypergraph(
         &self,
         Parameters(params): Parameters<crate::tools::params::BuildHypergraphParams>,
     ) -> Result<CallToolResult, McpError> {
         crate::tools::graph::core::build_hypergraph(params).await
+    }
+
+    #[tool(
+        description = "Lossless machine-readable export of an immutable HIR graph, paged by table. Call without `table` for metadata, coverage and graph_id, then page each listed table with graph_id and next_cursor. A CURRENT change mid-export is an error, never mixed pages. For bulk offline export use the rmc-graph graph_export example (JSONL)."
+    )]
+    async fn export_graph(
+        &self,
+        Parameters(params): Parameters<crate::tools::params::GraphExportParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::tools::graph::core::export_graph(params).await
     }
 
     #[tool(
@@ -369,7 +403,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "List every non-import reference to the given symbol (file path + byte range + read/write/test category). Complements who_imports, which only enumerates `use` edges."
+        description = "List resolved non-import references to a symbol, with file/byte range, semantic relation (Call, TraitDispatch, FunctionReference, TypeRef, Construct, Read, Write, Use, Implements), category and consumer_item/consumer_function. Imports are separate bindings. Includes aliases, fields and trait implementation bodies. This is configured-loader coverage, not a completeness claim."
     )]
     async fn who_uses(
         &self,
@@ -379,7 +413,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Aggregation rollup of who_uses: every non-import reference to the given symbol, grouped by consumer module, with total count + per-category breakdown (Read/Write/Test/Other). Local inherent method calls and local trait-declaration dispatch are captured as Method items; unresolved indirect calls such as external dyn-trait dispatch or generic Fn calls remain blind spots."
+        description = "Aggregation rollup of resolved non-import references, grouped by lexical consumer module with total count and Read/Write/Test/Other category breakdown. Category is independent of semantic relation: these counts are not call counts. Unresolved indirect calls are separate records returned by calls_from."
     )]
     async fn who_uses_summary(
         &self,
@@ -389,7 +423,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Layer 10 call graph: every non-import reference to the target function whose call site sits inside another function body. Returns (caller_qualified_name, file, byte range, category) per call site. References in const initializers, type aliases, and other non-function scopes are excluded — use `who_uses` to see all reference sites including those. Calls from closures attribute to the enclosing fn."
+        description = "Call/TraitDispatch sites targeting a function, from function bodies, with relation, category and source site. Concrete trait calls name the impl; generic/dyn calls name the trait method. Excludes function values, types and imports — use who_uses for every resolved reference. Closures count toward the enclosing fn."
     )]
     async fn who_calls(
         &self,
@@ -399,7 +433,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Layer 10 call graph: every non-import reference made from the body of the caller function. Returns (callee_qualified_name, file, byte range, category) per outgoing reference. References in const initializers, type aliases, and other non-function scopes are excluded — use `who_uses` to see all reference sites including those. Calls from closures attribute to the enclosing fn."
+        description = "Outgoing Call/TraitDispatch sites from a function body (relation, category), plus every unresolved call of that body with range and reason (IndirectCallable, TargetOutsideGraph, Unresolved), not paginated. Excludes type and function-value references and imports. No points-to analysis. Closures count toward the enclosing fn."
     )]
     async fn calls_from(
         &self,
@@ -409,7 +443,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Bounded recursive descent over outgoing call edges from `root`. Returns a tree of CallGraphNode { fn_qualified_name, crate_name, callees, truncated_at_cycle, truncated_at_depth }. `depth` defaults to 3 and is capped at 8 (deeper trees rarely fit usefully in a single response and may explode). `truncated_at_cycle = true` means the fn was already expanded earlier in the traversal — its callees are visible elsewhere in the tree. `truncated_at_depth = true` means depth ran out at this node and there were unvisited callees."
+        description = "Tree of outgoing calls from `root`, `depth` default 3, max 8. Each node: fn_qualified_name, crate_name, callees; truncated_at_cycle = already expanded elsewhere in the tree, truncated_at_depth = unvisited callees remain."
     )]
     async fn call_graph(
         &self,
@@ -469,7 +503,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards) matched against crate names, plus optional `consumer_kinds` (defaults to [`lib`, `bin`]), `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: unresolved indirect calls such as external dyn-trait dispatch or generic Fn calls remain blind spots."
+        description = "Architecture rule check over crate_edges. Each rule: glob `consumer`/`producer` crate patterns, optional consumer_kinds (default lib, bin), except, severity, message. Returns one violation per rule × matching edge with sample symbols and ref counts. Blind to unresolved indirect calls (external dyn-trait, generic Fn), as crate_edges is."
     )]
     async fn forbidden_dependency_check(
         &self,
@@ -499,7 +533,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Find every Item in the named crate whose attribute list has at least one entry matching `attribute_pattern`. Bare attribute paths such as `derive`, `must_use`, and `cfg` match `#[derive(...)]` / `#[must_use]`; wrapped prefix forms like `#[derive(` still work. Doc-comment patterns match against the **body** of a `///` line, so `SAFETY` matches `/// SAFETY: ...`. Anchoring avoids false positives where the pattern text appears mid-attribute — e.g. searching `must_use` no longer matches `#[tool(description = \"...#[must_use]...\")]` whose body merely mentions it. Each result row carries `match_location: \"attr\"` or `\"doc\"` so callers can filter visually. Empty pattern returns no results."
+        description = "Items in a crate with an attribute or `///` doc line matching `attribute_pattern`: a bare path (`derive`, `must_use`, `cfg`) or a doc-body prefix (`SAFETY`). Matching is anchored at the attribute start, so a mention inside another attribute does not count. Each row has match_location attr|doc."
     )]
     async fn items_with_attribute(
         &self,
@@ -509,7 +543,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Heuristic audit: every `pub type` alias in the named crate whose owning module also carries a `pub use ... as <alias_name>` (or `pub use ::<alias_name>`) binding. Indicates the alias may be acting as a re-export disguised as a `pub type` declaration. The model does NOT record what an alias's RHS resolves to, so this query cannot confirm the `pub use` and `pub type` point at the same target — verify with `find_definition` before acting."
+        description = "Heuristic: `pub type` aliases in a crate whose module also has `pub use … as <alias>` — possibly a re-export disguised as an alias. Cannot confirm both point at the same target; verify with find_definition."
     )]
     async fn pub_use_pub_type_audit(
         &self,
@@ -529,7 +563,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Per-local-crate Robert Martin instability metric plus an abstractness ratio. `efferent` (Ce) = distinct outgoing producer crates; `afferent` (Ca) = distinct incoming consumer crates; `instability = Ce / (Ce + Ca)` (0 = max stable, 1 = max unstable). `abstractness = (traits + pub_type_aliases) / total_items`. Both metrics are NaN-guarded — degenerate counts return 0.0. `crate_id` is rendered as a 64-char hex string. Single-number health metric for refactor decisions. Optional knobs: `sort_by` accepts `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending; unknown values produce an `invalid_params` error); `top_n` caps returned rows after sorting (default: all rows)."
+        description = "Per local crate: efferent (Ce) and afferent (Ca) crate counts, Martin instability Ce/(Ce+Ca) (0 stable, 1 unstable) and abstractness (traits + pub type aliases) / items; 0.0 on degenerate counts. sort_by: instability | item_count | afferent | efferent | abstractness (descending); top_n caps rows."
     )]
     async fn crate_dependency_metric(
         &self,
@@ -549,7 +583,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Recursive module/item tree dump rooted at the specified crate. `depth` limits recursion below the root."
+        description = "Recursive module/item tree of a crate. Without `depth`, a tree over 400 nodes is cut at the deepest level that fits, with truncated_at_depth and counts in the response."
     )]
     async fn module_tree(
         &self,
@@ -569,7 +603,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Write stripped Rust skeleton files under `<directory>/.skeleton/`, mirroring the workspace source layout and adding aggregate `<package>.rs` files that concatenate each package's skeleton sources. Uses the persisted hypergraph snapshot to select local crate items, slices current source files, strips function bodies and value initializers, and writes parseable facade files for codebase context. Requires build_hypergraph to have created a snapshot first."
+        description = "WRITES files: parseable Rust skeletons (function bodies and initializers stripped) under `<directory>/.skeleton/`, mirroring the source layout, plus one aggregate `<package>.rs` per package — compact codebase context. Requires build_hypergraph."
     )]
     async fn crate_skeleton(
         &self,
@@ -579,7 +613,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio. In `visibility`, `module_private` is the canonical bucket for declarations visible only inside their declaring module; `pub_self` and `private` are retained compatibility aliases/legacy buckets and are explained in `visibility_notes`; `restricted_to` is for broader module-subtree restrictions such as `pub(super)` / `pub(in path)`."
+        description = "Workspace-wide counters: nodes by kind, items by ItemKind, bindings by kind, visibility breakdown, pub_crate/total_items encapsulation ratio. In `visibility`, module_private is the canonical private bucket; pub_self/private are legacy aliases (see visibility_notes); restricted_to covers pub(super)/pub(in path)."
     )]
     async fn workspace_stats(
         &self,
@@ -589,7 +623,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 5 (v9): return the recorded FunctionSignature for a function (free fn, inherent assoc fn, trait declaration fn). Carries is_async, self_param (Owned/Ref/RefMut, or null for free fns), params (name + stringified type + by_ref + mutability), return_type, and generic type parameters with their declaration-site trait bounds. Type strings come from RA's HirDisplay rendered against the function's owning crate; anonymous lifetimes ('_) are suppressed by default. Allocator and hasher type parameters (`, Global>`, `, RandomState>`, `, BuildHasherDefault<...>>`) and `LazyLock`/`OnceLock` init-fn pointer parameters are stripped from rendered types for readability. Returns `signature: null` when the target isn't a fn or extraction skipped it. Note: trait_bounds reflects the parameter's declaration-site bounds only — where-clause bounds added later are NOT included (RA limitation)."
+        description = "Recorded signature of a function (free, inherent, trait declaration): is_async, self_param, params (name, type, by_ref, mutability), return_type, generics with declaration-site bounds — where-clause bounds are NOT included. Types rendered by rust-analyzer with allocator/hasher noise trimmed. `signature: null` when the target is not a fn."
     )]
     async fn function_signature(
         &self,
@@ -599,7 +633,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 5 (v9): every local function in the named crate whose recorded FunctionSignature matches every Some field of the filter. Substring matches (`has_param_type`, `returns_type_pattern`) are case-sensitive against HirDisplay strings. `self_kind` accepts \"none\" | \"owned\" | \"ref\" | \"ref_mut\" — \"none\" matches free fns and assoc fns without self. Allocator and hasher type parameters (`, Global>`, `, RandomState>`, `, BuildHasherDefault<...>>`) and `LazyLock`/`OnceLock` init-fn pointer parameters are stripped from rendered types for readability (same trim as `function_signature`). Sorted by qualified name. Trait-impl method bodies are NOT included (mirrors the impls.rs exclusion). Pagination/summary knobs: `limit` (default 50) caps returned matches, `offset` (default 0) skips matches, and `summary` (default false) drops the per-match `signature` payload (returns just `target`/`qualified_name`) — useful when the full payload exceeds the MCP token budget. The response always carries `total_match_count` (unfiltered total before slicing); compare to `offset + match_count` to detect that more pages exist."
+        description = "Local functions in a crate whose signature matches every given filter: has_param_type / returns_type_pattern (case-sensitive substrings of rendered types), self_kind (none | owned | ref | ref_mut). Trait-impl methods excluded. Sorted by qualified name, paged; `summary` drops the signature payload."
     )]
     async fn functions_with_filter(
         &self,
@@ -609,7 +643,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 6: query-time audit of every `unsafe { ... }` block in the workspace's local crates. Walks each `.rs` file's syntax tree (no semantic analysis beyond enclosing-fn lookup), returning per-block: workspace-relative file path, byte span of the unsafe expression (curlies included), source line count, enclosing function (NodeId rendered as a 64-char hex string + qualified name when resolvable, null for unsafe blocks in const initializers / trait bounds / closures-without-fn-parent), and a `has_safety_comment` heuristic flag (true when `SAFETY` appears as a substring in any of the 5 source lines preceding the `unsafe` keyword). Live computation; nothing cached — per-invocation cost is dominated by the workspace load (~2-3s). Sorted by (file, span). Use this to find unsafe blocks missing `// SAFETY:` comments, audit unsafe-block size distribution, or build an unsafe-code inventory for safety-critical review."
+        description = "Every `unsafe { }` block in local crates: file, span, line count, enclosing fn, has_safety_comment (`SAFETY` within the 5 preceding lines). Use to find unsafe blocks missing `// SAFETY:` or to review unsafe size. Live syntax walk; the cost is the workspace load."
     )]
     async fn unsafe_audit(
         &self,
@@ -619,7 +653,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 7 Path B (v10): type-aware audit of every local `static` item that matches a known global-mutable-state pattern. Reads the static's HIR type via HirDisplay (no source-text regex) and classifies against `static mut`, `LazyLock<...>`, `OnceLock<...>`, `OnceCell<...>`. A single static matching multiple patterns produces one finding per pattern. Each finding carries item NodeId (rendered as a 64-char hex string), qualified_name, matched_pattern, type_string (for human inspection), file, and byte span. The `type_string` is post-processed via the same HirDisplay trim as `function_signature` — e.g. `LazyLock<Mutex<Foo>, fn() -> Mutex<Foo>>` becomes `LazyLock<Mutex<Foo>>` (init-fn pointer dropped). Sorted by (qualified_name, matched_pattern). Limitation: the `lazy_static!` macro is NOT detected — its expansion produces a generated wrapper type whose name doesn't contain `LazyLock`. Use `items_with_attribute` or grep to cover that case. Use this to find hidden singleton config / auth / clocks / RNGs and to enforce 'avoid global mutable state' guidelines."
+        description = "Local `static` items holding global mutable state — `static mut`, LazyLock, OnceLock, OnceCell — classified by HIR type, not text. One finding per matched pattern: qualified_name, pattern, type, file, span. `lazy_static!` is NOT detected; use items_with_attribute or grep for it. Finds hidden singletons (config, clocks, RNGs)."
     )]
     async fn mut_static_audit(
         &self,
@@ -629,7 +663,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 8: query-time audit of every pure-`pub` local Item that carries no `///` doc-comment in its extracted attributes. Pure read-side query on the v11 snapshot's `node.attributes` (populated at build time) plus the declaring `Binding`'s visibility — no AST walk, no fresh RA load. Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module), optional `item_kind` (list — defaults to all 'documentable' kinds: Function, Struct, Enum, Union, Trait, TypeAlias, Const, Static, Method; excludes EnumVariant / AssocConst / AssocType which rarely carry standalone docs), and `skip_test_items` (default true — drops items whose qualified name contains `::tests::`). Only pure `pub` Items are flagged; `pub(crate)` / `pub(in path)` / private are skipped per §10 ('pub(crate) is internal API'). Each finding carries target NodeId (64-char hex), qualified_name, item_kind, visibility (always `\"pub\"`), file, and byte span. Sorted by (file, span). Use this to find public items missing rustdoc and to enforce §16 documentation discipline."
+        description = "Pure `pub` local items without a `///` doc comment (pub(crate) and private are skipped). Optional crate_name and item_kind (default: documentable kinds, no variants or associated items); test items skipped by default. Each finding: qualified_name, kind, file, span. Reads the hypergraph snapshot, no rust-analyzer load."
     )]
     async fn missing_docs_audit(
         &self,
@@ -639,7 +673,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 8: query-time audit of every pure-`pub` local Struct / Enum / Union that is missing one or more required derive macros. Pure read-side query on the v11 snapshot's `node.attributes` (Phase 1 populated at build time) plus the declaring `Binding`'s visibility — no AST walk, no fresh RA load. Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module), optional `item_kind` (list — any subset of [\"Struct\", \"Enum\", \"Union\"]; default all three), `pub_only` (default true — only audits the public surface per §8 'Debug almost always'), and `skip_test_items` (default true — drops items whose qualified name contains `::tests::`). `required_derives` is mandatory: a non-empty list (e.g. [\"Debug\"] or [\"Debug\", \"Clone\", \"PartialEq\"]). The derive parser strips path qualifiers — `serde::Serialize` and `::std::fmt::Debug` both match `Serialize` / `Debug` in `required_derives`. Each finding carries target NodeId (64-char hex), qualified_name, item_kind, visibility, file, byte span, the item's `current_derives`, and the `missing_derives` (set difference). Sorted by (file, span). Use this to enforce §8 standard-derive coverage."
+        description = "Local structs/enums/unions (pub only by default) missing any of `required_derives`, e.g. [\"Debug\", \"Clone\"]; path qualifiers are ignored. Each finding: qualified_name, kind, file, span, current_derives, missing_derives. Optional crate_name, item_kind; test items skipped by default. Reads the hypergraph snapshot, no rust-analyzer load."
     )]
     async fn derive_audit(
         &self,
@@ -649,7 +683,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 8: pure read-side audit listing every fn participating in a recursion cycle (self-recursion or mutual recursion). Walks the Layer 10 call graph data from `signatures_by_target` (every fn) + `usages_by_consumer_function` (caller fn → outgoing call sites), running a bounded DFS up to `max_cycle_length` from each fn. Cycles are canonicalized (rotated so the lowest-id NodeId comes first) so the same cycle viewed from different starting nodes counts once. Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module — a cycle is included if at least one of its members is in the requested crate, which is a deliberately looser filter than 'all members in crate'); `max_cycle_length` defaults 5 and is clamped to [1, 12]. Each cycle reports `fns` (qualified names in cycle order, lowest-id first), `cycle_length`, `direct_recursion` (true iff length == 1), and `starting_node_id` (64-char hex of the lowest-id member). Sorted by `(cycle_length asc, qualified_name)`. Use this to enforce §22 'no recursion in critical paths'."
+        description = "Functions in recursion cycles (self or mutual), by bounded DFS over the call graph up to max_cycle_length (default 5, max 12); each cycle reported once. Per cycle: fns in order, cycle_length, direct_recursion. crate_name keeps cycles with at least one member in that crate."
     )]
     async fn recursion_check(
         &self,
@@ -659,7 +693,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 8: query-time AST-walk audit of every channel-construction call site in the workspace's local crates. Loads the workspace through rust-analyzer (~2-3s, dominates per-call cost), iterates every local module's source file, walks the syntax tree for `CallExpr` nodes, and resolves each call's path through `Semantics::resolve_path` so aliased imports such as `use tokio::sync::mpsc; mpsc::channel(N)` still match the canonical entry. Matches the hardcoded v1 path table: `tokio::sync::mpsc::channel` (bounded), `tokio::sync::mpsc::unbounded_channel`, `std::sync::mpsc::channel` (legacy unbounded — flag), `std::sync::mpsc::sync_channel` (bounded), `crossbeam_channel::bounded`, `crossbeam_channel::unbounded`, `flume::bounded`, `flume::unbounded`. Per finding: workspace-relative crate name, `kind` (one of the 8 labels above), `bounded` flag, `capacity` (Some(N) for a literal int arg with `_` separators allowed, None for a const / variable / arithmetic expression / unbounded constructor), file, byte span of the call expression, and enclosing fn (NodeId rendered as 64-char hex + qualified name when resolvable; null for calls in const initializers / closures-without-fn-parent). Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module), `skip_test_fns` (default true — drops findings whose enclosing fn / module carries `#[cfg(test)]`). Sorted by (file, span). Use this to inventory channel construction across the workspace, enforce §12 'use bounded channels', and surface unbounded-channel call sites for review."
+        description = "Channel constructors in local crates — tokio and std mpsc, crossbeam, flume, bounded and unbounded; aliased imports resolved. Each finding: kind, bounded, literal capacity if any, file, span, enclosing fn. Use to find unbounded channels. Tests skipped by default; the cost is the workspace load."
     )]
     async fn channel_capacity_audit(
         &self,
@@ -669,7 +703,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Phase 8: query-time AST-walk audit of every fn body in the workspace's local crates against eight built-in pattern matchers covering rust-guidelines §3, §9, §12, §19, §22. Loads the workspace through rust-analyzer (~2-3s, dominates per-call cost), iterates every local module's source file, walks each `fn`'s body, and emits one finding per pattern hit. Patterns: 1) `unwrap` — any `MethodCallExpr` named `unwrap` (§9 'Avoid `unwrap()` in production paths'); 2) `expect` — same but `expect` (§9); 3) `panic_macros` — `panic!` / `unreachable!` / `todo!` / `unimplemented!` invocations (§9 'Use `panic!` for bugs only'); 4) `unwrap_unchecked` — `unwrap_unchecked` / `unwrap_err_unchecked` (§19); 5) `transmute` — `CallExpr` resolving to `std::mem::transmute` or `core::mem::transmute` via `Semantics::resolve_path` (§19); 6) `await_in_guard_scope` — `.await` inside a block where a preceding `LetStmt`'s initializer or type contains a guard hint (`MutexGuard`, `RwLockReadGuard`, `RwLockWriteGuard`, bare `Guard`, `Ref<` / `RefMut<`, or `.lock()` / `.read()` / `.write()` call) (§12 'Never hold a lock across `.await`'); 7) `self_recursion` — call resolving (via `Semantics::resolve_path` for `CallExpr` and `Semantics::resolve_method_call` for `MethodCallExpr`) to the enclosing fn's canonical path (§22 'No recursion in critical paths'); 8) `unbounded_loop` — bare `loop {}` keyword form whose body has no `BreakExpr` / `ReturnExpr` / `?` `TryExpr` at any depth (§22 'Give loops clear upper bounds'). Per finding: enclosing fn (NodeId hex + qualified name when resolvable), pattern label, workspace-relative file, byte span, and a 1-3 line trimmed `context` snippet. Filters: optional `crate_name` (Crate / root Module qualified name), `patterns` (subset of the 8 labels — empty/null defaults to all 8), `skip_test_fns` (default true — drops findings inside `#[cfg(test)]` modules / fns). Sorted by `(file, span, pattern)`. Heuristic notes: `await_in_guard_scope` is a review trigger and accepts false positives (string-match on let-stmt text); `unbounded_loop` will flag legitimate event loops — disable via `patterns` if needed; `unwrap` matches any method named `unwrap`, not just `Result::unwrap` / `Option::unwrap`. Use this to enforce body-level guideline coverage. Requires `build_hypergraph` to have run (snapshot needed for enclosing-fn NodeId lookup)."
+        description = "Pattern hits in local fn bodies: unwrap, expect, panic_macros, unwrap_unchecked, transmute, await_in_guard_scope, self_recursion, unbounded_loop (pick with `patterns`). Each finding: enclosing fn, pattern, file, span, short context. Heuristic: unwrap is by method name, guard scope by text, event loops get flagged. Tests skipped by default. Requires build_hypergraph."
     )]
     async fn fn_body_audit(
         &self,
@@ -679,7 +713,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Find semantic neighbors of a hypergraph Item using vector embeddings. Resolves `target` (qualified name) via the persisted hypergraph, reads its source from the file at the recorded byte span, then runs vector_only_search using that source as the query. Returns ranked matches above `threshold` (default 0.0), capped at `limit` (default 10), optionally filtered by `item_kind` (case-insensitive match against the chunk's symbol_kind). Self-match (the seed's own chunk, detected by file path + line-range overlap with the seed's byte span) is dropped automatically. Useful for finding \"what looks like X?\" — e.g. duplicate error types, parser variants, or builder patterns. NOTE: requires both `build_hypergraph` AND `index_codebase` to have been called for the workspace."
+        description = "Semantic neighbours of an item: takes the source of `target` (qualified name) and runs vector search with it, self-match dropped. Optional threshold, limit (default 10), item_kind. For \"what else looks like X\" — duplicate error types, parser variants. Requires both build_hypergraph and index_codebase."
     )]
     async fn similar_to_item(
         &self,
@@ -694,7 +728,7 @@ impl SearchToolRouter {
     }
 
     #[tool(
-        description = "Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source, and builds a similarity graph above `threshold` (defaults to the embedding model's tuned cutoff — 0.80 for local-cpu-small, 0.85 for Qwen3 profiles), returning either deduplicated pairs (output_mode=\"pairs\") or single-linkage clusters of transitively-similar items (output_mode=\"clusters\", default). Self-matches and cross-test noise are filtered (skip_test_chunks default true). Pagination/output controls: `max_pairs` caps returned pairs in pairs mode or total emitted cluster members in clusters mode after the scan; it is not a work cap. `offset` skips pairs/clusters, and `summary=true` omits per-member file/span payloads. The response carries `total_pair_count` and `total_cluster_count` before pagination. v1.1: per-Item embedding cache + in-memory cosine — first scan pays the full embedding cost; subsequent scans on unchanged code are nearly free (cache lives in the snapshot's LMDB env at the `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears it). Use this for offline duplicate-detection / refactor planning. NOTE: requires `build_hypergraph` to have been called for the workspace; the vector store / `index_codebase` is no longer required for this tool. Latency is seconds-to-minutes on first run, sub-second on cache-warm reruns."
+        description = "Workspace-wide near-duplicate audit: embeds every item's source and returns similar pairs or single-linkage clusters (output_mode, default clusters) above `threshold` (default: the embedding profile's tuned cutoff). For duplicate detection and refactor planning. First run embeds everything (seconds to minutes), reruns are cached. Requires build_hypergraph, not index_codebase."
     )]
     async fn semantic_overlaps(
         &self,
@@ -707,45 +741,9 @@ impl SearchToolRouter {
         .await
     }
 
-    #[tool(description = "Build a task-conditioned subgraph (codemap) of the indexed workspace.
-
-Returns nodes/edges/hierarchy focused on the prompt. Edges come from the
-HIR-driven hypergraph: direct calls and non-import uses. Local trait
-dispatch (`x.method()` where `method` is declared in a workspace-local
-trait) IS captured — the call resolves back to the trait declaration's
-Item. NOT captured: callers reaching an impl method through `dyn Trait`
-over external traits, generic `F: Fn(..)` indirect calls, and resolution
-to specific impl-method NodeIds via fully-qualified `<T as Trait>::m()`.
-These blind spots are inherent to the underlying Usage extraction.
-
-Tunable defaults: max_nodes=80 (cap 500), depth=3 (cap 5),
-max_incoming_per_node=8, embedding_policy='no_rerank', format='json'.
-
-Seed source: pass `task_prompt` for HybridSearch-driven seeds (requires
-`index_codebase` to have populated the vector store / tantivy index), OR
-`seed_qualified_names` for direct lookup. At least one of the two must
-be supplied. `task_prompt` seed lookup uses embedding_profile when set;
-otherwise it defaults to local-cpu-small.
-
-Choosing between them: `task_prompt` is best for exploratory queries
-against documented APIs; the underlying hybrid search (BM25 + vector
-embeddings against doc comments) favors public surfaces with rich
-docstrings, and many search hits fail to snap to an indexed Item span
-(reported in `Codemap.diagnostics`). For pinpoint navigation to a
-specific implementation, prefer `seed_qualified_names`. Note that the
-hypergraph indexes only `pub` and `pub(crate)` items — module-local
-private functions can't be referenced by qualified name. Unresolved
-names go to `Codemap.diagnostics`; if the leaf fails but its parent
-module resolves, the diagnostic notes 'likely private or not indexed'
-to distinguish that from a typo.
-
-Output: `format='json'` returns the full `Codemap` JSON (nodes, edges,
-hierarchy, stats, diagnostics). `format='mermaid'` returns a
-`flowchart LR` rendering with seeds highlighted via a `:::seed` class.
-`format='outline'` returns a flat indented text outline sorted by
-qualified name. `format='all'` wraps the three under a single JSON
-object. Requires `build_hypergraph` to have been called for the
-workspace.")]
+    #[tool(
+        description = "Task-focused subgraph (nodes, typed edges, hierarchy) of the workspace graph, seeded by `seed_qualified_names` (exact; best for pinpoint navigation) or `task_prompt` (hybrid search; needs index_codebase). Bounded view — max_nodes 80, depth 3 — not a complete export; unresolved seeds go to diagnostics. format: json | mermaid | outline | all. Requires build_hypergraph."
+    )]
     async fn build_codemap(
         &self,
         Parameters(crate::tools::params::BuildCodemapParams {
@@ -779,8 +777,76 @@ workspace.")]
     }
 }
 
-#[tool_handler]
+/// Tools whose schemas Claude Code loads into the prompt at session start; every
+/// other tool stays deferred behind its tool search.
+///
+/// Why only these: with tool search on, an agent reaches for `grep` before it
+/// spends a search call on loading a schema, and these three are what replaces
+/// `grep` over code. Each costs a few hundred tokens up front; the whole set of
+/// ~60 tools inline cost ~50k per session start, which is why deferral is on.
+/// Graph tools (`who_calls`, …) are left out: they answer only after
+/// `build_hypergraph`, so they are not a cold-start grep replacement.
+///
+/// Mechanism: Claude Code reads `_meta["anthropic/alwaysLoad"] = true` on a
+/// listed tool as "never defer this one", independent of the server-level
+/// `alwaysLoad` in `.mcp.json`. Other clients ignore the key.
+const EAGER_TOOLS: &[&str] = &["search", "find_definition", "find_references"];
+
+fn tools_with_load_hints(mut tools: Vec<rmcp::model::Tool>) -> Vec<rmcp::model::Tool> {
+    for tool in &mut tools {
+        if EAGER_TOOLS.contains(&tool.name.as_ref()) {
+            let mut meta = rmcp::model::Meta::new();
+            meta.0
+                .insert("anthropic/alwaysLoad".into(), serde_json::Value::Bool(true));
+            tool.meta = Some(meta);
+        }
+    }
+    tools
+}
+
+/// `call_tool` and `list_tools` are written out rather than generated by
+/// `#[tool_handler]`: the macro always emits both, and `call_tool` is the one
+/// door every tool passes through — the place to log what each call did to
+/// the daemon's memory (see `rmc_engine::mem_trace`). `list_tools` is the
+/// macro's body verbatim.
 impl ServerHandler for SearchToolRouter {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParam,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        // The directory is named because one daemon serves every checkout: a
+        // call against a workspace nobody else uses loads its own analysis.
+        let directory = request
+            .arguments
+            .as_ref()
+            .and_then(|args| args.get("directory"))
+            .and_then(|dir| dir.as_str())
+            .map(|dir| format!(" {dir}"))
+            .unwrap_or_default();
+        let mem =
+            rmc_engine::mem_trace::MemSpan::start(format!("tool {}{}", request.name, directory));
+        let tool = request.name.clone();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        // rmcp sends the response from inside the task it spawned for this
+        // request, so a panic that leaves this future sends none: the client
+        // would wait out its timeout. See `panic_boundary`.
+        let result =
+            crate::panic_boundary::answer_or_error(&tool, self.tool_router.call(tcc)).await;
+        mem.finish();
+        result
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        Ok(rmcp::model::ListToolsResult::with_all_items(
+            tools_with_load_hints(self.tool_router.list_all()),
+        ))
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
@@ -790,7 +856,9 @@ impl ServerHandler for SearchToolRouter {
                 .enable_tools()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("Rust code intelligence server for searching code, reading files, resolving symbols and references, previewing renames, inspecting dependencies and call graphs, semantic similarity, persisted hypergraph queries, workspace audits, and cache/index maintenance. List-shaped graph and audit tools accept `limit` (default 50), `offset`, and `summary`; responses include `total_match_count` plus returned-count metadata. See each tool's description for parameters and limitations; run `build_hypergraph` before graph-backed tools that require it."
+            // Loaded into every client session at start: keep it to the
+            // contracts shared by many tools. Per-tool detail lives in TOOLS.md.
+            instructions: Some("Rust code intelligence server: search, definitions, references, renames, dependencies, call graphs, semantic similarity, persisted hypergraph queries, workspace audits, cache/index maintenance. Every path parameter (`directory`, `file_path`, …) must be ABSOLUTE: one daemon serves every working directory and shares no cwd with your session; relative paths are refused. `directory` is the workspace root (the directory with Cargo.toml). List tools page with `limit` (default 50), `offset` and `summary` (drops bulky per-item fields); the list is sorted first, then sliced, and the response carries `total_match_count` — more pages exist while it exceeds `offset + returned`. Graph and audit tools need `build_hypergraph` first. Full per-tool notes: TOOLS.md in the server repository."
                 .into(),
             ),
         }
@@ -808,11 +876,93 @@ mod tests {
         assert!(true);
     }
 
+    /// Every name in EAGER_TOOLS is a real tool and carries the hint on the
+    /// wire; a renamed tool would otherwise silently fall back to deferred.
+    #[test]
+    fn eager_tools_exist_and_carry_always_load() {
+        let tools = tools_with_load_hints(SearchToolRouter::new().tool_router.list_all());
+        for name in EAGER_TOOLS {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == *name)
+                .unwrap_or_else(|| panic!("EAGER_TOOLS names unknown tool `{name}`"));
+            let wire = serde_json::to_value(tool).unwrap();
+            assert_eq!(wire["_meta"]["anthropic/alwaysLoad"], true, "{name}");
+        }
+        let marked = tools.iter().filter(|t| t.meta.is_some()).count();
+        assert_eq!(marked, EAGER_TOOLS.len(), "only EAGER_TOOLS are marked");
+    }
+
     #[test]
     fn test_router_with_sync_manager() {
         use std::sync::Arc;
         let sync_mgr = Arc::new(crate::mcp::SyncManager::new(300));
         let _router = SearchToolRouter::with_sync_manager(sync_mgr);
         assert!(_router.runtime.sync_manager().is_some());
+    }
+
+    /// A tool that panics on the async side answers with an error, and the
+    /// connection keeps serving. rmcp sends a response from inside the task it
+    /// spawned for the request, so without the catch in `call_tool` the panic
+    /// took the response with it and the client waited out its own timeout —
+    /// here, the 10 s bound below.
+    ///
+    /// Raw JSON-RPC lines over a duplex pipe against the real `serve`, so what
+    /// is checked is what a client reads off the wire.
+    #[tokio::test]
+    async fn a_panicking_tool_answers_with_an_error_and_the_server_keeps_serving() {
+        use rmcp::ServiceExt;
+        use rmcp::handler::server::router::tool::ToolRoute;
+        use serde_json::{Value, json};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let mut router = SearchToolRouter::new();
+        router.tool_router.add_route(ToolRoute::new_dyn(
+            rmcp::model::Tool::new("panic_probe", "panics", std::sync::Arc::new(serde_json::Map::new())),
+            |_| Box::pin(async { panic!("boom in a tool") }),
+        ));
+        let (server_io, client_io) = tokio::io::duplex(1 << 16);
+        let server = tokio::spawn(async move {
+            let service = router.serve(server_io).await.expect("handshake");
+            let _ = service.waiting().await;
+        });
+
+        let (reader, mut writer) = tokio::io::split(client_io);
+        let mut lines = BufReader::new(reader).lines();
+        let mut send = async |message: Value| {
+            writer.write_all(format!("{message}\n").as_bytes()).await.unwrap();
+        };
+        send(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": { "name": "test", "version": "0" } } }))
+        .await;
+        let mut answer = async |id: u64| loop {
+            let line = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+                .await
+                .expect("an answer, not a client timeout")
+                .unwrap()
+                .expect("the connection is open");
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["id"] == json!(id) {
+                return value;
+            }
+        };
+        answer(1).await;
+        send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await;
+
+        send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "panic_probe", "arguments": {} } }))
+        .await;
+        let failed = answer(2).await;
+        let message = failed["error"]["message"].as_str().unwrap_or_default().to_owned();
+        assert!(
+            message.contains("panic_probe") && message.contains("boom in a tool"),
+            "the error names the tool and the panic: {failed}"
+        );
+
+        // Same connection, next request: the server is still there.
+        send(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" })).await;
+        assert!(answer(3).await["result"]["tools"].is_array());
+        server.abort();
     }
 }

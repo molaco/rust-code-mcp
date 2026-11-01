@@ -167,68 +167,103 @@ Index data is stored in `~/Library/Application Support/dev.rust-code-mcp.search/
 ## Shared daemon (one server per project)
 
 The stdio transport is 1:1 with its client by construction: every editor window or
-agent session spawns its own server process — and with it another copy of the loaded
-rust-analyzer context (~2 GB per workspace) plus another ONNX/GPU context. Measured on
-one developer machine before this landed: six live servers, 8.9 GB, all analyzing the
-same repository.
+agent session used to spawn its own server process — and with it another copy of the
+loaded rust-analyzer context (~1.5 GB per workspace) plus another ONNX/GPU context.
+Eight sessions on one repository meant eight copies of the same analysis.
 
-The runtime state was already shareable (`RuntimeState` is a bundle of `Arc`s, semantic
-contexts are cached per project path, and locking is per workspace), so the only missing
-piece was a transport that accepts more than one client:
+Since the runtime state was already shareable (`RuntimeState` is a bundle of `Arc`s,
+semantic contexts are cached per project path, and locking is per workspace), the only
+missing piece was a transport that accepts more than one client. It now ships:
 
-- running the binary **with no arguments** makes it a *client* of a per-project daemon,
-  spawning that daemon on first use — no change to `.mcp.json` is needed;
+- running the binary **with no arguments** makes it a *client* of a shared daemon,
+  spawning that daemon on first use — no config change needed in `.mcp.json`;
 - the daemon serves every connection from one shared `RuntimeState` and exits after
   30 minutes with no clients (`--idle-secs` / `RMC_DAEMON_IDLE_SECS`, `0` = never);
 - if the daemon cannot be reached or started, the client serves the session in-process,
-  exactly as before — the daemon is a memory optimisation, not a new point of failure;
-- a session whose daemon dies mid-flight ends with exit code 1 and a message on stderr,
-  instead of continuing quietly in a second server: stdin is already partly consumed, so
-  a server started afterwards would answer a truncated stream;
-- a bad `RMC_EMBEDDING_PROFILE` exits 2 in every mode that serves a session, the client
-  included, while `--help` and `--print-socket` answer normally and exit 0, because they
-  serve nothing and are how a host reads back the value it got wrong.
+  exactly as before — the daemon is a memory optimisation, not a new point of failure.
 
-The socket key covers the **workspace root** — the walk upwards takes the nearest
-`Cargo.toml` that declares a `[workspace]` and stops at a `.git` or `.jj` boundary, so two
-sessions started in different subdirectories of one repository share a daemon while a stray
-outer manifest cannot merge two repositories into one — the binary's size and mtime, the
-resolved index root (`data_dir()`), because it decides where the index lives and is itself
-resolved from `XDG_DATA_HOME` and then `HOME`, `LD_LIBRARY_PATH`, because it decides which
-CUDA and ONNX libraries the daemon links at start, and every `RMC_*` and `RUST_CODE_MCP_*`
-variable plus `OPENROUTER_API_KEY`. The four transport knobs (`RMC_DAEMON`,
-`RMC_DAEMON_DIR`, `RMC_DAEMON_LOG_DIR`, `RMC_DAEMON_IDLE_SECS`) are excluded, because they
-choose which daemon a client talks to, or where it logs, rather than what it answers. A rebuilt binary, or a
-differently configured one, therefore gets its own daemon instead of silently attaching to
-one that answers differently.
+The socket key covers the binary's size/mtime and the env vars that change what the
+server computes (`RMC_EMBEDDING_PROFILE`, `RMC_BACKGROUND_SYNC`, `RMC_EP_CENSUS`). A
+rebuilt binary or a different profile therefore gets its own daemon instead of silently
+attaching to one that answers differently.
 
-The daemon runs in the project root it is keyed on, so every client of one daemon resolves
-a relative `directory` argument the same way, whichever subdirectory its session started
-in. A client whose own working directory is a subdirectory therefore sees `"."` mean the
-project root through the daemon and that subdirectory with `RMC_DAEMON=0`, so prefer
-absolute paths in tool arguments.
+**One daemon serves every working directory.** The key deliberately excludes the
+directory a session starts in. It used to include it, and the result was one daemon per
+directory: measured on one machine, 11 processes holding 12.5 GB between them, several
+analysing the same repository. The cwd never selected the project in the first place —
+every tool takes its `directory` as a parameter — so keying on it bought no isolation,
+only duplication.
+
+The consequence for callers: **path parameters must be absolute**. The daemon shares no
+working directory with the session asking, so a relative path is refused rather than
+resolved against a directory nobody chose (which would answer about the wrong tree
+without saying so).
 
 ```bash
-rust-code-mcp --print-socket   # which socket this project resolves to
-rust-code-mcp --in-process     # previous behaviour (same as RMC_DAEMON=0)
+rust-code-mcp --print-socket   # which socket this configuration resolves to
+rust-code-mcp --in-process     # old behaviour (same as RMC_DAEMON=0)
 rust-code-mcp --daemon         # run the daemon in the foreground
 ```
 
-Sockets and locks live in `$XDG_RUNTIME_DIR/rust-code-mcp/` (override with
-`RMC_DAEMON_DIR`). Daemon logs live on disk in `$XDG_STATE_HOME/rust-code-mcp/logs/`,
-normally `~/.local/state/rust-code-mcp/logs/` (override with `RMC_DAEMON_LOG_DIR`), named
-after the socket plus a short hash of its full path, with a `.log` extension, so two
-user-named sockets that share a name do not share a log — never in the runtime directory,
-which is a small tmpfs meant for sockets. The log is appended rather than replaced, so the crash of an earlier daemon stays readable
-after a new one starts, and the daemon truncates it in place before any tracing event that
-would take it past 32 MiB, so a long-lived daemon cannot fill a disk however verbose its
-`RUST_LOG`. The bound is read from the file, not counted: panic output, which reaches the
-same file through the daemon's raw stderr, counts at the next event. A write the log
-cannot take is dropped, never reported through stderr. Either
-directory, when it already exists, is used as it is and never re-permissioned; only a
-directory the daemon creates gets owner-only access. A symlink, a path that is not a
-directory, and a directory owned by another user are refused. Unix only; on other
-platforms the server stays in-process.
+Sockets live in `$XDG_RUNTIME_DIR/rust-code-mcp/`, falling back to
+`/run/user/<uid>/rust-code-mcp/` when that variable is unset (a session started outside a
+login shell) and to `/tmp/rust-code-mcp-$USER/` when there is no runtime directory at
+all; override with `RMC_DAEMON_DIR`. Daemon logs of the default socket go to
+`$XDG_STATE_HOME/rust-code-mcp/<key>.log` (`~/.local/state/rust-code-mcp/`), so they
+survive a reboot; logs untouched for two weeks are deleted on the next spawn. With
+`RMC_DAEMON_DIR` or `--socket` the log stays next to the socket. The fallback order matters: computing the same key
+but looking for it in a different directory is another way to end up with two daemons.
+Unix only; on other platforms the server stays in-process.
+
+### Keeping the daemon's memory bounded
+
+A daemon outlives its clients by design, so nothing bounds it the way a session used
+to. Six knobs do that instead, all in seconds or MB, all with `0` meaning *off*:
+
+| Knob | Default | What it does |
+|---|---:|---|
+| `RMC_MAX_PROJECTS` | 3 | How many rust-analyzer contexts stay loaded. Past the cap, the least recently used one is dropped; the project being queried is never the victim. |
+| `RMC_GC_INTERVAL_SECS` | 300 | How often loaded analyses are garbage-collected. This is also what makes salsa's LRU capacities do anything: they only evict while the revision bumps, and a project nobody edits never bumps on its own. |
+| `RMC_RSS_SOFT_MB` | 24576 | RSS above which the daemon unloads *all* contexts (at most one unload per `RMC_RSS_COOLDOWN_SECS`, default 300). Sized above the working point of one `Full` context of a large workspace (18–26 GB measured) — every analysis is loaded `Full`, so the old 12288, priced at `Fast` loads, unloaded a healthy daemon on every cooldown and reloaded it on the next question. |
+| `RMC_MIN_AVAILABLE_MB` | 6144 | Machine-wide floor on `MemAvailable`: below it the daemon unloads even though its own RSS is fine. The only reading here that sees pressure the daemon did not cause — a build, a second analyser, the application under development — and the caches belong to whoever needs the memory more. It never retires the daemon; that pressure usually passes with the build that caused it. |
+| `RMC_RSS_HARD_MB` | 28672 | RSS above which unloading is judged hopeless: the daemon unlinks its socket so new clients start a fresh one, unloads its contexts on that same tick, and finishes serving the clients it has. Sized above the measured 15–21 GB working range of one `Full` context — at 20480 it retired a *healthy* daemon three times in two hours. |
+| `RMC_RETIRE_GRACE_SECS` | 1800 | How long a retired daemon waits for those clients before exiting anyway. It has to end: a client session runs for hours, and a retired daemon holding 24 GB next to its successor is the failure this bounds. Exiting on the deadline **drops those connections** — the affected session loses its MCP tools until restarted. |
+
+The first two keep the working set from growing; the rest are the guard for when it
+grows anyway. Note which question each asks: three of them ask "is this process too
+big?", and `RMC_MIN_AVAILABLE_MB` asks "does the machine still have room?" — a daemon
+can answer the first comfortably while the machine around it goes to swap.
+
+The cooldown does not apply to a retired daemon's *first* unload. Retirement changes the
+economics of unloading rather than its nature: that daemon takes no new clients and its
+successor is already loading its own context, so it must not sit on 20+ GB waiting out a
+countdown that was armed for a different situation.
+
+Nor does a retired daemon load anything again. The sessions still attached get every tool
+that does not load rust-analyzer (search, the persisted graph queries, status); the ones
+that do — definitions, references, rename, building the graph, the audits — answer with a
+refusal that says how to reach the successor (reconnect the MCP server). Before this, each
+of their questions loaded a `Full` context back into the retired process, so for the whole
+grace period the machine held two analyses instead of one.
+
+⚠ Every `RMC_*` variable is part of the daemon key. Setting one of these knobs in one
+client's environment does not retune the running daemon — it starts a second one beside
+it. Change them for every client at once, or not at all.
+
+### Keeping the index honest when the disk fills
+
+| Knob | Default | What it does |
+|---|---:|---|
+| `RMC_MIN_INDEX_FREE_MB` | 2048 | Refuse persistent index writes below this much free space, checked before a run, before each file and before every batch. `0` disables the guard. |
+
+The failure this prevents is not "indexing stops" but "indexing stops and says it
+finished": an `ENOSPC` mid-run used to leave a *complete* Merkle snapshot behind, so
+every later background sync compared the tree against it and found nothing to do, while
+the files whose writes had failed stayed missing from the vector store. The snapshot now
+keeps the previous node for every path whose write failed — the retry falls out of the
+comparison itself — and it is written to a temporary file and renamed rather than
+truncating the last good one. `index_codebase` reports `⚠ Partially indexed` with the
+number of retryable failures instead of a checkmark.
 
 ## Embedding Models
 
@@ -243,14 +278,6 @@ Semantic search and the embedding-backed audits (`get_similar_code`, `similar_to
 | `openrouter-qwen3-8b` | Qwen3-Embedding-8B | OpenRouter API | 4096 |
 
 The default when `embedding_profile` is omitted is `local-cpu-small`. Select another profile by passing `embedding_profile` to `index_codebase` and the search tools. Each profile gets its own independent index, and search must use the profile its index was built with.
-
-**Set the default with `RMC_EMBEDDING_PROFILE`** — this environment variable names the profile used whenever a call omits `embedding_profile`, and changing it needs no rebuild:
-
-```sh
-RMC_EMBEDDING_PROFILE=local-gpu-small rust-code-mcp
-```
-
-Built-in profiles only: the canonical names above, their legacy aliases, and any letter case. A profile from `embedding_profiles.toml` needs the `embedding_profile` argument instead. Unset or blank keeps `local-cpu-small`, and whitespace is trimmed. The value is read once at startup, and an unusable name — including a local CUDA profile in a build without CUDA support — stops the server with one stderr line and exit code 2 rather than a silent fall back, because the profile is part of the index identity. Background sync is unchanged: it keeps syncing the indexes already on disk, and only a new local-CUDA index stays out of it.
 
 **API models** (OpenRouter) require an API key in the environment — keys are never read from config files:
 

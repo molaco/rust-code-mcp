@@ -3,16 +3,23 @@
 //! Provides the `index_codebase` tool which allows manual triggering of
 //! incremental indexing with optional force reindex.
 
-use rmc_engine::embeddings::{EmbeddingBackend, Qwen3Variant};
-use rmc_indexing::indexing::{
-    index_project_incrementally, IncrementalIndexRequest, IndexStats,
-};
-use crate::mcp::defaults::{automatic_embedding_backend, is_background_embedding_backend};
+use crate::mcp::defaults::is_background_embedding_backend;
 use crate::mcp::project_paths::{ProjectPaths, resolve_embedding_backend_for_mcp};
+use rmc_engine::embeddings::{EmbeddingBackend, Qwen3Variant};
 use rmc_engine::vector_store::VectorStoreError;
+use rmc_indexing::indexing::{
+    IncrementalIndexRequest, IndexStats, ReaderExclusion, index_project_incrementally,
+};
 use rmcp::{ErrorData as McpError, model::CallToolResult, model::Content, schemars};
-use std::path::PathBuf;
 use tracing;
+
+/// The lock an `index_codebase` run holds; see `crate::mcp::workspace_locks`.
+enum IndexCodebaseWriter {
+    /// Force or repair: readers out for the whole run.
+    WholeRun(crate::mcp::IndexWriterGuard),
+    /// Ordinary run: readers out only while it writes.
+    Store(crate::mcp::StoreWriterGuard),
+}
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct IndexCodebaseParams {
@@ -21,11 +28,15 @@ pub struct IndexCodebaseParams {
     #[schemars(description = "Force full reindex even if already indexed (default: false)")]
     pub force_reindex: Option<bool>,
     #[schemars(
-        description = "Optional legacy local Qwen3/CUDA model variant. One of: \"qwen3-0.6b\" (1024-dim), \"qwen3-4b\" (2560-dim), \"qwen3-8b\" (4096-dim). Picking a variant different from an existing index returns a version-mismatch error pointing to clear_cache."
+        description = "Re-embed only health_check's `stale_skips` (cached as indexed, no vectors) and drop the chunks of files no longer in the tree — minutes instead of a full force_reindex. Ignored with force_reindex."
+    )]
+    pub repair_coverage: Option<bool>,
+    #[schemars(
+        description = "Legacy: qwen3-0.6b | qwen3-4b | qwen3-8b. Prefer embedding_profile."
     )]
     pub model: Option<String>,
     #[schemars(
-        description = "Optional embedding profile. Preferred over `model` when both are set. Default when omitted: \"local-cpu-small\" (BGESmallENV15Q CPU). Use \"local-gpu-small\", \"local-qwen3-4b\", or \"local-qwen3-8b\" to explicitly opt into local CUDA; \"openrouter-qwen3-8b\" uses the remote API profile."
+        description = "Embedding profile; default local-cpu-small. Others: local-gpu-small, local-qwen3-4b, local-qwen3-8b, openrouter-qwen3-8b."
     )]
     pub embedding_profile: Option<String>,
 }
@@ -56,7 +67,12 @@ fn resolve_backend(
     }
 
     let Some(s) = model else {
-        return Ok(automatic_embedding_backend());
+        // Neither profile nor legacy model: hand off to the SHARED resolver, not the built-in
+        // default directly; otherwise index_codebase silently indexes with a different
+        // embedder than the search tools use (they go through the resolver and know
+        // about RMC_EMBEDDING_PROFILE). The mismatch is visible only in the
+        // "Profile:" line of the response, i.e. it looks like success.
+        return resolve_embedding_backend_for_mcp(None, project_root);
     };
     let variant = parse_variant(s).map_err(|msg| McpError::invalid_params(msg, None))?;
     Ok(EmbeddingBackend::from_qwen3_variant(variant))
@@ -78,13 +94,24 @@ fn format_index_codebase_result(
             Profile: {}\n\
             Embedder: {}\n\
             Skipped files: {}\n\
+            Retryable failures: {}\n\
             Time: {:?}",
-            directory, profile_name, embedder_identity, stats.skipped_files, elapsed
+            directory,
+            profile_name,
+            embedder_identity,
+            stats.skipped_files,
+            stats.failed_files,
+            elapsed
         );
     }
 
     if stats.indexed_files == 0 {
-        let heading = if stats.skipped_files == 0 {
+        let heading = if stats.failed_files > 0 {
+            format!(
+                "⚠ Indexing incomplete for '{}' — failed files will be retried",
+                directory
+            )
+        } else if stats.skipped_files == 0 {
             format!("✓ Index already up to date for '{}'", directory)
         } else {
             format!("✓ No files needed indexing updates in '{}'", directory)
@@ -98,6 +125,7 @@ fn format_index_codebase_result(
             - Total chunks: {}\n\
             - Unchanged files: {}\n\
             - Skipped or removed files: {}\n\
+            - Retryable failures: {}\n\
             - Time: {:?}\n\n\
             Profile: {}\n\
             Embedder: {}\n\
@@ -108,6 +136,7 @@ fn format_index_codebase_result(
             stats.total_chunks,
             stats.unchanged_files,
             stats.skipped_files,
+            stats.failed_files,
             elapsed,
             profile_name,
             embedder_identity,
@@ -116,20 +145,30 @@ fn format_index_codebase_result(
         );
     }
 
+    let heading = if stats.failed_files == 0 {
+        format!("✓ Successfully indexed '{}'", directory)
+    } else {
+        format!(
+            "⚠ Partially indexed '{}' — failed files will be retried",
+            directory
+        )
+    };
+
     format!(
-        "✓ Successfully indexed '{}'\n\n\
+        "{}\n\n\
         Indexing stats:\n\
         - Total Rust files: {}\n\
         - Indexed files: {} {}\n\
         - Total chunks: {}\n\
         - Unchanged files: {}\n\
         - Skipped or removed files: {}\n\
+        - Retryable failures: {}\n\
         - Time: {:?}\n\n\
         Profile: {}\n\
         Embedder: {}\n\
         Background sync: {}\n\
         Collection: {}",
-        directory,
+        heading,
         stats.total_files,
         stats.indexed_files,
         if force {
@@ -140,12 +179,55 @@ fn format_index_codebase_result(
         stats.total_chunks,
         stats.unchanged_files,
         stats.skipped_files,
+        stats.failed_files,
         elapsed,
         profile_name,
         embedder_identity,
         background_sync,
         collection_name
     )
+}
+
+/// Report what the coverage repair did, appended to the normal index summary.
+///
+/// An empty repair is worth saying out loud: it is the difference between
+/// "there was nothing to fix" and "the fix silently did nothing", and only the
+/// former is good news.
+fn format_repair_note(repaired: &[String], dropped: &[String]) -> String {
+    if repaired.is_empty() && dropped.is_empty() {
+        return "\n\nCoverage repair: nothing to repair — every cached file has vectors, \
+                and every file in the store is in the tree."
+            .to_string();
+    }
+
+    let mut note = String::new();
+    if !repaired.is_empty() {
+        note.push_str(&format!(
+            "\n\nCoverage repair: dropped {} stale cache entries and re-embedded those files:{}",
+            repaired.len(),
+            format_path_sample(repaired)
+        ));
+    }
+    if !dropped.is_empty() {
+        note.push_str(&format!(
+            "\n\nCoverage repair: removed the chunks of {} file(s) no longer in the tree:{}",
+            dropped.len(),
+            format_path_sample(dropped)
+        ));
+    }
+    note
+}
+
+/// The first five paths, one per line, and a count of the rest.
+fn format_path_sample(paths: &[String]) -> String {
+    let sample: Vec<&str> = paths.iter().take(5).map(String::as_str).collect();
+    let more = paths.len().saturating_sub(sample.len());
+    let tail = if more > 0 {
+        format!("\n  … and {} more", more)
+    } else {
+        String::new()
+    };
+    format!("\n  {}{}", sample.join("\n  "), tail)
 }
 
 fn indexing_error_to_mcp(error: anyhow::Error, dir: &std::path::Path) -> McpError {
@@ -178,8 +260,9 @@ pub async fn index_codebase(
     workspace_locks: &crate::mcp::WorkspaceLockRegistry,
     search_cache: Option<&crate::mcp::SearchRuntimeCache>,
 ) -> Result<CallToolResult, McpError> {
-    let dir = PathBuf::from(&params.directory);
+    let dir = crate::tools::paths::require_absolute("directory", &params.directory)?;
     let force = params.force_reindex.unwrap_or(false);
+    let repair = params.repair_coverage.unwrap_or(false);
 
     // Validate directory
     if !dir.exists() {
@@ -191,19 +274,38 @@ pub async fn index_codebase(
 
     if !dir.is_dir() {
         return Err(McpError::invalid_params(
-            format!("The specified path '{}' is not a directory", params.directory),
+            format!(
+                "The specified path '{}' is not a directory",
+                params.directory
+            ),
             None,
         ));
     }
 
-    let _workspace_lock = workspace_locks.lock_exclusive(&dir).await;
-    if force {
+    // A force or repair run deletes before it writes, and a cached search
+    // runtime opened before the clear must not outlive it: readers stay out for
+    // the whole run. An ordinary run is a store writer, like a sync — readers
+    // are kept out only while it writes.
+    let writer = if force || repair {
+        let writer = workspace_locks.lock_index_writer(&dir).await;
         if let Some(search_cache) = search_cache {
             search_cache.invalidate_workspace(&dir);
         }
-    }
+        IndexCodebaseWriter::WholeRun(writer)
+    } else {
+        IndexCodebaseWriter::Store(workspace_locks.lock_store_writer(&dir).await)
+    };
+    let reader_exclusion = match &writer {
+        IndexCodebaseWriter::WholeRun(_) => ReaderExclusion::HeldByCaller,
+        IndexCodebaseWriter::Store(store) => ReaderExclusion::AroundPublish(store.operation_lock()),
+    };
 
-    tracing::info!("Indexing codebase: {} (force: {})", dir.display(), force);
+    tracing::info!(
+        "Indexing codebase: {} (force: {}, repair_coverage: {})",
+        dir.display(),
+        force,
+        repair
+    );
 
     // Resolve the embedding backend from the optional profile/model args.
     // This becomes the single source of truth for vector_size /
@@ -214,7 +316,16 @@ pub async fn index_codebase(
         &dir,
     )?;
     let embedder_identity = backend.identity();
-    let paths = ProjectPaths::from_directory(&dir, &backend);
+    // The collection search, health_check and the background sync use — an
+    // existing one made by the same embedder — not the name the current
+    // chunking identity would give a new one. With `from_directory` a project
+    // indexed before a chunking change got a second, empty collection here:
+    // the coverage repair then found none of the shared cache entries in it,
+    // forgot them all and dropped the shared snapshot, and the run turned
+    // into a full re-embed into a collection search switched to while it was
+    // still filling (seen 2026-10-30 on a 6469-file project).
+    let paths = ProjectPaths::in_use(&dir, &backend)
+        .map_err(|message| McpError::invalid_params(message, None))?;
 
     tracing::debug!(
         "Using collection: {}, cache: {}, index: {}, embedder: {}",
@@ -234,9 +345,18 @@ pub async fn index_codebase(
         snapshot_path: Some(&paths.snapshot_path),
         codebase_loc: None,
         force_reindex: force,
+        repair_coverage: repair,
+        reader_exclusion,
     })
     .await
     .map_err(|error| indexing_error_to_mcp(error, &dir))?;
+    // Indexing is done: readers of the workspace stop waiting here, and the
+    // maintenance pass runs in the background under the maintenance lock.
+    let maintenance_guard = match writer {
+        IndexCodebaseWriter::WholeRun(writer) => writer.into_maintenance(),
+        IndexCodebaseWriter::Store(writer) => writer.into_maintenance(),
+    };
+    crate::mcp::finish_index_writer(maintenance_guard, outcome.maintenance.clone());
     let stats = &outcome.stats;
 
     // Track directory for background sync if indexing was successful
@@ -255,13 +375,16 @@ pub async fn index_codebase(
     // Format result. The resolved embedder identity is echoed verbatim
     // so a user who passed `model` (or relied on the default) can
     // confirm exactly which variant the index is bound to.
-    let result_text = format_index_codebase_result(
+    let mut result_text = format_index_codebase_result(
         stats,
         &params.directory,
         backend.profile.name(),
         &embedder_identity,
         &paths.collection_name,
-        match (sync_manager.is_some(), is_background_embedding_backend(&backend)) {
+        match (
+            sync_manager.is_some(),
+            is_background_embedding_backend(&backend),
+        ) {
             (false, _) => "disabled",
             (true, true) => "enabled (5-minute interval; CPU/remote profiles only)",
             (true, false) => "enabled, but this local CUDA profile is not synced in background",
@@ -269,6 +392,13 @@ pub async fn index_codebase(
         force,
         outcome.elapsed,
     );
+
+    if repair && !force {
+        result_text.push_str(&format_repair_note(
+            &outcome.repaired_files,
+            &outcome.dropped_files,
+        ));
+    }
 
     Ok(CallToolResult::success(vec![Content::text(result_text)]))
 }
@@ -283,6 +413,7 @@ mod tests {
         let params = IndexCodebaseParams {
             directory: "/nonexistent/path".to_string(),
             force_reindex: None,
+            repair_coverage: None,
             model: None,
             embedding_profile: None,
         };
@@ -301,6 +432,7 @@ mod tests {
         let params = IndexCodebaseParams {
             directory: file_path.to_string_lossy().to_string(),
             force_reindex: None,
+            repair_coverage: None,
             model: None,
             embedding_profile: None,
         };
@@ -325,6 +457,7 @@ mod tests {
         let params = IndexCodebaseParams {
             directory: test_codebase.to_string_lossy().to_string(),
             force_reindex: None,
+            repair_coverage: None,
             model: None,
             embedding_profile: None,
         };
@@ -350,6 +483,7 @@ mod tests {
         let params1 = IndexCodebaseParams {
             directory: test_codebase.to_string_lossy().to_string(),
             force_reindex: None,
+            repair_coverage: None,
             model: None,
             embedding_profile: None,
         };
@@ -361,6 +495,7 @@ mod tests {
         let params2 = IndexCodebaseParams {
             directory: test_codebase.to_string_lossy().to_string(),
             force_reindex: Some(true),
+            repair_coverage: None,
             model: None,
             embedding_profile: None,
         };
@@ -376,6 +511,7 @@ mod tests {
             unchanged_files: 28,
             skipped_files: 0,
             total_chunks: 120,
+            ..Default::default()
         };
 
         let text = format_index_codebase_result(
@@ -403,6 +539,7 @@ mod tests {
             unchanged_files: 0,
             skipped_files: 28,
             total_chunks: 0,
+            ..Default::default()
         };
 
         let text = format_index_codebase_result(
@@ -430,6 +567,7 @@ mod tests {
             unchanged_files: 0,
             skipped_files: 0,
             total_chunks: 0,
+            ..Default::default()
         };
 
         let text = format_index_codebase_result(
@@ -444,6 +582,32 @@ mod tests {
         );
 
         assert!(text.contains("No Rust files suitable"));
+    }
+
+    #[test]
+    fn format_result_does_not_call_a_retryable_partial_run_success() {
+        let stats = IndexStats {
+            total_files: 4,
+            indexed_files: 2,
+            failed_files: 2,
+            ..Default::default()
+        };
+
+        let text = format_index_codebase_result(
+            &stats,
+            "/workspace",
+            "local-gpu-small",
+            "test-embedder:v1",
+            "test_collection",
+            "enabled",
+            false,
+            std::time::Duration::from_millis(33),
+        );
+
+        assert!(text.contains("Partially indexed"));
+        assert!(text.contains("failed files will be retried"));
+        assert!(text.contains("- Retryable failures: 2"));
+        assert!(!text.contains("Successfully indexed"));
     }
 
     #[test]
@@ -462,6 +626,39 @@ mod tests {
         assert!(text.contains("clear_cache"));
         assert!(text.contains("/workspace/project"));
         assert!(!text.contains("Indexing failed"));
+    }
+
+    #[test]
+    fn repair_note_distinguishes_nothing_to_fix_from_a_silent_no_op() {
+        let text = format_repair_note(&[], &[]);
+
+        assert!(text.contains("nothing to repair"));
+        assert!(text.contains("every cached file has vectors"));
+        assert!(!text.contains("dropped"));
+    }
+
+    #[test]
+    fn repair_note_lists_repaired_files_and_counts_the_rest() {
+        let repaired: Vec<String> = (0..7).map(|i| format!("/repo/file{i}.rs")).collect();
+
+        let text = format_repair_note(&repaired, &[]);
+
+        assert!(text.contains("dropped 7 stale cache entries"));
+        assert!(text.contains("/repo/file0.rs"));
+        assert!(text.contains("/repo/file4.rs"));
+        // Only the first five are spelled out; the rest are counted.
+        assert!(!text.contains("/repo/file5.rs"));
+        assert!(text.contains("… and 2 more"));
+        assert!(!text.contains("no longer in the tree"));
+    }
+
+    #[test]
+    fn repair_note_lists_files_dropped_outside_the_tree() {
+        let text = format_repair_note(&[], &["/repo/gone.rs".to_string()]);
+
+        assert!(text.contains("removed the chunks of 1 file(s) no longer in the tree"));
+        assert!(text.contains("/repo/gone.rs"));
+        assert!(!text.contains("stale cache entries"));
     }
 
     #[test]
@@ -493,18 +690,23 @@ mod tests {
         assert!(parse_variant("minilm").is_err());
     }
 
+    /// Same reasoning as
+    /// `project_paths::resolve_embedding_backend_without_a_profile_uses_the_automatic_one`:
+    /// the claim here is "neither profile nor model given ⇒ the automatic
+    /// profile", and pinning its literal name would make the suite fail on any
+    /// machine that exports `RMC_EMBEDDING_PROFILE`.
     #[test]
-    fn resolve_backend_without_profile_or_model_uses_automatic_cpu_default() {
+    fn resolve_backend_without_profile_or_model_uses_the_automatic_profile() {
+        let automatic = crate::mcp::defaults::automatic_embedding_backend();
         let backend = resolve_backend(None, None, std::path::Path::new(".")).unwrap();
 
-        assert_eq!(backend.profile.name(), "local-cpu-small");
-        assert_eq!(backend.dim(), 384);
+        assert_eq!(backend.profile.name(), automatic.profile.name());
+        assert_eq!(backend.dim(), automatic.dim());
     }
 
     #[test]
     fn resolve_backend_explicit_model_keeps_default_limits() {
-        let backend =
-            resolve_backend(None, Some("qwen3-0.6b"), std::path::Path::new(".")).unwrap();
+        let backend = resolve_backend(None, Some("qwen3-0.6b"), std::path::Path::new(".")).unwrap();
         let default = EmbeddingBackend::default();
 
         assert_eq!(backend.qwen3_variant(), Some(Qwen3Variant::Embedding0_6B));

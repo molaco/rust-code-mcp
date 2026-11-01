@@ -2,21 +2,16 @@
 use hf_hub::api::sync::ApiRepo;
 use image::DynamicImage;
 use ndarray::{Array3, ArrayView3};
-use ort::{
-    session::{builder::GraphOptimizationLevel, Session},
-    value::Value,
-};
+use ort::{session::Session, value::Value};
 #[cfg(feature = "hf-hub")]
 use std::path::PathBuf;
-use std::{io::Cursor, path::Path, thread::available_parallelism};
+use std::{io::Cursor, path::Path};
 
 use crate::{
-    common::normalize, models::image_embedding::models_list, Embedding, ImageEmbeddingModel,
-    ModelInfo,
+    common::{init_session_builder, normalize, Error, Result},
+    models::image_embedding::models_list,
+    Embedding, ImageEmbeddingModel, ModelInfo,
 };
-use anyhow::anyhow;
-#[cfg(feature = "hf-hub")]
-use anyhow::Context;
 
 #[cfg(feature = "hf-hub")]
 use super::ImageInitOptions;
@@ -27,25 +22,21 @@ use super::{
 };
 
 impl ImageEmbedding {
-    fn builder_error(err: ort::Error<ort::session::builder::SessionBuilder>) -> anyhow::Error {
-        anyhow::Error::msg(err.to_string())
-    }
-
     /// Try to generate a new ImageEmbedding Instance
     ///
     /// Uses the highest level of Graph optimization
     ///
     /// Uses the total number of CPUs available as the number of intra-threads
     #[cfg(feature = "hf-hub")]
-    pub fn try_new(options: ImageInitOptions) -> anyhow::Result<Self> {
+    pub fn try_new(options: ImageInitOptions) -> Result<Self> {
         let ImageInitOptions {
             model_name,
             execution_providers,
             cache_dir,
             show_download_progress,
+            intra_threads,
+            profiling_file,
         } = options;
-
-        let threads = available_parallelism()?.get();
 
         let model_repo = ImageEmbedding::retrieve_model(
             model_name.clone(),
@@ -53,40 +44,26 @@ impl ImageEmbedding {
             show_download_progress,
         )?;
 
-        let preprocessor_file = model_repo
-            .get("preprocessor_config.json")
-            .context("Failed to retrieve preprocessor_config.json")?;
+        let preprocessor_file =
+            model_repo
+                .get("preprocessor_config.json")
+                .map_err(|e| Error::ModelRetrieval {
+                    file: "preprocessor_config.json".into(),
+                    source: Box::new(e),
+                })?;
         let preprocessor = Compose::from_file(preprocessor_file)?;
 
         let model_file_name = ImageEmbedding::get_model_info(&model_name).model_file;
-        let model_file_reference = model_repo
-            .get(&model_file_name)
-            .context(format!("Failed to retrieve {}", model_file_name))?;
+        let model_file_reference =
+            model_repo
+                .get(&model_file_name)
+                .map_err(|e| Error::ModelRetrieval {
+                    file: model_file_name.clone(),
+                    source: Box::new(e),
+                })?;
 
-        #[cfg(feature = "directml")]
-        let has_directml = execution_providers
-            .iter()
-            .any(|ep| ep.downcast_ref::<ort::ep::DirectML>().is_some());
-        #[cfg(not(feature = "directml"))]
-        let has_directml = false;
-
-        let mut builder = Session::builder()?
-            .with_execution_providers(execution_providers)
-            .map_err(Self::builder_error)?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(Self::builder_error)?
-            .with_intra_threads(threads)
-            .map_err(Self::builder_error)?;
-
-        if has_directml {
-            builder = builder
-                .with_memory_pattern(false)
-                .map_err(Self::builder_error)?
-                .with_parallel_execution(false)
-                .map_err(Self::builder_error)?;
-        }
-
-        let session = builder.commit_from_file(model_file_reference)?;
+        let session = init_session_builder(execution_providers, intra_threads, profiling_file)?
+            .commit_from_file(model_file_reference)?;
 
         Ok(Self::new(preprocessor, session))
     }
@@ -97,39 +74,16 @@ impl ImageEmbedding {
     pub fn try_new_from_user_defined(
         model: UserDefinedImageEmbeddingModel,
         options: ImageInitOptionsUserDefined,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         let ImageInitOptionsUserDefined {
             execution_providers,
+            intra_threads,
         } = options;
-
-        let threads = available_parallelism()?.get();
 
         let preprocessor = Compose::from_bytes(model.preprocessor_file)?;
 
-        #[cfg(feature = "directml")]
-        let has_directml = execution_providers
-            .iter()
-            .any(|ep| ep.downcast_ref::<ort::ep::DirectML>().is_some());
-        #[cfg(not(feature = "directml"))]
-        let has_directml = false;
-
-        let mut builder = Session::builder()?
-            .with_execution_providers(execution_providers)
-            .map_err(Self::builder_error)?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(Self::builder_error)?
-            .with_intra_threads(threads)
-            .map_err(Self::builder_error)?;
-
-        if has_directml {
-            builder = builder
-                .with_memory_pattern(false)
-                .map_err(Self::builder_error)?
-                .with_parallel_execution(false)
-                .map_err(Self::builder_error)?;
-        }
-
-        let session = builder.commit_from_memory(&model.onnx_file)?;
+        let session = init_session_builder(execution_providers, intra_threads, None)?
+            .commit_from_memory(&model.onnx_file)?;
 
         Ok(Self::new(preprocessor, session))
     }
@@ -148,7 +102,7 @@ impl ImageEmbedding {
         model: ImageEmbeddingModel,
         cache_dir: PathBuf,
         show_download_progress: bool,
-    ) -> anyhow::Result<ApiRepo> {
+    ) -> Result<ApiRepo> {
         use crate::common::pull_from_hf;
 
         pull_from_hf(model.to_string(), cache_dir, show_download_progress)
@@ -172,8 +126,13 @@ impl ImageEmbedding {
         &mut self,
         images: &[&[u8]],
         batch_size: Option<usize>,
-    ) -> anyhow::Result<Vec<Embedding>> {
+    ) -> Result<Vec<Embedding>> {
         let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+        if batch_size == 0 {
+            return Err(Error::InvalidArgument(
+                "batch_size must be greater than 0".into(),
+            ));
+        }
 
         let output = images
             .chunks(batch_size)
@@ -185,13 +144,13 @@ impl ImageEmbedding {
                         image::ImageReader::new(Cursor::new(img))
                             .with_guessed_format()?
                             .decode()
-                            .map_err(|err| anyhow!("image decode: {}", err))
+                            .map_err(|err| Error::ImageDecode(err.to_string()))
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 self.embed_images(inputs)
             })
-            .collect::<anyhow::Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
             .collect();
@@ -207,10 +166,15 @@ impl ImageEmbedding {
         &mut self,
         images: impl AsRef<[S]>,
         batch_size: Option<usize>,
-    ) -> anyhow::Result<Vec<Embedding>> {
+    ) -> Result<Vec<Embedding>> {
         let images = images.as_ref();
         // Determine the batch size, default if not specified
         let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+        if batch_size == 0 {
+            return Err(Error::InvalidArgument(
+                "batch_size must be greater than 0".into(),
+            ));
+        }
 
         let output = images
             .chunks(batch_size)
@@ -221,13 +185,13 @@ impl ImageEmbedding {
                     .map(|img| {
                         image::ImageReader::open(img)?
                             .decode()
-                            .map_err(|err| anyhow!("image decode: {}", err))
+                            .map_err(|err| Error::ImageDecode(err.to_string()))
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 self.embed_images(inputs)
             })
-            .collect::<anyhow::Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
             .collect();
@@ -236,28 +200,35 @@ impl ImageEmbedding {
     }
 
     /// Embed DynamicImages
-    pub fn embed_images(&mut self, imgs: Vec<DynamicImage>) -> anyhow::Result<Vec<Embedding>> {
+    pub fn embed_images(&mut self, imgs: Vec<DynamicImage>) -> Result<Vec<Embedding>> {
         let inputs = imgs
             .into_iter()
             .map(|img| {
                 let pixels = self.preprocessor.transform(TransformData::Image(img))?;
                 match pixels {
                     TransformData::NdArray(array) => Ok(array),
-                    _ => Err(anyhow!("Preprocessor configuration error!")),
+                    _ => Err(Error::PreprocessorConfig(
+                        "Preprocessor configuration error!".into(),
+                    )),
                 }
             })
-            .collect::<anyhow::Result<Vec<Array3<f32>>>>()?;
+            .collect::<Result<Vec<Array3<f32>>>>()?;
 
         // Extract the batch size
         let inputs_view: Vec<ArrayView3<f32>> = inputs.iter().map(|img| img.view()).collect();
-        let pixel_values_array = ndarray::stack(ndarray::Axis(0), &inputs_view)?;
+        let pixel_values_array = ndarray::stack(ndarray::Axis(0), &inputs_view)
+            .map_err(|e| Error::InvalidShape(e.to_string()))?;
 
         let input_name = self.session.inputs()[0].name().to_string();
         let session_inputs = ort::inputs![
-            input_name => Value::from_array(pixel_values_array)?,
+            input_name => Value::from_array(pixel_values_array)
+                .map_err(|e| Error::OrtSession(e.to_string()))?,
         ];
 
-        let outputs = self.session.run(session_inputs)?;
+        let outputs = self
+            .session
+            .run(session_inputs)
+            .map_err(|e| Error::OrtSession(e.to_string()))?;
 
         // Try to get the only output key
         // If multiple, then default to few known keys `image_embeds` and `last_hidden_state`
@@ -265,7 +236,9 @@ impl ImageEmbedding {
             1 => vec![outputs
                 .keys()
                 .next()
-                .ok_or_else(|| anyhow!("Expected one output but found none"))?],
+                .ok_or_else(|| Error::OutputKeyMissing {
+                    key: "<only output>".into(),
+                })?],
             _ => vec!["image_embeds", "last_hidden_state"],
         };
 
@@ -277,9 +250,12 @@ impl ImageEmbedding {
                     .get(key)
                     .and_then(|v| v.try_extract_tensor::<f32>().ok())
             })
-            .ok_or_else(|| anyhow!("Could not extract tensor from any known output key"))?;
+            .ok_or_else(|| {
+                Error::TensorExtraction("Could not extract tensor from any known output key".into())
+            })?;
         let shape: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
-        let output_array = ndarray::ArrayViewD::from_shape(shape.as_slice(), data)?;
+        let output_array = ndarray::ArrayViewD::from_shape(shape.as_slice(), data)
+            .map_err(|e| Error::InvalidShape(e.to_string()))?;
 
         let embeddings = match output_array.ndim() {
             3 => {
@@ -302,19 +278,35 @@ impl ImageEmbedding {
                     .outer_iter()
                     .map(|row| {
                         row.as_slice()
-                            .ok_or_else(|| anyhow!("Failed to convert array row to slice"))
+                            .ok_or_else(|| {
+                                Error::Other("Failed to convert array row to slice".into())
+                            })
                             .map(normalize)
                     })
-                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .collect::<Result<Vec<_>>>()?
             }
             _ => {
-                return Err(anyhow!(
+                return Err(Error::InvalidShape(format!(
                     "Unexpected output tensor shape: {:?}",
                     output_array.shape()
-                ))
+                )))
             }
         };
 
         Ok(embeddings)
+    }
+}
+
+impl ImageEmbedding {
+    /// Close the ONNX Runtime profile and return the FULL name of the written file.
+    ///
+    /// ORT appends a timestamp to the requested prefix, so the path
+    /// is known only from here. Without this call the profile stays unclosed:
+    /// a session built with profiling must finish it.
+    ///
+    /// Errors if profiling was not requested at initialization
+    /// (see [`crate::InitOptionsWithLength::with_profiling`]).
+    pub fn end_profiling(&mut self) -> crate::common::Result<String> {
+        Ok(self.session.end_profiling()?)
     }
 }

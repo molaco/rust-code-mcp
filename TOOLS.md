@@ -19,6 +19,7 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`health_check`](#health_check) | Index | Check system status |
 | [`clear_cache`](#clear_cache) | Index | Clear corrupted cache/index files |
 | [`build_hypergraph`](#build_hypergraph) | Graph: Build | Build/reuse persisted workspace hypergraph |
+| [`export_graph`](docs/GRAPH_COMPLETE_EXPORT.md) | Graph: Export | Lossless pinned canonical rows, metadata, typed observations and provenance; cursor pagination |
 | [`get_imports`](#get_imports) | Graph: Imports/Exports | List `use`/extern-crate imports of a module |
 | [`get_exports`](#get_exports) | Graph: Imports/Exports | Items visible to a consumer module |
 | [`get_reexports`](#get_reexports) | Graph: Imports/Exports | `pub use` subset of get_exports |
@@ -26,8 +27,8 @@ Complete reference for all MCP tools provided by rust-code-mcp.
 | [`who_imports`](#who_imports) | Graph: Reverse Lookup | Every importer of a symbol |
 | [`who_uses`](#who_uses) | Graph: Reverse Lookup | Every non-import reference (file:byte hits) |
 | [`who_uses_summary`](#who_uses_summary) | Graph: Reverse Lookup | who_uses aggregated per consumer module |
-| [`who_calls`](#who_calls) | Graph: Call Graph | Every fn-body reference to a target fn |
-| [`calls_from`](#calls_from) | Graph: Call Graph | Outgoing references from a caller fn body |
+| [`who_calls`](#who_calls) | Graph: Call Graph | Call/TraitDispatch sites to a function |
+| [`calls_from`](#calls_from) | Graph: Call Graph | Outgoing calls and explicit unresolved sites |
 | [`call_graph`](#call_graph) | Graph: Call Graph | Bounded recursive descent of call edges |
 | [`callers_in_crate`](#callers_in_crate) | Graph: Call Graph | who_calls filtered by caller's crate |
 | [`recursive_callers_count`](#recursive_callers_count) | Graph: Call Graph | Reverse BFS counting transitive callers |
@@ -199,6 +200,8 @@ Found 21 reference(s) for 'RustParser':
 Preview a project-wide rename of a Rust symbol using rust-analyzer. **Read-only** — returns the set of edits and file moves that *would* be applied, without modifying any files. Apply the edits yourself if the preview looks correct.
 
 The symbol is resolved by exact leaf name. If multiple symbols share the name, the call fails with an "Ambiguous symbol" error and lists actionable candidates. Rerun with `file_path`, `line`, and `column` from the candidate list to disambiguate. rust-analyzer may also refuse the rename (e.g. for keywords, fields of trait impls in foreign crates, or names that would conflict).
+
+> **Caveat:** rust-analyzer's rename can silently miss occurrences inside macro bodies (e.g. `vec![Foo { .. }]`). The preview reflects exactly what rust-analyzer reports — this tool does not add a textual fallback. **Cross-check with `grep -rn '\bsymbol\b'` before applying any edits**, especially when the symbol appears inside `macro_name![ ... ]` invocations.
 
 **Also useful as a dry-run probe** (beyond actually renaming):
 
@@ -644,7 +647,12 @@ Find every workspace module that imports the given symbol (matched by qualified 
 
 #### who_uses
 
-List every non-import reference to the given symbol (file path + byte range + Read/Write/Test/Other category). Complements `who_imports`, which only enumerates `use` edges.
+List resolved non-import references with file/byte range, Read/Write/Test/Other
+category, semantic `relation`, lexical `consumer_module`, nearest
+`consumer_item` and optional `consumer_function`. Relations are `Call`,
+`TraitDispatch`, `FunctionReference`, `TypeRef`, `Construct`, `Read`, `Write`,
+`Use`, and `Implements`; imports remain separate bindings. `Unknown` is reserved
+for the legacy reference extractor. Schema v15 requires rebuilding v14 snapshots.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -698,11 +706,22 @@ Aggregation rollup of `who_uses`: every non-import reference grouped by consumer
 
 ---
 
+Schema v16 uses distinct Cargo target identities and stable declaration ids
+across byte-offset shifts. Ambiguous lib/bin paths require `app[lib]::helper`
+or `app[bin]::helper`. Non-summary usage/call sites include macro expansion
+provenance. `build_hypergraph.usage_counts` distinguishes observations, physical
+source sites and expanded observations. See the
+[identity/snapshot contract](docs/GRAPH_IDENTITY_AND_SNAPSHOT.md) for exact units,
+slice consistency, immutable force rebuilds and coverage limits.
+
 ### Call Graph (Layer 10)
 
 #### who_calls
 
-Layer 10 call graph: every non-import reference to the target function whose call site sits inside another function body. References in const initializers, type aliases, and other non-function scopes are excluded — use `who_uses` to see all reference sites.
+Only `Call` and `TraitDispatch` sites from function bodies. Function values,
+types and other uses are excluded; `who_uses` retains all resolved relations.
+Concrete trait calls name the known implementation; generic/dyn calls name
+the contract without claiming a unique runtime implementation.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -723,7 +742,7 @@ Layer 10 call graph: every non-import reference to the target function whose cal
 {
   "target": "my_crate::module::do_thing",
   "call_sites": [
-    { "caller": "my_crate::other::caller_fn", "file": "src/other.rs", "start": 512, "end": 520, "category": "Read" }
+    { "caller_qualified_name": "my_crate::other::caller_fn", "callee_qualified_name": "my_crate::module::do_thing", "file": "src/other.rs", "start": 512, "end": 520, "category": "Other", "relation": "Call" }
   ]
 }
 ```
@@ -734,7 +753,9 @@ Layer 10 call graph: every non-import reference to the target function whose cal
 
 #### calls_from
 
-Layer 10 call graph: every non-import reference made from the body of the caller function. References in const initializers, type aliases, and other non-function scopes are excluded.
+Only outgoing `Call` and `TraitDispatch` sites from the caller's body.
+For `register(leaf)`, `register` is a call and `leaf` is a FunctionReference
+visible through `who_uses`, not a second call.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -750,7 +771,16 @@ Layer 10 call graph: every non-import reference made from the body of the caller
 }
 ```
 
-**Returns:** `{ caller, call_sites: [{ callee, file, start, end, category }] }`.
+**Returns:** `{ caller, call_sites: [{ callee_qualified_name, file, start, end, category, relation }], unresolved_calls: [...] }`.
+
+`unresolved_calls` holds all observed unresolved sites of this lexical owner,
+independent of resolved-call pagination, with file/byte range, expression and
+reason (`IndirectCallable`, `TargetOutsideGraph`, `Unresolved`). Calls via local
+variables remain indirect even if a fn-item type happens to reveal the assigned
+function. Summary mode omits navigation fields; raw owner IDs remain in the
+stored graph, and the response's `caller` identifies the lexical owner.
+No full points-to analysis, implicit operator/desugaring coverage,
+proc-macro expansion or build-script output is promised.
 
 **Notes:** Calls from closures attribute to the enclosing fn.
 
@@ -915,7 +945,9 @@ All cross-crate consumer→producer edges in the workspace, with the symbols car
 
 **Returns:** `{ edges: [{ consumer_crate, producer_crate, symbols: [...], total_refs }] }`.
 
-**Notes:** Cross-crate method calls and trait method dispatch are NOT captured in usage counts — Layer 4 doesn't extract impl-block items as Item nodes, so `usage_count` reflects only references to module-level items.
+**Notes:** Usage counts include resolved cross-crate methods and trait references;
+they count references of all relations, not calls. Generic/dyn dispatch can retain
+only a contract target. Inspect `calls_from.unresolved_calls` for known resolution gaps.
 
 ---
 
@@ -2011,3 +2043,207 @@ build_hypergraph (one-time per fingerprint, ~5-18s cold)
 | build_hypergraph (reused snapshot) | ~10ms |
 | Hypergraph read tool (cached snapshot) | <10ms server-side |
 | unsafe_audit / mut_static_audit | dominated by workspace load (~2-3s) — live, not cached |
+
+## Full tool descriptions (moved out of `tools/list`)
+
+Until 2026-10-28 the descriptions below were served verbatim in `tools/list`, so every client
+paid for them on each tool lookup. The served descriptions are now short (what the tool returns,
+when to choose it, the one caveat that matters); the full text is kept here unchanged so nothing
+the longer versions said is lost. Long parameter descriptions that were shortened are listed
+under their tool as well.
+
+### `analysis_memory` (full)
+
+Report what a LOADED rust-analyzer analysis is holding, per salsa ingredient: memo count, stack, metadata, and — for the queries that declare a heap size — the heap behind them, largest first. Reads a live analysis and refuses to load one, because a database built to answer the question measures a cold start instead of the daemon. `heap` is absent where nothing measures it (counted, not weighed) and a lower bound where present, so compare `accounted_bytes` against `rss_kib` rather than treating it as a budget. `process` covers the whole daemon: `lines` partition rss + swap into file mappings, anonymous memory outside the allocator, allocator free space (fragmentation), salsa of every loaded project, rust-analyzer's global interners, and the unattributed rest; plus the interners and the largest mappings by name. `top` also caps those two lists.
+
+- `directory`: Workspace root of an analysis this daemon has ALREADY loaded. The tool will not load one to answer: a database built for the question measures a cold start, not what the daemon is holding. Pass a path runtime_status lists under `semantic`.
+
+### `build_codemap` (full)
+
+Build a task-conditioned subgraph (codemap) of the indexed workspace.
+
+Returns nodes/edges/hierarchy focused on the prompt. Edges come from the
+HIR-driven hypergraph: Call, TraitDispatch, FunctionReference, TypeRef,
+Constructs, Reads, Writes, Uses and Implements stay distinct. Concrete trait
+calls retain known impl targets; generic/dyn dispatch retains the contract.
+Unknown indirect targets are not guessed; inspect calls_from.unresolved_calls.
+This bounded, deduplicated view is not a complete graph export and its
+weight=1 is set membership, not source/expansion count or execution frequency.
+
+Tunable defaults: max_nodes=80 (cap 500), depth=3 (cap 5),
+max_incoming_per_node=8, embedding_policy='no_rerank', format='json'.
+
+Seed source: pass `task_prompt` for HybridSearch-driven seeds (requires
+`index_codebase` to have populated the vector store / tantivy index), OR
+`seed_qualified_names` for direct lookup. At least one of the two must
+be supplied. `task_prompt` seed lookup uses embedding_profile when set;
+otherwise it defaults to local-cpu-small.
+
+Choosing between them: `task_prompt` is best for exploratory queries
+against documented APIs; the underlying hybrid search (BM25 + vector
+embeddings against doc comments) favors public surfaces with rich
+docstrings, and many search hits fail to snap to an indexed Item span
+(reported in `Codemap.diagnostics`). For pinpoint navigation to a
+specific implementation, prefer `seed_qualified_names`. The hypergraph
+indexes items of every visibility, private ones included; what it does
+not store is items declared inside function bodies, methods of trait
+impls, and anything under `#[cfg(test)]` — those can't be referenced by
+qualified name. Unresolved names go to `Codemap.diagnostics`; if the
+leaf fails but its parent module resolves, the diagnostic says the leaf
+is a typo or not indexed.
+
+Output: `format='json'` returns the full `Codemap` JSON (nodes, edges,
+hierarchy, stats, diagnostics). `format='mermaid'` returns a
+`flowchart LR` rendering with seeds highlighted via a `:::seed` class.
+`format='outline'` returns a flat indented text outline sorted by
+qualified name. `format='all'` wraps the three under a single JSON
+object. Requires `build_hypergraph` to have been called for the
+workspace.
+
+- `embedding_profile`: Optional embedding profile for task_prompt HybridSearch seed lookup. Default: local-cpu-small. Use local-gpu-small or another local-qwen3 profile to explicitly opt into local CUDA.
+- `seed_qualified_names`: Override seeds by qualified name. The hypergraph indexes items of every visibility, private ones included; items declared inside function bodies, methods of trait impls and items under `#[cfg(test)]` are not stored as nodes and can't be referenced this way. Names that fail to resolve are surfaced in Codemap.diagnostics rather than erroring out; if the leaf fails but its parent module resolves, the diagnostic says the leaf is a typo or not indexed.
+- `task_prompt`: Natural-language task description. Required unless seed_qualified_names is supplied. Best for exploratory queries against documented APIs — HybridSearch weighs token frequency in doc comments, so verbose-doc public surfaces rank highest. For pinpoint navigation to a specific implementation, prefer seed_qualified_names. Search hits that don't snap to an indexed Item are surfaced in Codemap.diagnostics with per-failure-mode counts (path-norm, line-resolve, kind-filter).
+
+### `build_hypergraph` (full)
+
+Build or reuse an immutable HIR workspace graph for a coherent source slice (all features, lib/bin targets; no proc-macro/build outputs/test cfg). Distinct Cargo target identities; usage_count counts static reference observations, usage_counts also reports physical source sites and macro-expanded observations. Concurrent source edits reload from a fresh slice, or fail without replacing CURRENT after three changed attempts. force_rebuild creates a fresh instance; fingerprint identifies contents. Ambiguous paths require target selectors such as app[lib]::helper / app[bin]::helper.
+
+### `call_graph` (full)
+
+Bounded recursive descent over outgoing call edges from `root`. Returns a tree of CallGraphNode { fn_qualified_name, crate_name, callees, truncated_at_cycle, truncated_at_depth }. `depth` defaults to 3 and is capped at 8 (deeper trees rarely fit usefully in a single response and may explode). `truncated_at_cycle = true` means the fn was already expanded earlier in the traversal — its callees are visible elsewhere in the tree. `truncated_at_depth = true` means depth ran out at this node and there were unvisited callees.
+
+### `calls_from` (full)
+
+Outgoing Call/TraitDispatch sites from a function body, with relation and category. FunctionReference, TypeRef, imports and other uses are excluded. Also returns all observed unresolved_calls of this lexical owner, with source ranges and reason (IndirectCallable, TargetOutsideGraph, Unresolved), independently of resolved-call pagination. No points-to analysis or implicit operator/desugaring completeness is promised. Closures attribute to the enclosing fn; nested fn and trait impl bodies have their own callers.
+
+### `channel_capacity_audit` (full)
+
+Phase 8: query-time AST-walk audit of every channel-construction call site in the workspace's local crates. Loads the workspace through rust-analyzer (~2-3s, dominates per-call cost), iterates every local module's source file, walks the syntax tree for `CallExpr` nodes, and resolves each call's path through `Semantics::resolve_path` so aliased imports such as `use tokio::sync::mpsc; mpsc::channel(N)` still match the canonical entry. Matches the hardcoded v1 path table: `tokio::sync::mpsc::channel` (bounded), `tokio::sync::mpsc::unbounded_channel`, `std::sync::mpsc::channel` (legacy unbounded — flag), `std::sync::mpsc::sync_channel` (bounded), `crossbeam_channel::bounded`, `crossbeam_channel::unbounded`, `flume::bounded`, `flume::unbounded`. Per finding: workspace-relative crate name, `kind` (one of the 8 labels above), `bounded` flag, `capacity` (Some(N) for a literal int arg with `_` separators allowed, None for a const / variable / arithmetic expression / unbounded constructor), file, byte span of the call expression, and enclosing fn (NodeId rendered as 64-char hex + qualified name when resolvable; null for calls in const initializers / closures-without-fn-parent). Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module), `skip_test_fns` (default true — drops findings whose enclosing fn / module carries `#[cfg(test)]`). Sorted by (file, span). Use this to inventory channel construction across the workspace, enforce §12 'use bounded channels', and surface unbounded-channel call sites for review.
+
+### `clear_cache` (full)
+
+Clear corrupted cache files to fix 'Failed to open MetadataCache' errors. Clears metadata cache, tantivy index, and vector store. Pass include_hypergraph=true to ALSO wipe the persisted hypergraph snapshot at <data_dir>/graphs/<workspace_hash>/ — forces the next build_hypergraph call to do a full re-index. Pass dry_run=true to report the directories that would be removed without deleting them. The response lists exactly which directories were or would be cleared.
+
+- `include_hypergraph`: When true, also wipe the persisted hypergraph snapshot directory at <data_dir>/graphs/<workspace_hash>/. Defaults to false. Forces the next build_hypergraph call to do a full re-index.
+
+### `clear_runtime` (full)
+
+- `scope`: Cleanup scope for in-memory runtime caches and sync tracking. Defaults to all. Values: all, workspace, semantic_only, search_cache_only, sync_tracking_only. This does not stop the background sync task; process shutdown cancels tasks through ServerRuntime.
+- `workspace`: Optional workspace path. With scope=workspace this is required; with semantic_only/search_cache_only/sync_tracking_only it limits cleanup to one workspace.
+
+### `crate_dependency_metric` (full)
+
+Per-local-crate Robert Martin instability metric plus an abstractness ratio. `efferent` (Ce) = distinct outgoing producer crates; `afferent` (Ca) = distinct incoming consumer crates; `instability = Ce / (Ce + Ca)` (0 = max stable, 1 = max unstable). `abstractness = (traits + pub_type_aliases) / total_items`. Both metrics are NaN-guarded — degenerate counts return 0.0. `crate_id` is rendered as a 64-char hex string. Single-number health metric for refactor decisions. Optional knobs: `sort_by` accepts `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending; unknown values produce an `invalid_params` error); `top_n` caps returned rows after sorting (default: all rows).
+
+- `sort_by`: Optional sort key applied before `top_n` slicing. One of `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending). Unknown values produce an `invalid_params` error.
+
+### `crate_skeleton` (full)
+
+Write stripped Rust skeleton files under `<directory>/.skeleton/`, mirroring the workspace source layout and adding aggregate `<package>.rs` files that concatenate each package's skeleton sources. Uses the persisted hypergraph snapshot to select local crate items, slices current source files, strips function bodies and value initializers, and writes parseable facade files for codebase context. Requires build_hypergraph to have created a snapshot first.
+
+### `dead_pub_in_crate` (full)
+
+- `krate`: Qualified name of the local crate to scan (e.g. `my_crate`). Items declared `pub` with no cross-crate consumers are returned as candidates for downgrading to `pub(crate)`.
+
+### `derive_audit` (full)
+
+Phase 8: query-time audit of every pure-`pub` local Struct / Enum / Union that is missing one or more required derive macros. Pure read-side query on the v11 snapshot's `node.attributes` (Phase 1 populated at build time) plus the declaring `Binding`'s visibility — no AST walk, no fresh RA load. Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module), optional `item_kind` (list — any subset of ["Struct", "Enum", "Union"]; default all three), `pub_only` (default true — only audits the public surface per §8 'Debug almost always'), and `skip_test_items` (default true — drops items whose qualified name contains `::tests::`). `required_derives` is mandatory: a non-empty list (e.g. ["Debug"] or ["Debug", "Clone", "PartialEq"]). The derive parser strips path qualifiers — `serde::Serialize` and `::std::fmt::Debug` both match `Serialize` / `Debug` in `required_derives`. Each finding carries target NodeId (64-char hex), qualified_name, item_kind, visibility, file, byte span, the item's `current_derives`, and the `missing_derives` (set difference). Sorted by (file, span). Use this to enforce §8 standard-derive coverage.
+
+### `export_graph` (full)
+
+Lossless machine-readable export of an immutable HIR graph. Omit table for metadata, provenance, coverage, units and graph_id; then page all listed canonical tables with that graph_id and next_cursor. Includes typed usages, namespace bindings, semantic containment and explicit unresolved calls; preserves physical/expanded sites and Cargo target context. No codemap caps. Changed CURRENT is an error, never mixed pages. For large offline exports use the rmc-graph graph_export example (JSONL).
+
+### `fn_body_audit` (full)
+
+Phase 8: query-time AST-walk audit of every fn body in the workspace's local crates against eight built-in pattern matchers covering rust-guidelines §3, §9, §12, §19, §22. Loads the workspace through rust-analyzer (~2-3s, dominates per-call cost), iterates every local module's source file, walks each `fn`'s body, and emits one finding per pattern hit. Patterns: 1) `unwrap` — any `MethodCallExpr` named `unwrap` (§9 'Avoid `unwrap()` in production paths'); 2) `expect` — same but `expect` (§9); 3) `panic_macros` — `panic!` / `unreachable!` / `todo!` / `unimplemented!` invocations (§9 'Use `panic!` for bugs only'); 4) `unwrap_unchecked` — `unwrap_unchecked` / `unwrap_err_unchecked` (§19); 5) `transmute` — `CallExpr` resolving to `std::mem::transmute` or `core::mem::transmute` via `Semantics::resolve_path` (§19); 6) `await_in_guard_scope` — `.await` inside a block where a preceding `LetStmt`'s initializer or type contains a guard hint (`MutexGuard`, `RwLockReadGuard`, `RwLockWriteGuard`, bare `Guard`, `Ref<` / `RefMut<`, or `.lock()` / `.read()` / `.write()` call) (§12 'Never hold a lock across `.await`'); 7) `self_recursion` — call resolving (via `Semantics::resolve_path` for `CallExpr` and `Semantics::resolve_method_call` for `MethodCallExpr`) to the enclosing fn's canonical path (§22 'No recursion in critical paths'); 8) `unbounded_loop` — bare `loop {}` keyword form whose body has no `BreakExpr` / `ReturnExpr` / `?` `TryExpr` at any depth (§22 'Give loops clear upper bounds'). Per finding: enclosing fn (NodeId hex + qualified name when resolvable), pattern label, workspace-relative file, byte span, and a 1-3 line trimmed `context` snippet. Filters: optional `crate_name` (Crate / root Module qualified name), `patterns` (subset of the 8 labels — empty/null defaults to all 8), `skip_test_fns` (default true — drops findings inside `#[cfg(test)]` modules / fns). Sorted by `(file, span, pattern)`. Heuristic notes: `await_in_guard_scope` is a review trigger and accepts false positives (string-match on let-stmt text); `unbounded_loop` will flag legitimate event loops — disable via `patterns` if needed; `unwrap` matches any method named `unwrap`, not just `Result::unwrap` / `Option::unwrap`. Use this to enforce body-level guideline coverage. Requires `build_hypergraph` to have run (snapshot needed for enclosing-fn NodeId lookup).
+
+- `patterns`: Patterns to check. Default: all 8 built-ins. Available: "unwrap", "expect", "panic_macros", "unwrap_unchecked", "transmute", "await_in_guard_scope", "self_recursion", "unbounded_loop".
+
+### `forbidden_dependency_check` (full)
+
+Architectural-rule check: pure filter over crate_edges. Each rule has glob-style `consumer` and `producer` patterns (with `*` wildcards) matched against crate names, plus optional `consumer_kinds` (defaults to [`lib`, `bin`]), `except` (consumer-side override), `severity`, and `message`. Returns one violation per (rule × matching edge), each with sample_symbol/unique_symbols/total_refs for the offending edge. Same caveat as crate_edges: unresolved indirect calls such as external dyn-trait dispatch or generic Fn calls remain blind spots.
+
+### `function_signature` (full)
+
+Phase 5 (v9): return the recorded FunctionSignature for a function (free fn, inherent assoc fn, trait declaration fn). Carries is_async, self_param (Owned/Ref/RefMut, or null for free fns), params (name + stringified type + by_ref + mutability), return_type, and generic type parameters with their declaration-site trait bounds. Type strings come from RA's HirDisplay rendered against the function's owning crate; anonymous lifetimes ('_) are suppressed by default. Allocator and hasher type parameters (`, Global>`, `, RandomState>`, `, BuildHasherDefault<...>>`) and `LazyLock`/`OnceLock` init-fn pointer parameters are stripped from rendered types for readability. Returns `signature: null` when the target isn't a fn or extraction skipped it. Note: trait_bounds reflects the parameter's declaration-site bounds only — where-clause bounds added later are NOT included (RA limitation).
+
+### `functions_with_filter` (full)
+
+Phase 5 (v9): every local function in the named crate whose recorded FunctionSignature matches every Some field of the filter. Substring matches (`has_param_type`, `returns_type_pattern`) are case-sensitive against HirDisplay strings. `self_kind` accepts "none" | "owned" | "ref" | "ref_mut" — "none" matches free fns and assoc fns without self. Allocator and hasher type parameters (`, Global>`, `, RandomState>`, `, BuildHasherDefault<...>>`) and `LazyLock`/`OnceLock` init-fn pointer parameters are stripped from rendered types for readability (same trim as `function_signature`). Sorted by qualified name. Trait-impl method bodies are NOT included (mirrors the impls.rs exclusion). Pagination/summary knobs: `limit` (default 50) caps returned matches, `offset` (default 0) skips matches, and `summary` (default false) drops the per-match `signature` payload (returns just `target`/`qualified_name`) — useful when the full payload exceeds the MCP token budget. The response always carries `total_match_count` (unfiltered total before slicing); compare to `offset + match_count` to detect that more pages exist.
+
+- `limit`: Optional cap on returned matches after slicing. Default: 50. Use together with `offset` to paginate. Compare `total_match_count` to `limit + offset` to detect more pages.
+
+### `get_similar_code` (full)
+
+- `embedding_profile`: Optional embedding profile for vector search. Default: "local-cpu-small". One of: "local-gpu-small", "local-cpu-small", "openrouter-qwen3-8b", "local-qwen3-4b", "local-qwen3-8b".
+
+### `health_check` (full)
+
+- `embedding_profile`: Optional embedding profile (built-in name or one from embedding_profiles.toml). The BM25 index, vector store, and collection name are all keyed by the embedder identity, so this must match the profile the directory was indexed with. Default: local-cpu-small.
+
+### `index_codebase` (full)
+
+- `embedding_profile`: Optional embedding profile. Preferred over `model` when both are set. Default when omitted: "local-cpu-small" (BGESmallENV15Q CPU). Use "local-gpu-small", "local-qwen3-4b", or "local-qwen3-8b" to explicitly opt into local CUDA; "openrouter-qwen3-8b" uses the remote API profile.
+- `model`: Optional legacy local Qwen3/CUDA model variant. One of: "qwen3-0.6b" (1024-dim), "qwen3-4b" (2560-dim), "qwen3-8b" (4096-dim). Picking a variant different from an existing index returns a version-mismatch error pointing to clear_cache.
+- `repair_coverage`: Repair the `stale_skips` reported by health_check: files the metadata cache calls indexed while the vector store holds no vectors for them. Such files are skipped by every ordinary run, so they never come back on their own. This forgets their cache entries and re-embeds exactly those, leaving the rest of the index untouched — minutes, not the hour-plus of force_reindex. Ignored when force_reindex is set. Default: false.
+
+### `items_with_attribute` (full)
+
+Find every Item in the named crate whose attribute list has at least one entry matching `attribute_pattern`. Bare attribute paths such as `derive`, `must_use`, and `cfg` match `#[derive(...)]` / `#[must_use]`; wrapped prefix forms like `#[derive(` still work. Doc-comment patterns match against the **body** of a `///` line, so `SAFETY` matches `/// SAFETY: ...`. Anchoring avoids false positives where the pattern text appears mid-attribute — e.g. searching `must_use` no longer matches `#[tool(description = "...#[must_use]...")]` whose body merely mentions it. Each result row carries `match_location: "attr"` or `"doc"` so callers can filter visually. Empty pattern returns no results.
+
+- `attribute_pattern`: Attribute/doc pattern to match. Bare attribute paths such as `derive`, `must_use`, and `cfg` match `#[derive(...)]` / `#[must_use]`; wrapped forms like `#[derive(` and doc bodies like `SAFETY:` are also accepted.
+
+### `missing_docs_audit` (full)
+
+Phase 8: query-time audit of every pure-`pub` local Item that carries no `///` doc-comment in its extracted attributes. Pure read-side query on the v11 snapshot's `node.attributes` (populated at build time) plus the declaring `Binding`'s visibility — no AST walk, no fresh RA load. Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module), optional `item_kind` (list — defaults to all 'documentable' kinds: Function, Struct, Enum, Union, Trait, TypeAlias, Const, Static, Method; excludes EnumVariant / AssocConst / AssocType which rarely carry standalone docs), and `skip_test_items` (default true — drops items whose qualified name contains `::tests::`). Only pure `pub` Items are flagged; `pub(crate)` / `pub(in path)` / private are skipped per §10 ('pub(crate) is internal API'). Each finding carries target NodeId (64-char hex), qualified_name, item_kind, visibility (always `"pub"`), file, and byte span. Sorted by (file, span). Use this to find public items missing rustdoc and to enforce §16 documentation discipline.
+
+- `item_kind`: Optional list of item kinds to audit (e.g. ["Function", "Struct", "Enum", "Trait", "TypeAlias", "Const", "Static"]). Default: all 'documentable' kinds (Function, Struct, Enum, Union, Trait, TypeAlias, Const, Static, Method) — excludes EnumVariant, AssocConst, AssocType which rarely carry standalone docs.
+
+### `mut_static_audit` (full)
+
+Phase 7 Path B (v10): type-aware audit of every local `static` item that matches a known global-mutable-state pattern. Reads the static's HIR type via HirDisplay (no source-text regex) and classifies against `static mut`, `LazyLock<...>`, `OnceLock<...>`, `OnceCell<...>`. A single static matching multiple patterns produces one finding per pattern. Each finding carries item NodeId (rendered as a 64-char hex string), qualified_name, matched_pattern, type_string (for human inspection), file, and byte span. The `type_string` is post-processed via the same HirDisplay trim as `function_signature` — e.g. `LazyLock<Mutex<Foo>, fn() -> Mutex<Foo>>` becomes `LazyLock<Mutex<Foo>>` (init-fn pointer dropped). Sorted by (qualified_name, matched_pattern). Limitation: the `lazy_static!` macro is NOT detected — its expansion produces a generated wrapper type whose name doesn't contain `LazyLock`. Use `items_with_attribute` or grep to cover that case. Use this to find hidden singleton config / auth / clocks / RNGs and to enforce 'avoid global mutable state' guidelines.
+
+### `overlaps` (full)
+
+- `scope`: Optional scope: `all` (default, current behavior), `local` (lib/bin targets only), or `local_no_vendor` (lib/bin targets excluding source under vendor/)
+
+### `pub_use_pub_type_audit` (full)
+
+Heuristic audit: every `pub type` alias in the named crate whose owning module also carries a `pub use ... as <alias_name>` (or `pub use ::<alias_name>`) binding. Indicates the alias may be acting as a re-export disguised as a `pub type` declaration. The model does NOT record what an alias's RHS resolves to, so this query cannot confirm the `pub use` and `pub type` point at the same target — verify with `find_definition` before acting.
+
+### `recursion_check` (full)
+
+Phase 8: pure read-side audit listing every fn participating in a recursion cycle (self-recursion or mutual recursion). Walks the Layer 10 call graph data from `signatures_by_target` (every fn) + `usages_by_consumer_function` (caller fn → outgoing call sites), running a bounded DFS up to `max_cycle_length` from each fn. Cycles are canonicalized (rotated so the lowest-id NodeId comes first) so the same cycle viewed from different starting nodes counts once. Filters: optional `crate_name` (qualified name; accepts a Crate or its root Module — a cycle is included if at least one of its members is in the requested crate, which is a deliberately looser filter than 'all members in crate'); `max_cycle_length` defaults 5 and is clamped to [1, 12]. Each cycle reports `fns` (qualified names in cycle order, lowest-id first), `cycle_length`, `direct_recursion` (true iff length == 1), and `starting_node_id` (64-char hex of the lowest-id member). Sorted by `(cycle_length asc, qualified_name)`. Use this to enforce §22 'no recursion in critical paths'.
+
+### `search` (full)
+
+- `embedding_profile`: Optional embedding profile for vector search. Default: "local-cpu-small". One of: "local-gpu-small", "local-cpu-small", "openrouter-qwen3-8b", "local-qwen3-4b", "local-qwen3-8b".
+
+### `semantic_overlaps` (full)
+
+Workspace-wide semantic-overlap audit. Enumerates Items (optionally scoped to a crate / item_kind), embeds each one's source, and builds a similarity graph above `threshold` (defaults to the embedding model's tuned cutoff — 0.80 for local-cpu-small, 0.85 for Qwen3 profiles), returning either deduplicated pairs (output_mode="pairs") or single-linkage clusters of transitively-similar items (output_mode="clusters", default). Self-matches and cross-test noise are filtered (skip_test_chunks default true). Pagination/output controls: `max_pairs` caps returned pairs in pairs mode or total emitted cluster members in clusters mode after the scan; it is not a work cap. `offset` skips pairs/clusters, and `summary=true` omits per-member file/span payloads. The response carries `total_pair_count` and `total_cluster_count` before pagination. v1.1: per-Item embedding cache + in-memory cosine — first scan pays the full embedding cost; subsequent scans on unchanged code are nearly free (cache lives in the snapshot's LMDB env at the `embeddings_by_target` sub-DB; `build_hypergraph --force_rebuild` clears it). Use this for offline duplicate-detection / refactor planning. NOTE: requires `build_hypergraph` to have been called for the workspace; the vector store / `index_codebase` is no longer required for this tool. Latency is seconds-to-minutes on first run, sub-second on cache-warm reruns.
+
+- `embedding_profile`: Embedding profile to embed items with (built-in name or a profile from embedding_profiles.toml). Selects the model and the similarity scale `threshold` is interpreted on; switching profiles re-embeds via the per-Item cache. Default: local-cpu-small. Use local-gpu-small or another local-qwen3 profile to explicitly opt into local CUDA.
+- `max_cluster_size`: Drop clusters whose member count exceeds this cap (single-linkage chaining produces large noisy clusters; default 15 trims them while keeping high-signal pair/trio clusters). Set to 0 to disable.
+- `max_pairs`: Output cap only: cap returned pairs in pairs mode, or total emitted cluster members in clusters mode. Does not reduce the scan's embedding/scoring work. Default 50.
+- `offset`: Optional offset into the sorted result list. In pairs mode this skips pairs; in clusters mode this skips clusters before the member cap is applied. Default 0.
+- `threshold`: Minimum cosine similarity (0.0-1.0). Omit to use the embedding model's tuned default cutoff (0.80 for the default local-cpu-small profile, 0.85 for Qwen3 profiles). Cosine-similarity scales are model-specific, so an explicit value is interpreted relative to the active model: drop ~0.05 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict "definitely duplicate" signal.
+
+### `similar_to_item` (full)
+
+Find semantic neighbors of a hypergraph Item using vector embeddings. Resolves `target` (qualified name) via the persisted hypergraph, reads its source from the file at the recorded byte span, then runs vector_only_search using that source as the query. Returns ranked matches above `threshold` (default 0.0), capped at `limit` (default 10), optionally filtered by `item_kind` (case-insensitive match against the chunk's symbol_kind). Self-match (the seed's own chunk, detected by file path + line-range overlap with the seed's byte span) is dropped automatically. Useful for finding "what looks like X?" — e.g. duplicate error types, parser variants, or builder patterns. NOTE: requires both `build_hypergraph` AND `index_codebase` to have been called for the workspace.
+
+- `embedding_profile`: Embedding profile the codebase was indexed with (built-in name or a profile from embedding_profiles.toml). Must match the profile passed to `index_codebase`, since this tool reads that profile's vector index. Default: local-cpu-small.
+- `item_kind`: Restrict results to items of this kind, matching the chunk's symbol_kind ("Function", "Struct", "Enum", "Trait", etc.). Case-insensitive. Default: no filter.
+
+### `unsafe_audit` (full)
+
+Phase 6: query-time audit of every `unsafe { ... }` block in the workspace's local crates. Walks each `.rs` file's syntax tree (no semantic analysis beyond enclosing-fn lookup), returning per-block: workspace-relative file path, byte span of the unsafe expression (curlies included), source line count, enclosing function (NodeId rendered as a 64-char hex string + qualified name when resolvable, null for unsafe blocks in const initializers / trait bounds / closures-without-fn-parent), and a `has_safety_comment` heuristic flag (true when `SAFETY` appears as a substring in any of the 5 source lines preceding the `unsafe` keyword). Live computation; nothing cached — per-invocation cost is dominated by the workspace load (~2-3s). Sorted by (file, span). Use this to find unsafe blocks missing `// SAFETY:` comments, audit unsafe-block size distribution, or build an unsafe-code inventory for safety-critical review.
+
+### `who_calls` (full)
+
+Call/TraitDispatch sites to the target from function bodies. Excludes function values, types, imports and other uses. Concrete trait calls retain the known implementation; generic/dyn calls target the trait contract without a runtime implementation claim. Includes relation, category and source site. Closures attribute to the enclosing fn; nested fn and trait impl bodies have their own callers. Use who_uses for all resolved references.
+
+### `workspace_stats` (full)
+
+Workspace-wide counters: nodes by kind, items by ItemKind, bindings by BindingKind, declared-binding visibility breakdown, and pub_crate/total_items encapsulation ratio. In `visibility`, `module_private` is the canonical bucket for declarations visible only inside their declaring module; `pub_self` and `private` are retained compatibility aliases/legacy buckets and are explained in `visibility_notes`; `restricted_to` is for broader module-subtree restrictions such as `pub(super)` / `pub(in path)`.

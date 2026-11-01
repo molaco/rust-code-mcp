@@ -1,0 +1,10 @@
+name: graph-experiments
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - graph-tool-base=2.98
+  - python-igraph=1.0.0
+  - leidenalg=0.12.0
+  - numpy=2.5.4
+  - scikit-learn=1.9.1

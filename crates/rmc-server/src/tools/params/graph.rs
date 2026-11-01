@@ -7,6 +7,19 @@ use rmc_graph::graph::ForbiddenDependencyRule;
 use super::ListPaginationParams;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub(crate) struct GraphExportParams {
+    pub directory: String,
+    #[schemars(description = "Omit for metadata. Otherwise nodes, bindings, usages, contains, unresolved_calls, signatures, statics or stub_owners.")]
+    pub table: Option<String>,
+    #[schemars(description = "Required for every table page: graph_id returned by metadata. A changed CURRENT is an error; restart export.")]
+    pub graph_id: Option<String>,
+    #[schemars(description = "Opaque JSON string of next_cursor from the preceding page; omit for first page of each table.")]
+    pub cursor: Option<String>,
+    #[schemars(description = "Rows per page, 1..=10000; default 100. No summary or truncation.")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(crate) struct GraphImportsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
@@ -146,7 +159,7 @@ pub(crate) struct RecursiveCallersCountParams {
 pub(crate) struct DeadPubParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
-    #[schemars(description = "Qualified name of the local crate to scan (e.g. `my_crate`). Items declared `pub` with no cross-crate consumers are returned as candidates for downgrading to `pub(crate)`.")]
+    #[schemars(description = "Local crate to scan, e.g. `my_crate`.")]
     pub krate: String,
     #[serde(flatten)]
     pub pagination: ListPaginationParams,
@@ -172,7 +185,7 @@ pub(crate) struct CrateEdgesParams {
 pub(crate) struct OverlapsParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
-    #[schemars(description = "Optional scope: `all` (default, current behavior), `local` (lib/bin targets only), or `local_no_vendor` (lib/bin targets excluding source under vendor/)")]
+    #[schemars(description = "all (default) | local (lib/bin targets) | local_no_vendor (also excludes vendor/).")]
     pub scope: Option<String>,
 }
 
@@ -214,7 +227,7 @@ pub(crate) struct ItemsWithAttributeParams {
     pub directory: String,
     #[schemars(description = "Crate qualified name to scan (e.g. `my_crate`); accepts the crate root module name as an alias")]
     pub crate_name: String,
-    #[schemars(description = "Attribute/doc pattern to match. Bare attribute paths such as `derive`, `must_use`, and `cfg` match `#[derive(...)]` / `#[must_use]`; wrapped forms like `#[derive(` and doc bodies like `SAFETY:` are also accepted.")]
+    #[schemars(description = "Attribute path (`derive`, `must_use`, `cfg`), wrapped form (`#[derive(`) or doc-body prefix (`SAFETY:`).")]
     pub attribute_pattern: String,
     #[serde(flatten)]
     pub pagination: ListPaginationParams,
@@ -247,7 +260,7 @@ pub(crate) struct CrateDependencyMetricParams {
     #[schemars(description = "Optional cap on returned rows after sorting. Default: None (all rows).")]
     #[serde(default)]
     pub top_n: Option<usize>,
-    #[schemars(description = "Optional sort key applied before `top_n` slicing. One of `instability`, `item_count`, `afferent`, `efferent`, `abstractness` (all descending). Unknown values produce an `invalid_params` error.")]
+    #[schemars(description = "instability | item_count | afferent | efferent | abstractness, descending, before top_n.")]
     #[serde(default)]
     pub sort_by: Option<String>,
     #[serde(flatten)]
@@ -260,7 +273,7 @@ pub(crate) struct ModuleTreeParams {
     pub directory: String,
     #[schemars(description = "Crate qualified name (e.g. `my_crate`)")]
     pub krate: String,
-    #[schemars(description = "Optional max depth below the crate root (None walks the full tree)")]
+    #[schemars(description = "Max depth below the crate root, served whole. Omitted: full tree up to 400 nodes, else cut at the deepest level that fits (reported).")]
     pub depth: Option<usize>,
 }
 
@@ -321,7 +334,7 @@ pub(crate) struct FunctionsWithFilterParams {
     #[schemars(description = "Optional self-kind filter: \"none\" | \"owned\" | \"ref\" | \"ref_mut\"")]
     #[serde(default)]
     pub self_kind: Option<String>,
-    #[schemars(description = "Optional cap on returned matches after slicing. Default: 50. Use together with `offset` to paginate. Compare `total_match_count` to `limit + offset` to detect more pages.")]
+    #[schemars(description = "Page size; default 50.")]
     #[serde(default)]
     pub limit: Option<usize>,
     #[schemars(description = "Optional offset into the (sorted) match list, applied before `limit`. Default: 0.")]
@@ -344,10 +357,10 @@ pub(crate) struct SimilarToItemParams {
     #[schemars(description = "Minimum cosine similarity score (0.0-1.0). Results below are dropped. Default: 0.0")]
     #[serde(default)]
     pub threshold: Option<f32>,
-    #[schemars(description = "Restrict results to items of this kind, matching the chunk's symbol_kind (\"Function\", \"Struct\", \"Enum\", \"Trait\", etc.). Case-insensitive. Default: no filter.")]
+    #[schemars(description = "Only this symbol kind (Function, Struct, Enum, Trait, …), case-insensitive.")]
     #[serde(default)]
     pub item_kind: Option<String>,
-    #[schemars(description = "Embedding profile the codebase was indexed with (built-in name or a profile from embedding_profiles.toml). Must match the profile passed to `index_codebase`, since this tool reads that profile's vector index. Default: local-cpu-small.")]
+    #[schemars(description = "Must match the profile given to index_codebase; default local-cpu-small.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
 }
@@ -362,19 +375,19 @@ pub(crate) struct SemanticOverlapsParams {
     #[schemars(description = "Optional item-kind filter (\"Function\" | \"Struct\" | \"Enum\" | \"Trait\" | \"Method\"). Default: all kinds.")]
     #[serde(default)]
     pub item_kind: Option<String>,
-    #[schemars(description = "Minimum cosine similarity (0.0-1.0). Omit to use the embedding model's tuned default cutoff (0.80 for the default local-cpu-small profile, 0.85 for Qwen3 profiles). Cosine-similarity scales are model-specific, so an explicit value is interpreted relative to the active model: drop ~0.05 for crate-scoped scans where chaining is less of a problem; raise to 0.90+ for very strict \"definitely duplicate\" signal.")]
+    #[schemars(description = "Minimum cosine similarity on the active model's scale; default is its tuned cutoff (0.80 local-cpu-small, 0.85 Qwen3). 0.90+ for strict duplicates.")]
     #[serde(default)]
     pub threshold: Option<f32>,
-    #[schemars(description = "Output cap only: cap returned pairs in pairs mode, or total emitted cluster members in clusters mode. Does not reduce the scan's embedding/scoring work. Default 50.")]
+    #[schemars(description = "Cap on returned pairs, or on cluster members in clusters mode; output only, not work. Default 50.")]
     #[serde(default)]
     pub max_pairs: Option<usize>,
-    #[schemars(description = "Optional offset into the sorted result list. In pairs mode this skips pairs; in clusters mode this skips clusters before the member cap is applied. Default 0.")]
+    #[schemars(description = "Pairs (or clusters) to skip; default 0.")]
     #[serde(default)]
     pub offset: Option<usize>,
-    #[schemars(description = "Optional summary mode. When true, pair endpoints and cluster members omit file/span payloads and keep only qualified_name + item_kind. Default false.")]
+    #[schemars(description = "Keep only qualified_name + item_kind per member.")]
     #[serde(default)]
     pub summary: Option<bool>,
-    #[schemars(description = "Drop clusters whose member count exceeds this cap (single-linkage chaining produces large noisy clusters; default 15 trims them while keeping high-signal pair/trio clusters). Set to 0 to disable.")]
+    #[schemars(description = "Drop clusters larger than this (chaining noise); default 15, 0 disables.")]
     #[serde(default)]
     pub max_cluster_size: Option<usize>,
     #[schemars(description = "Output mode: \"pairs\" (raw similarity edges) or \"clusters\" (single-linkage groups). Default \"clusters\".")]
@@ -386,7 +399,7 @@ pub(crate) struct SemanticOverlapsParams {
     #[schemars(description = "Drop pairs whose two items share a crate. Default false.")]
     #[serde(default)]
     pub cross_crate_only: Option<bool>,
-    #[schemars(description = "Embedding profile to embed items with (built-in name or a profile from embedding_profiles.toml). Selects the model and the similarity scale `threshold` is interpreted on; switching profiles re-embeds via the per-Item cache. Default: local-cpu-small. Use local-gpu-small or another local-qwen3 profile to explicitly opt into local CUDA.")]
+    #[schemars(description = "Embedding profile (built-in or from embedding_profiles.toml); sets the scale of `threshold`. Default local-cpu-small.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
 }
@@ -395,13 +408,13 @@ pub(crate) struct SemanticOverlapsParams {
 pub(crate) struct BuildCodemapParams {
     #[schemars(description = "Workspace root (directory containing Cargo.toml)")]
     pub directory: String,
-    #[schemars(description = "Natural-language task description. Required unless seed_qualified_names is supplied. Best for exploratory queries against documented APIs — HybridSearch weighs token frequency in doc comments, so verbose-doc public surfaces rank highest. For pinpoint navigation to a specific implementation, prefer seed_qualified_names. Search hits that don't snap to an indexed Item are surfaced in Codemap.diagnostics with per-failure-mode counts (path-norm, line-resolve, kind-filter).")]
+    #[schemars(description = "Natural-language task; required unless seed_qualified_names is given. Favours well-documented public APIs; misses go to diagnostics.")]
     #[serde(default)]
     pub task_prompt: Option<String>,
-    #[schemars(description = "Optional embedding profile for task_prompt HybridSearch seed lookup. Default: local-cpu-small. Use local-gpu-small or another local-qwen3 profile to explicitly opt into local CUDA.")]
+    #[schemars(description = "Embedding profile for task_prompt seed lookup; default local-cpu-small.")]
     #[serde(default)]
     pub embedding_profile: Option<String>,
-    #[schemars(description = "Override seeds by qualified name. The hypergraph indexes only `pub` and `pub(crate)` items — module-local private functions and trait-impl method bodies are not stored as standalone nodes and can't be referenced this way. Names that fail to resolve are surfaced in Codemap.diagnostics rather than erroring out; if the leaf fails but its parent module resolves, the diagnostic notes 'likely private or not indexed'.")]
+    #[schemars(description = "Seeds by qualified name, any visibility; not fn-local items, trait-impl methods or #[cfg(test)]. Unresolved names go to diagnostics.")]
     #[serde(default)]
     pub seed_qualified_names: Option<Vec<String>>,
     #[schemars(description = "Maximum number of retained nodes. Default 80; capped at 500.")]

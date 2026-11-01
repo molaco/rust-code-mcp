@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ra_ap_ide::{
-    AnalysisHost, FilePosition, FileSystemEdit, Query, RenameConfig, SourceChange,
+    Analysis, FilePosition, FileSystemEdit, Query, RenameConfig, SourceChange,
 };
 use ra_ap_vfs::Vfs;
 
@@ -68,13 +68,11 @@ pub(crate) struct RenamePreview {
 /// Resolves the symbol by name first; fails if multiple symbols match (ambiguous rename
 /// is dangerous). Use rename_by_position to disambiguate.
 pub(crate) fn rename_by_name(
-    host: &AnalysisHost,
+    analysis: &Analysis,
     vfs: &Vfs,
     symbol_name: &str,
     new_name: &str,
 ) -> Result<RenamePreview> {
-    let analysis = host.analysis();
-
     let query = Query::new(symbol_name.to_string());
     let symbols = analysis
         .symbol_search(query, 50)
@@ -166,7 +164,7 @@ fn format_nav_candidate(
 
 /// Rename the symbol at a concrete file position. Returns a preview without touching disk.
 pub(crate) fn rename_by_position(
-    host: &AnalysisHost,
+    analysis: &Analysis,
     vfs: &Vfs,
     file_path: &Path,
     line: u32,
@@ -174,7 +172,6 @@ pub(crate) fn rename_by_position(
     expected_symbol_name: &str,
     new_name: &str,
 ) -> Result<RenamePreview> {
-    let analysis = host.analysis();
     let position = position::file_position(&analysis, vfs, file_path, line, column)?;
 
     verify_expected_symbol_at_position(&analysis, position, expected_symbol_name)

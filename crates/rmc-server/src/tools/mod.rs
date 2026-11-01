@@ -1,6 +1,7 @@
 // Phase 1: Modular structure
 mod endpoints;
 mod params;
+mod paths;
 mod router;
 
 // Hypergraph (Layer 7): MCP tools backed by the persisted graph snapshot.

@@ -110,8 +110,7 @@ pub(super) fn canonicalize_and_strip(path: &Path, workspace_root: &Path) -> Opti
 /// Resolve qualified-name seeds. Names that don't resolve become diagnostics
 /// (`"unresolved seed: <name>"`); no RA fallback. When the leaf fails but the
 /// parent path resolves to a `Module` node, the diagnostic is enriched with
-/// a hint so a user can distinguish "leaf is private / not indexed" from a
-/// straight typo.
+/// a hint naming what the graph does not store ([`unresolved_seed_hint`]).
 pub(super) fn resolve_override_seeds(
     snap: &OpenedSnapshot,
     names: &[String],
@@ -124,21 +123,39 @@ pub(super) fn resolve_override_seeds(
                 seeds.insert(nid);
             }
             None => {
-                let hint: &'static str = if let Some((parent, _)) = qn.rsplit_once("::") {
-                    match snap.lookup_by_qualified_name(parent)? {
-                        Some((_, node)) if matches!(node.kind, NodeKind::Module) => {
-                            " (parent module resolves; leaf likely private or not indexed)"
-                        }
-                        _ => "",
-                    }
-                } else {
-                    ""
+                let hint = match qn.rsplit_once("::") {
+                    Some((parent, _)) => unresolved_seed_hint(
+                        snap.lookup_by_qualified_name(parent)?
+                            .map(|(_, node)| node.kind),
+                    ),
+                    None => "",
                 };
                 diagnostics.push(format!("unresolved seed: {qn}{hint}"));
             }
         }
     }
     Ok(seeds)
+}
+
+/// The tail of an "unresolved seed" diagnostic, given what the seed's parent
+/// path resolved to.
+///
+/// A parent that is a module means the leaf name is either a typo or an item
+/// the graph does not store. A crate parent is the same case: the crate and
+/// its root module share one qualified name, and which of the two a lookup of
+/// that name returns depends on their ids (hashes of the workspace path), so
+/// the hint must not. Visibility is not the reason — private items are
+/// indexed like public ones; the gaps are items declared inside function
+/// bodies, methods of trait impls, and anything under `#[cfg(test)]` (the
+/// workspace is loaded with `cfg(test)` off).
+fn unresolved_seed_hint(parent_kind: Option<NodeKind>) -> &'static str {
+    match parent_kind {
+        Some(NodeKind::Module | NodeKind::Crate) => {
+            " (parent module resolves; the leaf is a typo or not indexed: items inside fn bodies, \
+             trait-impl methods and #[cfg(test)] items are not stored)"
+        }
+        _ => "",
+    }
 }
 
 /// Resolve search-hit seeds via the span index + line→byte bridge. Items
@@ -246,33 +263,38 @@ mod tests {
         assert_eq!(rel, expected.to_string_lossy());
     }
 
-    // ----- A9: enriched diagnostic distinguishes private-leaf from typo -----
-    //
-    // We can't unit-test `resolve_override_seeds` without an
-    // `OpenedSnapshot`, but we can exercise the same branching logic
-    // on a small `Option<NodeKind>` helper inline so a regression in
-    // the public/typo distinction is caught by `cargo check --lib --tests`.
+    // ----- A9: enriched diagnostic distinguishes not-indexed from typo -----
 
     #[test]
     fn unresolved_seed_hint_branches_by_parent_kind() {
-        // Mirror of the `match` inside `resolve_override_seeds`. The
-        // hint is `&'static str` so this is an allocation-free check.
-        fn hint(parent_kind: Option<NodeKind>) -> &'static str {
-            match parent_kind {
-                Some(NodeKind::Module) => {
-                    " (parent module resolves; leaf likely private or not indexed)"
-                }
-                _ => "",
-            }
-        }
-        assert_eq!(
-            hint(Some(NodeKind::Module)),
-            " (parent module resolves; leaf likely private or not indexed)",
+        let hint = super::unresolved_seed_hint;
+        assert!(
+            hint(Some(NodeKind::Module)).contains("not indexed"),
             "module parent yields the enriched hint",
         );
-        assert_eq!(hint(Some(NodeKind::Crate)), "", "crate parent is terse");
+        assert!(
+            !hint(Some(NodeKind::Module)).contains("private"),
+            "private items are indexed, so the hint must not blame visibility",
+        );
+        assert_eq!(
+            hint(Some(NodeKind::Crate)),
+            hint(Some(NodeKind::Module)),
+            "a crate parent is its root module",
+        );
         assert_eq!(hint(Some(NodeKind::Item)), "", "item parent is terse");
         assert_eq!(hint(None), "", "no parent → terse");
+    }
+
+    /// What the hint and the tool descriptions claim: a private function is
+    /// a node like any other. `loader::filter_local_crates` is a plain `fn`.
+    #[test]
+    fn a_private_function_is_indexed() {
+        let snap = crate::graph::test_support::shared_snapshot();
+        let (_, node) = snap
+            .lookup_by_qualified_name("rmc_graph::graph::loader::filter_local_crates")
+            .unwrap()
+            .expect("private fn is in the snapshot");
+        assert_eq!(node.item_kind, Some(crate::graph::ItemKind::Function), "{node:?}");
     }
 
     // ===== fixture-dependent tests =====

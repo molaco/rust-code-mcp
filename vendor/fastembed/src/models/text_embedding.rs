@@ -76,6 +76,10 @@ pub enum EmbeddingModel {
     JinaEmbeddingsV2BaseEN,
     /// onnx-community/embeddinggemma-300m-ONNX
     EmbeddingGemma300M,
+    /// Quantized (4-bit) onnx-community/embeddinggemma-300m-ONNX
+    EmbeddingGemma300MQ4,
+    /// Quantized onnx-community/embeddinggemma-300m-ONNX
+    EmbeddingGemma300MQ,
     /// snowflake/snowflake-arctic-embed-xs
     SnowflakeArcticEmbedXS,
     /// Quantized snowflake/snowflake-arctic-embed-xs
@@ -419,6 +423,26 @@ fn init_models_map() -> HashMap<EmbeddingModel, ModelInfo<EmbeddingModel>> {
             output_key: Some(crate::OutputKey::ByName("sentence_embedding")),
         },
         ModelInfo {
+            model: EmbeddingModel::EmbeddingGemma300MQ4,
+            dim: 768,
+            description: String::from(
+                "Quantized (4-bit) EmbeddingGemma is a 300M parameter from Google",
+            ),
+            model_code: String::from("onnx-community/embeddinggemma-300m-ONNX"),
+            model_file: String::from("onnx/model_q4.onnx"),
+            additional_files: vec!["onnx/model_q4.onnx_data".to_string()],
+            output_key: Some(crate::OutputKey::ByName("sentence_embedding")),
+        },
+        ModelInfo {
+            model: EmbeddingModel::EmbeddingGemma300MQ,
+            dim: 768,
+            description: String::from("Quantized EmbeddingGemma is a 300M parameter from Google"),
+            model_code: String::from("onnx-community/embeddinggemma-300m-ONNX"),
+            model_file: String::from("onnx/model_quantized.onnx"),
+            additional_files: vec!["onnx/model_quantized.onnx_data".to_string()],
+            output_key: Some(crate::OutputKey::ByName("sentence_embedding")),
+        },
+        ModelInfo {
             model: EmbeddingModel::SnowflakeArcticEmbedXS,
             dim: 384,
             description: String::from("Snowflake Arctic embed model, xs"),
@@ -573,5 +597,123 @@ impl TryFrom<String> for EmbeddingModel {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         value.parse()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn all_variants() -> Vec<EmbeddingModel> {
+    fn _exhaustive_guard(m: &EmbeddingModel) {
+        match m {
+            EmbeddingModel::AllMiniLML6V2 => (),
+            EmbeddingModel::AllMiniLML6V2Q => (),
+            EmbeddingModel::AllMiniLML12V2 => (),
+            EmbeddingModel::AllMiniLML12V2Q => (),
+            EmbeddingModel::AllMpnetBaseV2 => (),
+            EmbeddingModel::BGEBaseENV15 => (),
+            EmbeddingModel::BGEBaseENV15Q => (),
+            EmbeddingModel::BGELargeENV15 => (),
+            EmbeddingModel::BGELargeENV15Q => (),
+            EmbeddingModel::BGESmallENV15 => (),
+            EmbeddingModel::BGESmallENV15Q => (),
+            EmbeddingModel::NomicEmbedTextV1 => (),
+            EmbeddingModel::NomicEmbedTextV15 => (),
+            EmbeddingModel::NomicEmbedTextV15Q => (),
+            EmbeddingModel::ParaphraseMLMiniLML12V2 => (),
+            EmbeddingModel::ParaphraseMLMiniLML12V2Q => (),
+            EmbeddingModel::ParaphraseMLMpnetBaseV2 => (),
+            EmbeddingModel::BGESmallZHV15 => (),
+            EmbeddingModel::BGELargeZHV15 => (),
+            EmbeddingModel::BGEM3 => (),
+            EmbeddingModel::ModernBertEmbedLarge => (),
+            EmbeddingModel::MultilingualE5Small => (),
+            EmbeddingModel::MultilingualE5Base => (),
+            EmbeddingModel::MultilingualE5Large => (),
+            EmbeddingModel::MxbaiEmbedLargeV1 => (),
+            EmbeddingModel::MxbaiEmbedLargeV1Q => (),
+            EmbeddingModel::GTEBaseENV15 => (),
+            EmbeddingModel::GTEBaseENV15Q => (),
+            EmbeddingModel::GTELargeENV15 => (),
+            EmbeddingModel::GTELargeENV15Q => (),
+            EmbeddingModel::ClipVitB32 => (),
+            EmbeddingModel::JinaEmbeddingsV2BaseCode => (),
+            EmbeddingModel::JinaEmbeddingsV2BaseEN => (),
+            EmbeddingModel::EmbeddingGemma300M => (),
+            EmbeddingModel::EmbeddingGemma300MQ4 => (),
+            EmbeddingModel::EmbeddingGemma300MQ => (),
+            EmbeddingModel::SnowflakeArcticEmbedXS => (),
+            EmbeddingModel::SnowflakeArcticEmbedXSQ => (),
+            EmbeddingModel::SnowflakeArcticEmbedS => (),
+            EmbeddingModel::SnowflakeArcticEmbedSQ => (),
+            EmbeddingModel::SnowflakeArcticEmbedM => (),
+            EmbeddingModel::SnowflakeArcticEmbedMQ => (),
+            EmbeddingModel::SnowflakeArcticEmbedMLong => (),
+            EmbeddingModel::SnowflakeArcticEmbedMLongQ => (),
+            EmbeddingModel::SnowflakeArcticEmbedL => (),
+            EmbeddingModel::SnowflakeArcticEmbedLQ => (),
+        }
+    }
+    vec![
+        EmbeddingModel::AllMiniLML6V2,
+        EmbeddingModel::AllMiniLML6V2Q,
+        EmbeddingModel::AllMiniLML12V2,
+        EmbeddingModel::AllMiniLML12V2Q,
+        EmbeddingModel::AllMpnetBaseV2,
+        EmbeddingModel::BGEBaseENV15,
+        EmbeddingModel::BGEBaseENV15Q,
+        EmbeddingModel::BGELargeENV15,
+        EmbeddingModel::BGELargeENV15Q,
+        EmbeddingModel::BGESmallENV15,
+        EmbeddingModel::BGESmallENV15Q,
+        EmbeddingModel::NomicEmbedTextV1,
+        EmbeddingModel::NomicEmbedTextV15,
+        EmbeddingModel::NomicEmbedTextV15Q,
+        EmbeddingModel::ParaphraseMLMiniLML12V2,
+        EmbeddingModel::ParaphraseMLMiniLML12V2Q,
+        EmbeddingModel::ParaphraseMLMpnetBaseV2,
+        EmbeddingModel::BGESmallZHV15,
+        EmbeddingModel::BGELargeZHV15,
+        EmbeddingModel::BGEM3,
+        EmbeddingModel::ModernBertEmbedLarge,
+        EmbeddingModel::MultilingualE5Small,
+        EmbeddingModel::MultilingualE5Base,
+        EmbeddingModel::MultilingualE5Large,
+        EmbeddingModel::MxbaiEmbedLargeV1,
+        EmbeddingModel::MxbaiEmbedLargeV1Q,
+        EmbeddingModel::GTEBaseENV15,
+        EmbeddingModel::GTEBaseENV15Q,
+        EmbeddingModel::GTELargeENV15,
+        EmbeddingModel::GTELargeENV15Q,
+        EmbeddingModel::ClipVitB32,
+        EmbeddingModel::JinaEmbeddingsV2BaseCode,
+        EmbeddingModel::JinaEmbeddingsV2BaseEN,
+        EmbeddingModel::EmbeddingGemma300M,
+        EmbeddingModel::EmbeddingGemma300MQ4,
+        EmbeddingModel::EmbeddingGemma300MQ,
+        EmbeddingModel::SnowflakeArcticEmbedXS,
+        EmbeddingModel::SnowflakeArcticEmbedXSQ,
+        EmbeddingModel::SnowflakeArcticEmbedS,
+        EmbeddingModel::SnowflakeArcticEmbedSQ,
+        EmbeddingModel::SnowflakeArcticEmbedM,
+        EmbeddingModel::SnowflakeArcticEmbedMQ,
+        EmbeddingModel::SnowflakeArcticEmbedMLong,
+        EmbeddingModel::SnowflakeArcticEmbedMLongQ,
+        EmbeddingModel::SnowflakeArcticEmbedL,
+        EmbeddingModel::SnowflakeArcticEmbedLQ,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_variant_has_model_info() {
+        let listed: Vec<_> = models_list().into_iter().map(|i| i.model).collect();
+        for variant in all_variants() {
+            assert!(
+                listed.contains(&variant),
+                "{variant:?} is missing from models_list(); get_model_info would panic"
+            );
+        }
     }
 }

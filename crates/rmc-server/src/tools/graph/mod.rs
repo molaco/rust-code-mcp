@@ -18,3 +18,5 @@ pub(super) mod surface;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod export_tests;

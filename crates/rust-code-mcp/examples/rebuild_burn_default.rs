@@ -10,6 +10,7 @@ fn main() {
             force_rebuild: true,
             data_dir_override: None,
             env: Default::default(),
+            release_free_memory: None,
         },
     )
     .expect("build");

@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Expected dim:     {}", backend.dim());
 
     let start = Instant::now();
-    let generator = EmbeddingGenerator::new()?;
+    let generator = EmbeddingGenerator::new(rmc_engine::embeddings::EmbeddingOwner::Tool)?;
     println!("Generator init:   {:.2}s", start.elapsed().as_secs_f32());
     println!("Reported dim:     {}", generator.dimensions());
     assert_eq!(generator.dimensions(), backend.dim(), "dim mismatch");

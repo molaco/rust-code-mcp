@@ -9,7 +9,6 @@
 use std::collections::HashSet;
 
 use crate::graph::ids::NodeId;
-use crate::graph::model::NodeKind;
 use crate::graph::ModuleTreeNode;
 use crate::graph::snapshot::OpenedSnapshot;
 
@@ -39,32 +38,29 @@ pub(super) fn project_hierarchy(
         }
     }
 
-    // Map each crate id to its qualified name, sorted for determinism.
-    let mut crate_names: Vec<String> = Vec::new();
+    // Keep Cargo contexts through the string-based module-tree API. Bare
+    // same-name lib/bin paths are ambiguous and must not be deduplicated.
+    let mut crates = Vec::new();
     {
         let rtxn = snap.read_txn()?;
+        let labels = snap.target_labels(&rtxn)?;
         for cid in &crate_ids {
-            if let Some(c) = snap.node(&rtxn, *cid)? {
-                if c.kind == NodeKind::Crate {
-                    crate_names.push(c.qualified_name);
-                }
+            if let Some(label) = labels.get(cid) {
+                crates.push((*cid, label.clone()));
             }
         }
     }
-    crate_names.sort();
-    crate_names.dedup();
-
-    // Retained qualified-name set for the filter predicate.
-    let retained_qns: HashSet<String> = {
-        let rtxn = snap.read_txn()?;
-        retained
-            .iter()
-            .filter_map(|nid| snap.node(&rtxn, *nid).ok().flatten().map(|n| n.qualified_name))
-            .collect()
-    };
+    crates.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
 
     let mut filtered_trees: Vec<ModuleTreeNode> = Vec::new();
-    for name in &crate_names {
+    for (cid, name) in &crates {
+        let rtxn = snap.read_txn()?;
+        let mut retained_qns = HashSet::new();
+        for nid in retained {
+            if let Some(node) = snap.node(&rtxn, *nid)? {
+                if node.crate_id == Some(*cid) { retained_qns.insert(node.qualified_name); }
+            }
+        }
         let tree = snap.module_tree(name, None)?;
         if let Some(filtered) = filter_module_tree(tree, &retained_qns) {
             filtered_trees.push(filtered);

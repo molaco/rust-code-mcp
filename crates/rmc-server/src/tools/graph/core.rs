@@ -10,11 +10,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use rmc_graph::graph::{
-    BuildOptions, CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage, ModuleDependency,
-    ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount, UsageSummaryRow,
-    WorkspaceStats, build_and_persist,
-};
+use crate::deep_stack::run_analysis;
 use crate::tools::graph::response::*;
 use crate::tools::params::{
     BuildHypergraphParams, CallGraphParams, CallersInCrateParams, CallsFromParams,
@@ -22,8 +18,28 @@ use crate::tools::params::{
     ModuleDependenciesParams, ModuleTreeParams, RecursiveCallersCountParams, WhoCallsParams,
     WhoImportsParams, WhoUsesParams, WhoUsesSummaryParams, WorkspaceStatsParams,
 };
+use rmc_graph::graph::{
+    BuildKind, BuildOptions, CallGraphNode, EnrichedBinding, EnrichedCallSite, EnrichedUsage,
+    ModuleDependency, ModuleDependencySymbol, ModuleTreeNode, NodeKind, RecursiveCallersCount,
+    UsageSummaryRow, WorkspaceStats, build_and_persist,
+};
 
 use rmcp::{ErrorData as McpError, model::CallToolResult};
+
+pub(crate) async fn export_graph(params: crate::tools::params::GraphExportParams) -> Result<CallToolResult, McpError> {
+    let snap = open_workspace_snapshot(&params.directory)?;
+    let Some(table) = params.table else {
+        return json_result(&rmc_graph::graph::export::export_metadata(&snap).map_err(internal_error("export metadata"))?);
+    };
+    if params.graph_id.as_deref() != Some(snap.manifest.graph_id.as_str()) {
+        return Err(McpError::invalid_params("graph_id must match export metadata and current snapshot; restart export", None));
+    }
+    let cursor = params.cursor.as_deref().map(serde_json::from_str).transpose()
+        .map_err(|e| McpError::invalid_params(format!("invalid export cursor: {e}"), None))?;
+    let page = rmc_graph::graph::export::export_page(&snap, &table, cursor.as_ref(), params.limit.unwrap_or(100))
+        .map_err(internal_error("export_graph"))?;
+    json_result(&page)
+}
 
 pub(crate) async fn build_hypergraph(
     params: BuildHypergraphParams,
@@ -37,14 +53,18 @@ pub(crate) async fn build_hypergraph(
     }
     let opts = BuildOptions {
         force_rebuild: params.force_rebuild.unwrap_or(false),
+        // The per-crate build gives rust-analyzer's caches back between
+        // crates; this returns the pages to the kernel with the allocator
+        // this binary actually links.
+        release_free_memory: Some(crate::mcp::memory::release_free_memory),
         ..Default::default()
     };
     // build_and_persist runs `loader::load` + the full extract pass + LMDB
-    // writes synchronously (4-18s wall-clock). Hand off to a blocking thread
-    // so the tokio runtime worker stays free to handle other tool calls.
-    let result = tokio::task::spawn_blocking(move || build_and_persist(&dir, opts))
-        .await
-        .map_err(|e| McpError::internal_error(format!("spawn_blocking join error: {e}"), None))?
+    // writes synchronously (4-18s wall-clock). Hand off to a dedicated thread
+    // so the tokio runtime worker stays free to handle other tool calls — and
+    // so the recursive extract pass gets a stack it fits in (see `deep_stack`).
+    let result = run_analysis("build_hypergraph", move || build_and_persist(&dir, opts))
+        .await?
         .map_err(|e| McpError::internal_error(format!("build_hypergraph failed: {e:#}"), None))?;
 
     json_result(&BuildHypergraphResponse {
@@ -54,7 +74,9 @@ pub(crate) async fn build_hypergraph(
         node_count: result.node_count,
         binding_count: result.binding_count,
         usage_count: result.usage_count,
+        usage_counts: result.usage_counts,
         reused: result.reused,
+        build: result.kind,
         snapshot_path: result.snapshot_path.display().to_string(),
     })
 }
@@ -67,7 +89,10 @@ pub(crate) struct BuildHypergraphResponse {
     pub(crate) node_count: u64,
     pub(crate) binding_count: u64,
     pub(crate) usage_count: u64,
+    pub(crate) usage_counts: Option<rmc_graph::graph::model::UsageCounts>,
     pub(crate) reused: bool,
+    /// Reused, full (with the reason) or incremental (which crates).
+    pub(crate) build: BuildKind,
     pub(crate) snapshot_path: String,
 }
 
@@ -146,7 +171,9 @@ pub(crate) async fn get_exports(params: GraphExportsParams) -> Result<CallToolRe
     })
 }
 
-pub(crate) async fn get_reexports(params: GraphReexportsParams) -> Result<CallToolResult, McpError> {
+pub(crate) async fn get_reexports(
+    params: GraphReexportsParams,
+) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let module_id = resolve_required_node(&snap, &params.module, NodeKind::Module)?;
     let consumer_id = resolve_required_node(&snap, &params.consumer, NodeKind::Module)?;
@@ -291,6 +318,7 @@ pub(crate) async fn who_calls(params: WhoCallsParams) -> Result<CallToolResult, 
         target: Some(target_node.qualified_name),
         caller: None,
         krate: None,
+        unresolved_calls: None,
         page,
         call_sites,
     })
@@ -317,6 +345,8 @@ pub(crate) async fn calls_from(params: CallsFromParams) -> Result<CallToolResult
         target: None,
         caller: Some(caller_node.qualified_name),
         krate: None,
+        unresolved_calls: Some(unresolved_call_views(snap.unresolved_calls_from(caller_id)
+            .map_err(internal_error("unresolved_calls_from"))?, page_req.summary)),
         page,
         call_sites,
     })
@@ -369,6 +399,7 @@ pub(crate) async fn callers_in_crate(
         target: Some(target_node.qualified_name),
         caller: None,
         krate: Some(params.krate),
+        unresolved_calls: None,
         page,
         call_sites,
     })
@@ -398,13 +429,71 @@ pub(crate) async fn recursive_callers_count(
 
 pub(crate) async fn module_tree(params: ModuleTreeParams) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
-    let tree: ModuleTreeNode = snap
+    let mut tree: ModuleTreeNode = snap
         .module_tree(&params.krate, params.depth)
         .map_err(internal_error("module_tree"))?;
-    json_result(&ModuleTreeResponse { tree })
+    let total_nodes = count_tree_nodes(&tree);
+    // An explicit `depth` is the caller's choice and is served whole. Without
+    // one, a large crate's full tree runs to hundreds of KB, so the default
+    // keeps the deepest levels that fit the node budget and says so.
+    let depth_applied = match params.depth {
+        Some(_) => None,
+        None if total_nodes <= MODULE_TREE_DEFAULT_NODE_BUDGET => None,
+        None => {
+            let mut depth = 0;
+            while count_tree_nodes_to(&tree, depth + 1) <= MODULE_TREE_DEFAULT_NODE_BUDGET {
+                depth += 1;
+            }
+            prune_tree_below(&mut tree, depth);
+            Some(depth)
+        }
+    };
+    let returned_nodes = count_tree_nodes(&tree);
+    json_result(&ModuleTreeResponse {
+        tree,
+        total_nodes,
+        returned_nodes,
+        truncated_at_depth: depth_applied,
+        note: depth_applied.map(|d| {
+            format!(
+                "tree cut at depth {d}: {returned_nodes} of {total_nodes} nodes; pass `depth` explicitly for more"
+            )
+        }),
+    })
 }
 
-pub(crate) async fn workspace_stats(params: WorkspaceStatsParams) -> Result<CallToolResult, McpError> {
+/// Node budget for a `module_tree` call that passes no `depth`.
+const MODULE_TREE_DEFAULT_NODE_BUDGET: usize = 400;
+
+fn count_tree_nodes(node: &ModuleTreeNode) -> usize {
+    1 + node.children.iter().map(count_tree_nodes).sum::<usize>()
+}
+
+/// Nodes at depth `<= max_depth` below `node` (the node itself is depth 0).
+fn count_tree_nodes_to(node: &ModuleTreeNode, max_depth: usize) -> usize {
+    if max_depth == 0 {
+        return 1;
+    }
+    1 + node
+        .children
+        .iter()
+        .map(|child| count_tree_nodes_to(child, max_depth - 1))
+        .sum::<usize>()
+}
+
+fn prune_tree_below(node: &mut ModuleTreeNode, max_depth: usize) {
+    if max_depth == 0 {
+        node.children.clear();
+        return;
+    }
+    for child in &mut node.children {
+        prune_tree_below(child, max_depth - 1);
+    }
+}
+
+pub(crate) async fn workspace_stats(
+    params: WorkspaceStatsParams,
+) -> Result<CallToolResult, McpError> {
     let snap = open_workspace_snapshot(&params.directory)?;
     let stats: WorkspaceStats = snap
         .workspace_stats()
@@ -412,10 +501,7 @@ pub(crate) async fn workspace_stats(params: WorkspaceStatsParams) -> Result<Call
     json_result(&stats)
 }
 
-pub(crate) fn call_site_views(
-    sites: Vec<EnrichedCallSite>,
-    summary: bool,
-) -> Vec<CallSiteView> {
+pub(crate) fn call_site_views(sites: Vec<EnrichedCallSite>, summary: bool) -> Vec<CallSiteView> {
     sites
         .into_iter()
         .map(|site| CallSiteView {
@@ -425,21 +511,33 @@ pub(crate) fn call_site_views(
             start: if summary { None } else { Some(site.start) },
             end: if summary { None } else { Some(site.end) },
             category: site.category,
+            relation: site.relation,
+            expansion: if summary { None } else { site.expansion },
         })
         .collect()
 }
 
-fn module_dependency_view(
-    dependency: ModuleDependency,
-    summary: bool,
-) -> ModuleDependencyView {
+pub(crate) fn unresolved_call_views(calls: Vec<rmc_graph::graph::model::UnresolvedCall>, summary: bool) -> Vec<UnresolvedCallView> {
+    calls.into_iter().map(|call| UnresolvedCallView {
+        file: if summary { None } else { Some(call.file) },
+        start: if summary { None } else { Some(call.start) },
+        end: if summary { None } else { Some(call.end) },
+        expression: call.expression, reason: call.reason,
+    }).collect()
+}
+
+fn module_dependency_view(dependency: ModuleDependency, summary: bool) -> ModuleDependencyView {
     ModuleDependencyView {
         target_module: dependency.target_module,
         target_kind: dependency.target_kind,
         target_crate: dependency.target_crate,
         import_count: dependency.import_count,
         usage_count: dependency.usage_count,
-        symbols: if summary { None } else { Some(dependency.symbols) },
+        symbols: if summary {
+            None
+        } else {
+            Some(dependency.symbols)
+        },
     }
 }
 
@@ -502,6 +600,23 @@ pub(crate) struct CallSitesResponse {
     #[serde(flatten)]
     pub(crate) page: ListMeta,
     pub(crate) call_sites: Vec<CallSiteView>,
+    /// All observed unresolved calls of this caller, independent of the
+    /// resolved-call page. Absence of call_sites alone is not completeness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) unresolved_calls: Option<Vec<UnresolvedCallView>>,
+}
+
+/// The owner is the response's caller; raw IDs stay in the stored graph.
+#[derive(Debug, Serialize)]
+pub(crate) struct UnresolvedCallView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) end: Option<u32>,
+    pub(crate) expression: String,
+    pub(crate) reason: rmc_graph::graph::model::UnresolvedCallReason,
 }
 
 #[derive(Debug, Serialize)]
@@ -516,6 +631,9 @@ pub(crate) struct CallSiteView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) end: Option<u32>,
     pub(crate) category: String,
+    pub(crate) relation: rmc_graph::graph::model::UsageRelation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) expansion: Option<rmc_graph::graph::model::ExpansionSite>,
 }
 
 #[derive(Debug, Serialize)]
@@ -536,4 +654,44 @@ pub(crate) struct CallGraphResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct ModuleTreeResponse {
     pub(crate) tree: ModuleTreeNode,
+    pub(crate) total_nodes: usize,
+    pub(crate) returned_nodes: usize,
+    /// Set when the default node budget cut the tree; nodes at this depth
+    /// come back with their children dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) truncated_at_depth: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
+}
+
+#[cfg(test)]
+mod module_tree_budget_tests {
+    use super::*;
+
+    fn node(name: &str, children: Vec<ModuleTreeNode>) -> ModuleTreeNode {
+        ModuleTreeNode {
+            qualified_name: name.to_string(),
+            display_name: name.to_string(),
+            kind: "Module".to_string(),
+            item_kind: None,
+            visibility: None,
+            children,
+        }
+    }
+
+    #[test]
+    fn counts_and_prunes_by_depth() {
+        // root -> a -> (a1, a2), b
+        let mut tree = node(
+            "root",
+            vec![node("a", vec![node("a1", vec![]), node("a2", vec![])]), node("b", vec![])],
+        );
+        assert_eq!(count_tree_nodes(&tree), 5);
+        assert_eq!(count_tree_nodes_to(&tree, 0), 1);
+        assert_eq!(count_tree_nodes_to(&tree, 1), 3);
+        assert_eq!(count_tree_nodes_to(&tree, 2), 5);
+        prune_tree_below(&mut tree, 1);
+        assert_eq!(count_tree_nodes(&tree), 3);
+        assert!(tree.children.iter().all(|c| c.children.is_empty()));
+    }
 }

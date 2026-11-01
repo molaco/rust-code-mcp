@@ -5,14 +5,15 @@
 //! - Precise identification of changed files
 //! - Directory-level skipping (if directory hash unchanged, skip all children)
 
+use crate::indexing::traversal::collect_project_rust_files;
 use anyhow::Result;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use walkdir::WalkDir;
 
 /// SHA-256 hasher for Merkle tree
 #[derive(Clone)]
@@ -82,6 +83,25 @@ pub struct FileSystemMerkle {
 }
 
 impl FileSystemMerkle {
+    fn from_nodes(mut file_to_node: HashMap<PathBuf, FileNode>, snapshot_version: u64) -> Self {
+        let mut paths: Vec<PathBuf> = file_to_node.keys().cloned().collect();
+        paths.sort();
+        let mut hashes = Vec::with_capacity(paths.len());
+        for (leaf_index, path) in paths.iter().enumerate() {
+            let node = file_to_node
+                .get_mut(path)
+                .expect("path came from the same node map");
+            node.leaf_index = leaf_index;
+            hashes.push(node.content_hash);
+        }
+
+        Self {
+            tree: MerkleTree::<Sha256Hasher>::from_leaves(&hashes),
+            file_to_node,
+            snapshot_version,
+        }
+    }
+
     /// Build a Merkle tree from a directory
     ///
     /// This scans all Rust files in the directory and creates a Merkle tree
@@ -92,28 +112,12 @@ impl FileSystemMerkle {
         let mut file_hashes = Vec::new();
         let mut file_to_node = HashMap::new();
 
-        // Collect all Rust files in sorted order with proper error handling (critical for consistency!)
-        let mut files = Vec::new();
-        let mut walk_errors = 0;
-
-        for entry in WalkDir::new(root) {
-            match entry {
-                Ok(e) if e.file_type().is_file()
-                       && e.path().extension() == Some(std::ffi::OsStr::new("rs")) => {
-                    files.push(e.path().to_path_buf());
-                }
-                Ok(_) => {}, // Directory or non-.rs file, skip silently
-                Err(err) => {
-                    let path = err.path().unwrap_or_else(|| Path::new("<unknown>"));
-                    tracing::warn!(
-                        "Failed to access {} during Merkle tree build: {}",
-                        path.display(),
-                        err
-                    );
-                    walk_errors += 1;
-                }
-            }
-        }
+        // Same walker as the indexer (see `traversal`): build output,
+        // vendored copies and generated trees are neither indexed nor
+        // tracked for changes. Walking more here would make the snapshot
+        // incomparable with the index — and the coverage check in
+        // `monitoring::health` is exactly that comparison.
+        let (mut files, walk_errors) = collect_project_rust_files(root);
 
         if walk_errors > 0 {
             tracing::warn!(
@@ -221,6 +225,114 @@ impl FileSystemMerkle {
         }
     }
 
+    /// Build the snapshot that is safe to commit after a partial indexing run.
+    ///
+    /// Successful paths keep their new hashes. A retryable modification or
+    /// deletion retains its previous node, while a retryable addition is left
+    /// absent. Consequently the next comparison presents exactly those paths
+    /// as changed again instead of declaring a failed write up to date.
+    pub(crate) fn snapshot_with_retries(
+        &self,
+        previous: Option<&Self>,
+        retry_paths: &[PathBuf],
+    ) -> Self {
+        let mut nodes = self.file_to_node.clone();
+        for path in retry_paths {
+            match previous.and_then(|snapshot| snapshot.file_to_node.get(path)) {
+                Some(old_node) => {
+                    nodes.insert(path.clone(), old_node.clone());
+                }
+                None => {
+                    nodes.remove(path);
+                }
+            }
+        }
+        Self::from_nodes(nodes, self.snapshot_version)
+    }
+
+    /// Compare this snapshot against what is on disk **right now**.
+    ///
+    /// [`detect_changes`](Self::detect_changes) answers the same question but
+    /// needs a second tree, and building one means reading and SHA-256-hashing
+    /// every file in the project. That is the indexer's job; a health probe
+    /// must not pay it. This walks the same file set (one walker, see
+    /// [`traversal`](crate::indexing) ), stats each entry, and reads only the
+    /// files whose mtime moved away from the snapshot.
+    ///
+    /// Content still decides the verdict: a file that was touched but not
+    /// edited — `git checkout`, a rebuild, `touch` — is re-hashed and reported
+    /// unchanged. So there are no false "stale" answers from timestamps alone,
+    /// which matters because this verdict is what tells an operator to spend an
+    /// indexing run.
+    ///
+    /// A file that walks fine but cannot be read is reported as modified: we
+    /// cannot prove it unchanged, and silently calling it clean is exactly the
+    /// kind of vacuous pass this whole module exists to abolish.
+    pub fn detect_disk_changes(&self, root: &Path) -> Result<ChangeSet> {
+        let (files, walk_errors) = collect_project_rust_files(root);
+
+        if walk_errors > 0 {
+            tracing::warn!(
+                "Encountered {} errors while walking {} for freshness, continuing with accessible files",
+                walk_errors,
+                root.display()
+            );
+        }
+
+        let mut added = Vec::new();
+        let mut modified = Vec::new();
+        let mut on_disk = HashSet::with_capacity(files.len());
+
+        for path in files {
+            let node = match self.file_to_node.get(&path) {
+                Some(node) => node,
+                None => {
+                    on_disk.insert(path.clone());
+                    added.push(path);
+                    continue;
+                }
+            };
+            on_disk.insert(path.clone());
+
+            // Fast path: an untouched mtime means untouched content. Writing a
+            // file always moves it, so this can only miss a change made with a
+            // deliberately restored timestamp.
+            let stamp_unchanged = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .map(|modified| modified == node.last_modified)
+                .unwrap_or(false);
+            if stamp_unchanged {
+                continue;
+            }
+
+            match std::fs::read(&path) {
+                Ok(content) if Sha256Hasher::hash(&content) == node.content_hash => {}
+                Ok(_) => modified.push(path),
+                Err(e) => {
+                    tracing::warn!("Cannot read {} for freshness: {}", path.display(), e);
+                    modified.push(path);
+                }
+            }
+        }
+
+        let mut deleted: Vec<PathBuf> = self
+            .file_to_node
+            .keys()
+            .filter(|path| !on_disk.contains(*path))
+            .cloned()
+            .collect();
+
+        added.sort();
+        modified.sort();
+        deleted.sort();
+
+        Ok(ChangeSet {
+            added,
+            modified,
+            deleted,
+        })
+    }
+
     /// Save snapshot to disk
     pub fn save_snapshot(&self, path: &Path) -> Result<()> {
         let snapshot = MerkleSnapshot {
@@ -235,8 +347,30 @@ impl FileSystemMerkle {
             std::fs::create_dir_all(parent)?;
         }
 
-        let file = std::fs::File::create(path)?;
-        bincode::serialize_into(file, &snapshot)?;
+        // Never truncate the last good snapshot in place. An ENOSPC while
+        // serializing used to turn a recoverable partial indexing run into a
+        // corrupt snapshot that every later background tick failed to load.
+        let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+        let write_result = (|| -> Result<()> {
+            let mut file = std::fs::File::create(&temporary)?;
+            bincode::serialize_into(&mut file, &snapshot)?;
+            file.flush()?;
+            file.sync_all()?;
+
+            #[cfg(windows)]
+            if path.exists() {
+                // Windows rename does not replace an existing destination.
+                // The complete temporary file is already durable, so ENOSPC
+                // cannot destroy the previous snapshot before this point.
+                std::fs::remove_file(path)?;
+            }
+            std::fs::rename(&temporary, path)?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
 
         tracing::info!(
             "Saved Merkle snapshot v{} to {}",
@@ -288,6 +422,15 @@ impl FileSystemMerkle {
     /// Get the number of files in the tree
     pub fn file_count(&self) -> usize {
         self.file_to_node.len()
+    }
+
+    /// Paths of every file the tree tracks.
+    ///
+    /// This is the "expected" side of the coverage check: whatever the
+    /// tree holds, the index is supposed to hold too (both sides walk
+    /// with `traversal::collect_project_rust_files`).
+    pub fn file_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.file_to_node.keys()
     }
 
     /// Get the snapshot version
@@ -411,6 +554,33 @@ mod tests {
     }
 
     #[test]
+    fn partial_snapshot_retries_failed_add_modify_and_delete() {
+        let temp_dir = TempDir::new().unwrap();
+        let modified = temp_dir.path().join("modified.rs");
+        let deleted = temp_dir.path().join("deleted.rs");
+        let added = temp_dir.path().join("added.rs");
+
+        std::fs::write(&modified, "fn value() -> u8 { 1 }").unwrap();
+        std::fs::write(&deleted, "fn old() {}").unwrap();
+        let old = FileSystemMerkle::from_directory(temp_dir.path()).unwrap();
+
+        std::fs::write(&modified, "fn value() -> u8 { 2 }").unwrap();
+        std::fs::remove_file(&deleted).unwrap();
+        std::fs::write(&added, "fn new() {}").unwrap();
+        let current = FileSystemMerkle::from_directory(temp_dir.path()).unwrap();
+
+        let committed = current.snapshot_with_retries(
+            Some(&old),
+            &[modified.clone(), deleted.clone(), added.clone()],
+        );
+        let retry = current.detect_changes(&committed);
+
+        assert_eq!(retry.modified, vec![modified]);
+        assert_eq!(retry.deleted, vec![deleted]);
+        assert_eq!(retry.added, vec![added]);
+    }
+
+    #[test]
     fn test_snapshot_save_and_load() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.rs");
@@ -424,12 +594,41 @@ mod tests {
         assert!(snapshot_path.exists());
 
         // Load snapshot
-        let merkle2 = FileSystemMerkle::load_snapshot(&snapshot_path).unwrap().unwrap();
+        let merkle2 = FileSystemMerkle::load_snapshot(&snapshot_path)
+            .unwrap()
+            .unwrap();
 
         // Should be identical
         assert_eq!(merkle1.file_count(), merkle2.file_count());
         assert_eq!(merkle1.root_hash(), merkle2.root_hash());
         assert!(!merkle1.has_changes(&merkle2));
+    }
+
+    #[test]
+    fn snapshot_replacement_keeps_a_loadable_complete_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source.rs");
+        let snapshot_path = temp_dir.path().join("merkle.snapshot");
+
+        std::fs::write(&source, "fn first() {}").unwrap();
+        FileSystemMerkle::from_directory(temp_dir.path())
+            .unwrap()
+            .save_snapshot(&snapshot_path)
+            .unwrap();
+
+        std::fs::write(&source, "fn second() {}").unwrap();
+        let expected = FileSystemMerkle::from_directory(temp_dir.path()).unwrap();
+        expected.save_snapshot(&snapshot_path).unwrap();
+
+        let loaded = FileSystemMerkle::load_snapshot(&snapshot_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.root_hash(), expected.root_hash());
+        assert!(
+            !snapshot_path
+                .with_extension(format!("tmp-{}", std::process::id()))
+                .exists()
+        );
     }
 
     #[test]

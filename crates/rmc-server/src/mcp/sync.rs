@@ -6,7 +6,10 @@
 //! - Uses the indexing incremental service for fast change detection
 //! - Tracks multiple directories independently
 
-use rmc_indexing::indexing::{index_project_incrementally, IncrementalIndexRequest};
+use rmc_indexing::indexing::{
+    index_project_incrementally, IncrementalIndexRequest, ReaderExclusion, VectorMaintenance,
+};
+use crate::mcp::workspace_locks::run_outside_operation_lock;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -18,11 +21,25 @@ use tracing;
 
 use rmc_engine::embeddings::EmbeddingBackend;
 
-use super::defaults::{automatic_embedding_profile_name, is_background_embedding_backend};
+use super::defaults::{
+    automatic_embedding_backend, automatic_embedding_profile_name, is_background_embedding_backend,
+};
 use super::workspace_locks::WorkspaceLockRegistry;
 
 fn normalize_directory(dir: &Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
+/// Whether a discovered index belongs to the profile background sync maintains.
+///
+/// Compared by profile name rather than by identity string: a legacy identity
+/// decodes into the same built-in profile, and matching on the raw string
+/// would drop such an index out of background sync for no real reason.
+fn is_automatic_profile_backend(
+    backend: &EmbeddingBackend,
+    automatic: &EmbeddingBackend,
+) -> bool {
+    backend.profile.name() == automatic.profile.name()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -90,7 +107,7 @@ impl SyncManager {
     ) -> bool {
         if !is_background_embedding_backend(backend) {
             tracing::info!(
-                "Not tracking {} for background sync because profile {} uses local CUDA; explicit foreground commands remain supported",
+                "Not tracking {} for background sync because profile {} runs a local Qwen3/CUDA model; explicit foreground commands remain supported",
                 dir.display(),
                 backend.profile.name(),
             );
@@ -174,7 +191,7 @@ impl SyncManager {
     /// periodic sync cycles. An in-flight workspace sync is allowed to finish.
     pub async fn run_until_shutdown(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
         tracing::info!(
-            "Starting background sync with {}s interval; automatic/default profile {}; local CUDA profiles are skipped in background sync",
+            "Starting background sync with {}s interval; automatic/default profile {}; other profiles' indexes on disk are left to explicit commands, and local Qwen3/CUDA profiles are skipped entirely",
             self.interval.as_secs(),
             automatic_embedding_profile_name(),
         );
@@ -226,8 +243,17 @@ impl SyncManager {
         for (i, dir) in dirs.iter().enumerate() {
             tracing::debug!("[{}/{}] Syncing: {}", i + 1, dirs.len(), dir.display());
 
-            if let Err(e) = self.sync_directory(dir).await {
-                tracing::error!("Failed to sync {}: {}", dir.display(), e);
+            // A panic is this directory's failed sync, like an `Err`: left to
+            // unwind, it ended the background task for the daemon's lifetime
+            // with nothing in the log to say so (see `panic_boundary`).
+            match crate::panic_boundary::catch_panic(self.sync_directory(dir)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!("Failed to sync {}: {}", dir.display(), e),
+                Err(message) => tracing::error!(
+                    target: "panic",
+                    "sync of {} panicked: {message}; the next cycle tries again",
+                    dir.display()
+                ),
             }
         }
 
@@ -240,9 +266,51 @@ impl SyncManager {
     /// - < 10ms if no changes
     /// - Only reindexes changed files if changes detected
     async fn sync_directory(&self, dir: &Path) -> Result<()> {
-        use crate::mcp::project_paths::ProjectPaths;
+        // A store writer: the walk and the embedding of changed files run
+        // beside the workspace's readers, which are kept out only while the
+        // run writes (16 files, 2026-10-31: 0.4 s of a 23 s run).
+        let writer = self.workspace_locks.lock_store_writer(dir).await;
+        let maintenance = self
+            .sync_directory_indexes(dir, writer.operation_lock())
+            .await?;
+        if maintenance.is_empty() {
+            return Ok(());
+        }
+        // The stores' maintenance runs outside the operation lock too: a
+        // `search` of this workspace must not wait for it (it waited 413.9 s
+        // for a 425.2 s pass, 2026-10-31). The next writer still does. Inline
+        // rather than spawned: the sync visits its directories one by one,
+        // and that keeps at most one pass of this loop running at a time.
+        run_outside_operation_lock(writer.into_maintenance(), async {
+            for pass in &maintenance {
+                pass.run(dir).await;
+            }
+        })
+        .await;
+        Ok(())
+    }
 
-        let _workspace_lock = self.workspace_locks.lock_exclusive(dir).await;
+    /// The indexing half of [`Self::sync_directory`], under its store-writer
+    /// lock; `operation` is the workspace's operation lock, which each run
+    /// takes for write around its writes. Returns the maintenance passes the
+    /// writes call for, one per index that wrote.
+    async fn sync_directory_indexes(
+        &self,
+        dir: &Path,
+        operation: &tokio::sync::RwLock<()>,
+    ) -> Result<Vec<VectorMaintenance>> {
+        use crate::mcp::project_paths::ProjectPaths;
+        let mut maintenance = Vec::new();
+
+        // Background sync maintains the automatic profile's index and nothing
+        // else. A directory can carry several indexes at once — typically a
+        // current GPU one plus a stale CPU one left over from an earlier
+        // default — and chasing all of them means the slow profile burns the
+        // machine on vectors no search ever reads: same model, same dim, but
+        // ~80x apart in throughput (260 vs 3 chunks/s measured on ONNX
+        // migraphx vs CPU). Other profiles stay reachable through an explicit
+        // index_codebase call with `embedding_profile`.
+        let automatic_backend = automatic_embedding_backend();
 
         let indexes = ProjectPaths::indexed_profiles(dir)
             .map_err(|msg| anyhow::anyhow!(msg))?;
@@ -251,7 +319,7 @@ impl SyncManager {
                 "No existing embedding indexes found for {}; sync skipped",
                 dir.display()
             );
-            return Ok(());
+            return Ok(maintenance);
         }
 
         for indexed in indexes {
@@ -259,9 +327,20 @@ impl SyncManager {
             let paths = indexed.paths;
             let stored_identity = indexed.stored_identity;
 
+            if !is_automatic_profile_backend(&backend, &automatic_backend) {
+                tracing::info!(
+                    "Skipping background sync for {} profile {} because background sync maintains only the automatic profile {}; use an explicit indexing command with embedding_profile=\"{}\" to update it",
+                    dir.display(),
+                    backend.profile.name(),
+                    automatic_backend.profile.name(),
+                    backend.profile.name(),
+                );
+                continue;
+            }
+
             if !is_background_embedding_backend(&backend) {
                 tracing::info!(
-                    "Skipping background sync for {} profile {} because automatic/background sync only runs CPU or remote embedding profiles; use an explicit indexing command with embedding_profile=\"{}\" for local CUDA updates",
+                    "Skipping background sync for {} profile {} because automatic/background sync runs ONNX (CPU or local GPU) and remote embedding profiles only; use an explicit indexing command with embedding_profile=\"{}\" for local Qwen3/CUDA updates",
                     dir.display(),
                     backend.profile.name(),
                     backend.profile.name(),
@@ -269,6 +348,10 @@ impl SyncManager {
                 continue;
             }
 
+            let mem = rmc_engine::mem_trace::MemSpan::start(format!(
+                "background sync of {}",
+                dir.display()
+            ));
             let outcome = index_project_incrementally(IncrementalIndexRequest {
                 codebase_path: dir,
                 cache_path: &paths.cache_path,
@@ -279,8 +362,14 @@ impl SyncManager {
                 snapshot_path: None,
                 codebase_loc: None,
                 force_reindex: false,
+                // Background sync only chases file changes; repairing coverage
+                // is an explicit, user-triggered decision.
+                repair_coverage: false,
+                reader_exclusion: ReaderExclusion::AroundPublish(operation),
             })
             .await?;
+            mem.finish();
+            maintenance.extend(outcome.maintenance);
             let stats = outcome.stats;
 
             if stats.indexed_files > 0 {
@@ -300,7 +389,7 @@ impl SyncManager {
             }
         }
 
-        Ok(())
+        Ok(maintenance)
     }
 
     /// Trigger an immediate sync for all tracked directories
@@ -465,11 +554,17 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// The line runs between MODELS, not between CPU and GPU: a local Qwen3
+    /// on CUDA is kept out because an unattended session takes VRAM from
+    /// whoever is at the machine, while the ONNX GPU profile is the same
+    /// small model as the CPU one on a different execution provider.
     #[test]
-    fn background_sync_rejects_local_cuda_profiles() {
-        let gpu_backend =
+    fn background_sync_rejects_local_qwen3_cuda_profiles() {
+        let qwen3_cuda_backend =
             rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-small")
                 .unwrap();
+        let onnx_gpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-bge").unwrap();
         let cpu_backend =
             rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-cpu-small")
                 .unwrap();
@@ -477,32 +572,66 @@ mod tests {
             rmc_engine::embeddings::EmbeddingBackend::from_profile_name("openrouter-qwen3-8b")
                 .unwrap();
 
-        assert!(!is_background_embedding_backend(&gpu_backend));
+        assert!(!is_background_embedding_backend(&qwen3_cuda_backend));
+        assert!(is_background_embedding_backend(&onnx_gpu_backend));
         assert!(is_background_embedding_backend(&cpu_backend));
         assert!(is_background_embedding_backend(&remote_backend));
     }
 
-    #[tokio::test]
-    async fn background_sync_tracking_skips_local_cuda_profiles() {
-        let sync_manager = SyncManager::with_defaults(300);
-        let temp_dir = tempfile::tempdir().unwrap();
+    /// A directory keeps every index ever built for it, so discovery returns
+    /// the stale ones too. Background sync must maintain only the automatic
+    /// profile: a leftover CPU index next to a live GPU one is ~80x slower per
+    /// chunk and feeds a collection no search reads.
+    #[test]
+    fn background_sync_maintains_only_the_automatic_profile() {
         let gpu_backend =
-            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-small")
-                .unwrap();
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-bge").unwrap();
         let cpu_backend =
             rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-cpu-small")
                 .unwrap();
 
+        assert!(is_automatic_profile_backend(&gpu_backend, &gpu_backend));
+        assert!(!is_automatic_profile_backend(&cpu_backend, &gpu_backend));
+        // Symmetric: with a CPU default it is the GPU index that is left alone.
+        assert!(is_automatic_profile_backend(&cpu_backend, &cpu_backend));
+        assert!(!is_automatic_profile_backend(&gpu_backend, &cpu_backend));
+    }
+
+    /// The stale-profile filter must not be confused with the Qwen3/CUDA one:
+    /// both CPU and ONNX-GPU pass `is_background_embedding_backend`, so only
+    /// the automatic-profile check separates them.
+    #[test]
+    fn stale_cpu_index_passes_the_qwen3_filter_and_is_stopped_by_the_profile_check() {
+        let gpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-bge").unwrap();
+        let cpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-cpu-small")
+                .unwrap();
+
+        assert!(is_background_embedding_backend(&cpu_backend));
+        assert!(!is_automatic_profile_backend(&cpu_backend, &gpu_backend));
+    }
+
+    #[tokio::test]
+    async fn background_sync_tracking_skips_local_qwen3_cuda_profiles() {
+        let sync_manager = SyncManager::with_defaults(300);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let qwen3_cuda_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-small")
+                .unwrap();
+        let onnx_gpu_backend =
+            rmc_engine::embeddings::EmbeddingBackend::from_profile_name("local-gpu-bge").unwrap();
+
         assert!(
             !sync_manager
-                .track_directory_for_backend(temp_dir.path().to_path_buf(), &gpu_backend)
+                .track_directory_for_backend(temp_dir.path().to_path_buf(), &qwen3_cuda_backend)
                 .await
         );
         assert!(sync_manager.get_tracked_directories().await.is_empty());
 
         assert!(
             sync_manager
-                .track_directory_for_backend(temp_dir.path().to_path_buf(), &cpu_backend)
+                .track_directory_for_backend(temp_dir.path().to_path_buf(), &onnx_gpu_backend)
                 .await
         );
         assert_eq!(sync_manager.get_tracked_directories().await.len(), 1);

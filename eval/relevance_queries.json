@@ -1,0 +1,281 @@
+{
+  "_comment": [
+    "Ground truth for search-quality evaluation, labelled by hand against this repository.",
+    "The unit is a FILE, not a symbol name: file paths survive renames of the items inside",
+    "them and can be re-verified by reading the repo (see tests/relevance_dataset.rs, which",
+    "fails if a labelled path no longer exists).",
+    "Queries are in English on purpose — both bge profiles are `bge-small-EN-v1.5`, so a",
+    "Russian query would measure the tokenizer's helplessness rather than the profile.",
+    "Labels name where the capability LIVES (its implementation), not every file mentioning it."
+  ],
+  "cases": [
+    {
+      "query": "detect which files changed since the last indexing run",
+      "expected_files": [
+        "crates/rmc-indexing/src/indexing/merkle.rs",
+        "crates/rmc-indexing/src/indexing/incremental.rs"
+      ],
+      "rationale": "Merkle-tree change detection and the incremental indexer that drives it."
+    },
+    {
+      "query": "store embedding vectors and find nearest neighbours",
+      "expected_files": [
+        "crates/rmc-engine/src/vector_store/lancedb.rs",
+        "crates/rmc-engine/src/vector_store/mod.rs"
+      ],
+      "rationale": "LanceDB backend plus the VectorStore facade with its search method."
+    },
+    {
+      "query": "combine keyword ranking and semantic ranking into one result list",
+      "expected_files": [
+        "crates/rmc-engine/src/search/mod.rs"
+      ],
+      "rationale": "HybridSearch and reciprocal rank fusion live here."
+    },
+    {
+      "query": "keyword search over code with tantivy",
+      "expected_files": [
+        "crates/rmc-engine/src/search/bm25.rs",
+        "crates/rmc-indexing/src/indexing/tantivy_adapter.rs"
+      ],
+      "rationale": "Bm25Search queries the tantivy index the adapter writes."
+    },
+    {
+      "query": "split a source file into semantic pieces for embedding",
+      "expected_files": [
+        "crates/rmc-engine/src/chunker/chunker.rs",
+        "crates/rmc-engine/src/chunker/split.rs"
+      ],
+      "rationale": "The chunker engine and the oversized-chunk splitter."
+    },
+    {
+      "query": "count tokens and cut an input that is too long for the model",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/token_lengths.rs",
+        "crates/rmc-engine/src/chunker/split.rs"
+      ],
+      "rationale": "Token-length measurement and the token-based split path."
+    },
+    {
+      "query": "which embedding model to load and what dimension it produces",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/profile.rs",
+        "crates/rmc-engine/src/embeddings/profile_registry.rs"
+      ],
+      "rationale": "Built-in profile table and the TOML/env registry that resolves a name to it."
+    },
+    {
+      "query": "run the embedding model on an AMD graphics card",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/fastembed_onnx.rs"
+      ],
+      "rationale": "The ONNX path with the MIGraphX execution provider and its kernel cache."
+    },
+    {
+      "query": "prove the graph really ran on the GPU instead of silently falling back to CPU",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/ep_census.rs"
+      ],
+      "rationale": "ProviderCensus counts nodes per execution provider from an ORT profile."
+    },
+    {
+      "query": "retry an HTTP request after rate limiting with backoff",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/openrouter/retry.rs"
+      ],
+      "rationale": "Retry classification and backoff for OpenRouter calls."
+    },
+    {
+      "query": "group inputs into batches before sending them to the embedding API",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/openrouter/batch.rs",
+        "crates/rmc-indexing/src/indexing/embedding_batcher.rs"
+      ],
+      "rationale": "API-side batch planning and the memory-aware batcher on the indexing side."
+    },
+    {
+      "query": "read the API key from an environment variable",
+      "expected_files": [
+        "crates/rmc-engine/src/embeddings/openrouter/config.rs"
+      ],
+      "rationale": "API_KEY_ENV / FALLBACK_API_KEY_ENV and the rest of the env parsing."
+    },
+    {
+      "query": "parse rust source into a syntax tree",
+      "expected_files": [
+        "crates/rmc-engine/src/parser/rust_parser.rs",
+        "crates/rmc-engine/src/parser/mod.rs"
+      ],
+      "rationale": "RustParser over ra_ap_syntax and the module that exposes it."
+    },
+    {
+      "query": "extract use statements and imports from a file",
+      "expected_files": [
+        "crates/rmc-engine/src/parser/imports.rs"
+      ],
+      "rationale": "Import extraction pass."
+    },
+    {
+      "query": "build a call graph of which function calls which",
+      "expected_files": [
+        "crates/rmc-engine/src/parser/call_graph.rs",
+        "crates/rmc-graph/src/graph/query/calls.rs"
+      ],
+      "rationale": "Syntactic call-graph construction and the persisted-graph calls query family."
+    },
+    {
+      "query": "find every place a type is used",
+      "expected_files": [
+        "crates/rmc-engine/src/parser/type_references.rs",
+        "crates/rmc-graph/src/graph/usages.rs"
+      ],
+      "rationale": "Type-reference tracking and the usage extraction pass."
+    },
+    {
+      "query": "persist the workspace graph snapshot on disk",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/storage.rs",
+        "crates/rmc-graph/src/graph/snapshot.rs"
+      ],
+      "rationale": "heed storage layout and the staging/write/publish lifecycle."
+    },
+    {
+      "query": "report public items that nothing outside the crate uses",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/query/surface.rs",
+        "crates/rmc-server/src/tools/graph/surface.rs"
+      ],
+      "rationale": "dead_pub_in_crate / dead_pub_report queries and their MCP endpoints."
+    },
+    {
+      "query": "audit unsafe blocks in the workspace",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/unsafe_audit.rs"
+      ],
+      "rationale": "The unsafe-block audit pass."
+    },
+    {
+      "query": "detect recursive functions",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/recursion_check.rs"
+      ],
+      "rationale": "recursion_check pass."
+    },
+    {
+      "query": "which derive macros are attached to structs and enums",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/derive_audit.rs"
+      ],
+      "rationale": "derive_audit pass."
+    },
+    {
+      "query": "check the capacity given to channels",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/channel_audit.rs"
+      ],
+      "rationale": "channel_capacity_audit pass."
+    },
+    {
+      "query": "render a mermaid diagram of the module structure",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/codemap/render.rs"
+      ],
+      "rationale": "Mermaid and outline renderers for the codemap."
+    },
+    {
+      "query": "produce a skeleton of a crate with signatures but no bodies",
+      "expected_files": [
+        "crates/rmc-graph/src/graph/skeleton/render.rs",
+        "crates/rmc-graph/src/graph/skeleton/collect.rs"
+      ],
+      "rationale": "Skeleton collection and rendering; the endpoint wrapper lives elsewhere."
+    },
+    {
+      "query": "reindex automatically in the background when files change",
+      "expected_files": [
+        "crates/rmc-server/src/mcp/sync.rs"
+      ],
+      "rationale": "Background sync manager."
+    },
+    {
+      "query": "prevent two operations from indexing the same workspace at once",
+      "expected_files": [
+        "crates/rmc-server/src/mcp/workspace_locks.rs"
+      ],
+      "rationale": "Per-workspace operation locks."
+    },
+    {
+      "query": "dispatch an incoming MCP tool call to its handler",
+      "expected_files": [
+        "crates/rmc-server/src/tools/router.rs"
+      ],
+      "rationale": "The tool router."
+    },
+    {
+      "query": "rename a symbol across the project using rust-analyzer",
+      "expected_files": [
+        "crates/rmc-server/src/semantic/rename.rs"
+      ],
+      "rationale": "Rename via rust-analyzer."
+    },
+    {
+      "query": "convert a line and column into a byte offset",
+      "expected_files": [
+        "crates/rmc-server/src/semantic/position.rs"
+      ],
+      "rationale": "Position and coordinate utilities."
+    },
+    {
+      "query": "report whether the index is healthy",
+      "expected_files": [
+        "crates/rmc-indexing/src/monitoring/health.rs",
+        "crates/rmc-server/src/tools/endpoints/health.rs"
+      ],
+      "rationale": "Health monitor and the MCP endpoint exposing it."
+    },
+    {
+      "query": "skip files containing passwords or secret keys",
+      "expected_files": [
+        "crates/rmc-indexing/src/security/mod.rs"
+      ],
+      "rationale": "The security module that filters files out of indexing. NOT secrets.rs: the scanner's own pattern table trips it, so the indexer excludes that file from the corpus and no profile can ever retrieve it."
+    },
+    {
+      "query": "decide which rust files belong to the project and which directories to skip",
+      "expected_files": [
+        "crates/rmc-indexing/src/indexing/traversal.rs"
+      ],
+      "rationale": "collect_project_rust_files and is_skipped_dir_name — the single source of truth."
+    },
+    {
+      "query": "where cache and index artifacts for a project are placed on disk",
+      "expected_files": [
+        "crates/rmc-indexing/src/indexing/project_paths.rs",
+        "crates/rmc-server/src/mcp/project_paths.rs"
+      ],
+      "rationale": "Artifact path derivation on the indexing side and its server-side counterpart."
+    },
+    {
+      "query": "clear a corrupted metadata cache",
+      "expected_files": [
+        "crates/rmc-server/src/tools/endpoints/cache.rs",
+        "crates/rmc-indexing/src/metadata_cache.rs"
+      ],
+      "rationale": "The clear-cache endpoint and the cache it clears."
+    },
+    {
+      "query": "measure how much memory indexing is using",
+      "expected_files": [
+        "crates/rmc-indexing/src/metrics/memory.rs"
+      ],
+      "rationale": "Memory usage monitoring."
+    },
+    {
+      "query": "back up and restore the merkle snapshot",
+      "expected_files": [
+        "crates/rmc-indexing/src/monitoring/backup.rs"
+      ],
+      "rationale": "Backup and restore for merkle snapshots."
+    }
+  ]
+}

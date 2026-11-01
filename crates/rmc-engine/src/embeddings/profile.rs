@@ -41,12 +41,17 @@ pub struct EmbeddingProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LocalLoaderSpec {
     Qwen3(Qwen3Variant),
-    FastembedCpu(FastembedCpuModel),
+    FastembedOnnx(FastembedOnnxModel),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FastembedCpuModel {
+pub enum FastembedOnnxModel {
+    /// int8-quantized BGE-small. Fast on CPU, but on GPU the quantized
+    /// operators (QLinear*) fall back to the CPU, so it is unusable for a GPU profile.
     BgeSmallEnV15Q,
+    /// fp32 BGE-small: the same model without quantization. Required by the GPU profile.
+    /// Vectors differ from `BgeSmallEnV15Q`, so these are DIFFERENT indexes.
+    BgeSmallEnV15,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -111,8 +116,42 @@ static BUILT_IN_PROFILES: LazyLock<Vec<EmbeddingProfile>> = LazyLock::new(|| {
             query_policy: QueryPolicy::InstructionPrefix(arc(BGE_SEARCH_QUERY_PREFIX)),
             chunk_target_tokens: 384,
             chunk_hard_max_tokens: 512,
-            local_loader: Some(LocalLoaderSpec::FastembedCpu(
-                FastembedCpuModel::BgeSmallEnV15Q,
+            local_loader: Some(LocalLoaderSpec::FastembedOnnx(
+                FastembedOnnxModel::BgeSmallEnV15Q,
+            )),
+        },
+        EmbeddingProfile {
+            name: arc("local-gpu-bge"),
+            runtime: EmbeddingRuntime::LocalFastembedOnnxMigraphx,
+            model_id: arc("Xenova/bge-small-en-v1.5"),
+            tokenizer_model_id: Some(arc("Xenova/bge-small-en-v1.5")),
+            dim: 384,
+            max_len: 512,
+            query_policy: QueryPolicy::InstructionPrefix(arc(BGE_SEARCH_QUERY_PREFIX)),
+            chunk_target_tokens: 384,
+            chunk_hard_max_tokens: 512,
+            local_loader: Some(LocalLoaderSpec::FastembedOnnx(
+                FastembedOnnxModel::BgeSmallEnV15,
+            )),
+        },
+        // Windows twin of `local-gpu-bge`: same model and same shape, different
+        // runtime. There are two profiles rather than one with automatic EP selection, because
+        // the runtime is part of `EmbeddingIdentity`, i.e. choosing the EP chooses
+        // the INDEX. Automatic selection here would mean the same profile on two
+        // machines addresses different collections, and that cannot be diagnosed by hand:
+        // the results are simply empty.
+        EmbeddingProfile {
+            name: arc("local-dml-bge"),
+            runtime: EmbeddingRuntime::LocalFastembedOnnxDirectml,
+            model_id: arc("Xenova/bge-small-en-v1.5"),
+            tokenizer_model_id: Some(arc("Xenova/bge-small-en-v1.5")),
+            dim: 384,
+            max_len: 512,
+            query_policy: QueryPolicy::InstructionPrefix(arc(BGE_SEARCH_QUERY_PREFIX)),
+            chunk_target_tokens: 384,
+            chunk_hard_max_tokens: 512,
+            local_loader: Some(LocalLoaderSpec::FastembedOnnx(
+                FastembedOnnxModel::BgeSmallEnV15,
             )),
         },
         EmbeddingProfile {
@@ -136,6 +175,8 @@ static BUILT_IN_PROFILES: LazyLock<Vec<EmbeddingProfile>> = LazyLock::new(|| {
 const PROFILE_ALIASES: &[(&str, &str)] = &[
     ("qwen3-local-gpu-small", "local-gpu-small"),
     ("bge-small-cpu", "local-cpu-small"),
+    ("bge-small-gpu", "local-gpu-bge"),
+    ("bge-small-dml", "local-dml-bge"),
     ("qwen3-8b-openrouter", "openrouter-qwen3-8b"),
 ];
 
@@ -165,16 +206,18 @@ impl Qwen3Variant {
     }
 }
 
-impl FastembedCpuModel {
+impl FastembedOnnxModel {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::BgeSmallEnV15Q => "BGESmallENV15Q",
+            Self::BgeSmallEnV15 => "BGESmallENV15",
         }
     }
 
     pub fn provider_model_id(self) -> &'static str {
         match self {
             Self::BgeSmallEnV15Q => "Qdrant/bge-small-en-v1.5-onnx-Q",
+            Self::BgeSmallEnV15 => "Xenova/bge-small-en-v1.5",
         }
     }
 }
@@ -254,7 +297,7 @@ impl EmbeddingProfile {
     }
 
     pub fn accepted_names() -> &'static str {
-        "local-gpu-small, local-cpu-small, openrouter-qwen3-8b, local-qwen3-4b, local-qwen3-8b"
+        "local-gpu-small, local-cpu-small, local-gpu-bge, local-dml-bge, openrouter-qwen3-8b, local-qwen3-4b, local-qwen3-8b"
     }
 
     pub fn default_chunk_target_tokens(&self) -> usize {

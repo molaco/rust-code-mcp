@@ -502,6 +502,7 @@ mod tests {
                 visibility: None,
                 attributes: Vec::new(),
                 crate_target_kind: None,
+                declaration_module: None,
             },
         )
     }
@@ -619,8 +620,41 @@ mod tests {
         assert!(all_items > 0);
     }
 
+    /// On a fixture, not on this repository: the graph is built with
+    /// `cfg(test)` off, so this repository's `#[cfg(test)] mod tests` and
+    /// `#[test]` fns never reach the snapshot. What does reach it — a module
+    /// named `tests` without the cfg, an item under `cfg_attr(test, …)` — is
+    /// what the option prunes.
     #[test]
     fn skip_test_items_prunes_tests_modules_and_test_attrs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"skel_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub fn keep() {}\n\npub mod tests {\n    pub fn helper() {}\n}\n\n\
+             #[cfg_attr(test, derive(Debug))]\npub struct DebugInTests;\n",
+        )
+        .unwrap();
+        use crate::graph::snapshot::{BuildOptions, build_and_persist, open_current};
+        use crate::graph::storage::{GraphEnvOptions, GraphPaths};
+        let data = tempfile::tempdir().unwrap();
+        let options = BuildOptions {
+            data_dir_override: Some(data.path().to_path_buf()),
+            ..Default::default()
+        };
+        let result = build_and_persist(root, options).unwrap();
+        let paths = GraphPaths::for_workspace_in(data.path(), &result.workspace_root);
+        let snap = open_current(&paths, GraphEnvOptions::default())
+            .unwrap()
+            .unwrap();
+        let render = |opts| collect_skeleton(&snap, &opts).expect("collect skeleton");
+
         let skipped = render(SkeletonOptions {
             include: vec!["all".to_string()],
             skip_test_items: true,
@@ -643,8 +677,14 @@ mod tests {
             .flat_map(|file| file.items.iter())
             .map(|item| item.node.qualified_name.as_str())
             .collect();
-        assert!(skipped_names.iter().all(|name| !name.contains("::tests::")));
-        assert!(kept_names.iter().any(|name| name.contains("::tests::")));
+        for name in ["skel_fixture::tests::helper", "skel_fixture::DebugInTests"] {
+            assert!(kept_names.contains(&name), "{name} not kept: {kept_names:?}");
+            assert!(!skipped_names.contains(&name), "{name} not skipped: {skipped_names:?}");
+        }
+        assert!(
+            skipped_names.contains(&"skel_fixture::keep"),
+            "{skipped_names:?}"
+        );
     }
 
     #[test]

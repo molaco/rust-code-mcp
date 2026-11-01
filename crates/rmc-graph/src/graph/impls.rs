@@ -6,16 +6,14 @@
 //! valid targets for `Definition::usages` so that `who_uses(Foo::bar)` and
 //! `who_uses(Trait::method)` can answer non-empty.
 //!
-//! Trait *impl* method bodies (`impl T for Foo { fn m() {...} }`) are
-//! deliberately NOT extracted — RA's `Definition::usages` resolves call sites
-//! `x.m()` and `Foo::m()` back to the trait declaration's def, so the trait
-//! Item alone covers `who_uses` for trait dispatch. Adding impl-body items
-//! would emit duplicate nodes that just shadow the trait declaration.
+//! Trait implementation items are distinct from contract declarations: their
+//! bodies own references and concrete dispatch can name them. Qualified names
+//! include the implemented trait, so two traits' same-named methods stay apart.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use ra_ap_hir::{AssocItem, Crate, Enum, EnumVariant, HasCrate, Impl, Semantics, Trait, attach_db};
+use ra_ap_hir::{AssocItem, Crate, DisplayTarget, Enum, EnumVariant, HasCrate, HirDisplay, Impl, Semantics, Trait, attach_db};
 use ra_ap_hir_def::{AdtId, ModuleDefId, TraitId};
 use ra_ap_ide::TryToNav;
 use ra_ap_ide_db::RootDatabase;
@@ -24,6 +22,8 @@ use ra_ap_vfs::Vfs;
 
 use super::audit_util::resolve_workspace_relative;
 use super::ids::NodeId;
+use super::identity::assoc_item_node_id;
+use super::labels::module_qualified_path;
 use super::model::{ExtractionModel, ItemKind, Node, NodeKind};
 
 pub(crate) fn extract_impl_items(
@@ -64,27 +64,22 @@ pub(crate) fn extract_impl_items(
             };
             let crate_name = crate_name_for.get(&krate).cloned().unwrap_or_default();
 
-            // Inherent-impl items.
+            // Inherent and trait implementation items.
             for impl_ in Impl::all_in_crate(db, krate) {
-                // Only inherent impls (no trait): trait-impl bodies are deferred.
-                if impl_.trait_(db).is_some() {
-                    continue;
-                }
-                let Some(adt) = impl_.self_ty(db).as_adt() else {
-                    continue;
-                };
-                let adt_id: AdtId = adt.into();
-                let Some(&adt_node_id) = adt_node_for.get(&adt_id) else {
-                    // Out-of-workspace ADT — skip. (Inherent impls of types
-                    // declared in dep crates aren't tracked in v1.)
+                let type_parent = impl_.self_ty(db).as_adt().and_then(|adt| adt_node_for.get(&adt.into()).copied());
+                let parent = type_parent.or_else(|| {
+                    let module = impl_.module(db).nearest_non_block_module(db);
+                    def_to_node.get(&ModuleDefId::ModuleId(module.into())).copied()
+                });
+                let Some(parent) = parent else {
                     continue;
                 };
-                if adt.krate(db) != krate {
-                    // Defensive: an inherent impl found in this crate's
-                    // def_map should always have a self-ty defined here, but
-                    // skip gracefully if not.
-                    continue;
-                }
+                let impl_qualified = impl_.trait_(db).map(|trait_| {
+                    let module = module_qualified_path(db, impl_.module(db).nearest_non_block_module(db).into());
+                    let self_ty = impl_.self_ty(db).display(db, DisplayTarget::from_crate(db, krate.into())).to_string();
+                    let trait_module = module_qualified_path(db, trait_.module(db).into());
+                    format!("{module}::<{self_ty} as {trait_module}::{}>", trait_.name(db).as_str())
+                });
 
                 for assoc in impl_.items(db) {
                     emit_assoc_item(
@@ -95,7 +90,8 @@ pub(crate) fn extract_impl_items(
                         def_to_node,
                         crate_node_id,
                         &crate_name,
-                        adt_node_id,
+                        parent,
+                        impl_qualified.as_deref(),
                         assoc,
                     );
                 }
@@ -117,6 +113,7 @@ pub(crate) fn extract_impl_items(
                         crate_node_id,
                         &crate_name,
                         trait_node_id,
+                        None,
                         assoc,
                     );
                 }
@@ -160,8 +157,9 @@ fn emit_assoc_item(
     workspace_root: &Path,
     def_to_node: &mut HashMap<ModuleDefId, NodeId>,
     crate_node_id: NodeId,
-    crate_name: &str,
+    _crate_name: &str,
     parent_node_id: NodeId,
+    qualified_parent: Option<&str>,
     assoc: AssocItem,
 ) {
     let db = sema.db;
@@ -205,7 +203,7 @@ fn emit_assoc_item(
         }
     };
 
-    // Resolve declaration site for byte-range disambiguation.
+    // Physical navigation is independent of semantic declaration identity.
     let nav = match def.try_to_nav(sema) {
         Some(n) => n.call_site,
         None => return, // macro-only / synthetic; can't disambiguate.
@@ -217,35 +215,20 @@ fn emit_assoc_item(
     let start: u32 = u32::from(nav.full_range.start());
     let end: u32 = u32::from(nav.full_range.end());
 
-    let parent_qual = model
+    let parent_qual = qualified_parent.map(str::to_owned).unwrap_or_else(|| model
         .nodes
         .get(&parent_node_id)
         .map(|n| n.qualified_name.clone())
-        .unwrap_or_default();
+        .unwrap_or_default());
     let qualified = if parent_qual.is_empty() {
         name.clone()
     } else {
         format!("{parent_qual}::{name}")
     };
 
-    // NodeId scheme (per Layer 4 spec): mix workspace_hash, kind label, crate,
-    // file path, byte offset, name. The byte offset disambiguates multiple
-    // inherent impls on the same type that re-declare a same-named method.
-    let byte_offset = start.to_string();
-    let kind_label = match item_kind {
-        ItemKind::Method => "method",
-        ItemKind::AssocConst => "assoc_const",
-        ItemKind::AssocType => "assoc_type",
-        _ => unreachable!(),
-    };
-    let node_id = NodeId::from_components(&[
-        model.workspace_hash.as_str(),
-        kind_label,
-        crate_name,
-        rel_path.as_str(),
-        byte_offset.as_str(),
-        name.as_str(),
-    ]);
+    let module = assoc.module(db).nearest_non_block_module(db);
+    let Some(&module_id) = def_to_node.get(&ModuleDefId::ModuleId(module.into())) else { return; };
+    let Some(node_id) = assoc_item_node_id(sema, module_id, assoc, item_kind, &name) else { return; };
 
     // If we somehow already have this id (re-entry during refactors), fold
     // into existing node and just register the def→node mapping.
@@ -263,6 +246,7 @@ fn emit_assoc_item(
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: Some(module_id),
         });
         model.insert_contains(parent_node_id, node_id);
     }
@@ -274,9 +258,8 @@ fn emit_assoc_item(
 }
 
 /// v7: emit an Item node for one enum variant, parented to the host enum's
-/// Item NodeId. NodeId scheme mirrors `emit_assoc_item`'s
-/// `[workspace_hash, "enum_variant", crate, file, byte_offset, name]` so two
-/// enums in the same module declaring same-named variants don't collide.
+/// Item NodeId. Identity derives from that enum and the variant name, so
+/// equal names in different enums are distinct without byte coordinates.
 /// Visibility is `None` (variants inherit from the parent enum, just like
 /// Method/AssocConst/AssocType).
 #[allow(clippy::too_many_arguments)]
@@ -287,7 +270,7 @@ fn emit_enum_variant(
     workspace_root: &Path,
     def_to_node: &mut HashMap<ModuleDefId, NodeId>,
     crate_node_id: NodeId,
-    crate_name: &str,
+    _crate_name: &str,
     enum_node_id: NodeId,
     variant: EnumVariant,
 ) {
@@ -316,13 +299,9 @@ fn emit_enum_variant(
         format!("{parent_qual}::{name}")
     };
 
-    let byte_offset = start.to_string();
     let node_id = NodeId::from_components(&[
-        model.workspace_hash.as_str(),
+        &enum_node_id.to_hex(),
         "enum_variant",
-        crate_name,
-        rel_path.as_str(),
-        byte_offset.as_str(),
         name.as_str(),
     ]);
 
@@ -340,6 +319,7 @@ fn emit_enum_variant(
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: model.nodes[&enum_node_id].declaration_module,
         });
         model.insert_contains(enum_node_id, node_id);
     }

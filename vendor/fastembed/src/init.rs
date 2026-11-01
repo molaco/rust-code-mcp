@@ -14,6 +14,17 @@ pub struct InitOptionsWithLength<M> {
     pub cache_dir: PathBuf,
     pub show_download_progress: bool,
     pub max_length: usize,
+    /// Number of intra-op threads for ONNX Runtime. `None` (the default) uses
+    /// every available CPU core via `std::thread::available_parallelism`.
+    /// Set this to cap CPU usage (e.g. on laptops) at the cost of throughput.
+    pub intra_threads: Option<usize>,
+    /// ONNX Runtime profile file, if profiling was requested.
+    ///
+    /// Profiling can be enabled ONLY when the session is built (later is too late),
+    /// so the path has to be carried through the init options. It is the only
+    /// known way to find out which execution provider actually ran
+    /// EACH graph node: in the profile every node event carries the provider name.
+    pub profiling_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +34,17 @@ pub struct InitOptions<M> {
     pub execution_providers: Vec<ExecutionProviderDispatch>,
     pub cache_dir: PathBuf,
     pub show_download_progress: bool,
+    /// Number of intra-op threads for ONNX Runtime. `None` (the default) uses
+    /// every available CPU core via `std::thread::available_parallelism`.
+    /// Set this to cap CPU usage (e.g. on laptops) at the cost of throughput.
+    pub intra_threads: Option<usize>,
+    /// ONNX Runtime profile file, if profiling was requested.
+    ///
+    /// Profiling can be enabled ONLY when the session is built (later is too late),
+    /// so the path has to be carried through the init options. It is the only
+    /// known way to find out which execution provider actually ran
+    /// EACH graph node: in the profile every node event carries the provider name.
+    pub profiling_file: Option<PathBuf>,
 }
 
 impl<M: Default + HasMaxLength> Default for InitOptionsWithLength<M> {
@@ -33,6 +55,8 @@ impl<M: Default + HasMaxLength> Default for InitOptionsWithLength<M> {
             cache_dir: get_cache_dir().into(),
             show_download_progress: true,
             max_length: M::MAX_LENGTH,
+            intra_threads: None,
+            profiling_file: None,
         }
     }
 }
@@ -44,6 +68,8 @@ impl<M: Default> Default for InitOptions<M> {
             execution_providers: Default::default(),
             cache_dir: get_cache_dir().into(),
             show_download_progress: true,
+            intra_threads: None,
+            profiling_file: None,
         }
     }
 }
@@ -78,9 +104,27 @@ impl<M: Default + HasMaxLength> InitOptionsWithLength<M> {
         self
     }
 
+    /// Set the number of intra-op threads ONNX Runtime uses. By default
+    /// (`None`) all available CPU cores are used; capping this limits CPU
+    /// usage at the cost of per-inference throughput.
+    pub fn with_intra_threads(mut self, intra_threads: usize) -> Self {
+        self.intra_threads = Some(intra_threads);
+        self
+    }
+
     /// Set whether to show download progress
     pub fn with_show_download_progress(mut self, show_download_progress: bool) -> Self {
         self.show_download_progress = show_download_progress;
+        self
+    }
+
+    /// Write the ONNX Runtime profile to the given file.
+    ///
+    /// ORT extends the actual file name with a timestamp and returns it from
+    /// `end_profiling` of the corresponding type; writing a profile and NOT calling
+    /// `end_profiling` is pointless: the file stays empty.
+    pub fn with_profiling(mut self, profiling_file: PathBuf) -> Self {
+        self.profiling_file = Some(profiling_file);
         self
     }
 }
@@ -109,9 +153,40 @@ impl<M: Default> InitOptions<M> {
         self
     }
 
+    /// Set the number of intra-op threads ONNX Runtime uses. By default
+    /// (`None`) all available CPU cores are used; capping this limits CPU
+    /// usage at the cost of per-inference throughput.
+    pub fn with_intra_threads(mut self, intra_threads: usize) -> Self {
+        self.intra_threads = Some(intra_threads);
+        self
+    }
+
     /// Set whether to show download progress
     pub fn with_show_download_progress(mut self, show_download_progress: bool) -> Self {
         self.show_download_progress = show_download_progress;
         self
+    }
+
+    /// Write the ONNX Runtime profile to the given file.
+    ///
+    /// ORT extends the actual file name with a timestamp and returns it from
+    /// `end_profiling` of the corresponding type; writing a profile and NOT calling
+    /// `end_profiling` is pointless: the file stays empty.
+    pub fn with_profiling(mut self, profiling_file: PathBuf) -> Self {
+        self.profiling_file = Some(profiling_file);
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intra_threads_defaults_none_and_builder_sets() {
+        let o = InitOptions::<crate::ImageEmbeddingModel>::default();
+        assert_eq!(o.intra_threads, None);
+        let o = o.with_intra_threads(4);
+        assert_eq!(o.intra_threads, Some(4));
     }
 }

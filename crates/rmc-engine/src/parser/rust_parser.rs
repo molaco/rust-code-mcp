@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use ra_ap_syntax::{
-    ast::{self, HasDocComments, HasModuleItem, HasName, HasVisibility},
+    ast::{self, HasAttrs, HasModuleItem, HasName, HasVisibility},
     AstNode, AstToken, Edition, SourceFile,
 };
 
@@ -125,19 +125,10 @@ fn extract_visibility(vis: Option<ast::Visibility>) -> Visibility {
 }
 
 /// Extract docstring from a node that has doc comments
-fn extract_docstring<N: HasDocComments>(node: &N) -> Option<String> {
-    let docs: Vec<String> = node
-        .doc_comments()
-        .map(|c| {
-            let text = c.text();
-            // Strip /// or //! prefix
-            let stripped: &str = text
-                .strip_prefix("///")
-                .or_else(|| text.strip_prefix("//!"))
-                .unwrap_or(text);
-            stripped.trim().to_string()
-        })
-        .collect();
+fn extract_docstring<N: HasAttrs>(node: &N) -> Option<String> {
+    // `ast::DocComment::text()` already hands back the content with the `///`,
+    // `//!`, `/**` or `/*!` markers taken off, so nothing is stripped here.
+    let docs: Vec<String> = node.doc_comments().map(|c| c.text().trim().to_string()).collect();
 
     if docs.is_empty() {
         None

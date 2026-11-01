@@ -6,8 +6,9 @@
 //! This is distinct from `indexing::error::IndexingError`, which is the
 //! `thiserror` enum for hard indexing failures.
 
-use std::sync::{Arc, Mutex};
+use crate::indexing::error::SETTLED_OUTCOMES;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// Category of indexing error
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +85,18 @@ impl Default for ErrorCollector {
 /// Categorize an error based on its message
 pub(crate) fn categorize_error(error: &dyn std::error::Error) -> ErrorCategory {
     let error_str = error.to_string().to_lowercase();
+
+    // Settled outcomes: the file was considered and deliberately not
+    // indexed. Retrying is guaranteed to reach the same answer, and a
+    // retried path stays out of the committed Merkle snapshot — so
+    // "transient" here would mean "re-attempted every five minutes for
+    // as long as the daemon lives". See `SETTLED_OUTCOMES`.
+    if SETTLED_OUTCOMES
+        .iter()
+        .any(|outcome| error_str.contains(&outcome.to_lowercase()))
+    {
+        return ErrorCategory::Permanent;
+    }
 
     // Permanent errors
     if error_str.contains("permission denied")
@@ -192,6 +205,37 @@ mod tests {
     #[test]
     fn test_categorize_transient_errors() {
         let error = std::io::Error::new(std::io::ErrorKind::TimedOut, "Network timeout");
+        assert_eq!(categorize_error(&error), ErrorCategory::Transient);
+    }
+
+    /// A settled outcome must never be called transient.
+    ///
+    /// This is not a style point. A transient verdict keeps the path out
+    /// of the committed Merkle snapshot, so the next run tries it again —
+    /// and since these outcomes are deterministic, "again" means every
+    /// five minutes for the life of the daemon, each attempt writing a
+    /// fragment and a version to the vector store that nothing removes.
+    /// That loop is what took the live index of a large workspace to 15 GB.
+    #[test]
+    fn settled_outcomes_are_permanent_not_retried_forever() {
+        for outcome in SETTLED_OUTCOMES {
+            let error = crate::indexing::IndexingError::Parser(outcome.to_string());
+            assert_eq!(
+                categorize_error(&error),
+                ErrorCategory::Permanent,
+                "{outcome:?} is deterministic — retrying it can only reach the same answer"
+            );
+        }
+    }
+
+    /// The control for the test above: a real parse failure MUST stay
+    /// transient. Without this, "classify every Parser error as
+    /// permanent" would pass the assertion above while silently dropping
+    /// files that a retry would have recovered.
+    #[test]
+    fn a_genuine_parse_failure_is_still_transient() {
+        let error =
+            crate::indexing::IndexingError::Parser("tree-sitter: unexpected end of input".into());
         assert_eq!(categorize_error(&error), ErrorCategory::Transient);
     }
 }

@@ -12,7 +12,11 @@ default-members = ["crates/rust-code-mcp"]
 
 [workspace.dependencies]
 # MCP and async runtime
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = [
+# Pinned to the commit that added `Tool::meta` (#534, rmcp 0.8.5+): `list_tools`
+# sets `_meta["anthropic/alwaysLoad"]` on the core tools (see EAGER_TOOLS in
+# rmc-server/src/tools/router.rs). `branch = "main"` would drift to an
+# incompatible major on the next `cargo update`.
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "03040f8b0bfb9ac43e73234189d409da67e1fe5b", features = [
   "server",
   "transport-io",
 ] }
@@ -50,19 +54,31 @@ sled = "0.34"          # Embedded key-value store for metadata cache
 sha2 = "0.10"          # SHA-256 file hashing
 directories = "5"      # Cross-platform config/data directories
 
-# Phase 2: Rust code parsing with rust-analyzer syntax
-ra_ap_syntax = "0.0.330"
-
-# IDE integration for semantic analysis (find_definition, find_references)
-ra_ap_ide = "0.0.330"
-ra_ap_ide_db = "0.0.330"
-"ra_ap_load-cargo" = "0.0.330"
-ra_ap_project_model = "0.0.330"
-ra_ap_vfs = "0.0.330"
-ra_ap_paths = "0.0.330"
-ra_ap_hir = "0.0.330"
-ra_ap_hir_def = "0.0.330"
-ra_ap_base_db = "0.0.330"
+# Phase 2/RA: rust-analyzer comes NOT from crates.io but from a local fork
+# (the fork's worktree = fresh upstream + our patches: cross-parent move in
+# willRenameFiles and 'move item to another module'; they live in ide/ide-db/syntax).
+#
+# ⚠ Why path and NOT `[patch.crates-io]`: in the RA repository packages are named without
+# the prefix (`base-db`, not `ra_ap_base_db`) AND ALL of them have version `0.0.0`. A patch
+# must satisfy the version requirement; `0.0.0` vs `0.0.330` does not match,
+# so the patch is dropped regardless of `package = ...`. A path dependency
+# does not check the version requirement; it is the only form that works.
+#
+# Key on the left = the name under which the crate is visible in code (`use ra_ap_ide::…`),
+# `package` = the real package name in the fork. The path is relative: the fork is checked out next to this repo.
+ra_ap_syntax = { path = "../rust-analyzer-bur/crates/syntax", package = "syntax" }
+ra_ap_ide = { path = "../rust-analyzer-bur/crates/ide", package = "ide" }
+ra_ap_ide_db = { path = "../rust-analyzer-bur/crates/ide-db", package = "ide-db" }
+"ra_ap_load-cargo" = { path = "../rust-analyzer-bur/crates/load-cargo", package = "load-cargo" }
+ra_ap_project_model = { path = "../rust-analyzer-bur/crates/project-model", package = "project-model" }
+ra_ap_vfs = { path = "../rust-analyzer-bur/crates/vfs", package = "vfs" }
+ra_ap_paths = { path = "../rust-analyzer-bur/crates/paths", package = "paths" }
+ra_ap_hir = { path = "../rust-analyzer-bur/crates/hir", package = "hir" }
+ra_ap_hir_def = { path = "../rust-analyzer-bur/crates/hir-def", package = "hir-def" }
+ra_ap_base_db = { path = "../rust-analyzer-bur/crates/base-db", package = "base-db" }
+# The process-global interners (types of the trait solver, `Symbol`), which salsa's
+# memory report cannot see; `analysis_memory` reads their sizes from here.
+ra_ap_intern = { path = "../rust-analyzer-bur/crates/intern", package = "intern" }
 
 # Persisted hypergraph store
 heed = "0.22.1"
@@ -71,7 +87,18 @@ heed = "0.22.1"
 text-splitter = "0.13"  # Semantic text chunking
 
 # Phase 4: Embedding Generation
-fastembed = { version = "5.13.4", default-features = false }
+fastembed = { version = "6.0.0", default-features = false }
+# ort: the same ONNX Runtime that fastembed pulls in (the pin matches on purpose: two
+# different versions in the graph would give two incompatible sets of bindings). Needed
+# DIRECTLY to build an ExecutionProvider and pass it into fastembed via
+# TextInitOptions::with_execution_providers; fastembed accepts the EP from outside and
+# does not need to know anything about GPU EPs itself.
+#   load-dynamic — dlopen of the system libonnxruntime.so instead of linking: GPU EPs
+#                  live only in the system ORT build; the archive downloaded by cargo
+#                  is built CPU-only.
+#   api-24       — C-API version. Without it ort-sys generates a trimmed OrtApi and
+#                  ep/vitis.rs (compiled unconditionally) cannot find its field.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "tracing", "api-24", "load-dynamic"] }
 candle-core = "0.10.2"
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq", "native-tls"] }
 

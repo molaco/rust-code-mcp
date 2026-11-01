@@ -1,8 +1,7 @@
 //! Layer X (Phase 5) — function signature extraction.
 //!
 //! For every Item in `def_to_node` whose ModuleDefId is FunctionId
-//! (free fn, inherent assoc fn, trait declaration fn — NOT trait-impl
-//! body fns; see impls.rs::69 for the symmetric exclusion), extract:
+//! (free/nested fn, inherent assoc fn, trait declaration and impl fn), extract:
 //! - self kind (Owned / Ref / RefMut)
 //! - non-self params (name, stringified type, by_ref, mutability)
 //! - return type (stringified)
@@ -223,7 +222,7 @@ mod tests {
     fn functions_with_filter_smoke_async() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("rust_code_mcp")
+            .lookup_by_qualified_name("rmc_server")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
@@ -242,7 +241,7 @@ mod tests {
             .expect("functions_with_filter failed");
         assert!(
             !matches.is_empty(),
-            "expected at least one async fn in rust_code_mcp"
+            "expected at least one async fn in rmc_server"
         );
         for m in &matches {
             assert!(
@@ -257,7 +256,7 @@ mod tests {
     fn functions_with_filter_smoke_min_params() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("rust_code_mcp")
+            .lookup_by_qualified_name("rmc_server")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
@@ -282,7 +281,7 @@ mod tests {
     fn functions_with_filter_smoke_self_kind() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("rust_code_mcp")
+            .lookup_by_qualified_name("rmc_server")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {
@@ -312,7 +311,7 @@ mod tests {
     fn functions_with_filter_async_total_exceeds_default_limit() {
         let snap = shared_snapshot();
         let (root_id, root_node) = snap
-            .lookup_by_qualified_name("rust_code_mcp")
+            .lookup_by_qualified_name("rmc_server")
             .unwrap()
             .unwrap();
         let crate_id = match root_node.kind {

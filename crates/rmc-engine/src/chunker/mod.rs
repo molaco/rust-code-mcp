@@ -8,4 +8,4 @@ mod split;
 mod types;
 
 pub use chunker::Chunker;
-pub use types::{ChunkContext, ChunkId, ChunkSplitConfig, CodeChunk};
+pub use types::{ChunkContext, ChunkId, ChunkSplitConfig, CodeChunk, EMBEDDED_CONTEXT_ITEMS};

@@ -14,11 +14,16 @@ embeddings = [
   "dep:tokio",
   "dep:futures",
   "dep:toml",
+  "dep:fs2",
+  # The VRAM ledger and the fastembed model cache find their directories with it.
+  "dep:directories",
   "fastembed/hf-hub-native-tls",
   # Use ORT at build/link time instead of dlopening libonnxruntime.so at runtime.
   # Plain Cargo builds download the CPU ORT archive; Nix builds override this
   # with ORT_LIB_PATH/ORT_PREFER_DYNAMIC_LINK so the pinned Nix ORT is used.
-  "fastembed/ort-download-binaries",
+  # WINDOWS-GNU: ort has no prebuilt for x86_64-pc-windows-gnu (pyke ships only msvc),
+  # so here ORT is loaded dynamically (ORT_DYLIB_PATH) rather than linked at build time.
+  "fastembed/ort-load-dynamic",
 ]
 embeddings-cuda = [
   "embeddings",
@@ -26,8 +31,44 @@ embeddings-cuda = [
   "fastembed/qwen3",
   "fastembed/cuda",
 ]
+# AMD GPU via the ONNX Runtime MIGraphX EP (measured on RX 7700 XT / gfx1101: ×32 vs
+# CPU on BGE-small fp32, batch 32x512). The ROCm EP is NOT added here on purpose: it
+# is deprecated in ORT, and system builds simply don't have it:
+# libonnxruntime_providers_rocm.so is not shipped, only migraphx is.
+#
+# The feature is additive to `embeddings`: the CPU profile keeps working in the same
+# build, GPU is a separate profile. The downloaded `ort-download-binaries` archive is
+# not used in that case (load-dynamic loads the system library), but it does not
+# get in the way either, so features stay additive, as cargo requires.
+embeddings-migraphx = [
+  "embeddings",
+  "dep:ort",
+  "ort/migraphx",
+  # Compiled-kernel cache directory; see ensure_migraphx_kernel_cache().
+  "dep:directories",
+]
+# AMD (and any other DX12) GPU on WINDOWS, via the DirectML EP.
+#
+# A separate feature rather than 'GPU in general', because MIGraphX does NOT exist on
+# Windows: not all of the ROCm stack has been ported to Windows, MIGraphX is not part of
+# the ported set (ROCm/TheRock#1912 is open), and the only AMD plugin EP for ORT
+# that made it to Windows is DirectML. So this is not 'a second way to do the same', but
+# the ONLY way to compute embeddings inside the tool on Windows.
+#
+# `fastembed/directml` is required, and not for the EP: through it the vendored fastembed
+# recognizes DirectML in the provider list and disables memory pattern + parallel
+# execution (init_session_builder), which the DirectML EP does not survive. Taking
+# `ort/directml` without it means building a session that crashes or silently
+# degrades, and not in this file.
+embeddings-directml = [
+  "embeddings",
+  "dep:ort",
+  "ort/directml",
+  "fastembed/directml",
+]
 vector-store = [
   "embeddings",
+  "dep:anyhow",
   "dep:lancedb",
   "dep:arrow-array",
   "dep:arrow-schema",
@@ -58,6 +99,7 @@ uuid  = { workspace = true }
 reqwest     = { workspace = true, optional = true }
 hf-hub      = { workspace = true, optional = true }
 fastembed   = { workspace = true, optional = true }
+ort         = { workspace = true, optional = true }
 candle-core = { workspace = true, optional = true }
 tokenizers  = { workspace = true, optional = true }
 serde_json  = { workspace = true }
@@ -65,6 +107,8 @@ thiserror   = { workspace = true }
 tracing     = { workspace = true }
 tokio       = { workspace = true, optional = true }
 futures     = { workspace = true, optional = true }
+# embeddings/gpu_lock.rs — one process at a time on the GPU (flock).
+fs2         = { workspace = true, optional = true }
 toml        = { workspace = true, optional = true }
 
 # vector_store/ — LanceDB-backed vector storage

@@ -135,23 +135,39 @@ impl ResilientHybridSearch {
         let bm25_clone = Arc::clone(bm25);
         let query_clone = query.to_string();
 
-        let results = tokio::task::spawn_blocking(move || {
+        let hits = tokio::task::spawn_blocking(move || {
             bm25_clone.search(&query_clone, limit)
         })
         .await
         .context("BM25 search task failed")?
         .map_err(|e| anyhow!("BM25 search failed: {:?}", e))?;
 
-        Ok(results
+        // The BM25 index holds ids only; the chunks live in the vector store.
+        // A BM25-only answer therefore still needs the store — but not the
+        // embedder, whose failure is the usual reason to fall back here.
+        let vector_store = self
+            .vector_store
+            .as_ref()
+            .ok_or_else(|| anyhow!("BM25 hits need the vector store for their chunks"))?;
+        let ids: Vec<_> = hits.iter().map(|(chunk_id, _)| *chunk_id).collect();
+        let mut chunks = vector_store
+            .chunks_by_ids(&ids)
+            .await
+            .map_err(|e| anyhow!("Failed to read BM25 hits' chunks: {:?}", e))?;
+
+        Ok(hits
             .into_iter()
-            .map(|(chunk_id, score, chunk)| SearchResult {
-                chunk_id,
-                score,
-                bm25_score: Some(score),
-                vector_score: None,
-                bm25_rank: None,
-                vector_rank: None,
-                chunk,
+            .filter_map(|(chunk_id, score)| {
+                let chunk = chunks.remove(&chunk_id)?;
+                Some(SearchResult {
+                    chunk_id,
+                    score,
+                    bm25_score: Some(score),
+                    vector_score: None,
+                    bm25_rank: None,
+                    vector_rank: None,
+                    chunk,
+                })
             })
             .collect())
     }

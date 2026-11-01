@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Measure generator creation separately
     let gen_start = Instant::now();
-    let generator = EmbeddingGenerator::new()
+    let generator = EmbeddingGenerator::new(rmc_engine::embeddings::EmbeddingOwner::Tool)
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
         })?;
@@ -166,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|(chunk, emb)| (chunk.id, emb.clone(), chunk.clone()))
                 .collect();
             written += chunk_batch.len();
-            vector_store.upsert_chunks(chunk_data).await.unwrap();
+            vector_store.insert_chunks(chunk_data).await.unwrap();
         }
         let per_file_time = per_file_start.elapsed();
         let estimated_total = per_file_time.as_secs_f64() * (rust_files.len() as f64 / 20.0);
@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .zip(embeddings.iter())
             .map(|(chunk, emb)| (chunk.id, emb.clone(), chunk.clone()))
             .collect();
-        vector_store.upsert_chunks(all_chunk_data).await.unwrap();
+        vector_store.insert_chunks(all_chunk_data).await.unwrap();
         let batch_time = batch_start.elapsed();
         println!("  Batch write (all {} chunks): {:.2}s", all_chunks.len(), batch_time.as_secs_f64());
     });

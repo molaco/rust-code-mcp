@@ -4,6 +4,9 @@
 
 mod bm25;
 mod error;
+#[cfg(all(test, feature = "vector-store", target_os = "linux"))]
+mod fts_eval;
+mod relevance;
 #[cfg(feature = "hybrid-search")]
 mod resilient;
 #[cfg(feature = "hybrid-search")]
@@ -11,6 +14,7 @@ mod rrf_tuner;
 
 pub use bm25::Bm25Search;
 pub use error::SearchError;
+pub use relevance::{CaseScore, RelevanceCase, RelevanceSummary, RepoRelPath, score_case};
 #[cfg(feature = "hybrid-search")]
 pub use resilient::ResilientHybridSearch;
 
@@ -193,24 +197,41 @@ impl HybridSearch {
             (vector_results, vec![])
         };
 
-        // Apply Reciprocal Rank Fusion
-        let merged = self.reciprocal_rank_fusion_with_k(&vector_results, &bm25_results, rrf_k);
+        // Apply Reciprocal Rank Fusion, on ids: which chunks make the answer
+        // is decided before any chunk is read.
+        let vector_hits: Vec<(ChunkId, f32)> =
+            vector_results.iter().map(|r| (r.chunk_id, r.score)).collect();
+        let mut fused = reciprocal_rank_fusion_core(
+            &vector_hits,
+            &bm25_results,
+            rrf_k,
+            self.config.vector_weight,
+            self.config.bm25_weight,
+        );
+        fused.truncate(limit);
 
-        // Return top N results
-        Ok(merged.into_iter().take(limit).collect())
-    }
-
-    /// Reciprocal Rank Fusion with custom k parameter
-    fn reciprocal_rank_fusion_with_k(
-        &self,
-        vector_results: &[VectorSearchResult],
-        bm25_results: &[(ChunkId, f32, CodeChunk)],
-        k: f32,
-    ) -> Vec<SearchResult> {
-        let vector: Vec<_> = vector_results.iter()
-            .map(|r| (r.chunk_id, r.score, r.chunk.clone()))
+        // Vector hits carry their chunk; a hit only BM25 found is read from
+        // the vector store, which is where the BM25 index's chunks live.
+        let mut chunks: HashMap<ChunkId, CodeChunk> = vector_results
+            .into_iter()
+            .map(|r| (r.chunk_id, r.chunk))
             .collect();
-        reciprocal_rank_fusion_core(&vector, bm25_results, k, self.config.vector_weight, self.config.bm25_weight)
+        let missing: Vec<ChunkId> = fused
+            .iter()
+            .map(|hit| hit.chunk_id)
+            .filter(|id| !chunks.contains_key(id))
+            .collect();
+        if !missing.is_empty() {
+            chunks.extend(
+                self.vector_search
+                    .vector_store
+                    .chunks_by_ids(&missing)
+                    .await
+                    .map_err(SearchError::VectorStore)?,
+            );
+        }
+
+        Ok(attach_chunks(fused, chunks))
     }
 
     /// Search using only vector similarity
@@ -242,77 +263,109 @@ impl HybridSearch {
         vector_results: Vec<SearchResult>,
         k: f32,
     ) -> Vec<SearchResult> {
-        let bm25: Vec<_> = bm25_results.into_iter()
-            .map(|r| (r.chunk_id, r.bm25_score.unwrap_or(r.score), r.chunk))
+        let bm25: Vec<_> = bm25_results
+            .iter()
+            .map(|r| (r.chunk_id, r.bm25_score.unwrap_or(r.score)))
             .collect();
-        let vector: Vec<_> = vector_results.into_iter()
-            .map(|r| (r.chunk_id, r.vector_score.unwrap_or(r.score), r.chunk))
+        let vector: Vec<_> = vector_results
+            .iter()
+            .map(|r| (r.chunk_id, r.vector_score.unwrap_or(r.score)))
             .collect();
-        reciprocal_rank_fusion_core(&vector, &bm25, k, 0.5, 0.5)
+        let fused = reciprocal_rank_fusion_core(&vector, &bm25, k, 0.5, 0.5);
+        let chunks = bm25_results
+            .into_iter()
+            .chain(vector_results)
+            .map(|r| (r.chunk_id, r.chunk))
+            .collect();
+        attach_chunks(fused, chunks)
     }
 }
 
 /// Core Reciprocal Rank Fusion algorithm
 ///
-/// Fuses two ranked result lists using the RRF formula `1/(k + rank)`.
-/// Each entry is `(ChunkId, raw_score, CodeChunk)`; the two lists are
-/// processed independently and their weighted contributions are summed.
+/// Fuses two ranked id lists using the RRF formula `1/(k + rank)`. Each
+/// entry is `(ChunkId, raw_score)`; the two lists are processed
+/// independently and their weighted contributions are summed. Returns the
+/// fused hits, best first.
 #[cfg(feature = "hybrid-search")]
 fn reciprocal_rank_fusion_core(
-    vector_results: &[(ChunkId, f32, CodeChunk)],
-    bm25_results: &[(ChunkId, f32, CodeChunk)],
+    vector_results: &[(ChunkId, f32)],
+    bm25_results: &[(ChunkId, f32)],
     k: f32,
     vector_weight: f32,
     bm25_weight: f32,
-) -> Vec<SearchResult> {
+) -> Vec<RrfScore> {
     let mut scores: HashMap<ChunkId, RrfScore> = HashMap::new();
+    let new_entry = |chunk_id: ChunkId| RrfScore {
+        chunk_id,
+        rrf_score: 0.0,
+        vector_score: None,
+        vector_rank: None,
+        bm25_score: None,
+        bm25_rank: None,
+    };
 
-    for (rank, (chunk_id, score, chunk)) in vector_results.iter().enumerate() {
+    for (rank, (chunk_id, score)) in vector_results.iter().enumerate() {
         let rrf_score = 1.0 / (k + (rank + 1) as f32);
-        let entry = scores.entry(*chunk_id).or_insert_with(|| RrfScore {
-            chunk_id: *chunk_id,
-            rrf_score: 0.0,
-            vector_score: None,
-            vector_rank: None,
-            bm25_score: None,
-            bm25_rank: None,
-            chunk: chunk.clone(),
-        });
+        let entry = scores.entry(*chunk_id).or_insert_with(|| new_entry(*chunk_id));
         entry.rrf_score += rrf_score * vector_weight;
         entry.vector_score = Some(*score);
         entry.vector_rank = Some(rank + 1);
     }
 
-    for (rank, (chunk_id, score, chunk)) in bm25_results.iter().enumerate() {
+    for (rank, (chunk_id, score)) in bm25_results.iter().enumerate() {
         let rrf_score = 1.0 / (k + (rank + 1) as f32);
-        let entry = scores.entry(*chunk_id).or_insert_with(|| RrfScore {
-            chunk_id: *chunk_id,
-            rrf_score: 0.0,
-            vector_score: None,
-            vector_rank: None,
-            bm25_score: None,
-            bm25_rank: None,
-            chunk: chunk.clone(),
-        });
+        let entry = scores.entry(*chunk_id).or_insert_with(|| new_entry(*chunk_id));
         entry.rrf_score += rrf_score * bm25_weight;
         entry.bm25_score = Some(*score);
         entry.bm25_rank = Some(rank + 1);
     }
 
-    let mut results: Vec<SearchResult> = scores
-        .into_values()
-        .map(|s| SearchResult {
-            chunk_id: s.chunk_id,
-            score: s.rrf_score,
-            bm25_score: s.bm25_score,
-            vector_score: s.vector_score,
-            bm25_rank: s.bm25_rank,
-            vector_rank: s.vector_rank,
-            chunk: s.chunk,
-        })
-        .collect();
+    let mut results: Vec<RrfScore> = scores.into_values().collect();
+    results.sort_by(|a, b| {
+        b.rrf_score
+            .partial_cmp(&a.rrf_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+/// Turn fused hits into results, in order, each with its chunk.
+///
+/// A hit whose chunk is not in `chunks` is left out and counted in a warning.
+/// It is a BM25 hit for a chunk the vector store no longer (or not yet) has:
+/// the two are written one after the other, and between a file's BM25 commit
+/// and its vector write there is no chunk to show. Leaving it out is the only
+/// answer there is; the warning is what keeps a store that drifted for good
+/// from passing silently.
+#[cfg(feature = "hybrid-search")]
+fn attach_chunks(
+    fused: Vec<RrfScore>,
+    mut chunks: HashMap<ChunkId, CodeChunk>,
+) -> Vec<SearchResult> {
+    let mut results = Vec::with_capacity(fused.len());
+    let mut without_chunk = 0usize;
+    for hit in fused {
+        let Some(chunk) = chunks.remove(&hit.chunk_id) else {
+            without_chunk += 1;
+            continue;
+        };
+        results.push(SearchResult {
+            chunk_id: hit.chunk_id,
+            score: hit.rrf_score,
+            bm25_score: hit.bm25_score,
+            vector_score: hit.vector_score,
+            bm25_rank: hit.bm25_rank,
+            vector_rank: hit.vector_rank,
+            chunk,
+        });
+    }
+    if without_chunk > 0 {
+        tracing::warn!(
+            without_chunk,
+            "search hits dropped: the vector store holds no chunk for them"
+        );
+    }
     results
 }
 
@@ -325,7 +378,6 @@ struct RrfScore {
     vector_rank: Option<usize>,
     bm25_score: Option<f32>,
     bm25_rank: Option<usize>,
-    chunk: CodeChunk,
 }
 
 #[cfg(test)]
@@ -352,8 +404,6 @@ mod tests {
                 line_start: 1,
                 line_end: 1,
             },
-            overlap_prev: None,
-            overlap_next: None,
         }
     }
 
@@ -369,7 +419,6 @@ mod tests {
     #[test]
     fn test_hybrid_search_with_bm25() {
         use tempfile::TempDir;
-        use tantivy::doc;
 
         let temp_dir = TempDir::new().unwrap();
         let index_path = temp_dir.path().join("bm25_test");
@@ -380,21 +429,11 @@ mod tests {
         // Create test chunks and index them
         let chunk1_id = ChunkId::new();
         let chunk1 = create_test_chunk(chunk1_id, "async_function");
-        let chunk1_json = serde_json::to_string(&chunk1).unwrap();
 
         let mut index_writer = bm25_search.index().writer(50_000_000).unwrap();
         let schema = bm25_search.schema();
 
-        index_writer.add_document(doc!(
-            schema.chunk_id => chunk1_id.to_string(),
-            schema.content => chunk1.content.clone(),
-            schema.symbol_name => chunk1.context.symbol_name.clone(),
-            schema.symbol_kind => chunk1.context.symbol_kind.clone(),
-            schema.file_path => chunk1.context.file_path.display().to_string(),
-            schema.module_path => chunk1.context.module_path.join("::"),
-            schema.docstring => chunk1.context.docstring.clone().unwrap_or_default(),
-            schema.chunk_json => chunk1_json,
-        )).unwrap();
+        index_writer.add_document(schema.document(&chunk1)).unwrap();
 
         index_writer.commit().unwrap();
 

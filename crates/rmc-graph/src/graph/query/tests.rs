@@ -31,6 +31,7 @@ fn test_node(qualified_name: &str, display_name: &str, item_kind: Option<ItemKin
         visibility: None,
         attributes: Vec::new(),
         crate_target_kind: None,
+        declaration_module: None,
     }
 }
 
@@ -320,7 +321,7 @@ fn lookup_by_qualified_name_unresolvable_terminates() {
 #[test]
 fn private_visibility_blocks_export() {
     // rmc_graph::graph::extract has private helpers like `crate_display_name`.
-    // From outside the loader/extract sibling (e.g., rust_code_mcp root module),
+    // From outside the loader/extract sibling (e.g., rmc_graph root module),
     // those should NOT be exported.
     let snap = shared_snapshot();
     let (extract_id, _) = snap
@@ -328,7 +329,7 @@ fn private_visibility_blocks_export() {
         .unwrap()
         .unwrap();
     let (root_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp")
+        .lookup_by_qualified_name("rmc_graph")
         .unwrap()
         .unwrap();
     let exports = snap.exports_of(extract_id, root_id).unwrap();
@@ -387,7 +388,7 @@ fn dead_pub_findings_are_well_formed() {
     // qualified_name here.
     let snap = shared_snapshot();
     let (crate_id, _) = snap
-        .lookup_by_qualified_name("rust_code_mcp")
+        .lookup_by_qualified_name("rmc_graph")
         .unwrap()
         .unwrap();
     // The lookup above resolves to the crate root MODULE; map up to the
@@ -430,7 +431,7 @@ fn crate_edges_returns_at_least_one_edge() {
     let edges = snap.crate_edges().unwrap();
     // The lib uses several external crates (heed, anyhow, serde, ra-ap-*),
     // and a self-only workspace might still have at least one
-    // external→rust_code_mcp edge. We only assert non-empty here.
+    // external→rmc_graph edge. We only assert non-empty here.
     assert!(
         !edges.is_empty(),
         "expected at least one cross-crate edge in the workspace"
@@ -560,6 +561,7 @@ fn dependency_node_for_climbs_item_parents_to_module() {
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: None,
         },
     );
     nodes.insert(
@@ -577,6 +579,7 @@ fn dependency_node_for_climbs_item_parents_to_module() {
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: None,
         },
     );
     nodes.insert(
@@ -594,6 +597,7 @@ fn dependency_node_for_climbs_item_parents_to_module() {
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: None,
         },
     );
     nodes.insert(
@@ -611,6 +615,7 @@ fn dependency_node_for_climbs_item_parents_to_module() {
             visibility: None,
             attributes: Vec::new(),
             crate_target_kind: None,
+            declaration_module: None,
         },
     );
 
@@ -645,8 +650,8 @@ fn overlaps_returns_well_formed_report() {
 #[test]
 fn module_tree_roots_at_requested_crate() {
     let snap = shared_snapshot();
-    let tree = snap.module_tree("rust_code_mcp", None).unwrap();
-    assert_eq!(tree.qualified_name, "rust_code_mcp");
+    let tree = snap.module_tree("rmc_graph", None).unwrap();
+    assert_eq!(tree.qualified_name, "rmc_graph");
     assert_eq!(tree.kind, "Crate");
     assert!(
         !tree.children.is_empty(),
@@ -657,7 +662,7 @@ fn module_tree_roots_at_requested_crate() {
 #[test]
 fn module_tree_respects_depth_limit() {
     let snap = shared_snapshot();
-    let tree = snap.module_tree("rust_code_mcp", Some(0)).unwrap();
+    let tree = snap.module_tree("rmc_graph", Some(0)).unwrap();
     // Depth 0 => no children walked.
     assert!(tree.children.is_empty(), "depth=0 must not recurse");
 }
@@ -769,10 +774,7 @@ fn who_uses_summary_aggregates_by_consumer() {
 
 #[test]
 fn calls_from_returns_callees() {
-    // Layer 10 — call graph: `build_and_persist` is a known caller of
-    // `loader::load`. `calls_from(build_and_persist)` should include the
-    // `loader::load` ref (plus a long tail of other refs from inside the
-    // body — at minimum the loader::load call must be present).
+    // The retry wrapper calls one build attempt; the attempt owns the load.
     let snap = shared_snapshot();
     let (caller_id, _) = snap
         .lookup_by_qualified_name("rmc_graph::graph::snapshot::build_and_persist")
@@ -781,12 +783,15 @@ fn calls_from_returns_callees() {
     let calls = snap
         .calls_from(caller_id)
         .expect("calls_from failed");
+    assert!(calls.iter().any(|c| c.callee_qualified_name == "rmc_graph::graph::snapshot::build_attempt"));
+    let (attempt_id, _) = snap.lookup_by_qualified_name("rmc_graph::graph::snapshot::build_attempt").unwrap().unwrap();
+    let attempt_calls = snap.calls_from(attempt_id).unwrap();
     assert!(
-        calls
+        attempt_calls
             .iter()
             .any(|c| c.callee_qualified_name.contains("loader::load")),
-        "expected calls_from(build_and_persist) to include loader::load, got {:?}",
-        calls
+        "expected calls_from(build_attempt) to include loader::load, got {:?}",
+        attempt_calls
             .iter()
             .map(|c| &c.callee_qualified_name)
             .collect::<Vec<_>>()
@@ -867,7 +872,7 @@ fn call_graph_respects_depth_zero() {
 
 #[test]
 fn callers_in_crate_filters_correctly() {
-    // `loader::load` is referenced from inside `rust_code_mcp` itself
+    // `loader::load` is referenced from inside `rmc_graph` itself
     // (e.g., from `build_and_persist`). Filtering by the workspace's own
     // crate must return a strict subset of who_calls — equal or smaller.
     let snap = shared_snapshot();
@@ -877,7 +882,7 @@ fn callers_in_crate_filters_correctly() {
         .expect("loader::load not in graph");
     let all = snap.who_calls(target_id).expect("who_calls failed");
     let filtered = snap
-        .callers_in_crate(target_id, "rust_code_mcp")
+        .callers_in_crate(target_id, "rmc_graph")
         .expect("callers_in_crate failed");
     assert!(
         filtered.len() <= all.len(),
@@ -890,9 +895,9 @@ fn callers_in_crate_filters_correctly() {
         assert!(
             row.caller_qualified_name
                 .as_deref()
-                .map(|s| s.starts_with("rust_code_mcp"))
+                .map(|s| s.starts_with("rmc_graph"))
                 .unwrap_or(false),
-            "caller {:?} not in rust_code_mcp",
+            "caller {:?} not in rmc_graph",
             row.caller_qualified_name
         );
     }
@@ -1103,9 +1108,10 @@ fn crate_types_pub_only_and_test_filters_hold() {
 /// flagged those as `#[must_use]` items; the anchored matcher must not.
 #[test]
 fn items_with_attribute_does_not_match_pattern_inside_attr_body() {
+    // `SearchToolRouter` lives in `rmc_server`.
     let snap = shared_snapshot();
     let (root_id, root_node) = snap
-        .lookup_by_qualified_name("rust_code_mcp")
+        .lookup_by_qualified_name("rmc_server")
         .unwrap()
         .unwrap();
     let crate_id = if root_node.kind == NodeKind::Crate {
@@ -1153,7 +1159,7 @@ fn items_with_attribute_does_not_match_pattern_inside_attr_body() {
 fn items_with_attribute_empty_pattern_returns_nothing() {
     let snap = shared_snapshot();
     let (root_id, root_node) = snap
-        .lookup_by_qualified_name("rust_code_mcp")
+        .lookup_by_qualified_name("rmc_graph")
         .unwrap()
         .unwrap();
     let crate_id = if root_node.kind == NodeKind::Crate {
@@ -1172,7 +1178,7 @@ fn items_with_attribute_empty_pattern_returns_nothing() {
 }
 
 /// Phase 4a smoke: `pub_use_pub_type_audit` returns without error
-/// against the `rust_code_mcp` workspace. Result set may be empty
+/// against the `rmc_graph` workspace. Result set may be empty
 /// (this codebase doesn't necessarily contain the antipattern); when
 /// non-empty, every entry must carry a non-empty qualified name and
 /// distinct alias / pub_use_target NodeIds.
@@ -1180,7 +1186,7 @@ fn items_with_attribute_empty_pattern_returns_nothing() {
 fn pub_use_pub_type_audit_smoke() {
     let snap = shared_snapshot();
     let (root_id, root_node) = snap
-        .lookup_by_qualified_name("rust_code_mcp")
+        .lookup_by_qualified_name("rmc_graph")
         .unwrap()
         .unwrap();
     let crate_id = if root_node.kind == NodeKind::Crate {

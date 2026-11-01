@@ -5,9 +5,10 @@
 //! builds on. Separated from `queries.rs` in PR 11 review fix-up so the
 //! legacy module can be a true facade.
 
+#[cfg(test)]
 use std::collections::HashSet;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use heed::RoTxn;
 
 use super::super::ids::NodeId;
@@ -84,17 +85,52 @@ impl OpenedSnapshot {
         name: &str,
         hops_remaining: usize,
     ) -> Result<Option<(NodeId, Node)>> {
+        // Optional Cargo-target selector, e.g. app[bin]::helper. Bare paths
+        // remain accepted when unambiguous. Never choose a lib/bin by hash
+        // iteration order; that used to return a different physical helper
+        // after a reload.
+        let (canonical, target_kind, target_root) = if let Some((prefix, rest)) = name.split_once('[').filter(|(prefix, _)| !prefix.contains("::")) {
+            if let Some((kind, suffix)) = rest.split_once(']') {
+                let (root, suffix) = if let Some(rest) = suffix.strip_prefix('@') {
+                    let (root, suffix) = rest.split_once("::").map(|(root, suffix)| (root, format!("::{suffix}"))).unwrap_or((rest, String::new()));
+                    (Some(root), suffix)
+                } else { (None, suffix.to_owned()) };
+                (format!("{prefix}{suffix}"), Some(kind), root)
+            } else { (name.to_owned(), None, None) }
+        } else { (name.to_owned(), None, None) };
         // Phase 1 — canonical name scan.
         {
             let rtxn = self.env.read_txn()?;
+            let mut found: Option<(NodeId, Node)> = None;
             for entry in self.dbs.nodes_by_id.iter(&rtxn)? {
                 let (key, node) = entry?;
-                if node.qualified_name == name {
+                if node.qualified_name == canonical {
+                    if let Some(kind) = target_kind {
+                        let matches = if let Some(id) = node.crate_id {
+                            self.dbs.nodes_by_id.get(&rtxn, id.as_bytes())?
+                                .is_some_and(|krate| krate.crate_target_kind.as_deref() == Some(kind)
+                                    && target_root.is_none_or(|root| krate.file.as_deref() == Some(root)))
+                        } else { false };
+                        if !matches { continue; }
+                    }
                     let mut id = [0u8; 32];
                     id.copy_from_slice(key);
-                    return Ok(Some((NodeId(id), node)));
+                    if let Some((_, previous)) = &found {
+                        let crate_root_pair = previous.crate_id == node.crate_id && matches!(
+                            (previous.kind, node.kind),
+                            (NodeKind::Crate, NodeKind::Module) | (NodeKind::Module, NodeKind::Crate)
+                        );
+                        if !crate_root_pair {
+                            bail!("ambiguous graph name `{name}`: {} and {}; use a Cargo-target selector such as [lib] or [bin]", previous.id.to_hex(), node.id.to_hex());
+                        }
+                        // A crate and its root module share a Rust path. Keep
+                        // the navigable module consistently, not hash order.
+                        if previous.kind == NodeKind::Module { continue; }
+                    }
+                    found = Some((NodeId(id), node));
                 }
             }
+            if found.is_some() { return Ok(found); }
         }
 
         // Phase 2 — re-export facade fallback.
@@ -226,6 +262,7 @@ impl OpenedSnapshot {
     /// anything `Usage` produces with `consumer_function == Some(caller_fn)`.
     /// The caller (codemap layer) classifies edges by reading each target's
     /// `Node.item_kind`.
+    #[cfg(test)]
     pub(in crate::graph) fn callees_of(&self, caller_fn: NodeId) -> Result<Vec<NodeId>> {
         let rtxn = self.env.read_txn()?;
         let mut seen: HashSet<NodeId> = HashSet::new();
@@ -241,6 +278,7 @@ impl OpenedSnapshot {
     /// Semantics depend on `target`'s `ItemKind`: if `target` is callable
     /// these are callers, if `target` is a type these are consumers —
     /// classification is the caller's concern.
+    #[cfg(test)]
     pub(in crate::graph) fn referrers_of(&self, target: NodeId) -> Result<Vec<NodeId>> {
         let rtxn = self.env.read_txn()?;
         let mut seen: HashSet<NodeId> = HashSet::new();

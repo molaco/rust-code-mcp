@@ -106,6 +106,8 @@ fn encode_runtime(runtime: EmbeddingRuntime) -> &'static str {
     match runtime {
         EmbeddingRuntime::LocalQwen3CandleCuda => "local-qwen3-candle-cuda",
         EmbeddingRuntime::LocalFastembedOnnxCpu => "local-fastembed-onnx-cpu",
+        EmbeddingRuntime::LocalFastembedOnnxMigraphx => "local-fastembed-onnx-migraphx",
+        EmbeddingRuntime::LocalFastembedOnnxDirectml => "local-fastembed-onnx-directml",
         EmbeddingRuntime::OpenRouter => "openrouter",
     }
 }
@@ -114,6 +116,8 @@ fn decode_runtime(value: &str) -> Result<EmbeddingRuntime, String> {
     match value {
         "local-qwen3-candle-cuda" => Ok(EmbeddingRuntime::LocalQwen3CandleCuda),
         "local-fastembed-onnx-cpu" => Ok(EmbeddingRuntime::LocalFastembedOnnxCpu),
+        "local-fastembed-onnx-migraphx" => Ok(EmbeddingRuntime::LocalFastembedOnnxMigraphx),
+        "local-fastembed-onnx-directml" => Ok(EmbeddingRuntime::LocalFastembedOnnxDirectml),
         "openrouter" => Ok(EmbeddingRuntime::OpenRouter),
         other => Err(format!("unknown embedding runtime `{other}`")),
     }

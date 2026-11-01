@@ -80,7 +80,7 @@ pub fn recursion_check(
                 let Some(usage) = snap.dbs.usages_by_id.get(&rtxn, &uid)? else {
                     continue;
                 };
-                if seen.insert(usage.target) {
+                if usage.relation.is_call() && seen.insert(usage.target) {
                     callees.push(usage.target);
                 }
             }

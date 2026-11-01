@@ -3,10 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use rmc_engine::embeddings::EmbeddingBackend;
+use rmc_engine::schema::bm25_index_dir;
 use sha2::{Digest, Sha256};
 
 use crate::indexing::identity::{
-    active_chunking_identity_for_backend, identity_hash, indexing_identity,
+    active_chunking_identity_for_backend, identity_hash, indexing_identity, metadata_cache_salt,
 };
 use crate::indexing::incremental::get_snapshot_path_for_identity;
 
@@ -16,6 +17,10 @@ pub struct IndexingProjectPaths {
     pub indexing_identity: String,
     pub chunking_identity: String,
     pub cache_path: PathBuf,
+    /// Salt that prefixes this project+profile's metadata-cache keys.
+    /// The sled database at `cache_path` is shared by every profile of
+    /// the directory, so reading it requires the matching salt.
+    pub metadata_cache_salt: String,
     pub tantivy_path: PathBuf,
     pub snapshot_path: PathBuf,
     pub collection_name: String,
@@ -55,7 +60,11 @@ impl IndexingProjectPaths {
 
         Self {
             cache_path: data_root.join("cache").join(&dir_hash),
-            tantivy_path: data_root.join("index").join(&dir_hash),
+            metadata_cache_salt: metadata_cache_salt(backend, &chunking_identity),
+            tantivy_path: bm25_index_dir(
+                &data_root.join("index").join(&dir_hash),
+                &collection_name,
+            ),
             vector_path: data_root.join("cache").join("vectors").join(&collection_name),
             collection_name,
             snapshot_path,
@@ -96,7 +105,11 @@ impl IndexingProjectPaths {
 
         Self {
             cache_path: data_root.join("cache").join(&dir_hash),
-            tantivy_path: data_root.join("index").join(&dir_hash),
+            metadata_cache_salt: metadata_cache_salt(backend, &chunking_identity),
+            tantivy_path: bm25_index_dir(
+                &data_root.join("index").join(&dir_hash),
+                &collection_name,
+            ),
             vector_path: vectors_root.join(&collection_name),
             collection_name,
             snapshot_path,
@@ -202,9 +215,19 @@ impl IndexingProjectPaths {
     }
 }
 
+/// Hash a project directory into the key its cache/index/collection live under.
+///
+/// Canonicalized first, the way `indexing_identity` already does. Two spellings
+/// of one directory — a symlinked path and its target — used to get two
+/// separate indexes, and once one daemon started serving every working
+/// directory the same asymmetry meant two clients could land on one key by
+/// spelling a path the same *relative* way. Canonicalization can fail (the
+/// directory may not exist yet); the raw path is then the only thing there is.
 pub fn dir_hash(dir: &Path) -> String {
+    let canonical = std::fs::canonicalize(dir);
+    let keyed = canonical.as_deref().unwrap_or(dir);
     let mut hasher = Sha256::new();
-    hasher.update(dir.to_string_lossy().as_bytes());
+    hasher.update(keyed.to_string_lossy().as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -249,6 +272,39 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Two spellings of one directory must share one index. They did not: this
+    /// hash was taken from the literal string while `indexing_identity` already
+    /// canonicalized, so a symlinked path and its target indexed separately —
+    /// and once one daemon started serving every working directory, the same
+    /// asymmetry let two clients spelling a path the same *relative* way land on
+    /// one key.
+    ///
+    /// Mutation that must fail it: hash `dir` instead of its canonical form.
+    #[test]
+    fn a_symlinked_directory_hashes_like_its_target() {
+        let real = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        let link = parent.path().join("link");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        assert_eq!(
+            dir_hash(&link),
+            dir_hash(real.path()),
+            "a symlink and its target are one project and must share one index"
+        );
+    }
+
+    /// A path that does not exist cannot be canonicalized, and must still hash
+    /// to something stable rather than panicking or collapsing to a constant.
+    #[test]
+    fn a_missing_directory_still_hashes_to_itself() {
+        let missing = Path::new("/nonexistent-project-for-tests");
+        let other = Path::new("/nonexistent-project-for-tests-2");
+
+        assert_eq!(dir_hash(missing), dir_hash(missing));
+        assert_ne!(dir_hash(missing), dir_hash(other));
+    }
+
     fn backend(name: &str) -> EmbeddingBackend {
         EmbeddingBackend::from_profile_name(name).unwrap()
     }
@@ -277,7 +333,10 @@ mod tests {
         );
         assert_eq!(
             paths.tantivy_path,
-            data_root.path().join("index").join(&paths.dir_hash)
+            bm25_index_dir(
+                &data_root.path().join("index").join(&paths.dir_hash),
+                &paths.collection_name
+            )
         );
         assert_eq!(
             paths.vector_path,
@@ -294,6 +353,12 @@ mod tests {
         assert_ne!(paths.indexing_identity, alternate.indexing_identity);
         assert_ne!(paths.collection_name, alternate.collection_name);
         assert_ne!(paths.snapshot_path, alternate.snapshot_path);
+        // The BM25 index holds its collection's chunk ids: never shared.
+        assert_ne!(paths.tantivy_path, alternate.tantivy_path);
+        let gpu = EmbeddingBackend::from_profile_name("local-gpu-bge").unwrap();
+        let other_profile =
+            IndexingProjectPaths::from_directory(data_root.path(), project_dir, &gpu);
+        assert_ne!(paths.tantivy_path, other_profile.tantivy_path);
     }
 
     #[test]
@@ -321,7 +386,10 @@ mod tests {
         );
         assert_eq!(
             paths.tantivy_path,
-            data_root.path().join("index").join(&paths.dir_hash)
+            bm25_index_dir(
+                &data_root.path().join("index").join(&paths.dir_hash),
+                &collection_name
+            )
         );
     }
 

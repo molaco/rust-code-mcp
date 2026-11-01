@@ -14,7 +14,7 @@ use super::super::labels::{
     binding_kind_label as label_binding_kind, item_kind_short_label as label_item_kind,
     node_kind_label,
 };
-use super::super::model::{Binding, BindingKind, BindingVisibility, Node, NodeKind};
+use super::super::model::{Binding, BindingKind, BindingVisibility, Node};
 use super::shared::dependency_node_for;
 use super::super::snapshot::OpenedSnapshot;
 use super::model::{ModuleDependency, ModuleDependencySymbol};
@@ -152,15 +152,12 @@ impl OpenedSnapshot {
         rtxn: &RoTxn<'_, heed::WithoutTls>,
     ) -> Result<(HashMap<NodeId, Node>, HashMap<NodeId, String>)> {
         let mut nodes = HashMap::new();
-        let mut crate_names = HashMap::new();
+        let crate_names = self.target_labels(rtxn)?;
         for entry in self.dbs.nodes_by_id.iter(rtxn)? {
             let (key, node) = entry?;
             let mut id = [0u8; 32];
             id.copy_from_slice(key);
             let id = NodeId(id);
-            if node.kind == NodeKind::Crate {
-                crate_names.insert(id, node.qualified_name.clone());
-            }
             nodes.insert(id, node);
         }
         Ok((nodes, crate_names))

@@ -219,6 +219,7 @@ mod tests {
             visibility: visibility.map(|s| s.to_string()),
             attributes: attributes.into_iter().map(|s| s.to_string()).collect(),
             crate_target_kind: None,
+            declaration_module: None,
         }
     }
 

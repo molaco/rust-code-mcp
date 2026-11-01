@@ -1,5 +1,6 @@
 use ndarray::{Array2, ArrayView, Dim, IxDynImpl};
 
+use crate::common::{Error, Result};
 use crate::pooling;
 
 use super::{OutputKey, OutputPrecedence};
@@ -12,6 +13,13 @@ use super::{OutputKey, OutputPrecedence};
 pub struct SingleBatchOutput {
     pub outputs: Vec<(String, ort::value::Value)>,
     pub attention_mask_array: Array2<i64>,
+    /// How many LEADING rows of the batch correspond to real inputs.
+    ///
+    /// Normally equal to the batch height. It is smaller when a constant input
+    /// shape ([`crate::FixedBatchShape`]) is in effect and the last batch was
+    /// padded up to that shape. Consumers MUST drop the tail: padding rows are
+    /// not data, and their embeddings correspond to nothing in the input.
+    pub real_rows: usize,
 }
 
 impl SingleBatchOutput {
@@ -22,7 +30,7 @@ impl SingleBatchOutput {
     pub fn select_output(
         &self,
         precedence: &impl OutputPrecedence,
-    ) -> anyhow::Result<ArrayView<'_, f32, Dim<IxDynImpl>>> {
+    ) -> Result<ArrayView<'_, f32, Dim<IxDynImpl>>> {
         let ort_output: &ort::value::Value = precedence
             .key_precedence()
             .find_map(|key| match key {
@@ -40,13 +48,13 @@ impl SingleBatchOutput {
                 }
             })
             .ok_or_else(|| {
-                anyhow::Error::msg(format!(
+                Error::Other(format!(
                     "No suitable output found in the outputs. Available outputs: {:?}",
                     self.outputs.iter().map(|(k, _)| k).collect::<Vec<_>>()
                 ))
             })?;
 
-        ort_output.try_extract_array().map_err(anyhow::Error::new)
+        ort_output.try_extract_array().map_err(Error::from)
     }
 
     /// Select the output from the session outputs based on the given precedence and pool it.
@@ -56,7 +64,7 @@ impl SingleBatchOutput {
         &self,
         precedence: &impl OutputPrecedence,
         pooling_opt: Option<pooling::Pooling>,
-    ) -> anyhow::Result<Array2<f32>> {
+    ) -> Result<Array2<f32>> {
         let tensor = self.select_output(precedence)?;
 
         // If there is none pooling, default to cls so as not to break the existing implementations
@@ -112,8 +120,8 @@ impl EmbeddingOutput {
         &self,
         // TODO: Convert this to a trait alias when it's stabilized.
         // https://github.com/rust-lang/rust/issues/41517
-        transformer: impl Fn(&[SingleBatchOutput]) -> anyhow::Result<R>,
-    ) -> anyhow::Result<R> {
+        transformer: impl Fn(&[SingleBatchOutput]) -> Result<R>,
+    ) -> Result<R> {
         transformer(&self.batches)
     }
 }

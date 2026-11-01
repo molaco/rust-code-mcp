@@ -195,7 +195,7 @@ Use `*` prefix for seeds. Group by parent module path in the hierarchy block. Fo
 
 ## Limitations
 
-- Hypergraph indexes only `pub` / `pub(crate)` items. Module-local private fns can't be seeded by qualified name. The diagnostic distinguishes "not indexed" from "typo" by checking whether the parent module resolves.
+- Hypergraph indexes items of every visibility, private ones included. It does not store items declared inside function bodies, methods of trait impls, or items under `#[cfg(test)]`; those can't be seeded by qualified name. When the parent module of an unresolved seed resolves, the diagnostic says the leaf is a typo or not indexed.
 - HybridSearch weighs token frequency in doc comments, so verbose-doc public surfaces rank highest. Prompts naming rare identifiers (e.g. `is_callable`) may not rank those identifiers' definitions; the result is dominated by code that *talks about* the concept. Use override seeds for pinpoint navigation.
 - ~65% of search hits typically fail line-resolve when prompts are too broad — chunks span line ranges that don't align with item bodies. The dropped-hit diagnostic surfaces this.
 - Edge weight is always 1 in v1; underlying adapters dedupe by NodeId. Call-site multiplicity will surface if/when adapters expose counts.
